@@ -104,6 +104,12 @@ impl<T> ReceiverUnbounded<T> {
     }
 }
 
+impl<T> Drop for ReceiverUnbounded<T> {
+    fn drop(&mut self) {
+        self.inner.close();
+    }
+}
+
 struct ChannelQueue<T> {
     items: VecDeque<T>,
     closed: bool,
@@ -169,8 +175,12 @@ impl<T> AsyncChannelUnbounded<T> {
 
     fn push_back(&self, message: T) -> std::result::Result<(), T> {
         self.queue.use_mut(|queue| {
-            queue.items.push_back(message);
-            Ok(())
+            if queue.closed {
+                Err(message)
+            } else {
+                queue.items.push_back(message);
+                Ok(())
+            }
         })
     }
 
@@ -557,6 +567,13 @@ mod test {
         let (channel1_tx, channel1_rx) = async_channel();
         drop(channel1_rx);
         assert_eq!(Err(SendError::ChannelClosed(3)), channel1_tx.try_send(3));
+    }
+
+    #[crate::test]
+    async fn test_unbounded_send_when_receiver_dropped() {
+        let (tx, rx) = async_channel_unbounded();
+        drop(rx);
+        assert_eq!(Err(7), tx.send(7));
     }
 
     #[crate::test]
