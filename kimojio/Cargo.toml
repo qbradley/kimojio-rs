@@ -69,3 +69,7 @@ harness = false
 [[bench]]
 name = "async_stream_bench"
 harness = false
+
+[[bench]]
+name = "disk_bench"
+harness = false
