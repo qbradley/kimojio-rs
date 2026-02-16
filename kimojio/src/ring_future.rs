@@ -227,6 +227,8 @@ impl<'a, T: Unpin, C: MakeResult<T>> Future for RingFuture<'a, T, C> {
                     tag,
                     canceled: false,
                 };
+
+                task.capture_callstack();
                 Poll::Pending
             }
             CompletionState::Submitted { waker, .. } => {
@@ -241,6 +243,8 @@ impl<'a, T: Unpin, C: MakeResult<T>> Future for RingFuture<'a, T, C> {
                 waker.clone_from(cx.waker());
 
                 // still waiting for a completion
+
+                task.capture_callstack();
                 Poll::Pending
             }
             CompletionState::Completed {

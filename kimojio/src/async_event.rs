@@ -475,6 +475,7 @@ impl<Source: WaitSource> Future for WaitFuture<Source> {
                     current_task.register_wait(&new_wait_data);
                     self.get_mut().wait_data = Some(new_wait_data);
                 };
+                current_task.capture_callstack();
                 Poll::Pending
             }
         } else {

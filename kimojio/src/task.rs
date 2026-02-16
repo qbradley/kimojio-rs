@@ -177,6 +177,9 @@ pub struct Task {
 
     // The task state from which this task originates
     pub task_state: *const TaskState,
+
+    #[cfg(feature = "backtrace")]
+    pub callstack: MutInPlaceCell<Option<backtrace::Backtrace>>,
 }
 
 #[derive(Default)]
@@ -258,6 +261,8 @@ impl Task {
             tag: Cell::new(1),
             io_scope_completions: MutInPlaceCell::new(None),
             task_state,
+            #[cfg(feature = "backtrace")]
+            callstack: MutInPlaceCell::new(Some(backtrace::Backtrace::new())),
         })
     }
 
@@ -290,6 +295,25 @@ impl Task {
     pub(crate) fn set_state(&self, state: TaskReadyState) {
         self.ready.set(state);
     }
+
+    #[cfg(feature = "backtrace")]
+    pub fn callstack(&self) -> Option<backtrace::Backtrace> {
+        self.callstack.use_mut(|callstack| callstack.clone())
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    pub fn callstack(&self) -> Option<()> {
+        None
+    }
+
+    #[cfg(feature = "backtrace")]
+    pub fn capture_callstack(&self) {
+        self.callstack
+            .use_mut(|callstack| *callstack = Some(backtrace::Backtrace::new()));
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    pub fn capture_callstack(&self) {}
 }
 
 #[derive(Default)]

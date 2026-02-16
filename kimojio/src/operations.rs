@@ -1034,11 +1034,13 @@ impl Future for SetYieldCpuFuture {
 
         match self.state {
             YieldFutureState::CreatedIo => {
+                current_task.capture_callstack();
                 task_state.schedule_io(current_task);
                 self.get_mut().state = YieldFutureState::Polled;
                 Poll::Pending
             }
             YieldFutureState::CreatedCpu => {
+                current_task.capture_callstack();
                 task_state.schedule_cpu(current_task);
                 self.get_mut().state = YieldFutureState::Polled;
                 Poll::Pending
@@ -1678,6 +1680,31 @@ pub fn inject_fault(operation_count: usize, fault: Errno) {
     let mut task_state = TaskState::get();
     task_state.inject_fault(operation_count, fault)
 }
+
+#[cfg(feature = "backtrace")]
+pub fn dump_tasks() {
+    fn dump_task(task: &Rc<Task>) {
+        println!("Task: {}", task.task_index);
+        if let Some(callstack) = task.callstack() {
+            println!("{:?}", callstack);
+        }
+    }
+
+    let state = TaskState::get();
+
+    println!("Task: {}", state.current_task.as_ref().unwrap().task_index);
+    println!("{:?}", backtrace::Backtrace::new());
+
+    let fill_ready_tasks = state.fill_ready_task_list_io.iter();
+    let io_tasks = state.ready_task_list_io.iter();
+    let cpu_tasks = state.ready_task_list_cpu.iter();
+
+    let tasks = fill_ready_tasks.chain(io_tasks).chain(cpu_tasks);
+    tasks.for_each(dump_task)
+}
+
+#[cfg(not(feature = "backtrace"))]
+pub fn dump_tasks() {}
 
 #[cfg(test)]
 mod test {

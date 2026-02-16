@@ -20,6 +20,7 @@ repository = "https://github.com/Azure/kimojio-rs"
 readme = "README.md"
 
 [workspace.dependencies]
+backtrace = "0.3"
 cc = "1"
 criterion = { version = "0.7", default-features = false }
 foreign-types-shared = "0.1"

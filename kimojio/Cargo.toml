@@ -15,6 +15,7 @@ description = "A thread-per-core Linux io_uring async runtime optimized for late
 async_fn_in_trait = "allow"
 
 [dependencies]
+backtrace = { workspace = true, optional = true }
 foreign-types-shared.workspace = true
 futures.workspace = true
 impls.workspace = true
@@ -32,7 +33,7 @@ uuid.workspace = true
 zerocopy.workspace = true
 
 [features]
-default = ["tls"]
+default = ["tls", "backtrace"]
 # Enable TLS/OpenSSL support
 tls = ["dep:openssl", "dep:kimojio-tls"]
 # Enable IoUring feature which optimizes the uring hot path at the tradeoff of
@@ -48,6 +49,7 @@ enter_stats = []
 fault_injection = []
 # Temporary feature for ssl2
 ssl2 = ["tls"]
+backtrace = ["dep:backtrace"]
 
 [dev-dependencies]
 criterion.workspace = true
