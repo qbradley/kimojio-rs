@@ -89,7 +89,6 @@ pub use rustix::fd::OwnedFd;
 use rustix::io_uring::io_uring_user_data;
 pub use rustix_uring::Errno;
 use rustix_uring::opcode::AsyncCancel;
-use task::Task;
 pub use tracing::{EventEnvelope, Events, TraceConfiguration};
 pub use uring_stats::URingStats;
 use uuid::Uuid;

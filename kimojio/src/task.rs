@@ -709,6 +709,19 @@ impl TaskState {
         }
     }
 
+    /// Looks up a task by its `u16` index in the handle table.
+    ///
+    /// Returns `None` if `task_index` is 0 (invalid [`NonZeroUsize`]) or if the
+    /// index does not correspond to a live task. The returned `Rc<Task>` is a
+    /// clone — the waker does not own a reference count; it temporarily acquires
+    /// one to schedule the task.
+    pub fn get_task_by_index(&self, task_index: u16) -> Option<Rc<Task>> {
+        let index = std::num::NonZeroUsize::new(task_index as usize)?;
+        self.tasks
+            .get(crate::handle_table::Index::from(index))
+            .cloned()
+    }
+
     pub fn schedule_io(&mut self, task: Rc<Task>) {
         match task.get_state() {
             TaskReadyState::Complete => {

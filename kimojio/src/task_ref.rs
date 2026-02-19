@@ -2,77 +2,180 @@
 // Licensed under the MIT License.
 //! Waker implementation
 //!
-use std::rc::Rc;
+use std::cell::Cell;
+use std::task::{RawWaker, RawWakerVTable, Waker};
 
-use crate::Task;
 use crate::task::TaskState;
 
-/// wake_task can be used when you already have a &mut TaskState reference. This avoids
-/// recursive TaskState::get() calls.
-pub fn wake_task(task_state: &mut TaskState, waker: &std::task::Waker) {
+thread_local! {
+    /// The index of the current kimojio runtime thread.
+    /// Initialized to u8::MAX (sentinel for "not a kimojio thread").
+    static KIMOJIO_THREAD_INDEX: Cell<u8> = const { Cell::new(u8::MAX) };
+}
+
+/// Sets the thread index for the current thread.
+/// This must be called during Runtime initialization.
+pub(crate) fn set_kimojio_thread_index(index: u8) {
+    debug_assert!(
+        index < u8::MAX,
+        "thread_index must be < {} (sentinel value)",
+        u8::MAX
+    );
+    let current = KIMOJIO_THREAD_INDEX.get();
+    if current != u8::MAX && current != index {
+        panic!(
+            "kimojio thread index already set to {}, cannot set to {}",
+            current, index
+        );
+    }
+    KIMOJIO_THREAD_INDEX.set(index);
+}
+
+/// Resets the thread index. Used for testing/cleanup.
+pub(crate) fn reset_kimojio_thread_index() {
+    KIMOJIO_THREAD_INDEX.set(u8::MAX);
+}
+
+/// Packs a `thread_index` (u8) and `task_index` (u16) into a pointer-sized value
+/// for use as `RawWaker` data. Layout: bits 16..23 = thread_index, bits 0..15 = task_index.
+/// No allocation — the "pointer" is just a reinterpreted integer.
+fn pack_waker_data(thread_index: u8, task_index: u16) -> *const () {
+    let val: usize = ((thread_index as usize) << 16) | (task_index as usize);
+    val as *const ()
+}
+
+/// Unpacks the `(thread_index, task_index)` pair previously packed by [`pack_waker_data`].
+fn unpack_waker_data(data: *const ()) -> (u8, u16) {
+    let val = data as usize;
+    let thread_index = (val >> 16) as u8;
+    let task_index = val as u16;
+    (thread_index, task_index)
+}
+
+/// Wakes a task using the given waker, with an optimization for kimojio-owned wakers.
+///
+/// When the waker belongs to this runtime (same vtable) **and** the same thread
+/// (matching `KIMOJIO_THREAD_INDEX`), the task is looked up directly from the
+/// local `TaskState` handle table and scheduled without going through the generic
+/// `Waker::wake_by_ref` path. This avoids a redundant `TaskState::get()` call
+/// when the caller already holds a mutable reference.
+///
+/// For foreign wakers or cross-thread wakers, falls back to `waker.wake_by_ref()`.
+pub fn wake_task(task_state: &mut TaskState, waker: &Waker) {
+    // Optimization: if it's our waker AND it belongs to this thread, use direct lookup
     if waker.vtable() == &VTABLE {
-        let task = clone_waker_task(waker.data());
-        task_state.schedule_io(task);
+        let (thread_index, task_index) = unpack_waker_data(waker.data());
+
+        // Safety: Only perform direct lookup if waker belongs to CURRENT thread
+        if thread_index == KIMOJIO_THREAD_INDEX.get() {
+            if let Some(task) = task_state.get_task_by_index(task_index) {
+                task_state.schedule_io(task);
+            }
+            return;
+        }
+    }
+    // Fallback: cross-thread or foreign waker
+    waker.wake_by_ref();
+}
+
+/// Clone implementation for the [`RawWakerVTable`].
+///
+/// Since waker data is a packed integer (not a heap allocation), cloning is
+/// trivially a bitwise copy — no reference counting needed.
+///
+/// # Safety
+/// `data` must be a value previously returned by [`pack_waker_data`].
+unsafe fn clone_waker(data: *const ()) -> RawWaker {
+    // Data is packed usize (Copy), just return a new RawWaker
+    RawWaker::new(data, &VTABLE)
+}
+
+/// Wake-by-value implementation. Since waker data is `Copy` (packed integer),
+/// this delegates directly to [`wake_by_ref_waker`].
+///
+/// # Safety
+/// `data` must be a value previously returned by [`pack_waker_data`].
+unsafe fn wake_waker(data: *const ()) {
+    // wake consumes the waker, but our data is Copy so it's same as wake_by_ref
+    // SAFETY: wake_by_ref_waker upholds the same invariants required by wake_waker
+    unsafe { wake_by_ref_waker(data) }
+}
+
+/// Wake-by-reference implementation — the core wake logic.
+///
+/// Unpacks the `(thread_index, task_index)` from the waker data and checks
+/// whether the wake is local (same thread) or cross-thread:
+/// - **Local**: Acquires `TaskState` from the thread-local, looks up the task
+///   by index, and calls `schedule_io`. Zero allocations, no locks.
+/// - **Cross-thread**: Panics in Phase 1. Phase 2 will route through
+///   `cross_thread_wake(thread_index, task_index)`.
+///
+/// # Safety
+/// `data` must be a value previously returned by [`pack_waker_data`].
+unsafe fn wake_by_ref_waker(data: *const ()) {
+    let (thread_index, task_index) = unpack_waker_data(data);
+    let current_thread = KIMOJIO_THREAD_INDEX.get();
+
+    if thread_index == current_thread {
+        // Local path: lock-free, atomic-free
+        // We are on the owning thread, so TaskState is local
+        let mut task_state = TaskState::get();
+        if let Some(task) = task_state.get_task_by_index(task_index) {
+            task_state.schedule_io(task);
+        }
     } else {
-        waker.wake_by_ref()
+        // Cross-thread path
+        // Phase 1: Panic if cross-thread wake attempted
+        // In Phase 2 this will call cross_thread_wake(thread_index, task_index)
+        panic!(
+            "Cross-thread wake not implemented in Phase 1 (target: {}, current: {})",
+            thread_index, current_thread
+        );
     }
 }
 
-static VTABLE: std::task::RawWakerVTable = std::task::RawWakerVTable::new(
-    |task| {
-        // clone should create a copy of the waker with its own reference
-        // count to the underlying task.
-        let task = clone_waker_task(task);
-        std::task::RawWaker::new(Rc::into_raw(task) as *const (), &VTABLE)
-    },
-    |task| {
-        // wake will only be called at most once. Its job is to put
-        // the assocated task into the ready queue. If wake is called
-        // then drop will not be called. It is an optimization over
-        // wake_by_ref followed by drop.
-        let task = consume_waker_task(task);
-        let mut task_state = TaskState::get();
-        task_state.schedule_io(task);
-    },
-    |task| {
-        // wake_by_ref can potentially be called multiple times.
-        // It needs to make the task as ready by moving it to the
-        // ready queue. drop or wake could still be called afterwards.
-        let task = clone_waker_task(task);
-        let mut task_state = TaskState::get();
-        task_state.schedule_io(task);
-    },
-    |task| {
-        // drop will only be called if wake isn't
-        let _task = consume_waker_task(task);
-    },
-);
+/// Drop implementation — no-op since there is no heap allocation to free.
+///
+/// # Safety
+/// No special requirements; `data` is a plain integer.
+unsafe fn drop_waker(_data: *const ()) {
+    // No-op: no allocation to free
+}
 
-fn clone_waker_task(task: *const ()) -> Rc<Task> {
-    let task = task as *const Task;
-    // SAFETY: On exit the total reference count
-    // will be one greater than it was. This indicates
-    // that the waker still owns its reference
-    // and the returned Rc<Task> owns the new count.
-    unsafe {
-        Rc::increment_strong_count(task);
-        Rc::from_raw(task)
+static VTABLE: RawWakerVTable =
+    RawWakerVTable::new(clone_waker, wake_waker, wake_by_ref_waker, drop_waker);
+
+/// Creates a [`Waker`] for the task at the given index on the current thread.
+///
+/// The waker packs the current thread's `KIMOJIO_THREAD_INDEX` and the provided
+/// `task_index` into the `RawWaker` data pointer. No heap allocation occurs.
+///
+/// # Panics
+/// Debug-asserts that the calling thread has been initialized as a kimojio
+/// runtime thread (i.e., `KIMOJIO_THREAD_INDEX` is not the sentinel `u8::MAX`).
+pub fn create_waker(task_index: u16) -> Waker {
+    let thread_index = KIMOJIO_THREAD_INDEX.get();
+    debug_assert!(
+        thread_index < u8::MAX,
+        "create_waker called on non-kimojio thread"
+    );
+
+    let data = pack_waker_data(thread_index, task_index);
+    let raw = RawWaker::new(data, &VTABLE);
+    // SAFETY: RawWakerVTable contract is upheld by implementation
+    unsafe { Waker::from_raw(raw) }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_waker_send_sync() {
+        // This test mostly verifies that we haven't done something weird that makes
+        // Waker !Send or !Sync (which shouldn't be possible for std::task::Waker,
+        // but good to be sure).
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Waker>();
     }
-}
-
-fn consume_waker_task(task: *const ()) -> Rc<Task> {
-    let task = task as *const Task;
-    // SAFETY: the waker will no longer own its
-    // reference so the refcount will not change.
-    unsafe { Rc::from_raw(task) }
-}
-
-pub fn create_waker(task: Rc<Task>) -> std::task::Waker {
-    let raw: std::task::RawWaker =
-        std::task::RawWaker::new(Rc::into_raw(task) as *const (), &VTABLE);
-    // SAFETY: this unsafe is meant to ensure that you know you have
-    // to upload the waker contract, which is that when a waker "wake"
-    // is called, poll is guaranteed to eventually be called on the
-    // related task.
-    unsafe { std::task::Waker::from_raw(raw) }
 }
