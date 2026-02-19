@@ -35,7 +35,7 @@ Key existing infrastructure:
 - Changing `MutInPlaceCell`, `TaskStateCell`, or the borrow/drop/reborrow patterns
 
 ## Phase Status
-- [ ] **Phase 1: Index-Based Waker (Local Thread)** - Replace Rc<Task>-based waker with packed task_index+thread_index identity, local path only
+- [x] **Phase 1: Index-Based Waker (Local Thread)** - Replace Rc<Task>-based waker with packed task_index+thread_index identity, local path only
 - [ ] **Phase 2: Cross-Thread Wake Infrastructure** - Add global registry, eventfd, wake queue, cross-thread path, and tests
 - [ ] **Phase 3: Documentation** - Docs.md and project documentation updates
 
@@ -55,7 +55,7 @@ Replace the `Rc<Task>`-based waker with an index-based waker that packs `thread_
 - **`kimojio/src/task_ref.rs`**: Complete rewrite of the waker module.
   - Remove `clone_waker_task()` and `consume_waker_task()` helper functions (no more `Rc` in wakers)
   - Add `pack_waker_data(thread_index: u8, task_index: u16) -> *const ()` and corresponding `unpack_thread_index(*const ()) -> u8`, `unpack_task_index(*const ()) -> u16` helpers
-  - Add thread-local `KIMOJIO_THREAD_INDEX: Cell<u8>` (sentinel `u8::MAX` = not a kimojio thread) and `set_kimojio_thread_index(u8)` setter. Include `debug_assert!(thread_index < u8::MAX)` in the setter to guard against sentinel collision with valid thread indices.
+  - Add thread-local `KIMOJIO_THREAD_INDEX: Cell<u8>` (sentinel `u8::MAX` = not a kimojio thread) and `set_kimojio_thread_index(u8)` setter. **Constraint**: `thread_index` must be < `u8::MAX` (0-254). Add `debug_assert!` in setter.
   - Replace `VTABLE` with new `RawWakerVTable`:
     - `clone`: return `RawWaker::new(data, &VTABLE)` — data is `Copy`, no allocation
     - `wake`: unpack data, check thread locality via `KIMOJIO_THREAD_INDEX`, if local → `TaskState::get()` + `HandleTable` lookup + `schedule_io`; if foreign → panic for now (Phase 2 adds cross-thread path)
@@ -65,7 +65,7 @@ Replace the `Rc<Task>`-based waker with an index-based waker that packs `thread_
   - Update `wake_task`: change vtable comparison to new `VTABLE`, also verify unpacked thread_index matches `KIMOJIO_THREAD_INDEX` (both checks required — vtable confirms it's a kimojio waker, thread_index confirms it belongs to this thread), unpack task_index from waker data, lookup in `task_state.tasks`, call `schedule_io`. If thread_index mismatches, fall back to `waker.wake_by_ref()` which takes the cross-thread path.
 
 - **`kimojio/src/task.rs`**: Adjust `schedule_io_internal` and task lookup
-  - Add a public method on `TaskState` to look up a task by u16 index: `get_task_by_index(task_index: u16) -> Option<Rc<Task>>` — wraps the `NonZeroUsize` construction and `HandleTable::get` + clone
+  - Add a public method on `TaskState` to look up a task by u16 index: `get_task_by_index(task_index: u16) -> Option<Rc<Task>>`. **Note**: This reconstructs the `Rc` by cloning it from the `HandleTable`. The waker does not own an `Rc`, but temporarily acquires one to schedule.
   - The assert in `schedule_io_internal` (`task.rs:682-685`) remains unchanged — it still validates that the task belongs to this thread's TaskState
 
 - **`kimojio/src/runtime.rs`**: Set thread-local on startup
@@ -105,8 +105,8 @@ Add the global thread registry, per-thread eventfd + wake queue, the cross-threa
   - `WakeRegistryEntry`: holds `wake_queue: Vec<u16>` and `eventfd_fd: RawFd` for one runtime thread. Safety invariant: the RawFd is valid for the lifetime of the entry; `unregister_thread` must be called before the corresponding `OwnedFd` is dropped; after unregistration, no new writes can reach the fd since the entry is removed under the mutex.
   - `static WAKE_REGISTRY: Mutex<HashMap<u8, WakeRegistryEntry>>` — global registry mapping `thread_index → entry`.
   - `register_thread(thread_index: u8, eventfd_fd: RawFd)` — inserts entry, called during `Runtime::new`. Fails/panics if thread_index already exists to prevent registry corruption.
-  - `unregister_thread(thread_index: u8)` — removes entry, called during runtime shutdown
-  - `cross_thread_wake(thread_index: u8, task_index: u16)` — locks registry, pushes task_index into the target thread's `wake_queue`, writes `1u64` to the eventfd. If thread_index not found (runtime shut down), silently drops the wake.
+  - `unregister_thread(thread_index: u8)` — removes entry, called during runtime shutdown. **Safety**: Must be called *before* closing the eventfd to ensure no races.
+  - `cross_thread_wake(thread_index: u8, task_index: u16)` — locks registry, pushes task_index into the target thread's `wake_queue`. **Coalescing**: only writes `1u64` to the eventfd when the queue transitions from empty → non-empty (checked under the mutex). This avoids unnecessary `write()` syscalls under load — multiple concurrent wakes produce a single eventfd signal, and the owning thread drains all queued items in one pass. If thread_index not found (runtime shut down), silently drops the wake.
   - `drain_wake_queue(thread_index: u8) -> Vec<u16>` — locks registry, swaps `wake_queue` with empty `Vec` (minimizes lock hold time), returns the pending indices
 
 - **`kimojio/src/lib.rs`**: Add `mod cross_thread_wake;` declaration

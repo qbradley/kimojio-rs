@@ -36,7 +36,7 @@ fn poll_task(task: Rc<Task>, mut task_state: TaskStateCellRef<'_>) -> TaskStateC
     // reborrow immediately after the poll call.
     let task_state_ref = task_state.into_inner();
 
-    let waker = create_waker(task.clone());
+    let waker = create_waker(task.task_index);
     let mut context = std::task::Context::from_waker(&waker);
     let complete = match task.poll(&mut context) {
         std::task::Poll::Pending => {
@@ -302,6 +302,7 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(thread_index: u8, configuration: Configuration) -> Self {
+        crate::task_ref::set_kimojio_thread_index(thread_index);
         let Configuration {
             trace_buffer_manager,
             busy_poll,
@@ -406,6 +407,8 @@ impl Runtime {
         let old_state = std::mem::take(&mut *task_state);
         drop(task_state);
         drop(old_state);
+
+        crate::task_ref::reset_kimojio_thread_index();
 
         task.result()
     }

@@ -709,6 +709,13 @@ impl TaskState {
         }
     }
 
+    pub fn get_task_by_index(&self, task_index: u16) -> Option<Rc<Task>> {
+        let index = std::num::NonZeroUsize::new(task_index as usize)?;
+        self.tasks
+            .get(crate::handle_table::Index::from(index))
+            .cloned()
+    }
+
     pub fn schedule_io(&mut self, task: Rc<Task>) {
         match task.get_state() {
             TaskReadyState::Complete => {
