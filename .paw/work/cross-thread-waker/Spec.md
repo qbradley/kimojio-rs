@@ -78,9 +78,9 @@ Acceptance Scenarios:
 
 ### Key Entities
 
-- **Waker Identity**: The data carried inside the waker — contains enough information to identify the task and its owning thread; must be `Send + Sync` and copyable without atomic operations
+- **Waker Identity**: The data carried inside the waker — contains enough information to identify the task and its owning thread (using an internal `u8` thread index); must be `Send + Sync` and copyable without atomic operations
 - **Cross-Thread Wake Channel**: Per-runtime-thread mechanism for receiving wake notifications from foreign threads
-- **Thread Registry**: Global mapping from thread identifiers to wake channels, enabling cross-thread wake delivery
+- **Thread Registry**: Global mapping from thread indices (`u8`) to wake channels, enabling cross-thread wake delivery
 
 ### Cross-Cutting / Non-Functional
 
@@ -99,7 +99,7 @@ Acceptance Scenarios:
 
 ## Assumptions
 
-- The thread identifier used for locality checks is a cheaply comparable cached value (no syscall)
+- The thread identifier used for locality checks is a small, unique integer (`u8`) assigned by the runtime at startup (not OS TID)
 - Task identities are stable for the lifetime of a task (not reused until the task is removed)
 - The number of runtime threads is small (typically 1-8), so a global registry with mutex-protected lookup is acceptable for the cross-thread path
 - The target platform supports an efficient file-descriptor-based notification mechanism for cross-thread signaling
@@ -107,7 +107,7 @@ Acceptance Scenarios:
 ## Scope
 
 In Scope:
-- New waker vtable and data structure using task index + thread ID
+- New waker vtable and data structure using task index + thread index
 - Cross-thread wake channel and eventfd integration
 - Global thread registry for wake channel lookup
 - Event loop changes to drain cross-thread wakes
