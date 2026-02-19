@@ -9,7 +9,7 @@ Kimojio is a single-threaded io_uring-based async runtime. Today, its `Waker` im
 
 The goal is to make kimojio's `Waker` satisfy the full `Send + Sync` contract required by `std::task::Waker`, enabling any thread to wake a kimojio task. The critical constraint is that the local-thread fast path must remain lock-free and atomic-free — kimojio's performance advantage comes from avoiding synchronization on the hot path, and that must be preserved.
 
-The design centers on a lightweight waker identity: instead of holding an `Rc<Task>`, the waker carries a task index (from the existing `HandleTable`) and a thread ID. On the local thread, a cheap thread-ID comparison confirms locality, and the waker operates exactly as today — direct `schedule_io` into the ready queue with no synchronization. On a foreign thread, the waker posts the task index into a thread-safe wake channel and signals the owning thread via an `eventfd` registered with io_uring, causing it to drain the channel on its next event loop iteration.
+On the local thread, waking remains as fast as today — a simple check confirms locality, and the task is scheduled directly with no synchronization. From other threads, waking uses an efficient notification mechanism that interrupts the event loop immediately, ensuring the woken task is processed on the next iteration without requiring the caller to know anything about kimojio internals.
 
 ## Objectives
 
@@ -27,9 +27,9 @@ Narrative: A developer runs a kimojio runtime on one thread and a tokio runtime 
 Independent Test: A kimojio task sends its waker to a std::thread, which calls `wake()`, causing the kimojio task to be polled and complete.
 
 Acceptance Scenarios:
-1. Given a kimojio task waiting on a cross-thread signal, When `waker.wake()` is called from another thread, Then the kimojio task is scheduled and polled on its owning thread within the next event loop iteration
-2. Given a kimojio event loop blocked in `submit_and_wait(1)`, When a cross-thread wake occurs, Then the event loop unblocks and processes the woken task
-3. Given a waker cloned on the local thread and sent to a foreign thread, When the foreign thread calls `wake()`, Then the task is correctly identified and scheduled without data races
+1. Given a kimojio task waiting on a cross-thread signal, When a waker is invoked from another thread, Then the kimojio task is scheduled and polled on its owning thread within the next event loop iteration
+2. Given a kimojio event loop that is idle and waiting for I/O, When a cross-thread wake occurs, Then the event loop unblocks and processes the woken task
+3. Given a waker cloned on the local thread and sent to a foreign thread, When the foreign thread invokes the waker, Then the task is correctly identified and scheduled without data races
 
 ### User Story P2 – Local-Thread Wake Remains Zero-Overhead
 
@@ -38,49 +38,49 @@ Narrative: A developer uses kimojio as today — all futures and I/O completions
 Independent Test: A kimojio benchmark comparing local-thread wake latency before and after the change shows no measurable regression.
 
 Acceptance Scenarios:
-1. Given a waker created for a local task, When `wake()` is called on the owning thread, Then no mutex, atomic operation, or `Arc` reference count is performed
-2. Given the `wake_task()` helper called with `&mut TaskState`, When the waker belongs to the local runtime, Then the task is scheduled directly via `schedule_io` without thread-local access
+1. Given a waker created for a local task, When it is invoked on the owning thread, Then no mutex, atomic operation, or shared reference counting is performed
+2. Given the optimized wake path used with direct task state access, When the waker belongs to the local runtime, Then the task is scheduled directly without additional indirection
 3. Given a local-thread wake, When tracing is enabled, Then the same trace events are emitted as the current implementation
 
 ### User Story P3 – Waker Satisfies Send + Sync
 
 Narrative: A library author writes generic async code that requires `Waker: Send + Sync` (as guaranteed by the standard library). Kimojio wakers work in this context without any special handling.
 
-Independent Test: A kimojio waker is stored in a `Box<dyn Send + Sync>` and used from a different thread without compilation errors or runtime panics.
+Independent Test: A kimojio waker is stored in a thread-safe container and used from a different thread without compilation errors or runtime panics.
 
 Acceptance Scenarios:
-1. Given a kimojio waker, When it is sent to another thread via `std::thread::spawn`, Then it compiles and runs without panic
+1. Given a kimojio waker, When it is sent to another thread, Then it compiles and runs without panic
 2. Given a kimojio waker, When it is cloned from a foreign thread, Then a valid waker is produced that can also wake the task
-3. Given a kimojio waker for a task that has already completed, When `wake()` is called from any thread, Then the wake is a no-op (no panic, no undefined behavior)
+3. Given a kimojio waker for a task that has already completed, When it is invoked from any thread, Then the wake is a no-op (no panic, no undefined behavior)
 
 ### Edge Cases
 
-- **Task completed before cross-thread wake**: The wake channel receives a task index for a completed/removed task. The owning thread looks it up in the `HandleTable`, finds no entry, and discards the wake — no panic.
-- **Multiple cross-thread wakes for same task**: Multiple threads wake the same task simultaneously. The owning thread drains all entries but `schedule_io` already handles duplicate scheduling (task already in Ready state is ignored).
-- **Waker outlives runtime**: A waker is held after the owning runtime shuts down. Cross-thread wake writes to the eventfd or channel fail gracefully (no panic, no UB).
-- **Eventfd saturation**: Many cross-thread wakes accumulate before the event loop drains them. The eventfd counter accumulates; a single read resets it, and the channel is drained fully.
-- **HandleTable index reuse**: A task completes and its index is reused for a new task. A stale waker wakes the new task — this is acceptable (spurious wake) and consistent with how `Waker` contracts work in Rust.
+- **Task completed before cross-thread wake**: The wake channel receives a task identity for a completed/removed task. The owning thread looks it up, finds no entry, and discards the wake — no panic.
+- **Multiple cross-thread wakes for same task**: Multiple threads wake the same task simultaneously. The owning thread drains all entries but duplicate scheduling for an already-ready task is silently ignored.
+- **Waker outlives runtime**: A waker is held after the owning runtime shuts down. Cross-thread wake delivery fails gracefully (no panic, no UB).
+- **Signal saturation**: Many cross-thread wakes accumulate before the event loop drains them. The signaling mechanism coalesces notifications; a single drain processes all pending wakes.
+- **Task identity reuse**: A task completes and its identity is reused for a new task. A stale waker wakes the new task — this is acceptable (spurious wake) and consistent with the standard Waker contract.
 
 ## Requirements
 
 ### Functional Requirements
 
-- FR-001: The `RawWakerVTable` implementation must produce wakers that are `Send + Sync` — the data pointer and vtable operations must be safe to invoke from any thread (Stories: P1, P3)
-- FR-002: The waker must carry a task identity consisting of a `HandleTable` `Index` value and a thread identifier, rather than an `Rc<Task>` (Stories: P1, P2)
-- FR-003: On `wake()` or `wake_by_ref()`, if the calling thread is the owning thread, the task must be scheduled via the existing `TaskState::schedule_io` path with no synchronization primitives (Stories: P2)
-- FR-004: On `wake()` or `wake_by_ref()`, if the calling thread is NOT the owning thread, the task index must be sent to the owning thread via a thread-safe channel and the owning thread must be signaled (Stories: P1)
-- FR-005: A per-runtime-thread `eventfd` must be registered with io_uring so that cross-thread wakes interrupt a blocking `submit_and_wait` call (Stories: P1)
-- FR-006: The event loop must drain the cross-thread wake channel when the eventfd completes, looking up tasks by index in the `HandleTable` and calling `schedule_io` for each (Stories: P1)
-- FR-007: A global registry must map thread identifiers to per-thread wake channels, allowing any thread to find the correct channel for a given waker (Stories: P1)
-- FR-008: The `wake_task()` helper function must continue to work as an optimization for callers that already hold `&mut TaskState` (Stories: P2)
-- FR-009: `clone` on a waker from any thread must produce a valid waker without requiring atomic reference counting (Stories: P2, P3)
-- FR-010: Waking a task that has already completed or whose index has been reused must not panic or cause undefined behavior (Stories: P1, P3)
+- FR-001: Wakers produced by the runtime must satisfy the `Send + Sync` contract — they must be safe to send, clone, and invoke from any thread (Stories: P1, P3)
+- FR-002: The waker must use a lightweight, `Send + Sync` task identity rather than a thread-local reference (Stories: P1, P2)
+- FR-003: When a wake occurs on the owning thread, the task must be scheduled with no locks, atomic operations, or synchronization primitives (Stories: P2)
+- FR-004: When a wake occurs on a foreign thread, the task identity must be delivered to the owning thread via a thread-safe mechanism (Stories: P1)
+- FR-005: Cross-thread wakes must interrupt a blocking event loop so the woken task is processed promptly (Stories: P1)
+- FR-006: The event loop must process cross-thread wake notifications and schedule the identified tasks (Stories: P1)
+- FR-007: Any thread must be able to discover the wake channel for a given waker's owning thread without the waker carrying a shared reference-counted pointer (Stories: P1)
+- FR-008: An optimized wake path must remain available for callers that already hold mutable access to the runtime's task state (Stories: P2)
+- FR-009: Cloning a waker from any thread must produce a valid waker without atomic reference counting (Stories: P2, P3)
+- FR-010: Waking a task that has already completed or whose identity has been reused must not panic or cause undefined behavior (Stories: P1, P3)
 
 ### Key Entities
 
-- **WakerData**: The data carried inside the `RawWaker` — contains task index and thread identifier; must be `Send + Sync`
-- **CrossThreadWakeChannel**: Per-runtime-thread channel (sender is `Send`, receiver is local) for receiving task indices from foreign threads
-- **Thread Registry**: Global static mapping thread identifiers to wake channel senders and eventfd file descriptors
+- **Waker Identity**: The data carried inside the waker — contains enough information to identify the task and its owning thread; must be `Send + Sync` and copyable without atomic operations
+- **Cross-Thread Wake Channel**: Per-runtime-thread mechanism for receiving wake notifications from foreign threads
+- **Thread Registry**: Global mapping from thread identifiers to wake channels, enabling cross-thread wake delivery
 
 ### Cross-Cutting / Non-Functional
 
@@ -99,10 +99,10 @@ Acceptance Scenarios:
 
 ## Assumptions
 
-- The `thread_id` stored in `TaskState` (via `std::thread::current().id()`) is a sufficiently cheap comparison for the local-thread check (it's a read of a cached value, no syscall)
-- HandleTable indices are stable for the lifetime of a task (they are not reused until the task is removed)
-- The number of kimojio runtime threads is small (typically 1-8), so a global registry with mutex-protected lookup is acceptable for the cross-thread path
-- `eventfd` is available on all target Linux kernels (it has been available since Linux 2.6.22)
+- The thread identifier used for locality checks is a cheaply comparable cached value (no syscall)
+- Task identities are stable for the lifetime of a task (not reused until the task is removed)
+- The number of runtime threads is small (typically 1-8), so a global registry with mutex-protected lookup is acceptable for the cross-thread path
+- The target platform supports an efficient file-descriptor-based notification mechanism for cross-thread signaling
 
 ## Scope
 
@@ -121,17 +121,16 @@ Out of Scope:
 
 ## Dependencies
 
-- Linux `eventfd` syscall (via `rustix` or `libc`)
-- io_uring support for polling eventfd (standard `IORING_OP_READ` on eventfd)
+- Linux kernel support for file-descriptor-based cross-thread notification
+- io_uring support for polling notification file descriptors
 
 ## Risks & Mitigations
 
-- **Stale waker after runtime shutdown**: A foreign thread holds a waker after the kimojio thread exits. Mitigation: The registry entry is removed on shutdown; cross-thread wake detects missing entry and silently drops the wake.
-- **Performance regression on local path**: Adding a thread-ID check could add overhead. Mitigation: Thread ID comparison is a simple integer compare of a cached value; benchmark to verify.
-- **Eventfd read/write ordering**: The event loop must not miss wakes. Mitigation: Drain the channel completely after each eventfd read; the eventfd counter guarantees at least one read wakes the loop per batch of writes.
-- **HandleTable index ABA problem**: Task index reused for a different task. Mitigation: This produces a spurious wake, which is safe — the new task gets an extra poll and returns `Pending`. This is consistent with the `Waker` contract.
+- **Stale waker after runtime shutdown**: A foreign thread holds a waker after the owning thread exits. Mitigation: The registry entry is removed on shutdown; cross-thread wake detects the missing entry and silently drops the notification.
+- **Performance regression on local path**: Adding a locality check could add overhead. Mitigation: The check is a simple integer comparison of a cached value; benchmark to verify no measurable regression.
+- **Notification ordering**: The event loop must not miss wakes. Mitigation: Drain the channel completely after each notification; the signaling mechanism guarantees at least one wakeup per batch of notifications.
+- **Task identity ABA problem**: Task identity reused for a different task. Mitigation: This produces a spurious wake, which is safe — the new task gets an extra poll and returns Pending. This is consistent with the standard Waker contract.
 
 ## References
 
 - Issue: none
-- Source files: `kimojio/src/task_ref.rs`, `kimojio/src/task.rs`, `kimojio/src/runtime.rs`, `kimojio/src/async_event.rs`
