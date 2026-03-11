@@ -90,6 +90,8 @@ use rustix::io_uring::io_uring_user_data;
 pub use rustix_uring::Errno;
 use rustix_uring::opcode::AsyncCancel;
 use task::Task;
+#[cfg(feature = "tls")]
+pub use tracing::TlsOperation;
 pub use tracing::{EventEnvelope, Events, TraceConfiguration};
 pub use uring_stats::URingStats;
 use uuid::Uuid;
@@ -358,6 +360,64 @@ impl TraceConfiguration for TestTraceConfiguration {
             #[cfg(feature = "tls")]
             tracing::Events::TlsError { activity_id, code } => println!(
                 "tls_error: thread_id: {thread_index}, task_id: {task_index}, code: {code}, activity_id: {activity_id}"
+            ),
+            #[cfg(feature = "tls")]
+            tracing::Events::TlsStreamCreated {
+                activity_id,
+                fd,
+                is_client,
+            } => println!(
+                "tls_stream_created: thread_id: {thread_index}, task_id: {task_index}, fd: {fd}, is_client: {is_client}, activity_id: {activity_id}"
+            ),
+            #[cfg(feature = "tls")]
+            tracing::Events::TlsHandshakeStarted {
+                activity_id,
+                is_client,
+            } => println!(
+                "tls_handshake_started: thread_id: {thread_index}, task_id: {task_index}, is_client: {is_client}, activity_id: {activity_id}"
+            ),
+            #[cfg(feature = "tls")]
+            tracing::Events::TlsHandshakeCompleted {
+                activity_id,
+                is_client,
+            } => println!(
+                "tls_handshake_completed: thread_id: {thread_index}, task_id: {task_index}, is_client: {is_client}, activity_id: {activity_id}"
+            ),
+            #[cfg(feature = "tls")]
+            tracing::Events::TlsTcpRead {
+                activity_id,
+                bytes,
+                on_behalf_of,
+            } => println!(
+                "tls_tcp_read: thread_id: {thread_index}, task_id: {task_index}, bytes: {bytes}, on_behalf_of: {on_behalf_of}, activity_id: {activity_id}"
+            ),
+            #[cfg(feature = "tls")]
+            tracing::Events::TlsTcpWrite {
+                activity_id,
+                bytes,
+                on_behalf_of,
+            } => println!(
+                "tls_tcp_write: thread_id: {thread_index}, task_id: {task_index}, bytes: {bytes}, on_behalf_of: {on_behalf_of}, activity_id: {activity_id}"
+            ),
+            #[cfg(feature = "tls")]
+            tracing::Events::TlsSslRead { activity_id, bytes } => println!(
+                "tls_ssl_read: thread_id: {thread_index}, task_id: {task_index}, bytes: {bytes}, activity_id: {activity_id}"
+            ),
+            #[cfg(feature = "tls")]
+            tracing::Events::TlsSslWrite { activity_id, bytes } => println!(
+                "tls_ssl_write: thread_id: {thread_index}, task_id: {task_index}, bytes: {bytes}, activity_id: {activity_id}"
+            ),
+            #[cfg(feature = "tls")]
+            tracing::Events::TlsShutdownStarted { activity_id } => println!(
+                "tls_shutdown_started: thread_id: {thread_index}, task_id: {task_index}, activity_id: {activity_id}"
+            ),
+            #[cfg(feature = "tls")]
+            tracing::Events::TlsShutdownCompleted { activity_id } => println!(
+                "tls_shutdown_completed: thread_id: {thread_index}, task_id: {task_index}, activity_id: {activity_id}"
+            ),
+            #[cfg(feature = "tls")]
+            tracing::Events::TlsStreamClosed { activity_id, cause } => println!(
+                "tls_stream_closed: thread_id: {thread_index}, task_id: {task_index}, cause: {cause:?}, activity_id: {activity_id}"
             ),
             tracing::Events::FutureCanceled { activity_id } => println!(
                 "future_canceled: thread_id: {thread_index}, task_id: {task_index}, activity_id: {activity_id}"
