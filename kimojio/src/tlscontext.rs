@@ -40,6 +40,7 @@ impl TlsContext {
     ) -> Result<TlsStream, Errno> {
         let ssl = self.ssl_ctx.server(bufsize).map_err(as_io_error)?;
         let mut server = TlsStream::new_tlsstream(ssl, socket);
+        server.emit_created(false);
         server.server_side_handshake(deadline).await?;
         Ok(server)
     }
@@ -53,6 +54,7 @@ impl TlsContext {
     ) -> Result<TlsStream, Errno> {
         let ssl = self.ssl_ctx.client(bufsize).map_err(as_io_error)?;
         let mut client = TlsStream::new_tlsstream(ssl, socket);
+        client.emit_created(true);
         client.client_side_handshake(deadline).await?;
         Ok(client)
     }

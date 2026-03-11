@@ -9,6 +9,7 @@
 //! TODO: implement client authentication
 //!
 use crate::tlscontext::as_io_error;
+use crate::tracing::{Events, TlsOperation};
 use crate::{
     AsyncLock, AsyncStreamRead, AsyncStreamWrite, CanceledError, Errno, OwnedFd, SplittableStream,
     operations, try_clone_owned_fd,
@@ -82,40 +83,104 @@ impl TlsStream {
         TlsStream { ssl, socket }
     }
 
+    /// Emits a `TlsStreamCreated` event for this stream.
+    pub fn emit_created(&self, is_client: bool) {
+        if let Some(ref socket) = self.socket {
+            use rustix::fd::AsRawFd;
+            operations::write_event(Events::TlsStreamCreated {
+                activity_id: operations::get_activity_id(),
+                fd: socket.as_raw_fd(),
+                is_client,
+            });
+        }
+    }
+
     /// Performs the client side of TLS handshake.
     pub async fn client_side_handshake(&mut self, deadline: Option<Instant>) -> Result<(), Errno> {
+        let activity_id = operations::get_activity_id();
+        operations::write_event(Events::TlsHandshakeStarted {
+            activity_id,
+            is_client: true,
+        });
         loop {
             let response = self.ssl.client_side_handshake();
             match response {
-                kimojio_tls::Response::Success(_) => return Ok(()),
+                kimojio_tls::Response::Success(_) => {
+                    operations::write_event(Events::TlsHandshakeCompleted {
+                        activity_id,
+                        is_client: true,
+                    });
+                    return Ok(());
+                }
                 kimojio_tls::Response::Fail(e) => {
                     handle_tls_error(&self.socket, "client_side_handshake", e).await?
                 }
                 kimojio_tls::Response::WantRead => {
-                    try_read(&mut self.ssl, &self.socket, deadline).await?
+                    try_read(
+                        &mut self.ssl,
+                        &self.socket,
+                        deadline,
+                        TlsOperation::Handshake,
+                    )
+                    .await?
                 }
                 kimojio_tls::Response::WantWrite => {
-                    try_write(&mut self.ssl, &self.socket, deadline).await?
+                    try_write(
+                        &mut self.ssl,
+                        &self.socket,
+                        deadline,
+                        TlsOperation::Handshake,
+                    )
+                    .await?
                 }
-                kimojio_tls::Response::Eof => return Ok(()),
+                kimojio_tls::Response::Eof => {
+                    operations::write_event(Events::TlsHandshakeCompleted {
+                        activity_id,
+                        is_client: true,
+                    });
+                    return Ok(());
+                }
             }
         }
     }
 
     /// Performs the server side of TLS handshake.
     pub async fn server_side_handshake(&mut self, deadline: Option<Instant>) -> Result<(), Errno> {
+        let activity_id = operations::get_activity_id();
+        operations::write_event(Events::TlsHandshakeStarted {
+            activity_id,
+            is_client: false,
+        });
         loop {
             let response = self.ssl.server_side_handshake();
             match response {
-                kimojio_tls::Response::Success(_) => return Ok(()),
+                kimojio_tls::Response::Success(_) => {
+                    operations::write_event(Events::TlsHandshakeCompleted {
+                        activity_id,
+                        is_client: false,
+                    });
+                    return Ok(());
+                }
                 kimojio_tls::Response::Fail(e) => {
                     handle_tls_error(&self.socket, "server_side_handshake", e).await?
                 }
                 kimojio_tls::Response::WantRead => {
-                    try_read(&mut self.ssl, &self.socket, deadline).await?
+                    try_read(
+                        &mut self.ssl,
+                        &self.socket,
+                        deadline,
+                        TlsOperation::Handshake,
+                    )
+                    .await?
                 }
                 kimojio_tls::Response::WantWrite => {
-                    try_write(&mut self.ssl, &self.socket, deadline).await?
+                    try_write(
+                        &mut self.ssl,
+                        &self.socket,
+                        deadline,
+                        TlsOperation::Handshake,
+                    )
+                    .await?
                 }
                 kimojio_tls::Response::Eof => {
                     return Err(Errno::from_raw_os_error(crate::EPROTO));
@@ -170,6 +235,7 @@ async fn try_read(
     ssl: &mut TlsServer,
     socket: &impl SocketPair,
     deadline: Option<Instant>,
+    on_behalf_of: TlsOperation,
 ) -> Result<(), Errno> {
     let socket = socket.read_socket().await?;
     if let Some(socket) = socket.borrow() {
@@ -178,6 +244,11 @@ async fn try_read(
             if amount == 0 {
                 return Err(Errno::from_raw_os_error(libc::EPIPE));
             }
+            operations::write_event(Events::TlsTcpRead {
+                activity_id: operations::get_activity_id(),
+                bytes: amount,
+                on_behalf_of,
+            });
             ssl.use_push_buffer(amount);
         }
         Ok(())
@@ -190,6 +261,7 @@ async fn try_write(
     ssl: &mut TlsServer,
     socket: &impl SocketPair,
     deadline: Option<Instant>,
+    on_behalf_of: TlsOperation,
 ) -> Result<(), Errno> {
     let socket = socket.write_socket().await?;
     if let Some(socket) = socket.borrow() {
@@ -202,6 +274,11 @@ async fn try_write(
             if amount == 0 {
                 return Err(Errno::from_raw_os_error(libc::EPIPE));
             }
+            operations::write_event(Events::TlsTcpWrite {
+                activity_id: operations::get_activity_id(),
+                bytes: amount,
+                on_behalf_of,
+            });
             ssl.use_pull_buffer(amount);
         }
         Ok(())
@@ -219,17 +296,26 @@ async fn write_internal(
     mut buffer: &[u8],
     deadline: Option<Instant>,
 ) -> Result<(), Errno> {
+    let total = buffer.len();
     while !buffer.is_empty() {
         match ssl.write(buffer) {
             kimojio_tls::Response::Success(amount) => {
                 buffer = &buffer[amount..];
             }
             kimojio_tls::Response::Fail(e) => handle_tls_error(socket, "write_internal", e).await?,
-            kimojio_tls::Response::WantRead => try_read(ssl, socket, deadline).await?,
-            kimojio_tls::Response::WantWrite => try_write(ssl, socket, deadline).await?,
+            kimojio_tls::Response::WantRead => {
+                try_read(ssl, socket, deadline, TlsOperation::SslWrite).await?
+            }
+            kimojio_tls::Response::WantWrite => {
+                try_write(ssl, socket, deadline, TlsOperation::SslWrite).await?
+            }
             kimojio_tls::Response::Eof => return Err(Errno::from_raw_os_error(libc::EPIPE)),
         }
     }
+    operations::write_event(Events::TlsSslWrite {
+        activity_id: operations::get_activity_id(),
+        bytes: total,
+    });
     Ok(())
 }
 
@@ -266,10 +352,20 @@ async fn try_read_impl(
 ) -> Result<usize, Errno> {
     loop {
         match ssl.read(buffer) {
-            kimojio_tls::Response::Success(amount) => return Ok(amount),
+            kimojio_tls::Response::Success(amount) => {
+                operations::write_event(Events::TlsSslRead {
+                    activity_id: operations::get_activity_id(),
+                    bytes: amount,
+                });
+                return Ok(amount);
+            }
             kimojio_tls::Response::Fail(e) => handle_tls_error(socket, "try_read", e).await?,
-            kimojio_tls::Response::WantRead => try_read(ssl, socket, deadline).await?,
-            kimojio_tls::Response::WantWrite => try_write(ssl, socket, deadline).await?,
+            kimojio_tls::Response::WantRead => {
+                try_read(ssl, socket, deadline, TlsOperation::SslRead).await?
+            }
+            kimojio_tls::Response::WantWrite => {
+                try_write(ssl, socket, deadline, TlsOperation::SslRead).await?
+            }
             kimojio_tls::Response::Eof => return Ok(0),
         }
     }
@@ -281,17 +377,26 @@ async fn read_impl(
     mut buffer: &mut [u8],
     deadline: Option<Instant>,
 ) -> Result<(), Errno> {
+    let total = buffer.len();
     while !buffer.is_empty() {
         match ssl.read(buffer) {
             kimojio_tls::Response::Success(amount) => {
                 buffer = &mut buffer[amount..];
             }
             kimojio_tls::Response::Fail(e) => handle_tls_error(socket, "try_read", e).await?,
-            kimojio_tls::Response::WantRead => try_read(ssl, socket, deadline).await?,
-            kimojio_tls::Response::WantWrite => try_write(ssl, socket, deadline).await?,
+            kimojio_tls::Response::WantRead => {
+                try_read(ssl, socket, deadline, TlsOperation::SslRead).await?
+            }
+            kimojio_tls::Response::WantWrite => {
+                try_write(ssl, socket, deadline, TlsOperation::SslRead).await?
+            }
             kimojio_tls::Response::Eof => return Err(Errno::from_raw_os_error(libc::EPIPE)),
         }
     }
+    operations::write_event(Events::TlsSslRead {
+        activity_id: operations::get_activity_id(),
+        bytes: total,
+    });
     Ok(())
 }
 
@@ -305,7 +410,7 @@ async fn writev_impl(
         write_internal(ssl, socket, buffer, deadline).await?;
     }
     // flush
-    try_write(ssl, socket, deadline).await
+    try_write(ssl, socket, deadline, TlsOperation::SslWrite).await
 }
 
 async fn write_impl(
@@ -316,28 +421,45 @@ async fn write_impl(
 ) -> Result<(), Errno> {
     write_internal(ssl, socket, buffer, deadline).await?;
     // flush
-    try_write(ssl, socket, deadline).await
+    try_write(ssl, socket, deadline, TlsOperation::SslWrite).await
 }
 
 async fn shutdown_impl(ssl: &mut TlsServer, socket: &impl SocketPair) -> Result<(), Errno> {
+    let activity_id = operations::get_activity_id();
+    operations::write_event(Events::TlsShutdownStarted { activity_id });
     loop {
         match ssl.shutdown() {
-            kimojio_tls::Response::Success(_) => return Ok(()),
+            kimojio_tls::Response::Success(_) => {
+                operations::write_event(Events::TlsShutdownCompleted { activity_id });
+                return Ok(());
+            }
             kimojio_tls::Response::Fail(e) => handle_tls_error(socket, "read", e).await?,
             kimojio_tls::Response::WantRead => {
                 // Graceful shutdown returns 0 byte read on EOF.
-                if let Err(Errno::PIPE) = try_read(ssl, socket, None).await {
+                if let Err(Errno::PIPE) = try_read(ssl, socket, None, TlsOperation::Shutdown).await
+                {
+                    operations::write_event(Events::TlsShutdownCompleted { activity_id });
                     return Ok(());
                 }
             }
-            kimojio_tls::Response::WantWrite => try_write(ssl, socket, None).await?,
-            kimojio_tls::Response::Eof => return Ok(()),
+            kimojio_tls::Response::WantWrite => {
+                try_write(ssl, socket, None, TlsOperation::Shutdown).await?
+            }
+            kimojio_tls::Response::Eof => {
+                operations::write_event(Events::TlsShutdownCompleted { activity_id });
+                return Ok(());
+            }
         }
     }
 }
 
 async fn close_impl(socket: &mut Option<OwnedFd>, cause: Result<(), Errno>) -> Result<(), Errno> {
+    let error_code = cause.as_ref().err().map(|e| e.raw_os_error());
     if let Some(socket) = socket.take() {
+        operations::write_event(Events::TlsStreamClosed {
+            activity_id: operations::get_activity_id(),
+            cause: error_code,
+        });
         operations::close(socket).await?;
         cause
     } else {
@@ -432,9 +554,14 @@ async fn close_read_because<T>(
     socket: &SharedSocketPair,
     cause: Result<T, Errno>,
 ) -> Result<T, Errno> {
+    let error_code = cause.as_ref().err().map(|e| e.raw_os_error());
     let read_socket = socket.read_socket.lock().await?.take();
 
     if let Some(read_socket) = read_socket {
+        operations::write_event(Events::TlsStreamClosed {
+            activity_id: operations::get_activity_id(),
+            cause: error_code,
+        });
         operations::close(read_socket).await?;
         cause
     } else {
@@ -446,9 +573,14 @@ async fn close_write_because<T>(
     socket: &SharedSocketPair,
     cause: Result<T, Errno>,
 ) -> Result<T, Errno> {
+    let error_code = cause.as_ref().err().map(|e| e.raw_os_error());
     let write_socket = socket.write_socket.lock().await?.take();
 
     if let Some(write_socket) = write_socket {
+        operations::write_event(Events::TlsStreamClosed {
+            activity_id: operations::get_activity_id(),
+            cause: error_code,
+        });
         operations::close(write_socket).await?;
         cause
     } else {
