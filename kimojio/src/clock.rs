@@ -3,7 +3,7 @@
 
 //! Clock abstraction for deterministic timing in tests.
 //!
-//! This module provides a [`clock_now()`] helper used internally by deadline-based
+//! This module provides a `clock_now()` helper used internally by deadline-based
 //! operations to obtain the current time. When the `virtual-clock` feature is enabled,
 //! this returns the virtual clock's time if one is installed in the runtime; otherwise
 //! it returns [`std::time::Instant::now()`].
