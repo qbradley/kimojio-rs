@@ -93,7 +93,7 @@ Acceptance Scenarios:
 - Advancing virtual time past multiple deadlines: timers fire in deadline order
 - Calling `advance()` with no registered timers: returns 0, no error
 - VirtualClock `now()` called before any advance: returns the initial instant
-- Registering a timer with a deadline already in the past: fires on next advance (or immediately if already past)
+- Registering a timer with a deadline already in the past: fires on the next `advance()` call (not during registration, to avoid re-entrancy). Note: `VirtualSleepFuture::poll()` checks `clock.now() >= deadline` before registering, so a past-deadline sleep resolves immediately at poll time without needing `advance()`
 - Dropping all references to a VirtualSleepFuture without polling: no timer registered (timer registered on first poll)
 - Concurrent `advance()` calls: not applicable — kimojio is single-threaded
 
@@ -103,16 +103,17 @@ Acceptance Scenarios:
 - FR-001: Provide a `Clock` trait with `now()`, `register_timer()`, `cancel_timer()`, and `is_real()` methods (Stories: P1, P2, P6)
 - FR-002: Provide a `SystemClock` implementation that delegates to `std::time::Instant::now()` and io_uring for timers (Stories: P6)
 - FR-003: Provide a `VirtualClock` implementation with a priority-based timer wheel, `advance()`, `advance_to()`, and `next_deadline()` methods (Stories: P1, P3, P5)
-- FR-004: Provide `Runtime::new_with_clock()` constructor accepting a `Clock` implementation (Stories: P1)
+- FR-004: Provide `Runtime::new_with_clock()` constructor accepting a `Clock` implementation, and `Runtime::new_virtual()` convenience constructor that returns both a runtime and a `VirtualClock` handle (Stories: P1)
 - FR-005: Preserve `Runtime::new()` as a backward-compatible constructor using `SystemClock` with no generic parameters visible (Stories: P6)
 - FR-006: Virtualize `operations::sleep()` — when virtual clock is active, register in timer wheel instead of submitting io_uring SQE (Stories: P1)
 - FR-007: Provide `operations::sleep_until(deadline)` that sleeps until a specific instant using the runtime's clock (Stories: P3)
 - FR-008: Provide `operations::timeout_at(deadline, future)` that races a deadline against an arbitrary future using the runtime's clock (Stories: P4)
 - FR-009: Replace `Instant::now()` with `clock.now()` in all deadline-based I/O functions and synchronization primitives within kimojio that compute remaining timeouts (operations.rs deadline functions, async_event.rs, async_lock.rs) (Stories: P2)
 - FR-010: Implement `Drop` for `VirtualSleepFuture` that cancels the registered timer (Stories: P5)
-- FR-011: Gate `VirtualClock` and test infrastructure behind a `virtual-clock` Cargo feature flag (Stories: P1, P6)
+- FR-011: Gate `VirtualClock` and test infrastructure behind a `virtual-clock` Cargo feature flag; `sleep_until` and `timeout_at` are always available as generally useful async primitives (Stories: P1, P3, P4, P6)
 - FR-012: Store the clock reference in thread-local `TaskState` so `operations::sleep()` can access it without parameter changes (Stories: P1, P6)
 - FR-013: Provide documentation including a usage guide, design document, and example code demonstrating virtual time usage (Stories: P1, P3, P4)
+- FR-014: Provide `Configuration::set_clock()` builder method for injecting a clock into the runtime (Stories: P1)
 
 ### Key Entities
 - `Clock`: Trait defining the time provider interface

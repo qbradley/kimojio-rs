@@ -58,19 +58,22 @@ We're adding deterministic virtual time to kimojio so upstream consumers can wri
 
 - **`kimojio/Cargo.toml`**: Add `virtual-clock = []` feature flag (no additional dependencies — uses `std::collections::BinaryHeap`, `Rc`, `RefCell`)
 
-- **`kimojio/src/clock.rs`** (new file): Core clock module, feature-gated with `#[cfg(feature = "virtual-clock")]`
-  - `Clock` trait: `now(&self) -> Instant`, `register_timer(&self, deadline: Instant, waker: Waker) -> TimerId`, `cancel_timer(&self, id: TimerId)`, `fn is_real(&self) -> bool { true }` (default impl)
-  - `TimerId(u64)`: opaque timer identifier
-  - `SystemClock` struct implementing `Clock` — `now()` delegates to `Instant::now()`, timer methods are no-ops (real timers go through io_uring), `is_real()` returns `true`
-  - `VirtualClock` struct wrapping `Rc<RefCell<VirtualClockState>>` — implements `Clone` for shared ownership between runtime internals and test code
-  - `VirtualClockState`: `current: Instant`, `timers: BinaryHeap<VirtualTimer>` (min-heap by deadline), `next_timer_id: u64`
-  - `VirtualTimer`: `id: TimerId`, `deadline: Instant`, `waker: Waker` — implements `Ord` with reversed comparison for min-heap behavior
-  - `VirtualClock::new(start: Instant) -> Self` — constructor
-  - `VirtualClock::advance(&self, duration: Duration) -> usize` — advances time, pops expired timers, wakes tasks, returns count
-  - `VirtualClock::advance_to(&self, target: Instant) -> usize` — advances to specific instant
-  - `VirtualClock::next_deadline(&self) -> Option<Instant>` — peek next timer (for test stepping)
-  - `VirtualClock::now(&self) -> Instant` — convenience accessor (same as `Clock::now()`)
-  - `Clock` impl for `VirtualClock`: `now()` returns `state.current`, `register_timer()` pushes to heap, `cancel_timer()` removes by ID (O(n) linear scan — acceptable for test workloads), `is_real()` returns `false`
+- **`kimojio/src/clock.rs`** (new file): Clock module — partially feature-gated
+  - **Always available (not feature-gated)**:
+    - `pub(crate) fn clock_now() -> Instant` — dual `#[cfg]` variants: when `virtual-clock` enabled, checks TaskState for virtual clock and returns `clock.now()` or falls back to `Instant::now()`; when disabled, always returns `Instant::now()`. This ensures Phase 3 replacements compile regardless of feature state.
+  - **Feature-gated with `#[cfg(feature = "virtual-clock")]`**:
+    - `Clock` trait: `now(&self) -> Instant`, `register_timer(&self, deadline: Instant, waker: Waker) -> TimerId`, `cancel_timer(&self, id: TimerId)`, `fn is_real(&self) -> bool { true }` (default impl)
+    - `TimerId(u64)`: opaque timer identifier
+    - `SystemClock` struct implementing `Clock` — `now()` delegates to `Instant::now()`, timer methods are no-ops (real timers go through io_uring), `is_real()` returns `true`
+    - `VirtualClock` struct wrapping `Rc<RefCell<VirtualClockState>>` — implements `Clone` for shared ownership between runtime internals and test code
+    - `VirtualClockState`: `current: Instant`, `timers: BinaryHeap<VirtualTimer>` (min-heap by `(deadline, TimerId)` for deterministic ordering of equal-deadline timers), `next_timer_id: u64`
+    - `VirtualTimer`: `id: TimerId`, `deadline: Instant`, `waker: Waker` — implements `Ord` with reversed comparison on `(deadline, id)` tuple for min-heap with stable tie-breaking
+    - `VirtualClock::new(start: Instant) -> Self` — constructor
+    - `VirtualClock::advance(&self, duration: Duration) -> usize` — advances time, pops expired timers, wakes tasks, returns count
+    - `VirtualClock::advance_to(&self, target: Instant) -> usize` — advances to specific instant
+    - `VirtualClock::next_deadline(&self) -> Option<Instant>` — peek next timer (for test stepping)
+    - `VirtualClock::now(&self) -> Instant` — convenience accessor (same as `Clock::now()`)
+    - `Clock` impl for `VirtualClock`: `now()` returns `state.current`, `register_timer()` pushes to heap, `cancel_timer()` removes by ID (O(n) linear scan — acceptable for test workloads), `is_real()` returns `false`
 
 - **`kimojio/src/configuration.rs`**: Add feature-gated clock field
   - Add `#[cfg(feature = "virtual-clock")] pub(crate) clock: Option<Rc<dyn Clock>>` field to `Configuration`
@@ -88,8 +91,8 @@ We're adding deterministic virtual time to kimojio so upstream consumers can wri
   - Add `#[cfg(feature = "virtual-clock")] pub fn new_virtual(thread_index: u8, configuration: Configuration) -> (Self, VirtualClock)` — convenience constructor that creates a VirtualClock, injects it via `new_with_clock`, returns both
 
 - **`kimojio/src/lib.rs`**: Module declaration and re-exports
-  - Add `#[cfg(feature = "virtual-clock")] pub mod clock;`
-  - Add `#[cfg(feature = "virtual-clock")] pub use clock::{Clock, SystemClock, VirtualClock, TimerId};`
+  - Add `pub mod clock;` (NOT feature-gated — module always exists for `clock_now()`)
+  - Add `#[cfg(feature = "virtual-clock")] pub use clock::{Clock, SystemClock, VirtualClock, TimerId};` (public types are feature-gated)
 
 - **`kimojio/src/clock.rs` tests**: Comprehensive unit tests for VirtualClock
   - Timer registration and advance fires timers in deadline order
@@ -112,7 +115,9 @@ We're adding deterministic virtual time to kimojio so upstream consumers can wri
 #### Manual Verification:
 - [ ] `Configuration::new()` unchanged for existing users
 - [ ] `Runtime::new()` signature unchanged
-- [ ] `Runtime::new_virtual()` creates a runtime with VirtualClock handle
+- [ ] `Runtime::new_with_clock()` and `Runtime::new_virtual()` create runtimes with clock
+- [ ] All new public types (`Clock`, `SystemClock`, `VirtualClock`, `TimerId`) have `///` doc comments with examples
+- [ ] Backward compat: existing code compiles and runs with feature on and off (verify macro paths `run()`, `run_test()`)
 
 ---
 
@@ -131,22 +136,23 @@ We're adding deterministic virtual time to kimojio so upstream consumers can wri
     - Virtual path: compute `deadline = clock.now() + duration`, create `SleepFuture::Virtual`
     - Real path: existing io_uring code (unchanged)
     - Critical: release TaskState borrow before creating `UnitFuture::with_polled()` (it re-borrows internally)
-  - **`SleepFuture`**: Restructure from struct to `pin_project_lite` enum with `Real { fut: UnitFuture<'a> }` and `Virtual { fut: VirtualSleepFuture }` variants (the Virtual variant feature-gated)
-    - `Future` impl: dispatch to inner variant
+  - **`SleepFuture`**: Use dual type definitions with `#[cfg]` at the type level (NOT cfg on enum variants — `pin_project_lite` does not support this):
+    - `#[cfg(not(feature = "virtual-clock"))]`: Keep existing `pin_project_lite` struct wrapping `UnitFuture<'a>` — identical compiled output to today
+    - `#[cfg(feature = "virtual-clock")]`: Define as enum with `Real { fut: ... }` and `Virtual { fut: VirtualSleepFuture }` variants. Since `VirtualSleepFuture` is `Unpin`, manual pin projection is straightforward (only the `Real` variant needs pinning via `unsafe` or use `pin-project` full crate)
+    - `Future` impl: dispatch to inner variant (duplicated for each cfg)
     - `FusedFuture` impl: dispatch to inner variant
-    - `cancel()` method: dispatch to inner variant (virtual: just drop/cancel timer)
-    - When feature is off, the enum has only `Real` variant — compiler optimizes to identical code
-  - **`sleep_until(deadline: Instant)` (new)**: Feature-gated public function. Similar to `sleep()` but takes absolute `Instant`. Virtual path: register timer directly at deadline. Real path: compute `deadline - Instant::now()` and delegate to existing `sleep()`.
-  - **`timeout_at(deadline: Instant, future: impl Future)` (new)**: Feature-gated public function. Returns `Result<T, TimeoutError>`. Implementation: use `futures::future::select()` (not `futures::select!` — avoids requiring `FusedFuture` on the inner future) between the inner future and `sleep_until(deadline)`. When virtual clock advances past deadline, sleep completes and returns timeout error.
-  - Add `pub(crate) fn clock_now() -> Instant` helper **in `clock.rs`** (not operations.rs): feature-gated function that checks TaskState for virtual clock, returns `clock.now()` or `Instant::now()`. Placed in `clock.rs` to avoid coupling `async_event`/`async_lock` to `operations`. Used by Phase 2 and Phase 3 across all modules.
+    - `cancel()` method: dispatch to inner variant (virtual: cancel timer)
+    - All public API (`Future`, `FusedFuture`, `cancel()`) preserved identically in both cfg variants
+  - **`sleep_until(deadline: Instant)` (new)**: Always-available public function (not feature-gated — useful for all kimojio users). When virtual clock is active: register timer directly at deadline. When using real time: compute `deadline - Instant::now()` and delegate to existing `sleep()`.
+  - **`timeout_at(deadline: Instant, future: impl Future)` (new)**: Always-available public function. Returns `Result<T, TimeoutError>`. Implementation: use `futures::future::select()` (not `futures::select!` — avoids requiring `FusedFuture` on the inner future) between the inner future and `sleep_until(deadline)`. When virtual clock advances past deadline, sleep completes and returns timeout error. When using real time, uses real io_uring timeout.
+  - Add `pub(crate) fn clock_now() -> Instant` helper **in `clock.rs`** (not operations.rs): dual `#[cfg]` function (see Phase 1 clock.rs description). Placed in `clock.rs` to avoid coupling `async_event`/`async_lock` to `operations`. Used by Phase 2 and Phase 3 across all modules.
 
 - **Tests** (in `kimojio/src/operations.rs` test module or `clock.rs` test module):
   - **Test harness pattern**: Virtual clock tests cannot use `#[crate::test]` (which creates a standard runtime). Instead, create a helper like `fn run_virtual_test(test: impl FnOnce(VirtualClock) -> F)` that constructs `Runtime::new_virtual()`, calls `block_on()`, and provides the clock handle to the test closure. Or use `Runtime::new_virtual()` + `block_on()` directly in each test.
   - P1 scenarios: virtual sleep completes on advance, stays pending without advance, multiple sleeps wake in order, real sleep unaffected
   - P3 scenarios: `sleep_until` completes at deadline, past deadline completes immediately
-  - P4 scenarios: `timeout_at` returns inner result on fast future, returns timeout error on advance
+  - P4 scenarios: `timeout_at` returns inner result on fast future, returns timeout error on advance, **timeout_at with SystemClock (no virtual clock) uses real io_uring timeout** (P4-3)
   - P5 scenarios: dropped VirtualSleepFuture removes timer, no spurious wakeups
-  - Integration test: `wait_with_deadline` on AsyncEvent with virtual clock — both `Instant::now()` and inner `sleep()` get virtualized, verify the loop in `async_event.rs:146-176` works correctly with virtual time
 
 ### Success Criteria:
 
@@ -160,6 +166,7 @@ We're adding deterministic virtual time to kimojio so upstream consumers can wri
 - [ ] `operations::sleep()` function signature unchanged
 - [ ] `SleepFuture` type name unchanged (enum internals are private)
 - [ ] `cancel()` method works for both real and virtual paths
+- [ ] All new public functions (`sleep_until`, `timeout_at`) have `///` doc comments with examples
 
 ---
 
@@ -183,8 +190,9 @@ We're adding deterministic virtual time to kimojio so upstream consumers can wri
 
 - **Tests**: 
   - P2 scenarios: `write_with_deadline` computes correct remaining time from virtual clock, past virtual deadline returns timeout immediately
-  - Integration test: create virtual runtime, advance time, verify `wait_with_deadline` on AsyncEvent respects virtual time
+  - Integration test: create virtual runtime, advance time, verify `wait_with_deadline` on AsyncEvent respects virtual time (requires both Phase 2 sleep virtualization and Phase 3 `Instant::now()` replacement)
   - Integration test: `lock_with_timeout` with virtual clock computes deadline from virtual now
+  - Backward compat: verify all existing async_event and async_lock tests pass with feature on and off
 
 ### Success Criteria:
 
