@@ -337,6 +337,81 @@ mod virtual_clock {
         }
     }
 
+    /// A future that completes when the virtual clock reaches the specified deadline.
+    ///
+    /// Created internally by [`sleep()`](crate::operations::sleep) and
+    /// [`sleep_until()`](crate::operations::sleep_until) when a virtual clock
+    /// is active. Registers a timer with the clock on first poll and resolves
+    /// when virtual time is advanced past the deadline.
+    ///
+    /// Implements [`Drop`] to cancel the registered timer if the future is
+    /// dropped before completion (FR-010: timer cancellation on drop).
+    pub(crate) struct VirtualSleepFuture {
+        deadline: Instant,
+        clock: Rc<dyn Clock>,
+        timer_id: Option<TimerId>,
+        completed: bool,
+    }
+
+    impl VirtualSleepFuture {
+        pub(crate) fn new(deadline: Instant, clock: Rc<dyn Clock>) -> Self {
+            Self {
+                deadline,
+                clock,
+                timer_id: None,
+                completed: false,
+            }
+        }
+
+        pub(crate) fn cancel(&mut self) {
+            if let Some(id) = self.timer_id.take() {
+                self.clock.cancel_timer(id);
+            }
+            self.completed = true;
+        }
+
+        pub(crate) fn is_terminated(&self) -> bool {
+            self.completed
+        }
+    }
+
+    impl std::future::Future for VirtualSleepFuture {
+        type Output = Result<(), rustix_uring::Errno>;
+
+        fn poll(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Self::Output> {
+            if self.completed {
+                panic!("polled after completion");
+            }
+
+            if self.clock.now() >= self.deadline {
+                self.completed = true;
+                if let Some(id) = self.timer_id.take() {
+                    self.clock.cancel_timer(id);
+                }
+                return std::task::Poll::Ready(Ok(()));
+            }
+
+            // Cancel old timer and re-register with potentially updated waker
+            if let Some(id) = self.timer_id.take() {
+                self.clock.cancel_timer(id);
+            }
+            let id = self.clock.register_timer(self.deadline, cx.waker().clone());
+            self.timer_id = Some(id);
+            std::task::Poll::Pending
+        }
+    }
+
+    impl Drop for VirtualSleepFuture {
+        fn drop(&mut self) {
+            if let Some(id) = self.timer_id.take() {
+                self.clock.cancel_timer(id);
+            }
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -608,3 +683,6 @@ mod virtual_clock {
 
 #[cfg(feature = "virtual-clock")]
 pub use virtual_clock::{Clock, SystemClock, TimerId, VirtualClock};
+
+#[cfg(feature = "virtual-clock")]
+pub(crate) use virtual_clock::VirtualSleepFuture;

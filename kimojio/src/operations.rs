@@ -1060,12 +1060,40 @@ impl FusedFuture for SetYieldCpuFuture {
 
 /// Suspends the task for the specified duration (or longer).
 ///
+/// When a [`VirtualClock`](crate::clock::VirtualClock) is installed in the
+/// runtime, the sleep completes when virtual time is advanced past the
+/// deadline — no real wall-clock time passes.
+///
 /// # Cancel safety
 ///
 /// This method is cancel safe.
 pub fn sleep(duration: Duration) -> SleepFuture<'static> {
-    // boxed Timespec will be dropped when the Completion drops, making
-    // this cancel safe.
+    #[cfg(feature = "virtual-clock")]
+    {
+        // Check for virtual clock — must release TaskState borrow before
+        // creating UnitFuture (which re-borrows TaskState internally).
+        let virtual_sleep = {
+            let task_state = TaskState::get();
+            task_state.clock.as_ref().and_then(|clock| {
+                if !clock.is_real() {
+                    let deadline = clock.now() + duration;
+                    Some(crate::clock::VirtualSleepFuture::new(
+                        deadline,
+                        clock.clone(),
+                    ))
+                } else {
+                    None
+                }
+            })
+        };
+
+        if let Some(vfut) = virtual_sleep {
+            return SleepFuture {
+                inner: SleepFutureInner::Virtual(vfut),
+            };
+        }
+    }
+
     let timespec = Box::new(Timespec::from(duration));
     let entry = opcode::Timeout::new(timespec.as_ref()).build();
     let fut = UnitFuture::with_polled(
@@ -1076,28 +1104,147 @@ pub fn sleep(duration: Duration) -> SleepFuture<'static> {
         false,
         CompletionResources::Box(timespec),
     );
-    SleepFuture { fut }
+
+    #[cfg(feature = "virtual-clock")]
+    {
+        SleepFuture {
+            inner: SleepFutureInner::Real(fut),
+        }
+    }
+
+    #[cfg(not(feature = "virtual-clock"))]
+    {
+        SleepFuture { fut }
+    }
 }
 
+/// Suspends the task until the specified deadline.
+///
+/// When a [`VirtualClock`](crate::clock::VirtualClock) is installed in the
+/// runtime, completes when virtual time is advanced to or past `deadline`.
+/// With real system time, computes the remaining duration and delegates to
+/// an io_uring timeout.
+///
+/// If `deadline` is already in the past, the future completes immediately
+/// on first poll.
+///
+/// # Cancel safety
+///
+/// This method is cancel safe.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use std::time::{Duration, Instant};
+/// use kimojio::operations;
+///
+/// async fn example() {
+///     let deadline = Instant::now() + Duration::from_secs(5);
+///     operations::sleep_until(deadline).await.unwrap();
+/// }
+/// ```
+pub fn sleep_until(deadline: Instant) -> SleepFuture<'static> {
+    #[cfg(feature = "virtual-clock")]
+    {
+        let virtual_sleep = {
+            let task_state = TaskState::get();
+            task_state.clock.as_ref().and_then(|clock| {
+                if !clock.is_real() {
+                    Some(crate::clock::VirtualSleepFuture::new(
+                        deadline,
+                        clock.clone(),
+                    ))
+                } else {
+                    None
+                }
+            })
+        };
+
+        if let Some(vfut) = virtual_sleep {
+            return SleepFuture {
+                inner: SleepFutureInner::Virtual(vfut),
+            };
+        }
+    }
+
+    let now = crate::clock::clock_now();
+    let duration = deadline.saturating_duration_since(now);
+    sleep(duration)
+}
+
+/// Runs `future` with a deadline, returning a timeout error if the deadline
+/// is reached before the future completes.
+///
+/// When a [`VirtualClock`](crate::clock::VirtualClock) is installed, the
+/// timeout fires when virtual time is advanced past `deadline` — no real
+/// wall-clock time passes.
+///
+/// # Cancel safety
+///
+/// The inner future is dropped if the timeout fires.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use std::time::{Duration, Instant};
+/// use kimojio::{TimeoutError, operations};
+///
+/// async fn example() {
+///     let deadline = Instant::now() + Duration::from_secs(5);
+///     match operations::timeout_at(deadline, async { 42 }).await {
+///         Ok(value) => assert_eq!(value, 42),
+///         Err(TimeoutError::Timeout) => panic!("timed out"),
+///         Err(TimeoutError::Canceled) => panic!("canceled"),
+///     }
+/// }
+/// ```
+pub async fn timeout_at<F: Future>(
+    deadline: Instant,
+    future: F,
+) -> Result<F::Output, crate::TimeoutError> {
+    use futures::future::{Either, select};
+    use std::pin::pin;
+
+    let future = pin!(future);
+    let timer = pin!(sleep_until(deadline));
+
+    match select(future, timer).await {
+        Either::Left((result, _)) => Ok(result),
+        Either::Right((Ok(()), _)) => Err(crate::TimeoutError::Timeout),
+        Either::Right((Err(_), _)) => Err(crate::TimeoutError::Canceled),
+    }
+}
+
+// --- SleepFuture: dual type definitions for feature gating ---
+//
+// pin_project_lite does NOT support #[cfg] on enum variants, so we use
+// two separate type definitions: the original pin_project_lite struct when
+// virtual-clock is off, and an enum when it's on.
+
+#[cfg(not(feature = "virtual-clock"))]
 pin_project_lite::pin_project! {
+    /// A future that resolves after a timeout duration.
+    ///
+    /// Created by [`sleep()`] or [`sleep_until()`].
     pub struct SleepFuture<'a> {
         #[pin]
         fut: UnitFuture<'a>,
     }
 }
 
+#[cfg(not(feature = "virtual-clock"))]
 impl<'a> SleepFuture<'a> {
+    /// Cancels this sleep, causing it to resolve with an error.
     pub fn cancel(self: Pin<&mut Self>) {
         self.project().fut.cancel();
     }
 }
 
+#[cfg(not(feature = "virtual-clock"))]
 impl<'a> Future for SleepFuture<'a> {
     type Output = Result<(), Errno>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // Timeout returns ETIME in the expected case. Any other
-        // error is returned (e.g. Canceled).
         match self.project().fut.poll(cx) {
             Poll::Ready(Err(Errno::TIME)) => Poll::Ready(Ok(())),
             Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
@@ -1107,9 +1254,73 @@ impl<'a> Future for SleepFuture<'a> {
     }
 }
 
+#[cfg(not(feature = "virtual-clock"))]
 impl<'a> FusedFuture for SleepFuture<'a> {
     fn is_terminated(&self) -> bool {
         self.fut.is_terminated()
+    }
+}
+
+/// A future that resolves after a timeout duration.
+///
+/// Created by [`sleep()`] or [`sleep_until()`]. When the `virtual-clock`
+/// feature is enabled and a [`VirtualClock`](crate::clock::VirtualClock) is
+/// active, resolves based on virtual time advancement instead of real
+/// wall-clock time.
+#[cfg(feature = "virtual-clock")]
+pub struct SleepFuture<'a> {
+    inner: SleepFutureInner<'a>,
+}
+
+#[cfg(feature = "virtual-clock")]
+enum SleepFutureInner<'a> {
+    Real(UnitFuture<'a>),
+    Virtual(crate::clock::VirtualSleepFuture),
+}
+
+#[cfg(feature = "virtual-clock")]
+impl<'a> SleepFuture<'a> {
+    /// Cancels this sleep, causing it to resolve with an error.
+    pub fn cancel(self: Pin<&mut Self>) {
+        // SAFETY: Real variant is pinned (contains !Unpin UnitFuture).
+        // Virtual variant is Unpin (all fields are Unpin), so mutable
+        // access through Pin is safe.
+        unsafe {
+            match &mut self.get_unchecked_mut().inner {
+                SleepFutureInner::Real(fut) => Pin::new_unchecked(fut).cancel(),
+                SleepFutureInner::Virtual(fut) => fut.cancel(),
+            }
+        }
+    }
+}
+
+#[cfg(feature = "virtual-clock")]
+impl<'a> Future for SleepFuture<'a> {
+    type Output = Result<(), Errno>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // SAFETY: Same pin projection justification as cancel().
+        unsafe {
+            match &mut self.get_unchecked_mut().inner {
+                SleepFutureInner::Real(fut) => match Pin::new_unchecked(fut).poll(cx) {
+                    Poll::Ready(Err(Errno::TIME)) => Poll::Ready(Ok(())),
+                    Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+                    Poll::Ready(Ok(_)) => panic!("Timeout should never return Ok"),
+                    Poll::Pending => Poll::Pending,
+                },
+                SleepFutureInner::Virtual(fut) => Pin::new(fut).poll(cx),
+            }
+        }
+    }
+}
+
+#[cfg(feature = "virtual-clock")]
+impl<'a> FusedFuture for SleepFuture<'a> {
+    fn is_terminated(&self) -> bool {
+        match &self.inner {
+            SleepFutureInner::Real(fut) => fut.is_terminated(),
+            SleepFutureInner::Virtual(fut) => fut.is_terminated(),
+        }
     }
 }
 
@@ -2384,5 +2595,306 @@ mod test {
         operations::close(file);
         operations::unlink(newpath2).await.unwrap();
         operations::rmdir(root).await.unwrap();
+    }
+
+    // --- Virtual Clock Tests ---
+    // These tests use Runtime::new_virtual() + block_on() directly because
+    // #[crate::test] creates a standard runtime without a virtual clock.
+
+    #[cfg(feature = "virtual-clock")]
+    mod virtual_clock_tests {
+        use crate::configuration::Configuration;
+        use crate::operations;
+        use crate::{Runtime, TimeoutError};
+        use std::cell::Cell;
+        use std::rc::Rc;
+        use std::task::Poll;
+        use std::time::Duration;
+
+        /// Helper: run a test with a virtual clock runtime.
+        fn run_virtual<F, Fut>(test: F)
+        where
+            F: FnOnce(crate::clock::VirtualClock) -> Fut,
+            Fut: std::future::Future<Output = ()> + 'static,
+        {
+            let (mut runtime, clock) = Runtime::new_virtual(0, Configuration::new());
+            let clock2 = clock.clone();
+            let result = runtime.block_on(test(clock2));
+            if let Some(Err(payload)) = result {
+                std::panic::resume_unwind(payload);
+            }
+            drop(clock);
+        }
+
+        // --- P1: Virtual sleep completes on advance ---
+
+        #[test]
+        fn virtual_sleep_completes_on_advance() {
+            run_virtual(|clock| async move {
+                use std::pin::pin;
+
+                let mut sleep = pin!(operations::sleep(Duration::from_secs(60)));
+
+                // Poll once to register timer
+                let completed = futures::future::poll_fn(|cx| match sleep.as_mut().poll(cx) {
+                    Poll::Pending => Poll::Ready(false),
+                    Poll::Ready(_) => Poll::Ready(true),
+                })
+                .await;
+                assert!(!completed, "should be pending before advance");
+
+                // Advance past the deadline
+                clock.advance(Duration::from_secs(60));
+
+                // Now await — should complete immediately
+                sleep.await.unwrap();
+            });
+        }
+
+        #[test]
+        fn virtual_sleep_stays_pending_without_advance() {
+            run_virtual(|clock| async move {
+                use std::pin::pin;
+
+                let mut sleep = pin!(operations::sleep(Duration::from_secs(10)));
+
+                // Poll multiple times without advancing — should stay Pending
+                for _ in 0..3 {
+                    let completed = futures::future::poll_fn(|cx| match sleep.as_mut().poll(cx) {
+                        Poll::Pending => Poll::Ready(false),
+                        Poll::Ready(_) => Poll::Ready(true),
+                    })
+                    .await;
+                    assert!(!completed);
+                }
+
+                // Advance partially — still pending
+                clock.advance(Duration::from_secs(5));
+                let completed = futures::future::poll_fn(|cx| match sleep.as_mut().poll(cx) {
+                    Poll::Pending => Poll::Ready(false),
+                    Poll::Ready(_) => Poll::Ready(true),
+                })
+                .await;
+                assert!(!completed);
+
+                // Advance to exact deadline — now completes
+                clock.advance(Duration::from_secs(5));
+                sleep.await.unwrap();
+            });
+        }
+
+        #[test]
+        fn multiple_virtual_sleeps_wake_in_order() {
+            run_virtual(|clock| async move {
+                let order = Rc::new(std::cell::RefCell::new(Vec::new()));
+                let o1 = order.clone();
+                let o2 = order.clone();
+                let o3 = order.clone();
+
+                operations::spawn_task(async move {
+                    operations::sleep(Duration::from_secs(30)).await.unwrap();
+                    o1.borrow_mut().push(30);
+                });
+                operations::spawn_task(async move {
+                    operations::sleep(Duration::from_secs(10)).await.unwrap();
+                    o2.borrow_mut().push(10);
+                });
+                operations::spawn_task(async move {
+                    operations::sleep(Duration::from_secs(20)).await.unwrap();
+                    o3.borrow_mut().push(20);
+                });
+
+                // Let all tasks register their timers
+                operations::yield_io().await;
+
+                // Advance past all deadlines at once
+                clock.advance(Duration::from_secs(30));
+                // Yield enough times for all tasks to run
+                for _ in 0..5 {
+                    operations::yield_io().await;
+                }
+
+                assert_eq!(*order.borrow(), vec![10, 20, 30]);
+            });
+        }
+
+        #[test]
+        fn virtual_sleep_60s_completes_fast() {
+            let wall_start = std::time::Instant::now();
+            run_virtual(|clock| async move {
+                use std::pin::pin;
+                let mut sleep = pin!(operations::sleep(Duration::from_secs(60)));
+
+                // Poll once to register timer
+                futures::future::poll_fn(|cx| {
+                    let _ = sleep.as_mut().poll(cx);
+                    Poll::Ready(())
+                })
+                .await;
+
+                clock.advance(Duration::from_secs(60));
+                sleep.await.unwrap();
+            });
+            // Must complete in <1s wall time (spec: <10ms, but allow margin for CI)
+            assert!(wall_start.elapsed() < Duration::from_secs(1));
+        }
+
+        #[test]
+        fn spawned_virtual_sleep_completes_on_advance() {
+            run_virtual(|clock| async move {
+                let done = Rc::new(Cell::new(false));
+                let d = done.clone();
+
+                operations::spawn_task(async move {
+                    operations::sleep(Duration::from_secs(60)).await.unwrap();
+                    d.set(true);
+                });
+
+                // Let spawned task start and register its timer
+                operations::yield_io().await;
+                assert!(!done.get());
+
+                // Advance past deadline
+                clock.advance(Duration::from_secs(60));
+
+                // Let spawned task complete
+                operations::yield_io().await;
+                assert!(done.get());
+            });
+        }
+
+        // --- P3: sleep_until ---
+
+        #[test]
+        fn sleep_until_completes_at_deadline() {
+            run_virtual(|clock| async move {
+                use std::pin::pin;
+                let deadline = clock.now() + Duration::from_secs(5);
+                let mut sleep = pin!(operations::sleep_until(deadline));
+
+                let completed = futures::future::poll_fn(|cx| match sleep.as_mut().poll(cx) {
+                    Poll::Pending => Poll::Ready(false),
+                    Poll::Ready(_) => Poll::Ready(true),
+                })
+                .await;
+                assert!(!completed);
+
+                clock.advance(Duration::from_secs(5));
+                sleep.await.unwrap();
+            });
+        }
+
+        #[test]
+        fn sleep_until_past_deadline_completes_immediately() {
+            run_virtual(|clock| async move {
+                let past = clock.now() - Duration::from_secs(1);
+                operations::sleep_until(past).await.unwrap();
+            });
+        }
+
+        // --- P4: timeout_at ---
+
+        #[test]
+        fn timeout_at_returns_inner_result_on_fast_future() {
+            run_virtual(|clock| async move {
+                let deadline = clock.now() + Duration::from_secs(10);
+                let result = operations::timeout_at(deadline, async { 42 }).await;
+                assert_eq!(result, Ok(42));
+            });
+        }
+
+        #[test]
+        fn timeout_at_returns_timeout_on_advance() {
+            run_virtual(|clock| async move {
+                let deadline = clock.now() + Duration::from_secs(5);
+                let clock2 = clock.clone();
+
+                let done = Rc::new(Cell::new(None::<Result<(), TimeoutError>>));
+                let d = done.clone();
+
+                operations::spawn_task(async move {
+                    let result =
+                        operations::timeout_at(deadline, std::future::pending::<()>()).await;
+                    d.set(Some(result));
+                });
+
+                operations::yield_io().await;
+                assert!(done.get().is_none(), "should still be pending");
+
+                // Advance past deadline — should trigger timeout
+                clock2.advance(Duration::from_secs(5));
+                operations::yield_io().await;
+
+                assert_eq!(done.get(), Some(Err(TimeoutError::Timeout)));
+            });
+        }
+
+        #[test]
+        fn timeout_at_past_deadline_immediate_timeout() {
+            run_virtual(|clock| async move {
+                let past_deadline = clock.now() - Duration::from_secs(1);
+                let result =
+                    operations::timeout_at(past_deadline, std::future::pending::<()>()).await;
+                assert_eq!(result, Err(TimeoutError::Timeout));
+            });
+        }
+
+        // --- P5: Drop cancellation ---
+
+        #[test]
+        fn dropped_virtual_sleep_cancels_timer() {
+            run_virtual(|clock| async move {
+                assert_eq!(clock.pending_timers(), 0);
+
+                {
+                    use std::pin::pin;
+                    let mut sleep = pin!(operations::sleep(Duration::from_secs(100)));
+
+                    // Poll once to register the timer
+                    futures::future::poll_fn(|cx| {
+                        let _ = sleep.as_mut().poll(cx);
+                        Poll::Ready(())
+                    })
+                    .await;
+                    assert_eq!(clock.pending_timers(), 1);
+                }
+                // sleep dropped when scope ends — timer should be cancelled
+                assert_eq!(clock.pending_timers(), 0);
+            });
+        }
+
+        #[test]
+        fn dropped_virtual_sleep_no_spurious_wakeup_on_advance() {
+            run_virtual(|clock| async move {
+                {
+                    use std::pin::pin;
+                    let mut sleep = pin!(operations::sleep(Duration::from_secs(10)));
+
+                    // Poll once to register timer
+                    futures::future::poll_fn(|cx| {
+                        let _ = sleep.as_mut().poll(cx);
+                        Poll::Ready(())
+                    })
+                    .await;
+                }
+                // sleep dropped — timer cancelled
+                assert_eq!(clock.pending_timers(), 0);
+
+                // Advancing should not panic or cause issues
+                let fired = clock.advance(Duration::from_secs(10));
+                assert_eq!(fired, 0);
+            });
+        }
+
+        #[test]
+        fn unpolled_virtual_sleep_drops_cleanly() {
+            run_virtual(|clock| async move {
+                // Create and immediately drop without polling
+                let sleep = operations::sleep(Duration::from_secs(10));
+                drop(sleep);
+                // No timer should have been registered
+                assert_eq!(clock.pending_timers(), 0);
+            });
+        }
     }
 }
