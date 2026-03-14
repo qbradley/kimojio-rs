@@ -564,7 +564,7 @@ pub fn writev_with_deadline<'a>(
     deadline: Option<Instant>,
 ) -> ErrnoOrFuture<UsizeFuture<'a>> {
     let timeout = if let Some(deadline) = deadline {
-        if let Some(duration) = deadline.checked_duration_since(Instant::now()) {
+        if let Some(duration) = deadline.checked_duration_since(crate::clock::clock_now()) {
             Some(duration)
         } else {
             return ErrnoOrFuture::Error {
@@ -627,7 +627,7 @@ pub fn write_with_deadline<'a>(
     deadline: Option<Instant>,
 ) -> ErrnoOrFuture<UsizeFuture<'a>> {
     let timeout = if let Some(deadline) = deadline {
-        if let Some(duration) = deadline.checked_duration_since(Instant::now()) {
+        if let Some(duration) = deadline.checked_duration_since(crate::clock::clock_now()) {
             Some(duration)
         } else {
             return ErrnoOrFuture::Error {
@@ -842,7 +842,7 @@ pub fn read_with_deadline<'a>(
     deadline: Option<Instant>,
 ) -> ErrnoOrFuture<UsizeFuture<'a>> {
     let timeout = if let Some(deadline) = deadline {
-        if let Some(duration) = deadline.checked_duration_since(Instant::now()) {
+        if let Some(duration) = deadline.checked_duration_since(crate::clock::clock_now()) {
             Some(duration)
         } else {
             return ErrnoOrFuture::Error {

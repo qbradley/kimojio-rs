@@ -19,7 +19,6 @@ use std::time::Instant;
 /// in the current runtime, returns the virtual clock's time. Otherwise returns
 /// the real system time via [`Instant::now()`].
 #[cfg(feature = "virtual-clock")]
-#[allow(dead_code)] // Used in Phase 2 & 3: operations.rs, async_event.rs, async_lock.rs
 pub(crate) fn clock_now() -> Instant {
     let task_state = crate::task::TaskState::get();
     match &task_state.clock {
@@ -33,7 +32,6 @@ pub(crate) fn clock_now() -> Instant {
 /// When the `virtual-clock` feature is not enabled, this always returns
 /// [`Instant::now()`].
 #[cfg(not(feature = "virtual-clock"))]
-#[allow(dead_code)] // Used in Phase 2 & 3: operations.rs, async_event.rs, async_lock.rs
 pub(crate) fn clock_now() -> Instant {
     Instant::now()
 }
