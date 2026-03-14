@@ -45,7 +45,7 @@ We're adding deterministic virtual time to kimojio so upstream consumers can wri
 - [x] **Phase 1: Clock Infrastructure** - Clock trait, VirtualClock timer wheel, Configuration/TaskState integration, feature flag
 - [x] **Phase 2: Sleep & Timeout Virtualization** - Virtual sleep dispatch, sleep_until, timeout_at, VirtualSleepFuture with Drop cancellation
 - [x] **Phase 3: Deadline I/O Virtualization** - Replace 6 Instant::now() sites with clock-aware dispatch
-- [ ] **Phase 4: Documentation** - Usage guide, design doc, example, README update, Docs.md
+- [x] **Phase 4: Documentation** - Usage guide, design doc, example, README update, Docs.md
 
 ## Phase Candidates
 <!-- None — all phases are fully defined -->
