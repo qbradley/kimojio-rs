@@ -305,16 +305,77 @@ impl Runtime {
         let Configuration {
             trace_buffer_manager,
             busy_poll,
+            #[cfg(feature = "virtual-clock")]
+            clock,
         } = configuration;
         let mut task_state = TaskState::get();
         task_state.trace_buffer.thread_idx = thread_index;
         task_state.trace_buffer.trace_configuration = trace_buffer_manager;
+        #[cfg(feature = "virtual-clock")]
+        {
+            task_state.clock = clock;
+        }
         let (server_pipe, client_pipe) = crate::pipe::bipipe();
         Self {
             busy_poll,
             server_pipe,
             client_pipe,
         }
+    }
+
+    /// Creates a new runtime with the given clock provider.
+    ///
+    /// This is the primary way to inject a [`VirtualClock`](crate::clock::VirtualClock)
+    /// or any [`Clock`](crate::clock::Clock) implementation into the runtime.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use std::time::Instant;
+    /// use kimojio::{Runtime, clock::VirtualClock};
+    /// use kimojio::configuration::Configuration;
+    ///
+    /// let clock = VirtualClock::new(Instant::now());
+    /// let mut runtime = Runtime::new_with_clock(0, Configuration::new(), clock.clone());
+    /// ```
+    #[cfg(feature = "virtual-clock")]
+    pub fn new_with_clock(
+        thread_index: u8,
+        configuration: Configuration,
+        clock: impl crate::clock::Clock,
+    ) -> Self {
+        let config = configuration.set_clock(clock);
+        Self::new(thread_index, config)
+    }
+
+    /// Creates a new runtime with a [`VirtualClock`](crate::clock::VirtualClock)
+    /// and returns both the runtime and a handle to the clock for time advancement.
+    ///
+    /// This is the most convenient way to set up a runtime for deterministic
+    /// timing tests.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use std::time::{Duration, Instant};
+    /// use kimojio::{Runtime, clock::VirtualClock};
+    /// use kimojio::configuration::Configuration;
+    ///
+    /// let (mut runtime, clock) = Runtime::new_virtual(0, Configuration::new());
+    /// let clock2 = clock.clone();
+    /// runtime.block_on(async move {
+    ///     // Advance virtual time instead of waiting
+    ///     clock2.advance(Duration::from_secs(60));
+    /// });
+    /// ```
+    #[cfg(feature = "virtual-clock")]
+    pub fn new_virtual(
+        thread_index: u8,
+        configuration: Configuration,
+    ) -> (Self, crate::clock::VirtualClock) {
+        let clock = crate::clock::VirtualClock::new(std::time::Instant::now());
+        let runtime = Self::new_with_clock(thread_index, configuration, clock.clone());
+        (runtime, clock)
     }
 
     pub fn get_handle(&self) -> RuntimeHandle {

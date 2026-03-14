@@ -23,6 +23,11 @@ pub struct Configuration {
     /// specific CPU cores. This is a power user feature that should only be
     /// used with careful testing and experimentation.
     pub(crate) busy_poll: BusyPoll,
+
+    /// Optional clock provider for the runtime. When set, the runtime uses
+    /// this clock for all timing operations (sleep, deadlines, etc.).
+    #[cfg(feature = "virtual-clock")]
+    pub(crate) clock: Option<std::rc::Rc<dyn crate::clock::Clock>>,
 }
 
 /// Controls whether the event loop busy-polls for I/O completion.
@@ -68,6 +73,28 @@ impl Configuration {
     /// Sets the busy polling behavior for the event loop.
     pub fn set_busy_poll(mut self, busy_poll: BusyPoll) -> Self {
         self.busy_poll = busy_poll;
+        self
+    }
+
+    /// Sets the clock provider for the runtime.
+    ///
+    /// When a [`VirtualClock`](crate::clock::VirtualClock) is provided, all timing
+    /// operations (sleep, deadlines) use virtual time instead of real system time.
+    /// This enables deterministic, instant-resolving timeout tests.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use std::time::Instant;
+    /// use kimojio::configuration::Configuration;
+    /// use kimojio::clock::VirtualClock;
+    ///
+    /// let clock = VirtualClock::new(Instant::now());
+    /// let config = Configuration::new().set_clock(clock);
+    /// ```
+    #[cfg(feature = "virtual-clock")]
+    pub fn set_clock(mut self, clock: impl crate::clock::Clock) -> Self {
+        self.clock = Some(std::rc::Rc::new(clock));
         self
     }
 }

@@ -24,6 +24,7 @@ mod async_semaphore;
 mod async_stream;
 mod buffer_pipe;
 mod cancellation_token;
+pub mod clock;
 pub mod configuration;
 mod errors;
 mod handle_table;
@@ -97,6 +98,9 @@ use uuid::Uuid;
 use crate::configuration::BusyPoll;
 
 pub use kimojio_macros::{main, test};
+
+#[cfg(feature = "virtual-clock")]
+pub use clock::{Clock, SystemClock, TimerId, VirtualClock};
 
 const MAX_TASK_STACK_SIZE: usize = 65536;
 

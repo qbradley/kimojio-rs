@@ -519,6 +519,9 @@ pub struct TaskState {
 
     #[cfg(feature = "fault_injection")]
     pub fault: Option<(usize, rustix_uring::Errno)>,
+
+    #[cfg(feature = "virtual-clock")]
+    pub(crate) clock: Option<std::rc::Rc<dyn crate::clock::Clock>>,
 }
 
 thread_local! {
@@ -552,6 +555,8 @@ impl TaskState {
             next_tag: 0,
             #[cfg(feature = "fault_injection")]
             fault: None,
+            #[cfg(feature = "virtual-clock")]
+            clock: None,
         }
     }
 
