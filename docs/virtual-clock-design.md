@@ -43,13 +43,16 @@ in microseconds instead of waiting for real wall-clock time.
 The `Clock` trait abstracts time queries and timer management:
 
 ```rust
-pub trait Clock: 'static {
+pub trait Clock: sealed::Sealed + 'static {
     fn now(&self) -> Instant;
     fn register_timer(&self, deadline: Instant, waker: Waker) -> TimerId;
     fn cancel_timer(&self, id: TimerId);
     fn is_real(&self) -> bool { true }
 }
 ```
+
+The `Clock` trait is **sealed** — it cannot be implemented outside this crate.
+Only `SystemClock` and `VirtualClock` are supported implementations.
 
 - **`SystemClock`**: Returns `Instant::now()`. Timer operations are no-ops
   (real timers are managed by io_uring).
@@ -66,6 +69,13 @@ min-heap ordered by `(deadline, TimerId)`:
   `TimerId` first), providing fully deterministic behavior.
 - **Complexity**: O(log n) for register/cancel, O(k log n) for advance
   (where k = timers fired).
+- **Waker caching**: `VirtualSleepFuture` caches the waker from the task
+  context and only re-registers the timer when the waker changes. This
+  preserves the original `TimerId` across spurious wakeups, maintaining
+  deterministic ordering for equal-deadline timers.
+- **Re-entrancy safety**: `advance_to()` collects all expired wakers into a
+  `Vec` and drops the `RefCell` borrow before calling `wake()`, preventing
+  panics from re-entrant clock access in waker callbacks.
 
 ### TaskState Integration
 
@@ -120,7 +130,10 @@ separate type definitions:
 - **With feature**: A struct wrapping an internal `SleepFutureInner` enum
   with `Real(UnitFuture)` and `Virtual(VirtualSleepFuture)` variants.
   Pin projection uses `unsafe` but is straightforward since
-  `VirtualSleepFuture` is `Unpin`.
+  `VirtualSleepFuture` is `Unpin` (enforced by a
+  `static_assertions::assert_impl_all!` check). The enum variant is set at
+  construction and never changes, which is the key safety invariant for the
+  pin projection.
 
 ### Why `clock_now()` lives in `clock.rs`?
 
@@ -166,12 +179,19 @@ sleep(duration)
 
 1. **Real I/O timeouts are not virtualized**: The `timeout` parameter on I/O
    operations becomes a kernel io_uring timeout. Virtual clock only affects
-   the `Instant::now()` used to compute the remaining duration.
+   the `Instant::now()` used to compute the remaining duration. This is
+   documented on `writev_with_deadline`, `write_with_deadline`,
+   `read_with_deadline`, and `wait_with_deadline`.
 
 2. **No automatic time advancement**: The virtual clock never advances on its
    own. Test code must explicitly call `advance()`.
 
-3. **Single-threaded only**: `VirtualClock` is `!Send`/`!Sync`.
+3. **Single-threaded only**: `VirtualClock` is `!Send`/`!Sync`. `Runtime` is
+   also `!Send` — it is bound to a single thread.
+
+4. **`timeout_at` left-bias**: When both the inner future and the timeout are
+   immediately ready, the inner future's result takes priority due to
+   `futures::future::select` left-bias. This is documented on `timeout_at()`.
 
 ## Future Work
 
