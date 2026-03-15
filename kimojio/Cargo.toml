@@ -51,6 +51,10 @@ virtual-clock = []
 # Temporary feature for ssl2
 ssl2 = ["tls"]
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dev-dependencies]
 criterion.workspace = true
 rcgen.workspace = true

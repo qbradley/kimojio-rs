@@ -5,7 +5,7 @@
 //! time is advanced.
 
 use kimojio::configuration::Configuration;
-use kimojio::{Runtime, operations};
+use kimojio::{operations, Runtime};
 use std::future::Future;
 use std::time::Duration;
 

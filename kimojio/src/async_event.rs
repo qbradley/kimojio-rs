@@ -140,6 +140,11 @@ impl AsyncEvent {
     /// If the optional deadline is specified and the event is not set by that
     /// time, then this will return a timeout error.
     ///
+    /// **Note:** When a virtual clock is active, the deadline comparison uses
+    /// virtual time, but the sleep backing the deadline uses real kernel time
+    /// unless a virtual sleep is selected (which happens when the `virtual-clock`
+    /// feature is enabled). See [`sleep`](crate::operations::sleep) for details.
+    ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.

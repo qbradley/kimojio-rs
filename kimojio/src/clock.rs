@@ -47,11 +47,20 @@ mod virtual_clock {
     use std::task::Waker;
     use std::time::{Duration, Instant};
 
+    mod sealed {
+        pub trait Sealed {}
+    }
+
     /// Clock provider for runtime timing operations.
     ///
     /// Production code uses [`SystemClock`] (the default), which delegates to real
     /// system time and io_uring timers. Test code can inject a [`VirtualClock`] to
     /// get deterministic, instant timer resolution via manual time advancement.
+    ///
+    /// # Sealed
+    ///
+    /// This trait is sealed and cannot be implemented outside of this crate.
+    /// Only [`SystemClock`] and [`VirtualClock`] are supported implementations.
     ///
     /// # Examples
     ///
@@ -62,7 +71,7 @@ mod virtual_clock {
     /// let now = clock.now();
     /// assert!(clock.is_real());
     /// ```
-    pub trait Clock: 'static {
+    pub trait Clock: sealed::Sealed + 'static {
         /// Returns the current instant according to this clock.
         fn now(&self) -> Instant;
 
@@ -110,6 +119,9 @@ mod virtual_clock {
     /// println!("Current time: {:?}", now);
     /// ```
     pub struct SystemClock;
+
+    impl sealed::Sealed for SystemClock {}
+    impl sealed::Sealed for VirtualClock {}
 
     impl Clock for SystemClock {
         fn now(&self) -> Instant {
@@ -235,7 +247,7 @@ mod virtual_clock {
         /// This does not advance; it returns whatever time was last set via
         /// [`advance()`](Self::advance) or [`advance_to()`](Self::advance_to).
         pub fn now(&self) -> Instant {
-            self.state.borrow().current
+            Clock::now(self)
         }
 
         /// Advances virtual time by the given duration.
@@ -267,20 +279,27 @@ mod virtual_clock {
         ///
         /// Returns the number of timers that fired.
         pub fn advance_to(&self, target: Instant) -> usize {
-            let mut state = self.state.borrow_mut();
-            if target > state.current {
-                state.current = target;
-            }
-
-            let mut fired = 0;
-            while let Some(timer) = state.timers.peek() {
-                if timer.deadline <= state.current {
-                    let timer = state.timers.pop().unwrap();
-                    timer.waker.wake();
-                    fired += 1;
-                } else {
-                    break;
+            let expired: Vec<Waker> = {
+                let mut state = self.state.borrow_mut();
+                if target > state.current {
+                    state.current = target;
                 }
+
+                let mut expired = Vec::new();
+                while let Some(timer) = state.timers.peek() {
+                    if timer.deadline <= state.current {
+                        let timer = state.timers.pop().unwrap();
+                        expired.push(timer.waker);
+                    } else {
+                        break;
+                    }
+                }
+                expired
+            }; // borrow_mut dropped before waking
+
+            let fired = expired.len();
+            for waker in expired {
+                waker.wake();
             }
             fired
         }
@@ -348,6 +367,7 @@ mod virtual_clock {
         deadline: Instant,
         clock: Rc<dyn Clock>,
         timer_id: Option<TimerId>,
+        cached_waker: Option<Waker>,
         completed: bool,
     }
 
@@ -357,6 +377,7 @@ mod virtual_clock {
                 deadline,
                 clock,
                 timer_id: None,
+                cached_waker: None,
                 completed: false,
             }
         }
@@ -392,12 +413,24 @@ mod virtual_clock {
                 return std::task::Poll::Ready(Ok(()));
             }
 
-            // Cancel old timer and re-register with potentially updated waker
-            if let Some(id) = self.timer_id.take() {
-                self.clock.cancel_timer(id);
+            // Only cancel and re-register if we have no active timer or the
+            // waker has changed.  Preserves the original TimerId on spurious
+            // wakeups, which maintains deterministic ordering for equal
+            // deadlines (FR-005).
+            let needs_register = match (&self.timer_id, &self.cached_waker) {
+                (Some(_), Some(w)) => !w.will_wake(cx.waker()),
+                _ => true,
+            };
+
+            if needs_register {
+                if let Some(id) = self.timer_id.take() {
+                    self.clock.cancel_timer(id);
+                }
+                let id = self.clock.register_timer(self.deadline, cx.waker().clone());
+                self.timer_id = Some(id);
+                self.cached_waker = Some(cx.waker().clone());
             }
-            let id = self.clock.register_timer(self.deadline, cx.waker().clone());
-            self.timer_id = Some(id);
+
             std::task::Poll::Pending
         }
     }
@@ -415,33 +448,47 @@ mod virtual_clock {
         use super::*;
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-        use std::task::{RawWaker, RawWakerVTable};
 
-        // Simple waker that increments a counter when woken
-        fn counting_waker(counter: Arc<AtomicUsize>) -> Waker {
-            fn clone_fn(data: *const ()) -> RawWaker {
-                let counter = unsafe { Arc::from_raw(data as *const AtomicUsize) };
-                let cloned = counter.clone();
-                std::mem::forget(counter); // don't decrement ref count
-                RawWaker::new(Arc::into_raw(cloned) as *const (), &VTABLE)
+        // Waker that increments a counter when woken (uses stable std::task::Wake)
+        struct CountingWake(AtomicUsize);
+
+        impl std::task::Wake for CountingWake {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, AtomicOrdering::SeqCst);
             }
-            fn wake_fn(data: *const ()) {
-                let counter = unsafe { Arc::from_raw(data as *const AtomicUsize) };
-                counter.fetch_add(1, AtomicOrdering::SeqCst);
+
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.fetch_add(1, AtomicOrdering::SeqCst);
             }
-            fn wake_by_ref_fn(data: *const ()) {
-                let counter = unsafe { &*(data as *const AtomicUsize) };
-                counter.fetch_add(1, AtomicOrdering::SeqCst);
+        }
+
+        fn counting_waker() -> (Waker, Arc<CountingWake>) {
+            let counter = Arc::new(CountingWake(AtomicUsize::new(0)));
+            let waker = Waker::from(counter.clone());
+            (waker, counter)
+        }
+
+        // Waker that records its index in a shared Vec to verify ordering
+        struct OrderRecorder {
+            index: usize,
+            order: Arc<std::sync::Mutex<Vec<usize>>>,
+        }
+
+        impl std::task::Wake for OrderRecorder {
+            fn wake(self: Arc<Self>) {
+                self.order.lock().unwrap().push(self.index);
             }
-            fn drop_fn(data: *const ()) {
-                unsafe {
-                    drop(Arc::from_raw(data as *const AtomicUsize));
-                }
+
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.order.lock().unwrap().push(self.index);
             }
-            static VTABLE: RawWakerVTable =
-                RawWakerVTable::new(clone_fn, wake_fn, wake_by_ref_fn, drop_fn);
-            let raw = RawWaker::new(Arc::into_raw(counter) as *const (), &VTABLE);
-            unsafe { Waker::from_raw(raw) }
+        }
+
+        fn ordering_waker(index: usize, order: &Arc<std::sync::Mutex<Vec<usize>>>) -> Waker {
+            Waker::from(Arc::new(OrderRecorder {
+                index,
+                order: order.clone(),
+            }))
         }
 
         #[test]
@@ -460,57 +507,49 @@ mod virtual_clock {
         #[test]
         fn advance_by_zero_fires_no_timers() {
             let clock = VirtualClock::new(Instant::now());
-            let counter = Arc::new(AtomicUsize::new(0));
-            let waker = counting_waker(counter.clone());
+            let (waker, counter) = counting_waker();
             clock.register_timer(clock.now() + Duration::from_secs(1), waker);
             assert_eq!(clock.advance(Duration::ZERO), 0);
-            assert_eq!(counter.load(AtomicOrdering::SeqCst), 0);
+            assert_eq!(counter.0.load(AtomicOrdering::SeqCst), 0);
         }
 
         #[test]
         fn advance_fires_expired_timers() {
             let start = Instant::now();
             let clock = VirtualClock::new(start);
-            let counter = Arc::new(AtomicUsize::new(0));
-            let waker = counting_waker(counter.clone());
+            let (waker, counter) = counting_waker();
             clock.register_timer(start + Duration::from_secs(5), waker);
 
             assert_eq!(clock.advance(Duration::from_secs(5)), 1);
-            assert_eq!(counter.load(AtomicOrdering::SeqCst), 1);
+            assert_eq!(counter.0.load(AtomicOrdering::SeqCst), 1);
         }
 
         #[test]
         fn advance_does_not_fire_future_timers() {
             let start = Instant::now();
             let clock = VirtualClock::new(start);
-            let counter = Arc::new(AtomicUsize::new(0));
-            let waker = counting_waker(counter.clone());
+            let (waker, counter) = counting_waker();
             clock.register_timer(start + Duration::from_secs(10), waker);
 
             assert_eq!(clock.advance(Duration::from_secs(3)), 0);
-            assert_eq!(counter.load(AtomicOrdering::SeqCst), 0);
+            assert_eq!(counter.0.load(AtomicOrdering::SeqCst), 0);
         }
 
         #[test]
         fn timers_fire_in_deadline_order() {
             let start = Instant::now();
             let clock = VirtualClock::new(start);
+            let order = Arc::new(std::sync::Mutex::new(Vec::new()));
 
-            let counters: Vec<_> = (0..3).map(|_| Arc::new(AtomicUsize::new(0))).collect();
-
-            // Register at 5s, 10s, 7s
-            for (secs, i) in [(5, 0), (10, 1), (7, 2)] {
-                clock.register_timer(
-                    start + Duration::from_secs(secs),
-                    counting_waker(counters[i].clone()),
-                );
+            // Register at 5s (index 0), 10s (index 1), 7s (index 2)
+            for (secs, i) in [(5u64, 0usize), (10, 1), (7, 2)] {
+                let waker = ordering_waker(i, &order);
+                clock.register_timer(start + Duration::from_secs(secs), waker);
             }
 
-            // Advance past all — should fire 3 timers
+            // Advance past all — should fire in deadline order: 5s, 7s, 10s
             assert_eq!(clock.advance(Duration::from_secs(15)), 3);
-            for counter in &counters {
-                assert_eq!(counter.load(AtomicOrdering::SeqCst), 1);
-            }
+            assert_eq!(*order.lock().unwrap(), vec![0, 2, 1]);
         }
 
         #[test]
@@ -518,34 +557,29 @@ mod virtual_clock {
             let start = Instant::now();
             let clock = VirtualClock::new(start);
             let deadline = start + Duration::from_secs(5);
+            let order = Arc::new(std::sync::Mutex::new(Vec::new()));
 
-            let counters: Vec<_> = (0..3).map(|_| Arc::new(AtomicUsize::new(0))).collect();
-
-            // Register 3 timers with same deadline
-            for counter in &counters {
-                let waker = counting_waker(counter.clone());
+            // Register 3 timers with same deadline — should fire in registration order
+            for i in 0..3 {
+                let waker = ordering_waker(i, &order);
                 clock.register_timer(deadline, waker);
             }
 
             assert_eq!(clock.advance(Duration::from_secs(5)), 3);
-            // All should have been woken
-            for counter in &counters {
-                assert_eq!(counter.load(AtomicOrdering::SeqCst), 1);
-            }
+            assert_eq!(*order.lock().unwrap(), vec![0, 1, 2]);
         }
 
         #[test]
         fn cancel_timer_prevents_firing() {
             let start = Instant::now();
             let clock = VirtualClock::new(start);
-            let counter = Arc::new(AtomicUsize::new(0));
-            let waker = counting_waker(counter.clone());
+            let (waker, counter) = counting_waker();
 
             let id = clock.register_timer(start + Duration::from_secs(5), waker);
             clock.cancel_timer(id);
 
             assert_eq!(clock.advance(Duration::from_secs(10)), 0);
-            assert_eq!(counter.load(AtomicOrdering::SeqCst), 0);
+            assert_eq!(counter.0.load(AtomicOrdering::SeqCst), 0);
         }
 
         #[test]
@@ -558,20 +592,14 @@ mod virtual_clock {
         fn next_deadline_returns_earliest() {
             let start = Instant::now();
             let clock = VirtualClock::new(start);
-            let counter = Arc::new(AtomicUsize::new(0));
 
-            clock.register_timer(
-                start + Duration::from_secs(10),
-                counting_waker(counter.clone()),
-            );
-            clock.register_timer(
-                start + Duration::from_secs(3),
-                counting_waker(counter.clone()),
-            );
-            clock.register_timer(
-                start + Duration::from_secs(7),
-                counting_waker(counter.clone()),
-            );
+            let (w1, _) = counting_waker();
+            let (w2, _) = counting_waker();
+            let (w3, _) = counting_waker();
+
+            clock.register_timer(start + Duration::from_secs(10), w1);
+            clock.register_timer(start + Duration::from_secs(3), w2);
+            clock.register_timer(start + Duration::from_secs(7), w3);
 
             assert_eq!(clock.next_deadline(), Some(start + Duration::from_secs(3)));
         }
@@ -586,21 +614,16 @@ mod virtual_clock {
         fn advance_to_specific_instant() {
             let start = Instant::now();
             let clock = VirtualClock::new(start);
-            let counter = Arc::new(AtomicUsize::new(0));
+            let (w1, c1) = counting_waker();
+            let (w2, _c2) = counting_waker();
 
-            clock.register_timer(
-                start + Duration::from_secs(5),
-                counting_waker(counter.clone()),
-            );
-            clock.register_timer(
-                start + Duration::from_secs(10),
-                counting_waker(counter.clone()),
-            );
+            clock.register_timer(start + Duration::from_secs(5), w1);
+            clock.register_timer(start + Duration::from_secs(10), w2);
 
             let target = start + Duration::from_secs(7);
             assert_eq!(clock.advance_to(target), 1);
             assert_eq!(clock.now(), target);
-            assert_eq!(counter.load(AtomicOrdering::SeqCst), 1);
+            assert_eq!(c1.0.load(AtomicOrdering::SeqCst), 1);
         }
 
         #[test]
@@ -618,18 +641,13 @@ mod virtual_clock {
         fn pending_timers_count() {
             let start = Instant::now();
             let clock = VirtualClock::new(start);
-            let counter = Arc::new(AtomicUsize::new(0));
 
             assert_eq!(clock.pending_timers(), 0);
 
-            clock.register_timer(
-                start + Duration::from_secs(5),
-                counting_waker(counter.clone()),
-            );
-            clock.register_timer(
-                start + Duration::from_secs(10),
-                counting_waker(counter.clone()),
-            );
+            let (w1, _) = counting_waker();
+            let (w2, _) = counting_waker();
+            clock.register_timer(start + Duration::from_secs(5), w1);
+            clock.register_timer(start + Duration::from_secs(10), w2);
             assert_eq!(clock.pending_timers(), 2);
 
             clock.advance(Duration::from_secs(7));
@@ -661,20 +679,53 @@ mod virtual_clock {
         fn past_deadline_timer_fires_on_next_advance() {
             let start = Instant::now();
             let clock = VirtualClock::new(start + Duration::from_secs(10));
-            let counter = Arc::new(AtomicUsize::new(0));
+            let (waker, counter) = counting_waker();
 
             // Register timer with deadline in the "past" (before current virtual time)
-            clock.register_timer(
-                start + Duration::from_secs(5),
-                counting_waker(counter.clone()),
-            );
+            clock.register_timer(start + Duration::from_secs(5), waker);
 
             // Timer should not fire during registration
-            assert_eq!(counter.load(AtomicOrdering::SeqCst), 0);
+            assert_eq!(counter.0.load(AtomicOrdering::SeqCst), 0);
 
             // Timer fires on next advance — deadline (start+5) <= current (start+10)
             assert_eq!(clock.advance(Duration::ZERO), 1);
-            assert_eq!(counter.load(AtomicOrdering::SeqCst), 1);
+            assert_eq!(counter.0.load(AtomicOrdering::SeqCst), 1);
+        }
+
+        #[test]
+        fn advance_to_does_not_panic_on_reentrant_waker() {
+            // Regression test for F-1: advance_to must not hold borrow_mut
+            // while calling waker.wake()
+            use std::cell::RefCell;
+
+            thread_local! {
+                static TEST_CLOCK: RefCell<Option<VirtualClock>> = const { RefCell::new(None) };
+            }
+
+            let start = Instant::now();
+            let clock = VirtualClock::new(start);
+            TEST_CLOCK.with(|c| *c.borrow_mut() = Some(clock.clone()));
+
+            // ReentrantWake is Send+Sync (unit struct) and accesses the clock
+            // through a thread-local when woken. This calls state.borrow() —
+            // would panic if advance_to still held borrow_mut.
+            struct ReentrantWake;
+            impl std::task::Wake for ReentrantWake {
+                fn wake(self: Arc<Self>) {
+                    TEST_CLOCK.with(|c| {
+                        if let Some(clock) = c.borrow().as_ref() {
+                            let _ = clock.now();
+                        }
+                    });
+                }
+            }
+
+            let waker = Waker::from(Arc::new(ReentrantWake));
+            clock.register_timer(start + Duration::from_secs(1), waker);
+            // Should not panic
+            assert_eq!(clock.advance(Duration::from_secs(2)), 1);
+
+            TEST_CLOCK.with(|c| *c.borrow_mut() = None);
         }
     }
 }

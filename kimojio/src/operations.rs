@@ -556,6 +556,11 @@ pub fn writev<'a>(
 /// Like [`writev`], but with an optional deadline. If the operation does not complete
 /// before the deadline, it will fail with `Errno::TIMEDOUT`.
 ///
+/// **Note:** When a virtual clock is active, the deadline comparison uses virtual
+/// time, but the actual I/O timeout submitted to io_uring uses real kernel time.
+/// Advancing virtual time will **not** cause an in-flight I/O operation to time out
+/// early. This is by design — real I/O latency is not virtualized.
+///
 /// Returns a future that resolves to the number of bytes written, or an error.
 pub fn writev_with_deadline<'a>(
     fd: &impl AsFd,
@@ -619,6 +624,11 @@ pub fn write<'a>(fd: &impl AsFd, buf: &'a [u8]) -> ErrnoOrFuture<UsizeFuture<'a>
 ///
 /// Like [`write`], but with an optional deadline. If the operation does not complete
 /// before the deadline, it will fail with `Errno::TIMEDOUT`.
+///
+/// **Note:** When a virtual clock is active, the deadline comparison uses virtual
+/// time, but the actual I/O timeout submitted to io_uring uses real kernel time.
+/// Advancing virtual time will **not** cause an in-flight I/O operation to time out
+/// early. This is by design — real I/O latency is not virtualized.
 ///
 /// Returns a future that resolves to the number of bytes written, or an error.
 pub fn write_with_deadline<'a>(
@@ -834,6 +844,11 @@ pub fn read<'a>(fd: &impl AsFd, buf: &'a mut [u8]) -> UsizeFuture<'a> {
 ///
 /// Like [`read`], but with an optional deadline. If the operation does not complete
 /// before the deadline, it will fail with `Errno::TIMEDOUT`.
+///
+/// **Note:** When a virtual clock is active, the deadline comparison uses virtual
+/// time, but the actual I/O timeout submitted to io_uring uses real kernel time.
+/// Advancing virtual time will **not** cause an in-flight I/O operation to time out
+/// early. This is by design — real I/O latency is not virtualized.
 ///
 /// Returns a future that resolves to the number of bytes read, or an error.
 pub fn read_with_deadline<'a>(
@@ -1058,6 +1073,37 @@ impl FusedFuture for SetYieldCpuFuture {
     }
 }
 
+/// Maps an io_uring timeout completion result to the `SleepFuture` contract:
+/// `Errno::TIME` (normal expiry) becomes `Ok(())`.
+fn map_timeout_poll(poll: Poll<Result<(), Errno>>) -> Poll<Result<(), Errno>> {
+    match poll {
+        Poll::Ready(Err(Errno::TIME)) => Poll::Ready(Ok(())),
+        Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+        Poll::Ready(Ok(_)) => panic!("Timeout should never return Ok"),
+        Poll::Pending => Poll::Pending,
+    }
+}
+
+/// When the `virtual-clock` feature is enabled, attempts to create a virtual
+/// sleep future for the given deadline. Returns `None` if no virtual clock is
+/// active (or if the active clock is a real clock).
+#[cfg(feature = "virtual-clock")]
+fn try_virtual_sleep(deadline: Instant) -> Option<SleepFuture<'static>> {
+    let task_state = TaskState::get();
+    task_state.clock.as_ref().and_then(|clock| {
+        if !clock.is_real() {
+            Some(SleepFuture {
+                inner: SleepFutureInner::Virtual(crate::clock::VirtualSleepFuture::new(
+                    deadline,
+                    clock.clone(),
+                )),
+            })
+        } else {
+            None
+        }
+    })
+}
+
 /// Suspends the task for the specified duration (or longer).
 ///
 /// When a [`VirtualClock`](crate::clock::VirtualClock) is installed in the
@@ -1070,27 +1116,9 @@ impl FusedFuture for SetYieldCpuFuture {
 pub fn sleep(duration: Duration) -> SleepFuture<'static> {
     #[cfg(feature = "virtual-clock")]
     {
-        // Check for virtual clock — must release TaskState borrow before
-        // creating UnitFuture (which re-borrows TaskState internally).
-        let virtual_sleep = {
-            let task_state = TaskState::get();
-            task_state.clock.as_ref().and_then(|clock| {
-                if !clock.is_real() {
-                    let deadline = clock.now() + duration;
-                    Some(crate::clock::VirtualSleepFuture::new(
-                        deadline,
-                        clock.clone(),
-                    ))
-                } else {
-                    None
-                }
-            })
-        };
-
-        if let Some(vfut) = virtual_sleep {
-            return SleepFuture {
-                inner: SleepFutureInner::Virtual(vfut),
-            };
+        let deadline = crate::clock::clock_now() + duration;
+        if let Some(vfut) = try_virtual_sleep(deadline) {
+            return vfut;
         }
     }
 
@@ -1146,24 +1174,8 @@ pub fn sleep(duration: Duration) -> SleepFuture<'static> {
 pub fn sleep_until(deadline: Instant) -> SleepFuture<'static> {
     #[cfg(feature = "virtual-clock")]
     {
-        let virtual_sleep = {
-            let task_state = TaskState::get();
-            task_state.clock.as_ref().and_then(|clock| {
-                if !clock.is_real() {
-                    Some(crate::clock::VirtualSleepFuture::new(
-                        deadline,
-                        clock.clone(),
-                    ))
-                } else {
-                    None
-                }
-            })
-        };
-
-        if let Some(vfut) = virtual_sleep {
-            return SleepFuture {
-                inner: SleepFutureInner::Virtual(vfut),
-            };
+        if let Some(vfut) = try_virtual_sleep(deadline) {
+            return vfut;
         }
     }
 
@@ -1178,6 +1190,13 @@ pub fn sleep_until(deadline: Instant) -> SleepFuture<'static> {
 /// When a [`VirtualClock`](crate::clock::VirtualClock) is installed, the
 /// timeout fires when virtual time is advanced past `deadline` — no real
 /// wall-clock time passes.
+///
+/// # Polling Order
+///
+/// The inner future is polled before the timeout timer. If both the inner
+/// future and the timeout are immediately ready (e.g., the deadline has
+/// already passed but the inner future completes synchronously), the inner
+/// future's result takes priority and `Ok(value)` is returned.
 ///
 /// # Cancel safety
 ///
@@ -1245,12 +1264,7 @@ impl<'a> Future for SleepFuture<'a> {
     type Output = Result<(), Errno>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.project().fut.poll(cx) {
-            Poll::Ready(Err(Errno::TIME)) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-            Poll::Ready(Ok(_)) => panic!("Timeout should never return Ok"),
-            Poll::Pending => Poll::Pending,
-        }
+        map_timeout_poll(self.project().fut.poll(cx))
     }
 }
 
@@ -1282,9 +1296,16 @@ enum SleepFutureInner<'a> {
 impl<'a> SleepFuture<'a> {
     /// Cancels this sleep, causing it to resolve with an error.
     pub fn cancel(self: Pin<&mut Self>) {
-        // SAFETY: Real variant is pinned (contains !Unpin UnitFuture).
-        // Virtual variant is Unpin (all fields are Unpin), so mutable
-        // access through Pin is safe.
+        // SAFETY: Pin projection through the SleepFutureInner enum.
+        //
+        // Invariants upheld:
+        // 1. The enum variant is set at construction and never changes — there
+        //    is no code path that switches between Real and Virtual after init.
+        // 2. The Real variant contains a !Unpin UnitFuture and must remain
+        //    pinned; we project through Pin::new_unchecked.
+        // 3. VirtualSleepFuture is Unpin (all fields are Unpin: Instant,
+        //    Rc<dyn Clock>, Option<TimerId>, Option<Waker>, bool), so mutable
+        //    access through Pin is safe.
         unsafe {
             match &mut self.get_unchecked_mut().inner {
                 SleepFutureInner::Real(fut) => Pin::new_unchecked(fut).cancel(),
@@ -1294,20 +1315,20 @@ impl<'a> SleepFuture<'a> {
     }
 }
 
+// Compile-time assertion that VirtualSleepFuture is Unpin, which is required
+// for the unsafe pin projection in SleepFuture to be sound.
+#[cfg(feature = "virtual-clock")]
+static_assertions::assert_impl_all!(crate::clock::VirtualSleepFuture: Unpin);
+
 #[cfg(feature = "virtual-clock")]
 impl<'a> Future for SleepFuture<'a> {
     type Output = Result<(), Errno>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // SAFETY: Same pin projection justification as cancel().
+        // SAFETY: Same pin projection invariants as cancel() — see above.
         unsafe {
             match &mut self.get_unchecked_mut().inner {
-                SleepFutureInner::Real(fut) => match Pin::new_unchecked(fut).poll(cx) {
-                    Poll::Ready(Err(Errno::TIME)) => Poll::Ready(Ok(())),
-                    Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-                    Poll::Ready(Ok(_)) => panic!("Timeout should never return Ok"),
-                    Poll::Pending => Poll::Pending,
-                },
+                SleepFutureInner::Real(fut) => map_timeout_poll(Pin::new_unchecked(fut).poll(cx)),
                 SleepFutureInner::Virtual(fut) => Pin::new(fut).poll(cx),
             }
         }

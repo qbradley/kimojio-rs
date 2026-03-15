@@ -298,6 +298,10 @@ pub struct Runtime {
     busy_poll: BusyPoll,
     server_pipe: OwnedFd,
     client_pipe: OwnedFd,
+    // Runtime is bound to a single thread and must not be sent across threads.
+    // io_uring submission/completion queues, TaskState, and virtual clocks are
+    // all thread-local resources.
+    _not_send: std::marker::PhantomData<*const ()>,
 }
 
 impl Runtime {
@@ -320,6 +324,7 @@ impl Runtime {
             busy_poll,
             server_pipe,
             client_pipe,
+            _not_send: std::marker::PhantomData,
         }
     }
 
