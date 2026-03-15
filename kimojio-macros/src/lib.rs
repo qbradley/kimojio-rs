@@ -110,18 +110,20 @@ pub fn main(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
-/// This expands to:
+/// ## Virtual Clock Mode
+///
+/// When the `virtual-clock` feature is enabled, the `virtual` parameter
+/// creates a runtime with a [`VirtualClock`] and passes it to the test:
 ///
 /// ```ignore
-/// #[test]
-/// fn my_test() {
-///     ::kimojio::run_test("my_test", async {
-///         // async test code
-///     })
+/// #[kimojio::test(virtual)]
+/// async fn my_test(clock: VirtualClock) {
+///     clock.advance(Duration::from_secs(60));
+///     // No real time passes!
 /// }
 /// ```
 #[proc_macro_attribute]
-pub fn test(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemFn);
 
     let ItemFn {
@@ -144,17 +146,74 @@ pub fn test(_attr: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
 
+    // Parse attribute for "virtual" keyword
+    let is_virtual = !attr.is_empty() && {
+        let attr_str = attr.to_string();
+        attr_str.trim() == "virtual"
+    };
+
+    if !attr.is_empty() && !is_virtual {
+        return syn::Error::new(
+            proc_macro::Span::call_site().into(),
+            "unsupported attribute; expected `#[kimojio::test]` or `#[kimojio::test(virtual)]`",
+        )
+        .to_compile_error()
+        .into();
+    }
+
     // Get the function body without async
     let body = &block;
 
-    // Generate the expanded code
-    let expanded = quote! {
-        #[test]
-        #(#attrs)*
-        #vis fn #fn_name() {
-            ::kimojio::run_test(#fn_name_str, async #body)
-        }
-    };
+    if is_virtual {
+        // Virtual mode: test function should accept a VirtualClock parameter
+        // Extract the parameter name (first param)
+        let clock_param = if sig.inputs.len() == 1 {
+            let param = sig.inputs.first().unwrap();
+            match param {
+                syn::FnArg::Typed(pat_type) => Some(pat_type.pat.clone()),
+                _ => None,
+            }
+        } else if sig.inputs.is_empty() {
+            None
+        } else {
+            return syn::Error::new_spanned(
+                &sig.inputs,
+                "virtual test function must have zero or one parameter (VirtualClock)",
+            )
+            .to_compile_error()
+            .into();
+        };
 
-    TokenStream::from(expanded)
+        let expanded = if let Some(clock_name) = clock_param {
+            quote! {
+                #[test]
+                #(#attrs)*
+                #vis fn #fn_name() {
+                    ::kimojio::run_test_virtual(#fn_name_str, |#clock_name| async move #body)
+                }
+            }
+        } else {
+            // No parameter — pass clock but don't bind it
+            quote! {
+                #[test]
+                #(#attrs)*
+                #vis fn #fn_name() {
+                    ::kimojio::run_test_virtual(#fn_name_str, |_clock| async move #body)
+                }
+            }
+        };
+
+        TokenStream::from(expanded)
+    } else {
+        // Standard mode — existing behavior
+        let expanded = quote! {
+            #[test]
+            #(#attrs)*
+            #vis fn #fn_name() {
+                ::kimojio::run_test(#fn_name_str, async #body)
+            }
+        };
+
+        TokenStream::from(expanded)
+    }
 }

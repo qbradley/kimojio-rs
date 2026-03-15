@@ -1104,6 +1104,35 @@ fn try_virtual_sleep(deadline: Instant) -> Option<SleepFuture<'static>> {
     })
 }
 
+/// Polls a future exactly once and returns whether it completed.
+///
+/// This is a test utility for the poll-advance-await pattern common in
+/// virtual clock tests. It registers any internal timers (by polling) and
+/// reports whether the future was immediately ready.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use std::pin::pin;
+/// use std::time::Duration;
+/// use kimojio::operations;
+///
+/// # async fn example(clock: kimojio::clock::VirtualClock) {
+/// let mut sleep = pin!(operations::sleep(Duration::from_secs(10)));
+/// assert!(!operations::poll_once(sleep.as_mut()).await, "should be pending");
+/// clock.advance(Duration::from_secs(10));
+/// assert!(operations::poll_once(sleep.as_mut()).await, "should be ready");
+/// # }
+/// ```
+#[cfg(feature = "virtual-clock")]
+pub async fn poll_once<F: Future>(mut fut: Pin<&mut F>) -> bool {
+    futures::future::poll_fn(|cx| match fut.as_mut().poll(cx) {
+        Poll::Pending => Poll::Ready(false),
+        Poll::Ready(_) => Poll::Ready(true),
+    })
+    .await
+}
+
 /// Suspends the task for the specified duration (or longer).
 ///
 /// When a [`VirtualClock`](crate::clock::VirtualClock) is installed in the

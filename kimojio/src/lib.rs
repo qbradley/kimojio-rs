@@ -239,6 +239,40 @@ pub fn run_test_with_handle(
     }
 }
 
+/// Runs a test future with a [`VirtualClock`] for deterministic timing. For testing only.
+///
+/// The test function receives a [`VirtualClock`] handle that can be used to
+/// advance virtual time explicitly. No real wall-clock time passes for timer
+/// operations.
+///
+/// This is the runtime function backing `#[kimojio::test(virtual)]`.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use kimojio::clock::VirtualClock;
+/// use std::time::Duration;
+///
+/// kimojio::run_test_virtual("my_test", |clock: VirtualClock| async move {
+///     clock.advance(Duration::from_secs(60));
+/// });
+/// ```
+#[cfg(feature = "virtual-clock")]
+pub fn run_test_virtual<F, Fut>(test_name: &str, test: F)
+where
+    F: FnOnce(clock::VirtualClock) -> Fut,
+    Fut: Future<Output = ()> + 'static,
+{
+    let _ = test_name;
+    let (mut runtime, clock) = Runtime::new_virtual(0, Configuration::new());
+    let clock_for_test = clock.clone();
+    let result = runtime.block_on(test(clock_for_test));
+    if let Some(Err(payload)) = result {
+        std::panic::resume_unwind(payload);
+    }
+    drop(clock);
+}
+
 /// Returns the OpenSSL version as a tuple of (major, minor, patch).
 #[cfg(feature = "tls")]
 pub fn tls_version() -> (u64, u64, u64) {
