@@ -193,8 +193,39 @@ sleep(duration)
    immediately ready, the inner future's result takes priority due to
    `futures::future::select` left-bias. This is documented on `timeout_at()`.
 
+## Recently Added Features
+
+### Auto-advance mode
+
+`VirtualClock::set_auto_advance(true)` makes sleep futures automatically
+advance the clock to their deadline on poll. This eliminates the need for
+manual clock advancement when testing code that calls `sleep().await`
+internally (e.g., retry loops with exponential backoff).
+
+Implementation: `Clock::try_auto_advance()` is called during
+`VirtualSleepFuture::poll()`. The default implementation (SystemClock) is a
+no-op. VirtualClock checks the `auto_advance` flag and calls `advance_to()`
+if enabled.
+
+### `#[kimojio::test(virtual)]` proc macro
+
+Reduces virtual clock test boilerplate from ~10 lines to 1 attribute.
+The macro generates a `#[test]` function that creates a virtual runtime and
+passes the clock to the async test body. Supports 0 parameters (clock unused)
+or 1 parameter (`VirtualClock`).
+
+### `poll_once()` test helper
+
+`operations::poll_once(fut)` polls a pinned future exactly once and returns
+whether it was ready. Simplifies the common poll-advance-await pattern in
+virtual clock tests.
+
+### `VirtualClock::epoch()`
+
+Returns the start time of the clock, useful for computing elapsed virtual
+time: `clock.now().duration_since(clock.epoch())`.
+
 ## Future Work
 
-- Auto-advance mode that steps to the next deadline when all tasks are blocked.
-- Integration with `#[kimojio::test]` macro for automatic virtual clock setup.
 - Virtual clock statistics (timers registered, fired, cancelled).
+- `#[kimojio::test(virtual, auto_advance)]` attribute variant.

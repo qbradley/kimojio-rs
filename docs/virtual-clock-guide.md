@@ -49,10 +49,20 @@ remain unchanged.
 |--------|-------------|
 | `VirtualClock::new(start)` | Create a clock starting at `start` |
 | `clock.now()` | Current virtual time |
+| `clock.epoch()` | Start time of the clock |
 | `clock.advance(duration)` | Advance time by `duration`, fire expired timers |
 | `clock.advance_to(instant)` | Advance to a specific instant |
+| `clock.set_auto_advance(bool)` | Enable/disable auto-advance mode |
+| `clock.is_auto_advance()` | Query auto-advance state |
 | `clock.next_deadline()` | Peek at the next pending timer deadline |
 | `clock.pending_timers()` | Count of pending timers |
+
+### Test utilities
+
+| Function | Description |
+|----------|-------------|
+| `operations::poll_once(fut)` | Poll a future once, return `true` if ready |
+| `#[kimojio::test(virtual)]` | Proc macro for zero-boilerplate virtual tests |
 
 ### Timer operations (virtual-aware)
 
@@ -157,6 +167,128 @@ while let Some(next) = clock.next_deadline() {
     clock.advance_to(next);
     // Check state after each timer fires
 }
+```
+
+### Using `#[kimojio::test(virtual)]`
+
+The proc macro eliminates boilerplate for virtual clock tests:
+
+```rust
+use kimojio::clock::VirtualClock;
+use kimojio::operations;
+use std::pin::pin;
+use std::time::Duration;
+
+#[kimojio::test(virtual)]
+async fn sleep_completes_after_advance(clock: VirtualClock) {
+    let mut sleep = pin!(operations::sleep(Duration::from_secs(60)));
+    assert!(!operations::poll_once(sleep.as_mut()).await);
+    clock.advance(Duration::from_secs(60));
+    sleep.await.unwrap();
+}
+
+// Clock parameter is optional:
+#[kimojio::test(virtual)]
+async fn no_clock_needed() {
+    operations::sleep(Duration::ZERO).await.unwrap();
+}
+```
+
+### Using `poll_once` for the poll-advance-await pattern
+
+The `operations::poll_once()` helper reduces boilerplate when testing
+timer registration:
+
+```rust
+use std::pin::pin;
+use std::time::Duration;
+use kimojio::operations;
+
+# async fn example(clock: kimojio::clock::VirtualClock) {
+let mut sleep = pin!(operations::sleep(Duration::from_secs(10)));
+
+// Old way — manual poll_fn:
+// futures::future::poll_fn(|cx| {
+//     let _ = sleep.as_mut().poll(cx);
+//     std::task::Poll::Ready(())
+// }).await;
+
+// New way — one line:
+assert!(!operations::poll_once(sleep.as_mut()).await);
+
+clock.advance(Duration::from_secs(10));
+assert!(operations::poll_once(sleep.as_mut()).await);
+# }
+```
+
+### Auto-advance for retry loops
+
+When testing code that calls `sleep().await` internally (e.g., retry loops
+with exponential backoff), manually advancing the clock isn't possible because
+the test doesn't control the poll cycle. Enable **auto-advance** to make all
+virtual sleeps complete instantly:
+
+```rust
+use kimojio::clock::VirtualClock;
+use kimojio::operations;
+use std::time::Duration;
+
+async fn retry_with_backoff<F, Fut>(
+    initial_delay: Duration,
+    max_retries: u32,
+    mut op: F,
+) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let mut delay = initial_delay;
+    for _ in 0..=max_retries {
+        if op().await { return true; }
+        operations::sleep(delay).await.unwrap();
+        delay *= 2;
+    }
+    false
+}
+
+#[kimojio::test(virtual)]
+async fn retry_backoff_test(clock: VirtualClock) {
+    clock.set_auto_advance(true); // sleeps resolve instantly
+
+    let mut attempts = 0u32;
+    let succeeded = retry_with_backoff(
+        Duration::from_secs(1),
+        5,
+        || {
+            attempts += 1;
+            async move { attempts >= 3 }
+        },
+    ).await;
+
+    assert!(succeeded);
+    // Virtual time advanced: 1s + 2s = 3s (2 failures before success)
+    let elapsed = clock.now().duration_since(clock.epoch());
+    assert_eq!(elapsed, Duration::from_secs(3));
+}
+```
+
+Auto-advance can be toggled at any point. Combine manual and auto modes:
+
+```rust
+# use kimojio::clock::VirtualClock;
+# use std::time::Duration;
+# fn example(clock: &VirtualClock) {
+// Start manual for precise control
+clock.advance(Duration::from_secs(5));
+
+// Switch to auto for a retry loop
+clock.set_auto_advance(true);
+// ... retry_with_backoff(...).await;
+
+// Back to manual
+clock.set_auto_advance(false);
+clock.advance(Duration::from_secs(1));
+# }
 ```
 
 ## Caveats

@@ -38,7 +38,6 @@ We're adding deterministic virtual time to kimojio so upstream consumers can wri
 - Multi-threaded `Send`/`Sync` VirtualClock (kimojio is single-threaded)
 - TSC/Timer profiling virtualization (`timer.rs` is for metrics, not logic)
 - Event loop optimization to skip io_uring when only virtual timers pending (deferred)
-- Changes to `#[kimojio::main]` or `#[kimojio::test]` macros
 - Modifying test-only `Instant::now()` calls (sites #7-16 in CodeResearch.md)
 
 ## Phase Status
@@ -46,9 +45,14 @@ We're adding deterministic virtual time to kimojio so upstream consumers can wri
 - [x] **Phase 2: Sleep & Timeout Virtualization** - Virtual sleep dispatch, sleep_until, timeout_at, VirtualSleepFuture with Drop cancellation
 - [x] **Phase 3: Deadline I/O Virtualization** - Replace 6 Instant::now() sites with clock-aware dispatch
 - [x] **Phase 4: Documentation** - Usage guide, design doc, example, README update, Docs.md
+- [ ] **Phase 5: `#[kimojio::test(virtual)]` Proc Macro** - Reduce virtual clock test boilerplate
+- [ ] **Phase 6: `poll_once` Test Helper** - Simplify poll-advance-await pattern
+- [ ] **Phase 7: Exponential Backoff Example** - Retry loop example with virtual time
 
 ## Phase Candidates
-<!-- None — all phases are fully defined -->
+- [x] [promoted] `#[kimojio::test(virtual)]` proc macro to reduce virtual clock test boilerplate
+- [x] [promoted] Helper for the poll-advance-await pattern (pin → poll → advance → await)
+- [x] [promoted] More examples of converting retry loops with exponential backoff
 
 ---
 
@@ -250,6 +254,111 @@ We're adding deterministic virtual time to kimojio so upstream consumers can wri
 - [ ] Design doc accurately reflects implemented architecture
 - [ ] Example runs successfully and demonstrates key patterns
 - [ ] README section is concise and links to guide
+
+---
+
+## Phase 5: `#[kimojio::test(virtual)]` Proc Macro
+
+### Goal
+Reduce virtual clock test boilerplate from:
+```rust
+#[test]
+fn my_test() {
+    let (mut runtime, clock) = Runtime::new_virtual(0, Configuration::new());
+    let c = clock.clone();
+    let result = runtime.block_on(async move { /* test body using c */ });
+    if let Some(Err(p)) = result { std::panic::resume_unwind(p); }
+}
+```
+To:
+```rust
+#[kimojio::test(virtual)]
+async fn my_test(clock: VirtualClock) {
+    // test body — clock is ready to use
+}
+```
+
+### Changes Required:
+
+- **`kimojio-macros/src/lib.rs`**: Extend `#[kimojio::test]` to accept an optional `virtual` parameter.
+  - Parse `_attr` (currently ignored) for the `virtual` keyword
+  - When `virtual` is present: generate code that calls `::kimojio::run_test_virtual(name, |clock| async { ... })`
+  - When absent: keep existing behavior (`::kimojio::run_test(name, async { ... })`)
+  - Validate: function must be async, must take exactly one `VirtualClock` parameter when `virtual` specified
+
+- **`kimojio/src/lib.rs`**: Add `run_test_virtual()` function (feature-gated)
+  - Signature: `pub fn run_test_virtual(test_name: &str, test: impl FnOnce(VirtualClock) -> Fut)` where `Fut: Future<Output = ()> + 'static`
+  - Implementation: creates `Runtime::new_virtual(0, Configuration::new())`, clones clock, calls `block_on`, handles panic unwinding
+  - Re-export: already covered by `pub use kimojio_macros::test`
+
+- **Tests**: 
+  - Add a test using `#[kimojio::test(virtual)]` in the integration test file
+  - Verify the macro works for both `#[kimojio::test]` (no virtual) and `#[kimojio::test(virtual)]`
+
+### Success Criteria:
+- `#[kimojio::test(virtual)]` compiles and runs correctly
+- Existing `#[kimojio::test]` tests still work unchanged
+- New macro is feature-gated behind `virtual-clock`
+
+---
+
+## Phase 6: `poll_once` Test Helper
+
+### Goal
+Simplify the repeated poll-advance-await pattern. Currently used 14+ times across tests:
+```rust
+// Current boilerplate (7 lines per use)
+let completed = futures::future::poll_fn(|cx| match sleep.as_mut().poll(cx) {
+    Poll::Pending => Poll::Ready(false),
+    Poll::Ready(_) => Poll::Ready(true),
+}).await;
+```
+To:
+```rust
+// With helper (1 line)
+assert!(!poll_once(&mut sleep).await);
+```
+
+### Changes Required:
+
+- **`kimojio/src/operations.rs`** (or `kimojio/src/clock.rs`): Add `poll_once` as a public test utility
+  - `pub async fn poll_once<F: Future>(fut: Pin<&mut F>) -> bool` — polls once, returns true if Ready
+  - Feature-gated behind `virtual-clock` since it's a test utility
+  - Add doc comment with usage example
+
+- **Refactor existing tests in `kimojio/src/operations.rs`**: Replace 7 instances of the poll-advance-await boilerplate with `poll_once`
+
+- **Refactor `kimojio/tests/virtual_clock_integration.rs`**: Replace 7+ instances with `poll_once`
+
+### Success Criteria:
+- `poll_once` is a public, documented helper
+- Existing tests refactored to use it
+- All tests still pass
+
+---
+
+## Phase 7: Exponential Backoff Example
+
+### Goal
+Demonstrate converting a real-world retry loop with exponential backoff from slow wall-clock testing to instant virtual-time testing.
+
+### Changes Required:
+
+- **`examples/retry-backoff/Cargo.toml`**: New example project with `virtual-clock` feature
+- **`examples/retry-backoff/src/main.rs`**: Working example showing:
+  - A `retry_with_backoff` async helper function
+  - A "flaky server" simulation that fails N times then succeeds
+  - Test demonstrating retry with exponential backoff (1s, 2s, 4s, 8s, …) completing instantly via virtual time advancement
+  - Uses `#[kimojio::test(virtual)]` macro from Phase 5
+
+- **`Cargo.toml`** (workspace): Add `examples/retry-backoff` to members
+
+- **`docs/virtual-clock-guide.md`**: Add "Retry with Exponential Backoff" section showing the pattern
+
+### Success Criteria:
+- Example compiles and runs (`cargo run --example` equivalent)
+- Guide section is clear and practical
+- Pattern is realistic (not a toy example)
 
 ---
 

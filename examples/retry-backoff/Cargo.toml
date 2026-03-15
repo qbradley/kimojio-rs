@@ -1,0 +1,9 @@
+[package]
+name = "retry-backoff"
+version = "0.1.0"
+edition = "2021"
+description = "Example demonstrating retry with exponential backoff using virtual time"
+
+[dependencies]
+kimojio = { path = "../../kimojio", features = ["virtual-clock"] }
+futures = "0.3"

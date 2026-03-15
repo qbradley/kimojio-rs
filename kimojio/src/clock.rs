@@ -93,6 +93,13 @@ mod virtual_clock {
         fn is_real(&self) -> bool {
             true
         }
+
+        /// If auto-advance is enabled, advances time to `deadline` so that
+        /// the sleep resolves immediately. Returns `true` if advancement
+        /// occurred. The default implementation does nothing.
+        fn try_auto_advance(&self, _deadline: Instant) -> bool {
+            false
+        }
     }
 
     /// Opaque identifier for a registered virtual timer.
@@ -185,7 +192,9 @@ mod virtual_clock {
     }
 
     struct VirtualClockState {
+        epoch: Instant,
         current: Instant,
+        auto_advance: bool,
         timers: BinaryHeap<VirtualTimer>,
         next_timer_id: u64,
     }
@@ -235,11 +244,31 @@ mod virtual_clock {
         pub fn new(start: Instant) -> Self {
             Self {
                 state: Rc::new(RefCell::new(VirtualClockState {
+                    epoch: start,
                     current: start,
+                    auto_advance: false,
                     timers: BinaryHeap::new(),
                     next_timer_id: 1,
                 })),
             }
+        }
+
+        /// Returns the start time (epoch) of this virtual clock.
+        ///
+        /// This is the `Instant` that was passed to [`new()`](Self::new) and
+        /// is useful for calculating elapsed virtual time:
+        ///
+        /// ```rust,no_run
+        /// use std::time::{Duration, Instant};
+        /// use kimojio::clock::VirtualClock;
+        ///
+        /// let clock = VirtualClock::new(Instant::now());
+        /// clock.advance(Duration::from_secs(60));
+        /// let elapsed = clock.now().duration_since(clock.epoch());
+        /// assert_eq!(elapsed, Duration::from_secs(60));
+        /// ```
+        pub fn epoch(&self) -> Instant {
+            self.state.borrow().epoch
         }
 
         /// Returns the current virtual time.
@@ -325,6 +354,36 @@ mod virtual_clock {
         pub fn pending_timers(&self) -> usize {
             self.state.borrow().timers.len()
         }
+
+        /// Enables or disables auto-advance mode.
+        ///
+        /// When enabled, virtual sleep futures automatically advance the clock
+        /// to their deadline on poll, making `sleep(dur).await` complete
+        /// instantly with virtual time advancing by `dur`. This is useful for
+        /// testing async code that uses sleep internally (e.g., retry loops
+        /// with exponential backoff) without needing manual clock advancement.
+        ///
+        /// When disabled (the default), timers only fire when you explicitly
+        /// call [`advance()`](Self::advance) or [`advance_to()`](Self::advance_to).
+        ///
+        /// # Examples
+        ///
+        /// ```rust,no_run
+        /// use std::time::{Duration, Instant};
+        /// use kimojio::clock::VirtualClock;
+        ///
+        /// let clock = VirtualClock::new(Instant::now());
+        /// clock.set_auto_advance(true);
+        /// // Now any virtual sleep will complete instantly with time advancing
+        /// ```
+        pub fn set_auto_advance(&self, enabled: bool) {
+            self.state.borrow_mut().auto_advance = enabled;
+        }
+
+        /// Returns whether auto-advance mode is enabled.
+        pub fn is_auto_advance(&self) -> bool {
+            self.state.borrow().auto_advance
+        }
     }
 
     impl Clock for VirtualClock {
@@ -351,6 +410,15 @@ mod virtual_clock {
 
         fn is_real(&self) -> bool {
             false
+        }
+
+        fn try_auto_advance(&self, deadline: Instant) -> bool {
+            if self.state.borrow().auto_advance && self.now() < deadline {
+                self.advance_to(deadline);
+                true
+            } else {
+                false
+            }
         }
     }
 
@@ -404,6 +472,12 @@ mod virtual_clock {
             if self.completed {
                 panic!("polled after completion");
             }
+
+            // Auto-advance: if enabled and deadline is in the future,
+            // advance the clock to the deadline so this sleep resolves
+            // immediately. This makes `sleep(dur).await` in retry loops
+            // and similar patterns complete instantly.
+            self.clock.try_auto_advance(self.deadline);
 
             if self.clock.now() >= self.deadline {
                 self.completed = true;

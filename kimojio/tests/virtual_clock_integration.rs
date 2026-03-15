@@ -161,3 +161,61 @@ async fn macro_virtual_no_param() {
     // The virtual macro works without a clock parameter
     operations::sleep(Duration::ZERO).await.unwrap();
 }
+
+// ── Auto-advance tests ──────────────────────────────────────────────
+
+#[kimojio::test(virtual)]
+async fn auto_advance_resolves_sleep_instantly(clock: VirtualClock) {
+    clock.set_auto_advance(true);
+    // This would hang without auto-advance
+    operations::sleep(Duration::from_secs(3600)).await.unwrap();
+    let elapsed = clock.now().duration_since(clock.epoch());
+    assert_eq!(elapsed, Duration::from_secs(3600));
+}
+
+#[kimojio::test(virtual)]
+async fn auto_advance_accumulates_time(clock: VirtualClock) {
+    clock.set_auto_advance(true);
+    operations::sleep(Duration::from_secs(10)).await.unwrap();
+    operations::sleep(Duration::from_secs(20)).await.unwrap();
+    operations::sleep(Duration::from_secs(30)).await.unwrap();
+    let elapsed = clock.now().duration_since(clock.epoch());
+    assert_eq!(elapsed, Duration::from_secs(60));
+}
+
+#[kimojio::test(virtual)]
+async fn auto_advance_can_be_toggled(clock: VirtualClock) {
+    // Manual mode: advance explicitly
+    let mut sleep = pin!(operations::sleep(Duration::from_secs(5)));
+    operations::poll_once(sleep.as_mut()).await;
+    clock.advance(Duration::from_secs(5));
+    sleep.await.unwrap();
+
+    // Switch to auto
+    clock.set_auto_advance(true);
+    operations::sleep(Duration::from_secs(10)).await.unwrap();
+
+    // Switch back to manual
+    clock.set_auto_advance(false);
+    let mut sleep = pin!(operations::sleep(Duration::from_secs(5)));
+    assert!(!operations::poll_once(sleep.as_mut()).await);
+    clock.advance(Duration::from_secs(5));
+    sleep.await.unwrap();
+
+    let elapsed = clock.now().duration_since(clock.epoch());
+    assert_eq!(elapsed, Duration::from_secs(20));
+}
+
+// ── epoch() tests ───────────────────────────────────────────────────
+
+#[kimojio::test(virtual)]
+async fn epoch_returns_start_time(clock: VirtualClock) {
+    let epoch = clock.epoch();
+    assert_eq!(clock.now(), epoch, "initially now == epoch");
+    clock.advance(Duration::from_secs(100));
+    assert_eq!(clock.epoch(), epoch, "epoch doesn't change");
+    assert_eq!(
+        clock.now().duration_since(clock.epoch()),
+        Duration::from_secs(100)
+    );
+}

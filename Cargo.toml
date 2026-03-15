@@ -8,6 +8,7 @@ members = [
     "examples/copyfile",
     "examples/tls-echo-server",
     "examples/virtual-time",
+    "examples/retry-backoff",
 ]
 
 resolver = "3"
