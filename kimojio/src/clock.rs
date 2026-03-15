@@ -296,7 +296,11 @@ mod virtual_clock {
         /// assert_eq!(fired, 0); // No timers registered
         /// ```
         pub fn advance(&self, duration: Duration) -> usize {
-            let new_time = self.state.borrow().current + duration;
+            let current = self.state.borrow().current;
+            let new_time = current.checked_add(duration).unwrap_or_else(|| {
+                // Saturate rather than panic on extreme durations.
+                current + Duration::from_secs(365 * 24 * 3600 * 100)
+            });
             self.advance_to(new_time)
         }
 
@@ -314,6 +318,12 @@ mod virtual_clock {
                     state.current = target;
                 }
 
+                // SAFETY INVARIANT: We collect all expired wakers into a Vec
+                // and drop the borrow_mut BEFORE calling wake(). This is
+                // required for auto-advance re-entrancy safety: a woken
+                // future's poll may call try_auto_advance → advance_to,
+                // which takes borrow_mut. A pop-one-wake-one pattern would
+                // cause a RefCell BorrowMutError in that case.
                 let mut expired = Vec::new();
                 while let Some(timer) = state.timers.peek() {
                     if timer.deadline <= state.current {
@@ -366,6 +376,16 @@ mod virtual_clock {
         /// When disabled (the default), timers only fire when you explicitly
         /// call [`advance()`](Self::advance) or [`advance_to()`](Self::advance_to).
         ///
+        /// # Concurrency note
+        ///
+        /// Auto-advance works best for **linear chains** of sleeps (e.g., a
+        /// retry loop). When multiple futures are polled concurrently (e.g.,
+        /// via `join!`), the poll order determines which future advances time
+        /// first, making intermediate `clock.now()` values executor-dependent.
+        /// The final time will be `max(all deadlines)` regardless of order.
+        /// For precise control over concurrent timer ordering, use manual
+        /// advancement instead.
+        ///
         /// # Examples
         ///
         /// ```rust,no_run
@@ -413,7 +433,12 @@ mod virtual_clock {
         }
 
         fn try_auto_advance(&self, deadline: Instant) -> bool {
-            if self.state.borrow().auto_advance && self.now() < deadline {
+            // Extract condition before entering `if` body to drop the `Ref`
+            // before `advance_to` takes a `borrow_mut`. This is safe in all
+            // Rust editions (edition 2024 drops temporaries earlier, but
+            // binding explicitly avoids relying on that).
+            let should_advance = self.state.borrow().auto_advance && self.now() < deadline;
+            if should_advance {
                 self.advance_to(deadline);
                 true
             } else {

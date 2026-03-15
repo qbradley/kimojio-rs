@@ -1104,11 +1104,16 @@ fn try_virtual_sleep(deadline: Instant) -> Option<SleepFuture<'static>> {
     })
 }
 
-/// Polls a future exactly once and returns whether it completed.
+/// Polls a future exactly once and returns its output if immediately ready.
 ///
 /// This is a test utility for the poll-advance-await pattern common in
 /// virtual clock tests. It registers any internal timers (by polling) and
-/// reports whether the future was immediately ready.
+/// returns `None` if the future is pending, or `Some(output)` if it
+/// completed immediately.
+///
+/// **Note**: This is a one-shot probe. If it returns `Some`, the future
+/// has been consumed — do not `.await` or `poll_once` it again (doing so
+/// on a `VirtualSleepFuture` will panic).
 ///
 /// # Example
 ///
@@ -1119,16 +1124,17 @@ fn try_virtual_sleep(deadline: Instant) -> Option<SleepFuture<'static>> {
 ///
 /// # async fn example(clock: kimojio::clock::VirtualClock) {
 /// let mut sleep = pin!(operations::sleep(Duration::from_secs(10)));
-/// assert!(!operations::poll_once(sleep.as_mut()).await, "should be pending");
+/// assert!(operations::poll_once(sleep.as_mut()).await.is_none(), "should be pending");
 /// clock.advance(Duration::from_secs(10));
-/// assert!(operations::poll_once(sleep.as_mut()).await, "should be ready");
+/// let result = operations::poll_once(sleep.as_mut()).await;
+/// assert!(result.is_some(), "should be ready");
 /// # }
 /// ```
 #[cfg(feature = "virtual-clock")]
-pub async fn poll_once<F: Future>(mut fut: Pin<&mut F>) -> bool {
+pub async fn poll_once<F: Future>(mut fut: Pin<&mut F>) -> Option<F::Output> {
     futures::future::poll_fn(|cx| match fut.as_mut().poll(cx) {
-        Poll::Pending => Poll::Ready(false),
-        Poll::Ready(_) => Poll::Ready(true),
+        Poll::Pending => Poll::Ready(None),
+        Poll::Ready(val) => Poll::Ready(Some(val)),
     })
     .await
 }
@@ -1145,7 +1151,11 @@ pub async fn poll_once<F: Future>(mut fut: Pin<&mut F>) -> bool {
 pub fn sleep(duration: Duration) -> SleepFuture<'static> {
     #[cfg(feature = "virtual-clock")]
     {
-        let deadline = crate::clock::clock_now() + duration;
+        let now = crate::clock::clock_now();
+        let deadline = now.checked_add(duration).unwrap_or_else(|| {
+            // Saturate to the maximum representable Instant rather than panicking.
+            now + Duration::from_secs(365 * 24 * 3600 * 100) // ~100 years
+        });
         if let Some(vfut) = try_virtual_sleep(deadline) {
             return vfut;
         }

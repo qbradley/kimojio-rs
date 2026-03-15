@@ -247,6 +247,9 @@ pub fn run_test_with_handle(
 ///
 /// This is the runtime function backing `#[kimojio::test(virtual)]`.
 ///
+/// Note: The setup/teardown pattern mirrors [`run_test_with_handle`]; if
+/// adding shared test infrastructure (tracing, configuration), update both.
+///
 /// # Examples
 ///
 /// ```rust,no_run

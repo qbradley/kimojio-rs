@@ -48,6 +48,7 @@ pub trait Clock: sealed::Sealed + 'static {
     fn register_timer(&self, deadline: Instant, waker: Waker) -> TimerId;
     fn cancel_timer(&self, id: TimerId);
     fn is_real(&self) -> bool { true }
+    fn try_auto_advance(&self, _deadline: Instant) -> bool { false }
 }
 ```
 

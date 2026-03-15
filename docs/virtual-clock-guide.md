@@ -61,7 +61,7 @@ remain unchanged.
 
 | Function | Description |
 |----------|-------------|
-| `operations::poll_once(fut)` | Poll a future once, return `true` if ready |
+| `operations::poll_once(fut)` | Poll a future once, return `Some(output)` if ready |
 | `#[kimojio::test(virtual)]` | Proc macro for zero-boilerplate virtual tests |
 
 ### Timer operations (virtual-aware)
@@ -182,7 +182,7 @@ use std::time::Duration;
 #[kimojio::test(virtual)]
 async fn sleep_completes_after_advance(clock: VirtualClock) {
     let mut sleep = pin!(operations::sleep(Duration::from_secs(60)));
-    assert!(!operations::poll_once(sleep.as_mut()).await);
+    assert!(operations::poll_once(sleep.as_mut()).await.is_none());
     clock.advance(Duration::from_secs(60));
     sleep.await.unwrap();
 }
@@ -214,10 +214,10 @@ let mut sleep = pin!(operations::sleep(Duration::from_secs(10)));
 // }).await;
 
 // New way — one line:
-assert!(!operations::poll_once(sleep.as_mut()).await);
+assert!(operations::poll_once(sleep.as_mut()).await.is_none());
 
 clock.advance(Duration::from_secs(10));
-assert!(operations::poll_once(sleep.as_mut()).await);
+assert!(operations::poll_once(sleep.as_mut()).await.is_some());
 # }
 ```
 

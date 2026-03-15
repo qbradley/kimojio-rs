@@ -113,7 +113,8 @@ pub fn main(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// ## Virtual Clock Mode
 ///
 /// When the `virtual-clock` feature is enabled, the `virtual` parameter
-/// creates a runtime with a [`VirtualClock`] and passes it to the test:
+/// creates a runtime with a [`VirtualClock`] and passes it to the test.
+/// **Requires** the `virtual-clock` feature on the `kimojio` dependency.
 ///
 /// ```ignore
 /// #[kimojio::test(virtual)]
@@ -146,20 +147,36 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
 
-    // Parse attribute for "virtual" keyword
-    let is_virtual = !attr.is_empty() && {
-        let attr_str = attr.to_string();
-        attr_str.trim() == "virtual"
+    // Parse attribute for "virtual" keyword.
+    // Note: `virtual` is a reserved keyword in Rust, so syn::parse::<Ident>
+    // won't work. We parse the token stream and check the string representation.
+    let is_virtual = if attr.is_empty() {
+        false
+    } else {
+        let tokens: Vec<_> = attr.clone().into_iter().collect();
+        if tokens.len() == 1 {
+            let token_str = tokens[0].to_string();
+            if token_str == "virtual" {
+                true
+            } else {
+                return syn::Error::new(
+                    proc_macro::Span::call_site().into(),
+                    format!(
+                        "unsupported attribute `{token_str}`; expected `#[kimojio::test]` or `#[kimojio::test(virtual)]`"
+                    ),
+                )
+                .to_compile_error()
+                .into();
+            }
+        } else {
+            return syn::Error::new(
+                proc_macro::Span::call_site().into(),
+                "unsupported attribute; expected `#[kimojio::test]` or `#[kimojio::test(virtual)]`",
+            )
+            .to_compile_error()
+            .into();
+        }
     };
-
-    if !attr.is_empty() && !is_virtual {
-        return syn::Error::new(
-            proc_macro::Span::call_site().into(),
-            "unsupported attribute; expected `#[kimojio::test]` or `#[kimojio::test(virtual)]`",
-        )
-        .to_compile_error()
-        .into();
-    }
 
     // Get the function body without async
     let body = &block;

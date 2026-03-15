@@ -24,7 +24,7 @@ async fn sleep_until_completes_after_advance(clock: VirtualClock) {
     let mut sleep = pin!(operations::sleep_until(deadline));
 
     assert!(
-        !operations::poll_once(sleep.as_mut()).await,
+        operations::poll_once(sleep.as_mut()).await.is_none(),
         "sleep_until should be pending before advance"
     );
 
@@ -58,7 +58,7 @@ async fn timeout_at_returns_timeout_when_deadline_reached(clock: VirtualClock) {
     ));
 
     assert!(
-        !operations::poll_once(timeout_fut.as_mut()).await,
+        operations::poll_once(timeout_fut.as_mut()).await.is_none(),
         "timeout_at should be pending before advance"
     );
 
@@ -150,7 +150,7 @@ async fn advance_to_safe_with_reentrant_access(clock: VirtualClock) {
 #[kimojio::test(virtual)]
 async fn macro_virtual_sleep_completes(clock: VirtualClock) {
     let mut sleep = pin!(operations::sleep(Duration::from_secs(30)));
-    assert!(!operations::poll_once(sleep.as_mut()).await);
+    assert!(operations::poll_once(sleep.as_mut()).await.is_none());
 
     clock.advance(Duration::from_secs(30));
     sleep.await.unwrap();
@@ -198,7 +198,7 @@ async fn auto_advance_can_be_toggled(clock: VirtualClock) {
     // Switch back to manual
     clock.set_auto_advance(false);
     let mut sleep = pin!(operations::sleep(Duration::from_secs(5)));
-    assert!(!operations::poll_once(sleep.as_mut()).await);
+    assert!(operations::poll_once(sleep.as_mut()).await.is_none());
     clock.advance(Duration::from_secs(5));
     sleep.await.unwrap();
 
