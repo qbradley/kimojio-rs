@@ -6,7 +6,9 @@ members = [
     "kimojio-tls",
     "perf",
     "examples/copyfile",
+    "examples/retry-backoff",
     "examples/tls-echo-server",
+    "examples/virtual-time",
 ]
 
 resolver = "3"

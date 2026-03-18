@@ -917,6 +917,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
+name = "retry-backoff"
+version = "0.1.0"
+dependencies = [
+ "kimojio",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1212,6 +1219,14 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
+
+[[package]]
+name = "virtual-time"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "kimojio",
+]
 
 [[package]]
 name = "walkdir"
