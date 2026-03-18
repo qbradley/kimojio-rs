@@ -81,7 +81,7 @@ impl<T> AsyncLock<T> {
         &self,
         timeout: Option<Duration>,
     ) -> Result<AsyncLockRef<'_, T>, TimeoutError> {
-        let deadline = timeout.map(|timeout| Instant::now() + timeout);
+        let deadline = timeout.map(|timeout| crate::clock_now() + timeout);
         self.lock_with_deadline(deadline).await
     }
 

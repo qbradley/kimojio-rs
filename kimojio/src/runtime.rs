@@ -298,6 +298,10 @@ pub struct Runtime {
     busy_poll: BusyPoll,
     server_pipe: OwnedFd,
     client_pipe: OwnedFd,
+    // Runtime is bound to a single thread and must not be sent across threads.
+    // io_uring submission/completion queues, TaskState, and virtual clocks are
+    // all thread-local resources.
+    _not_send: std::marker::PhantomData<*const ()>,
 }
 
 impl Runtime {
@@ -314,6 +318,7 @@ impl Runtime {
             busy_poll,
             server_pipe,
             client_pipe,
+            _not_send: std::marker::PhantomData,
         }
     }
 
@@ -379,9 +384,23 @@ impl Runtime {
                 BusyPoll::Until(_) => Timer::ticks() <= cool_down_time,
             };
 
-            task_state = crate::runtime::submit_and_complete_io_all(task_state, busy_poll);
+            // When virtual clock is active, don't block in submit_and_wait
+            // if there are idle advances to apply OR self-woken tasks in the
+            // fill list (e.g., from yield-once cooperative scheduling).
+            // Without this, submit_and_wait(1) blocks on io_uring forever
+            // since self-wakeups don't produce io_uring CQEs.
+            #[cfg(feature = "virtual-clock")]
+            let busy_poll = busy_poll
+                || (task_state.clock.is_some()
+                    && (task_state.any_ready()
+                        || task_state
+                            .clock
+                            .as_ref()
+                            .is_some_and(|c| c.can_idle_advance())));
 
+            task_state = crate::runtime::submit_and_complete_io_all(task_state, busy_poll);
             task_state.prepare_cohort();
+
             while let Some(task) = task_state.get_ready() {
                 task_state = poll_task(task, task_state);
 
@@ -390,6 +409,31 @@ impl Runtime {
                     // will wake a task, so this is an adequate proxy for I/O completion activity.
                     cool_down_time = Timer::ticks() + poll_duration_ticks;
                 }
+            }
+
+            // When the runtime is idle (no tasks ready) and idle advances are
+            // available (explicit queue or default), apply the next one. This
+            // fires expired timers, waking tasks for the next loop iteration.
+            // Re-entrancy: release the TaskState borrow before waking so that
+            // woken futures can re-borrow TaskState via schedule_io.
+            #[cfg(feature = "virtual-clock")]
+            if !task_state.any_ready()
+                && task_state
+                    .clock
+                    .as_ref()
+                    .is_some_and(|c| c.can_idle_advance())
+            {
+                let wakers = {
+                    let clock = task_state.clock.as_mut().unwrap();
+                    let (_, wakers) = clock.take_next_idle_advance_or_default().unwrap();
+                    wakers
+                };
+                let cell = task_state.into_inner();
+                for w in wakers {
+                    w.wake();
+                }
+                task_state = cell.borrow_mut();
+                continue;
             }
         }
 
