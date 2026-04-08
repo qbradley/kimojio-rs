@@ -16,7 +16,7 @@ The change is purely internal to the virtual clock idle mechanism. The explicit 
 - Unify idle advance control into a single, composable callback
 - Enable the "advance to next timer on idle" pattern without pre-computation
 - Enable dynamic idle advance strategies (conditional, variable-duration, stateful) that the current API cannot express
-- Reduce API surface area (three functions → one setter + one query)
+- Reduce API surface area (three functions → one setter + one clear + one query, unifying the idle mechanism under a single callback concept)
 - Maintain zero overhead when no callback is installed (no idle advancement)
 
 ## User Scenarios & Testing
@@ -59,7 +59,7 @@ Narrative: A test author installs a callback, runs part of a test with automatic
 Independent Test: Install a callback, complete a sleep, clear the callback, verify that a subsequent sleep does not auto-complete on idle.
 
 Acceptance Scenarios:
-1. Given an installed callback, When `virtual_clock_set_idle_advance(None)` is called, Then no idle advancement occurs on subsequent idle points
+1. Given an installed callback, When `virtual_clock_clear_idle_advance()` is called, Then no idle advancement occurs on subsequent idle points
 2. Given a cleared callback, When `virtual_clock_advance()` is called explicitly, Then timers fire normally (explicit API unaffected)
 
 ### User Story P5 – Backward-Compatible Upgrade
@@ -71,7 +71,7 @@ Independent Test: All old idle advance test scenarios pass when rewritten with t
 Acceptance Scenarios:
 1. Given old code using `virtual_clock_advance_idle(dur)`, When migrated to a one-shot callback pattern, Then behavior is equivalent
 2. Given old code using `virtual_clock_advance_idle_default(Some(dur))`, When migrated to a fixed-duration callback, Then behavior is equivalent
-3. Given old code checking `virtual_clock_pending_idle_advances()`, When migrated to callback-based tracking, Then equivalent observability exists
+3. Given old code checking `virtual_clock_pending_idle_advances()`, When migrated to `virtual_clock_has_idle_advance()`, Then presence/absence of idle advancement is observable (note: exact queue counts are no longer applicable since the callback model has no queue)
 
 ### Edge Cases
 - Callback receives `(now, None)` when no timers are pending: should return `None` to avoid advancing time pointlessly
@@ -83,19 +83,21 @@ Acceptance Scenarios:
 ## Requirements
 
 ### Functional Requirements
-- FR-001: Provide `virtual_clock_set_idle_advance(callback)` that accepts `Option<impl FnMut(Instant, Option<Instant>) -> Option<Duration> + 'static>`, storing the callback on the virtual clock state (Stories: P1, P2, P3, P4)
+- FR-001: Provide `virtual_clock_set_idle_advance(callback)` that accepts `impl FnMut(Instant, Option<Instant>) -> Option<Duration> + 'static`, storing the callback on the virtual clock state (Stories: P1, P2, P3, P4)
 - FR-002: When the runtime is idle and a callback is installed, call the callback with `(current_virtual_time, next_pending_timer_deadline)` and advance by the returned `Duration` (Stories: P1, P2)
 - FR-003: When the callback returns `None` or no callback is installed, do not advance and allow the runtime to block in io_uring (Stories: P1, P3, P4)
 - FR-004: When the callback returns `Some(Duration::ZERO)`, treat as no-advance to prevent infinite loops (Stories: P1)
 - FR-005: Provide `virtual_clock_has_idle_advance()` query returning `bool` — whether a callback is currently installed (Stories: P5)
 - FR-006: Remove `virtual_clock_advance_idle(Duration)`, `virtual_clock_advance_idle_default(Option<Duration>)`, and `virtual_clock_pending_idle_advances()` (Stories: P5)
 - FR-007: Update runtime event loop idle detection to use the callback instead of the queue/default mechanism (Stories: P1, P2, P3)
-- FR-008: Passing `None` to `virtual_clock_set_idle_advance` clears any installed callback (Stories: P4)
-- FR-009: Update documentation (virtual-clock-guide.md, doc comments) to reflect the new API (Stories: P1–P5)
+- FR-008: Provide `virtual_clock_clear_idle_advance()` to remove any installed callback (Stories: P4)
+- FR-009: Update documentation (virtual-clock-guide.md, doc comments, README.md, docs/virtual-clock-design.md, examples/) to reflect the new API (Stories: P1–P5)
 - FR-010: Migrate all existing idle advance tests to use the callback API (Stories: P5)
 
 ### Key Entities
 - Idle advance callback: `Box<dyn FnMut(Instant, Option<Instant>) -> Option<Duration>` stored on `VirtualClockState`
+- `virtual_clock_set_idle_advance`: setter for the callback
+- `virtual_clock_clear_idle_advance`: clears the callback
 - `virtual_clock_set_idle_advance`: the sole API for configuring idle behavior
 
 ### Cross-Cutting / Non-Functional
@@ -116,7 +118,7 @@ Acceptance Scenarios:
 
 ## Assumptions
 - Callback heap allocation (`Box<dyn FnMut>`) is acceptable — virtual clock is test infrastructure, not production hot path
-- The three removed APIs have no downstream consumers outside this repository (this is an unreleased feature)
+- The three removed APIs have no downstream consumers outside this repository (this is an unreleased feature on an unmerged branch; risk is negligible but formally unvalidated)
 - `FnMut` (not `Fn`) is needed because common patterns use mutable captured state (counters, flags)
 - The callback is called at most once per idle point — consistent with current behavior where one advance fires per idle iteration
 
@@ -131,7 +133,7 @@ In Scope:
 - Update runtime event loop idle path
 - Migrate existing tests
 - New tests for dynamic callback patterns
-- Update virtual-clock-guide.md and doc comments
+- Update virtual-clock-guide.md, doc comments, README.md, docs/virtual-clock-design.md, and examples/retry-backoff/
 
 Out of Scope:
 - Changes to `virtual_clock_advance()` or `virtual_clock_advance_to()` (explicit advance is orthogonal)

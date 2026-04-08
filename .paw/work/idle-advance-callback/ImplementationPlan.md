@@ -47,26 +47,26 @@ Replace the queue-based and default-based idle advance mechanism in `VirtualCloc
 ### Changes Required:
 
 - **`kimojio/src/virtual_clock.rs`**: Core state refactoring
-  - Replace fields `idle_advances: VecDeque<Duration>` and `idle_advance_default: Option<Duration>` with `idle_advance_fn: Option<Box<dyn FnMut(Instant, Option<Instant>) -> Option<Duration>>>`
+  - Replace fields `idle_advances: VecDeque<Duration>` and `idle_advance_default: Option<Duration>` with `idle_advance_fn: Option<Box<dyn FnMut(Instant, Option<Instant>) -> Option<Duration>>>` and `idle_advance_dirty: bool` (dirty flag for self-replacement detection)
   - Remove `VecDeque` import (if no longer needed)
-  - Update `new()` to initialize `idle_advance_fn: None`
+  - Update `new()` to initialize `idle_advance_fn: None`, `idle_advance_dirty: false`
   - Remove methods: `queue_idle_advance`, `has_idle_advances`, `take_next_idle_advance`, `pending_idle_advances`, `set_idle_advance_default`, `idle_advance_default`, `take_next_idle_advance_or_default`
   - Rename `can_idle_advance` → `has_idle_advance_fn`: returns `self.idle_advance_fn.is_some()`
-  - Add `set_idle_advance_fn(&mut self, f: Option<Box<dyn FnMut(Instant, Option<Instant>) -> Option<Duration>>>)`: stores callback
-  - Add `take_idle_advance_fn(&mut self) -> Option<Box<dyn FnMut(...)>>`: `Option::take()` for the runtime to extract before releasing borrow
-  - Add `restore_idle_advance_fn(&mut self, f: Box<dyn FnMut(...)>)`: puts callback back after invocation
+  - Add `set_idle_advance_fn(&mut self, f: Option<Box<dyn FnMut(Instant, Option<Instant>) -> Option<Duration>>>)`: stores callback and sets `idle_advance_dirty = true` (so runtime knows user code touched the field)
+  - Add `take_idle_advance_fn(&mut self) -> Option<Box<dyn FnMut(...)>>`: `Option::take()` for the runtime to extract before releasing borrow; also resets `idle_advance_dirty = false` (baseline before callback invocation)
+  - Add `restore_idle_advance_fn(&mut self, f: Box<dyn FnMut(...)>)`: puts callback back only if `!self.idle_advance_dirty` (callback didn't replace/clear itself during invocation); if dirty, drops the old callback since user code already set a new state
   - Migrate unit tests in same file: replace queue/default tests with callback equivalents (see test plan below)
 
 - **`kimojio/src/runtime.rs`**: Event loop update
-  - Update busy-poll override (:392-399): replace `c.can_idle_advance()` with `c.has_idle_advance_fn()`
+  - Update busy-poll override (:392-399): replace `c.can_idle_advance()` with `c.has_idle_advance_fn()`. Note: this keeps busy_poll active whenever a callback is installed; the "fall through" path (callback returns `None` or `Duration::ZERO`) exits the idle block without `continue`, so the next loop iteration re-evaluates busy_poll. To prevent spinning, add a `last_idle_advanced: bool` flag to VirtualClockState: set `true` when advance produces wakers, `false` when callback returns None/ZERO. Include this flag in the busy-poll condition: `c.has_idle_advance_fn() && (task_state.any_ready() || c.last_idle_advanced_or_first_call())`
   - Replace idle advance execution block (:419-437) with new two-phase pattern:
-    1. Extract callback + params: `take_idle_advance_fn()`, `now()`, `next_deadline()` in inner block
+    1. Extract callback + params: `take_idle_advance_fn()` (resets dirty flag), `now()`, `next_deadline()` in inner block
     2. Release borrow: `task_state.into_inner()`
     3. Invoke callback: `cb(now, next_deadline)` → `Option<Duration>`
     4. Re-borrow: `cell.borrow_mut()`
-    5. Conditionally restore callback: only call `restore_idle_advance_fn(cb)` if `idle_advance_fn.is_none()` — the callback may have replaced or cleared itself during invocation (e.g., by calling `virtual_clock_set_idle_advance` or `virtual_clock_clear_idle_advance` via TaskState, which is safe since the borrow was released)
-    6. If `Some(dur)` with `!dur.is_zero()`: call `clock.advance(dur)`, collect wakers, release borrow, wake, re-borrow, continue
-    7. Else: fall through (no advance, runtime proceeds to io_uring)
+    5. Restore callback via `restore_idle_advance_fn(cb)` — this method internally checks the dirty flag; if dirty (callback called `set_idle_advance` or `clear_idle_advance` during invocation), the old callback is dropped instead of restored
+    6. If `Some(dur)` with `!dur.is_zero()`: call `clock.advance(dur)`, collect wakers, set `last_idle_advanced = true`, release borrow, wake, re-borrow, continue
+    7. Else: set `last_idle_advanced = false`, fall through (no advance, runtime proceeds to io_uring)
 
 - **`kimojio/src/operations.rs`**: Public API replacement
   - Remove `virtual_clock_advance_idle` (currently :2156-2162)
@@ -156,11 +156,17 @@ Tests removed (4): these tested queue-specific mechanics that no longer exist. T
 
 - **`.paw/work/idle-advance-callback/Docs.md`**: Technical reference (load `paw-docs-guidance`)
 - **`docs/virtual-clock-guide.md`**: Update API reference table (lines 49-61) — remove three old entries, add `virtual_clock_set_idle_advance`, `virtual_clock_clear_idle_advance`, `virtual_clock_has_idle_advance`. Rewrite idle advance prose sections (lines 260-306) to explain callback model with examples. Update "Manual advancement only" caveats section (lines 237-258) if relevant.
+- **`docs/virtual-clock-design.md`**: Update API sections that reference `virtual_clock_advance_idle` and `virtual_clock_pending_idle_advances` to use the new callback API.
+- **`README.md`**: Update the virtual clock code snippet that uses `virtual_clock_advance_idle(Duration::from_secs(60))` to use the callback API.
+- **`examples/retry-backoff/src/main.rs`**: Rewrite the idle advance calls (lines 72-74) to use `virtual_clock_set_idle_advance` with an appropriate callback pattern.
 - **Doc comments in `operations.rs`**: Comprehensive doc comments on new public functions with usage examples showing advance-to-next-timer, fixed-duration, and conditional patterns.
 - **Doc comments in `virtual_clock.rs`**: Update struct-level and method-level docs for changed internals.
 
 ### Success Criteria:
 - [ ] `docs/virtual-clock-guide.md` contains no references to removed APIs
+- [ ] `docs/virtual-clock-design.md` contains no references to removed APIs
+- [ ] `README.md` virtual clock snippet uses callback API
+- [ ] `examples/retry-backoff/` compiles and uses callback API
 - [ ] New API functions have doc comments with `# Examples` sections
 - [ ] Content accurately reflects implemented behavior
 
