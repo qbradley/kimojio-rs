@@ -16,8 +16,8 @@ Replace the queue-based and default-based idle advance mechanism in `VirtualCloc
 ## Desired End State
 
 - `VirtualClockState` stores a single `Option<Box<dyn FnMut(Instant, Option<Instant>) -> Option<Duration>>>` instead of queue + default
-- Two methods replace eight: `set_idle_advance_fn`, `has_idle_advance_fn` (plus internal `invoke_idle_advance`)
-- Two public API functions replace three: `virtual_clock_set_idle_advance`, `virtual_clock_has_idle_advance`
+- Four internal methods replace eight: `set_idle_advance_fn`, `has_idle_advance_fn`, `take_idle_advance_fn`, `restore_idle_advance_fn`
+- Three public API functions replace three: `virtual_clock_set_idle_advance`, `virtual_clock_clear_idle_advance`, `virtual_clock_has_idle_advance`
 - Runtime idle block: extract callback via `Option::take()`, release TaskState borrow, invoke callback, re-borrow, put callback back, then advance and wake if callback returned `Some(dur)` with non-zero duration
 - All migrated tests pass; new tests demonstrate advance-to-next-timer, conditional, countdown, and clearing patterns
 
@@ -64,7 +64,7 @@ Replace the queue-based and default-based idle advance mechanism in `VirtualCloc
     2. Release borrow: `task_state.into_inner()`
     3. Invoke callback: `cb(now, next_deadline)` → `Option<Duration>`
     4. Re-borrow: `cell.borrow_mut()`
-    5. Restore callback: `restore_idle_advance_fn(cb)`
+    5. Conditionally restore callback: only call `restore_idle_advance_fn(cb)` if `idle_advance_fn.is_none()` — the callback may have replaced or cleared itself during invocation (e.g., by calling `virtual_clock_set_idle_advance` or `virtual_clock_clear_idle_advance` via TaskState, which is safe since the borrow was released)
     6. If `Some(dur)` with `!dur.is_zero()`: call `clock.advance(dur)`, collect wakers, release borrow, wake, re-borrow, continue
     7. Else: fall through (no advance, runtime proceeds to io_uring)
 
@@ -74,7 +74,7 @@ Replace the queue-based and default-based idle advance mechanism in `VirtualCloc
   - Remove `virtual_clock_advance_idle_default` (currently :2215-2229)
   - Add `virtual_clock_set_idle_advance(f: impl FnMut(Instant, Option<Instant>) -> Option<Duration> + 'static)`: wraps in `Box` and delegates to `VirtualClockState::set_idle_advance_fn`. Accepts the closure directly (not `Option`) for ergonomics — clearing uses a separate call or passing a `None`-returning closure.
     Actually — accept `Option<impl FnMut(...) + 'static>` to support clearing with `None`, matching Spec FR-008. The `impl` approach doesn't work with `Option<impl>` directly, so the public signature should accept `Box<dyn FnMut(...)>` wrapped by a convenience that takes `impl`. Alternatively, provide two functions: `virtual_clock_set_idle_advance` taking `impl FnMut + 'static` and `virtual_clock_clear_idle_advance` to clear. The two-function approach is cleaner for callers. Use this approach.
-  - Add `virtual_clock_clear_idle_advance()`: clears callback (sets to `None`)
+  - Add `virtual_clock_clear_idle_advance()`: clears callback (sets to `None`). **Note**: Spec FR-008 describes passing `None` to a single function; the two-function split (`set` + `clear`) is the Rust-idiomatic realization of that requirement since `Option<impl Trait>` is not expressible.
   - Add `virtual_clock_has_idle_advance() -> bool`: delegates to `has_idle_advance_fn()`
   - Migrate unit tests in operations.rs test module (see test plan below)
 
@@ -93,7 +93,34 @@ Replace the queue-based and default-based idle advance mechanism in `VirtualCloc
 | `idle_advance_default_resolves_sleep` | `fixed_duration_callback_resolves_sleep` | fixed: `\|_, _\| Some(Duration::from_millis(1))` |
 | `idle_advance_default_cleared` | `cleared_callback_stops_advancement` | Set then clear, verify no auto-advance |
 
-Plus equivalent migrations for the operations.rs and virtual_clock.rs unit tests (same patterns, updated API calls).
+Plus equivalent migrations for the operations.rs and virtual_clock.rs unit tests:
+
+**operations.rs unit test migrations** (7 tests):
+
+| Old Test | New Test | Strategy |
+|----------|----------|----------|
+| `idle_advance_completes_sleep` | `callback_completes_sleep` | advance-to-next callback |
+| `idle_advance_60s_completes_fast` | `callback_60s_completes_fast` | advance-to-next, wall-clock assertion |
+| `multiple_idle_advances_fire_in_sequence` | `callback_fires_timers_in_sequence` | advance-to-next, verify clock positions |
+| `idle_advance_spawned_task` | `callback_wakes_spawned_task` | advance-to-next, spawned + main |
+| `idle_advance_default_completes_sleep` | `fixed_callback_completes_sleep` | fixed 1ms callback |
+| `idle_advance_default_none_is_noop` | `no_callback_is_noop` | verify no advancement without callback |
+| `queue_drains_before_default` | `replace_callback_changes_behavior` | install one callback, sleep, replace with different callback, sleep |
+
+**virtual_clock.rs unit test migrations** (8 tests — these test internal state, adapt to new field):
+
+| Old Test | New Test | Strategy |
+|----------|----------|----------|
+| `queue_idle_advance_enqueues` | `set_idle_advance_fn_stores` | Set callback, verify `has_idle_advance_fn()` |
+| `take_next_idle_advance_applies_in_order` | Remove — queue ordering is N/A with callback |
+| `take_next_idle_advance_returns_none_when_empty` | `take_idle_advance_fn_returns_none_when_empty` | No callback → take returns None |
+| `idle_advance_default_none_by_default` | `idle_advance_fn_none_by_default` | No callback by default, `has_idle_advance_fn()` false |
+| `set_idle_advance_default` | `set_and_clear_idle_advance_fn` | Set, verify has, clear (set None), verify not has |
+| `zero_duration_default_treated_as_none` | Remove — Duration::ZERO is now a runtime-level guard, not state-level filtering |
+| `take_next_uses_default_when_queue_empty` | Remove — no queue/default distinction |
+| `queue_takes_priority_over_default` | Remove — no queue/default distinction |
+
+Tests removed (4): these tested queue-specific mechanics that no longer exist. Their behavioral coverage is subsumed by the new callback tests above and the integration tests.
 
 **New tests** (demonstrate capabilities the old API couldn't express):
 
@@ -105,6 +132,7 @@ Plus equivalent migrations for the operations.rs and virtual_clock.rs unit tests
 | `callback_receives_none_when_no_timers` | Install callback, don't register any timers, verify callback receives `None` for next_deadline and returns `None` (SC-005) |
 | `zero_duration_return_does_not_loop` | Callback always returns `Some(Duration::ZERO)`. Verify runtime doesn't hang — falls through without advancing. (SC-006) |
 | `replace_callback_mid_test` | Install one callback, sleep, install a different callback, sleep again. Verify both behaviors. |
+| `callback_self_clears_during_invocation` | Callback calls `virtual_clock_clear_idle_advance()` inside itself (safe since borrow is released), then returns `Some(dur)`. Verify the advance fires AND the callback is gone afterward (not restored). |
 | `callback_receives_correct_now_and_deadline` | Callback captures `Rc<Cell<(Instant, Option<Instant>)>>` to record parameters. Verify `now` matches `virtual_clock_epoch()` and `next_deadline` matches the registered sleep deadline. |
 
 ### Success Criteria:
