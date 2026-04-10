@@ -217,11 +217,16 @@ impl VirtualClockState {
 
     /// Restores the callback after invocation, unless user code touched
     /// the field during invocation (dirty flag set by `set_idle_advance_fn`).
-    pub(crate) fn restore_idle_advance_fn(&mut self, f: Box<IdleAdvanceFn>) {
+    /// Returns `true` if the callback was replaced or cleared during invocation
+    /// (dirty), so the caller can re-arm idle advancement for the new callback.
+    pub(crate) fn restore_idle_advance_fn(&mut self, f: Box<IdleAdvanceFn>) -> bool {
         if !self.idle_advance_dirty {
             self.idle_advance_fn = Some(f);
+            false
+        } else {
+            // User code called set/clear during invocation — drop the old callback.
+            true
         }
-        // If dirty, user code called set/clear during invocation — drop the old callback.
     }
 }
 
@@ -624,7 +629,8 @@ mod tests {
         let cb = state.take_idle_advance_fn().unwrap();
         // dirty flag was reset by take
         assert!(!state.has_idle_advance_fn());
-        state.restore_idle_advance_fn(cb);
+        let was_replaced = state.restore_idle_advance_fn(cb);
+        assert!(!was_replaced);
         assert!(state.has_idle_advance_fn());
     }
 
@@ -636,7 +642,8 @@ mod tests {
         // Simulate user code calling set during invocation
         state.set_idle_advance_fn(None);
         // dirty flag is now set — restore should NOT put back the old callback
-        state.restore_idle_advance_fn(cb);
+        let was_replaced = state.restore_idle_advance_fn(cb);
+        assert!(was_replaced);
         assert!(!state.has_idle_advance_fn());
     }
 

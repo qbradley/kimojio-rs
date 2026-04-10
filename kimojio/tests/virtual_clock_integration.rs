@@ -508,3 +508,23 @@ async fn conditional_callback_with_flag() {
     active.set(true);
     operations::sleep(Duration::from_secs(10)).await.unwrap();
 }
+
+/// Callback A replaces itself with callback B and returns None.
+/// Callback B should run on the next idle point (not be blocked by anti-spin).
+#[kimojio::test]
+async fn replacement_during_callback_none_takes_effect_next_idle_point() {
+    operations::virtual_clock_enable(true);
+
+    // Callback A: install callback B and return None (don't advance this time)
+    operations::virtual_clock_set_idle_advance(|_now, _next| {
+        // Replace with advance-to-next callback
+        operations::virtual_clock_set_idle_advance(|now, next| {
+            next.map(|d| d.saturating_duration_since(now))
+        });
+        None // Don't advance on this invocation
+    });
+
+    // The sleep should still complete: callback A returns None but installs B,
+    // and B should fire on the next idle point.
+    operations::sleep(Duration::from_secs(10)).await.unwrap();
+}

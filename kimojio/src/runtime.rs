@@ -455,30 +455,33 @@ impl Runtime {
 
                 // Restore callback unless user code replaced/cleared it
                 // during invocation (dirty flag set by set_idle_advance_fn).
-                task_state
-                    .clock
-                    .as_mut()
-                    .unwrap()
-                    .restore_idle_advance_fn(cb);
+                // If replaced, re-arm idle_advance_active so the new callback
+                // gets a chance to run on the next idle point.
+                // Guard: the callback may have called virtual_clock_enable(false),
+                // dropping the clock entirely. In that case, drop the old callback.
+                let was_replaced = if let Some(clock) = task_state.clock.as_mut() {
+                    clock.restore_idle_advance_fn(cb)
+                } else {
+                    drop(cb);
+                    false
+                };
 
                 if let Some(dur) = advance_duration.filter(|d| !d.is_zero()) {
-                    let wakers = {
-                        let clock = task_state.clock.as_mut().unwrap();
+                    if let Some(clock) = task_state.clock.as_mut() {
                         let (_, wakers) = clock.advance(dur);
-                        wakers
-                    };
-                    let cell = task_state.into_inner();
-                    for w in wakers {
-                        w.wake();
+                        let cell = task_state.into_inner();
+                        for w in wakers {
+                            w.wake();
+                        }
+                        task_state = cell.borrow_mut();
                     }
-                    task_state = cell.borrow_mut();
                     idle_advance_active = true;
                     continue;
                 }
                 // Callback returned None or Duration::ZERO — don't spin.
-                // Clear active flag so busy_poll won't prevent io_uring
-                // from blocking. Reset when tasks are polled next.
-                idle_advance_active = false;
+                // But if the callback was replaced during invocation, the new
+                // callback should get a chance: re-arm so it runs next iteration.
+                idle_advance_active = was_replaced;
             }
         }
 
