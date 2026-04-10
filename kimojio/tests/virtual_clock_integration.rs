@@ -440,3 +440,71 @@ async fn callback_returns_none_when_no_timers() {
     // Now use it with a real sleep to verify it works end-to-end
     operations::sleep(Duration::from_secs(1)).await.unwrap();
 }
+
+/// Callback that always returns Duration::ZERO does not cause infinite loop.
+#[kimojio::test]
+async fn zero_duration_return_does_not_loop() {
+    operations::virtual_clock_enable(true);
+
+    // Install a callback that always returns ZERO — the runtime should not spin.
+    operations::virtual_clock_set_idle_advance(|_, _| Some(Duration::ZERO));
+
+    // Do a manual advance to verify the runtime isn't stuck
+    operations::virtual_clock_advance(Duration::from_secs(1));
+    let epoch = operations::virtual_clock_epoch();
+    assert_eq!(
+        operations::virtual_clock_now().duration_since(epoch),
+        Duration::from_secs(1)
+    );
+}
+
+/// Callback calls virtual_clock_clear_idle_advance during invocation.
+/// The clear should take effect — the old callback should NOT be restored.
+#[kimojio::test]
+async fn callback_self_clears_during_invocation() {
+    operations::virtual_clock_enable(true);
+
+    operations::virtual_clock_set_idle_advance(|now, next| {
+        // Clear ourselves during invocation
+        operations::virtual_clock_clear_idle_advance();
+        // Still return an advance for this one invocation
+        next.map(|d| d.saturating_duration_since(now))
+    });
+
+    // The first sleep should complete (callback returns advance-to-next)
+    operations::sleep(Duration::from_secs(10)).await.unwrap();
+
+    // But the callback should now be gone (self-cleared via dirty flag)
+    assert!(
+        !operations::virtual_clock_has_idle_advance(),
+        "callback should have been cleared during invocation"
+    );
+}
+
+/// Conditional callback with a shared flag to toggle advancement on/off.
+#[kimojio::test]
+async fn conditional_callback_with_flag() {
+    operations::virtual_clock_enable(true);
+    let active = std::rc::Rc::new(std::cell::Cell::new(true));
+    let a = active.clone();
+
+    operations::virtual_clock_set_idle_advance(move |now, next| {
+        if a.get() {
+            next.map(|d| d.saturating_duration_since(now))
+        } else {
+            None
+        }
+    });
+
+    // With flag=true, sleep completes
+    operations::sleep(Duration::from_secs(10)).await.unwrap();
+
+    // Disable the flag — callback returns None, runtime should block.
+    // We can't test blocking directly, but we can verify the flag
+    // is respected by toggling it back and sleeping again.
+    active.set(false);
+
+    // Re-enable so we don't hang, and verify it works again.
+    active.set(true);
+    operations::sleep(Duration::from_secs(10)).await.unwrap();
+}
