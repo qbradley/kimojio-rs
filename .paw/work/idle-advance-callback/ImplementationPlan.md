@@ -35,7 +35,7 @@ Replace the queue-based and default-based idle advance mechanism in `VirtualCloc
 
 ## Phase Status
 - [x] **Phase 1: Callback Infrastructure + Tests** - Replace queue/default with callback, update runtime, migrate and add tests
-- [ ] **Phase 2: Documentation** - Update guide, doc comments, Docs.md
+- [x] **Phase 2: Documentation** - Update guide, doc comments, Docs.md
 
 ## Phase Candidates
 <!-- No candidates for this focused refactoring -->
