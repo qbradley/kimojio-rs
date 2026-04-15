@@ -46,8 +46,14 @@ io_uring_cmd = []
 noencrypt = []
 enter_stats = []
 fault_injection = []
+# Enable virtual clock for deterministic test timing
+virtual-clock = []
 # Temporary feature for ssl2
 ssl2 = ["tls"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dev-dependencies]
 criterion.workspace = true

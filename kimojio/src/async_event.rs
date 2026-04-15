@@ -140,6 +140,11 @@ impl AsyncEvent {
     /// If the optional deadline is specified and the event is not set by that
     /// time, then this will return a timeout error.
     ///
+    /// **Note:** When a virtual clock is active, the deadline comparison uses
+    /// virtual time, but the sleep backing the deadline uses real kernel time
+    /// unless a virtual sleep is selected (which happens when the `virtual-clock`
+    /// feature is enabled). See [`sleep`](crate::operations::sleep) for details.
+    ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
@@ -147,11 +152,11 @@ impl AsyncEvent {
         if let Some(deadline) = deadline {
             let wait_remaining = || match (
                 self.state.get(),
-                deadline.checked_duration_since(Instant::now()),
+                deadline.checked_duration_since(crate::clock_now()),
             ) {
                 (true, _) => None,
-                (false, Some(remaining)) => Some(remaining),
-                (false, None) => None,
+                (false, Some(remaining)) if !remaining.is_zero() => Some(remaining),
+                (false, _) => None,
             };
 
             while let Some(remaining) = wait_remaining() {
@@ -184,7 +189,7 @@ impl AsyncEvent {
     ///
     /// This method is cancel safe.
     pub async fn wait_with_timeout(&self, timeout: Option<Duration>) -> Result<(), TimeoutError> {
-        let deadline = timeout.map(|timeout| Instant::now() + timeout);
+        let deadline = timeout.map(|timeout| crate::clock_now() + timeout);
         self.wait_with_deadline(deadline).await
     }
 

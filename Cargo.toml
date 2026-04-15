@@ -5,8 +5,7 @@ members = [
     "kimojio-macros",
     "kimojio-tls",
     "perf",
-    "examples/copyfile",
-    "examples/tls-echo-server",
+    "examples",
 ]
 
 resolver = "3"

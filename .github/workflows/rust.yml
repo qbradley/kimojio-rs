@@ -37,6 +37,9 @@ jobs:
     - name: Run tests
       run: cargo +${{ matrix.rust }} test --all-targets --features ssl2
 
+    - name: Run virtual-clock tests
+      run: cargo +${{ matrix.rust }} test --all-targets --features virtual-clock
+
     - name: Check docs
       run: cargo +${{ matrix.rust }} test --doc
 

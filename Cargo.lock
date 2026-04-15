@@ -241,17 +241,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
-name = "copyfile"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "futures",
- "kimojio",
- "rustix",
-]
-
-[[package]]
 name = "criterion"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -350,6 +339,18 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "examples"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "futures",
+ "kimojio",
+ "openssl",
+ "rustix",
 ]
 
 [[package]]
@@ -1159,17 +1160,6 @@ checksum = "be4d6b5f19ff7664e8c98d03e2139cb510db9b0a60b55f8e8709b689d939b6bc"
 dependencies = [
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "tls-echo-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "kimojio",
- "openssl",
- "rustix",
 ]
 
 [[package]]

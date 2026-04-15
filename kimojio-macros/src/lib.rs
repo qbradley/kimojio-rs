@@ -110,18 +110,22 @@ pub fn main(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
-/// This expands to:
+/// To use the virtual clock in a test, call
+/// `operations::virtual_clock_enable(true)` at the start of the test body:
 ///
 /// ```ignore
-/// #[test]
-/// fn my_test() {
-///     ::kimojio::run_test("my_test", async {
-///         // async test code
-///     })
+/// use std::time::Duration;
+/// use kimojio::operations;
+///
+/// #[kimojio::test]
+/// async fn my_test() {
+///     operations::virtual_clock_enable(true);
+///     operations::virtual_clock_advance(Duration::from_secs(60));
+///     // No real time passes!
 /// }
 /// ```
 #[proc_macro_attribute]
-pub fn test(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemFn);
 
     let ItemFn {
@@ -144,10 +148,19 @@ pub fn test(_attr: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
 
+    // Reject any attributes — the macro takes no arguments
+    if !attr.is_empty() {
+        return syn::Error::new(
+            proc_macro::Span::call_site().into(),
+            "unsupported attribute; expected `#[kimojio::test]` with no arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
+
     // Get the function body without async
     let body = &block;
 
-    // Generate the expanded code
     let expanded = quote! {
         #[test]
         #(#attrs)*

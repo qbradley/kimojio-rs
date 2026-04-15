@@ -56,6 +56,30 @@ async fn main() -> Result<(), Errno> {
 
 Please see [CONTRIBUTING.md](CONTRIBUTING.md) for more information on how to contribute to this project.
 
+## Virtual Clock for Testing
+
+Kimojio supports deterministic timing via a virtual clock, enabling tests
+involving timeouts and sleeps to run instantly.
+
+```rust
+use kimojio::{Runtime, operations};
+use kimojio::configuration::Configuration;
+use std::time::Duration;
+
+let mut runtime = Runtime::new(0, Configuration::new());
+runtime.block_on(async {
+    operations::virtual_clock_enable(true);
+    operations::virtual_clock_set_idle_advance(|now, next| {
+        next.map(|d| d.saturating_duration_since(now))
+    });
+    operations::sleep(Duration::from_secs(60)).await.unwrap(); // Instant!
+});
+```
+
+Enable with `features = ["virtual-clock"]`. See the
+[Virtual Clock Guide](docs/virtual-clock-guide.md) for detailed usage and the
+[Design Document](docs/virtual-clock-design.md) for architecture details.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE.txt).

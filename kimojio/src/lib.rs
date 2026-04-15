@@ -51,6 +51,8 @@ pub mod tlscontext;
 pub mod tlsstream;
 mod tracing;
 mod uring_stats;
+#[cfg(feature = "virtual-clock")]
+pub(crate) mod virtual_clock;
 
 pub use async_channel::{
     Receiver, ReceiverUnbounded, Sender, SenderUnbounded, async_channel, async_channel_unbounded,
@@ -372,4 +374,31 @@ pub fn try_clone_owned_fd(fd: &OwnedFd) -> Result<OwnedFd, Errno> {
             .map(Errno::from_raw_os_error)
             .unwrap_or(Errno::INVAL)
     })
+}
+
+/// Returns the current instant from the runtime's clock.
+///
+/// When the `virtual-clock` feature is enabled and a virtual clock is installed
+/// in the current runtime, returns the virtual clock's time. Otherwise returns
+/// the real system time via [`Instant::now()`].
+///
+/// This is the recommended way for downstream crates to get the current time
+/// in a virtual-clock-aware manner. It is zero-cost when no virtual clock is
+/// active.
+#[cfg(feature = "virtual-clock")]
+pub fn clock_now() -> std::time::Instant {
+    let task_state = crate::task::TaskState::get();
+    match &task_state.clock {
+        Some(clock) => clock.now(),
+        None => std::time::Instant::now(),
+    }
+}
+
+/// Returns the current instant from the system clock.
+///
+/// When the `virtual-clock` feature is not enabled, this always returns
+/// [`Instant::now()`].
+#[cfg(not(feature = "virtual-clock"))]
+pub fn clock_now() -> std::time::Instant {
+    std::time::Instant::now()
 }
