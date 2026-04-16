@@ -27,6 +27,7 @@ mod cancellation_token;
 pub mod configuration;
 mod errors;
 mod handle_table;
+mod io_scope;
 pub mod io_type;
 mod message_pipe;
 mod mut_in_place_cell;

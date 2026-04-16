@@ -35,7 +35,6 @@ use std::io::IoSlice;
 use std::marker::PhantomData;
 use std::mem::{size_of, size_of_val};
 use std::net::{SocketAddr, SocketAddrV6};
-use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
@@ -56,12 +55,9 @@ pub use rustix_uring::types::{OFlags, Statx};
 use crate::async_event::TaskSource;
 use crate::io_type::IOType;
 use crate::ring_future::{OwnedFdFuture, UnitFuture, UsizeFuture};
-use crate::task::{IoScopeCompletions, Task, TaskReadyState, TaskState};
-use crate::task_ref::wake_task;
+use crate::task::{Task, TaskReadyState, TaskState};
 use crate::tracing::Events;
-use crate::{
-    CanceledError, Completion, CompletionResources, CompletionState, Errno, TaskHandleError,
-};
+use crate::{CanceledError, CompletionResources, Errno, TaskHandleError};
 use rustix::fd::{AsFd, AsRawFd};
 use rustix_uring::{
     opcode,
@@ -1728,186 +1724,12 @@ pub fn io_scope_cancel() {
     task.cancel_io_scope_completions(task_state);
 }
 
-/// If called with an io_scope callback, will cancel all the pending
-/// I/O accumulated since the start of the scope. The scope remains
-/// open and will continue gathering I/O until it exits.
-///
-/// Calling io_scope_cancel before returning from an io_scope is a
-/// way to ensure that futures in the scope have completed before
-/// they drop.
-///
-/// Note that this is a blocking call. Other tasks in this uringruntime
-/// thread will not make progress until this call returns. It should
-/// most likely be the last call in the io_scope callback. If there are
-/// I/O that do not respond quickly to cancellation then that could cause
-/// stalls.
-fn io_scope_cancel_and_wait_internal(new_io_scope_completions: Option<IoScopeCompletions>) {
-    let mut task_state = TaskState::get();
-    let task = task_state.get_current_task();
-
-    // restore remembered completions and get the I/O gathered for this task while f was running
-    let gathered_completions = task.replace_io_scope_completions(new_io_scope_completions);
-
-    // now we have to wait until all gathered completions are done.
-    if let Some(mut gathered_completions) = gathered_completions {
-        // 1. ensure all I/O is submitted
-        task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
-
-        // 2. cancel the gathered completions
-        retain_incomplete(&mut gathered_completions.completions, &mut task_state);
-
-        for completion in &gathered_completions.completions {
-            completion.cancel(&mut task_state);
-        }
-
-        for wait in gathered_completions.waits.drain(..) {
-            wait.canceled.set(true);
-            wait.waker.use_mut(|waker| {
-                if let Some(waker) = waker {
-                    wake_task(&mut task_state, waker)
-                }
-            });
-        }
-
-        // 3. wait for them to finish.
-        while !gathered_completions.completions.is_empty() {
-            task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
-
-            retain_incomplete(&mut gathered_completions.completions, &mut task_state);
-        }
-    }
-}
-
 /// Calls the function f, ensuring that any IO operations
 /// initiated by the current task while calling f are
 /// complete by the time f returns. Any IO operations
 /// that are in progress when f returns will be cancelled.
 pub fn io_scope<'a, T>(f: impl AsyncFnOnce() -> T + 'a) -> impl Future<Output = T> + 'a {
-    IoScopeFuture {
-        inner: CatchUnwindFuture { f: f() },
-        completions: IoScopeCompletionsGuard(Some(IoScopeCompletions::default())),
-    }
-}
-
-pin_project_lite::pin_project! {
-    /// Catches any panics that occur while polling the future.
-    struct CatchUnwindFuture<F: Future> {
-        #[pin]
-        f: F,
-    }
-}
-
-impl<F: Future> Future for CatchUnwindFuture<F> {
-    type Output = Result<F::Output, Box<dyn std::any::Any + Send>>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        match std::panic::catch_unwind(AssertUnwindSafe(|| this.f.poll(cx))) {
-            Ok(Poll::Ready(result)) => Poll::Ready(Ok(result)),
-            Ok(Poll::Pending) => Poll::Pending,
-            Err(e) => Poll::Ready(Err(e)),
-        }
-    }
-}
-
-/// Guard that cancels any remaining I/O completions on drop.
-/// This ensures that if an `IoScopeFuture` is dropped while pending
-/// (e.g., a `select!` branch loses), captured I/O is properly cancelled.
-struct IoScopeCompletionsGuard(Option<IoScopeCompletions>);
-
-impl Drop for IoScopeCompletionsGuard {
-    fn drop(&mut self) {
-        if let Some(completions) = self.0.take() {
-            if completions.completions.is_empty() && completions.waits.is_empty() {
-                return;
-            }
-            // Temporarily install our completions on the task so
-            // io_scope_cancel_and_wait_internal can swap-and-cancel them.
-            let task_state = TaskState::get();
-            let task = task_state.get_current_task();
-            let outer = task.replace_io_scope_completions(Some(completions));
-            drop(task_state);
-            io_scope_cancel_and_wait_internal(outer);
-        }
-    }
-}
-
-pin_project_lite::pin_project! {
-    /// Future returned by [`io_scope`]. Installs its completions list into
-    /// the task only while the inner future is being polled, ensuring that
-    /// sibling futures in combinators like `join!` do not have their I/O
-    /// captured by this scope.
-    ///
-    /// Field order matters: `inner` is declared before `completions` so that
-    /// the inner future (and any nested scopes) is dropped before this
-    /// scope's completions guard runs.
-    struct IoScopeFuture<F: Future> {
-        #[pin]
-        inner: CatchUnwindFuture<F>,
-        completions: IoScopeCompletionsGuard,
-    }
-}
-
-impl<F: Future> Future for IoScopeFuture<F> {
-    type Output = F::Output;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-
-        // Install this scope's completions into the task for the duration
-        // of the inner poll. Any I/O initiated by the inner future will be
-        // registered into this list. Drop TaskState before polling to avoid
-        // recursive borrow panics.
-        let outer = {
-            let task_state = TaskState::get();
-            let task = task_state.get_current_task();
-            task.replace_io_scope_completions(this.completions.0.take())
-        };
-
-        let result = this.inner.poll(cx);
-
-        match result {
-            Poll::Ready(result) => {
-                // The inner future completed. Cancel all I/O captured by this
-                // scope and restore the outer scope's completions.
-                io_scope_cancel_and_wait_internal(outer);
-
-                Poll::Ready(match result {
-                    Ok(val) => val,
-                    Err(e) => std::panic::resume_unwind(e),
-                })
-            }
-            Poll::Pending => {
-                // Swap our completions back from the task so that sibling
-                // futures (e.g., in a join!) don't have their I/O captured
-                // by this scope.
-                let task_state = TaskState::get();
-                let task = task_state.get_current_task();
-                this.completions.0 = task.replace_io_scope_completions(outer);
-
-                Poll::Pending
-            }
-        }
-    }
-}
-
-fn retain_incomplete(vec: &mut Vec<Rc<Completion>>, task_state: &mut TaskState) {
-    let mut index = 0;
-    while index < vec.len() {
-        let completion = vec.get(index).unwrap();
-        let retain = completion.state.use_mut(|state| {
-            matches!(
-                state,
-                CompletionState::Idle { .. } | CompletionState::Submitted { .. }
-            )
-        });
-        if !retain {
-            let completion = vec.swap_remove(index);
-            task_state.return_completion(completion);
-        } else {
-            index += 1;
-        }
-    }
+    crate::io_scope::IoScopeFuture::new(f())
 }
 
 // A future that either returns an error,
