@@ -1783,21 +1783,10 @@ fn io_scope_cancel_and_wait_internal(new_io_scope_completions: Option<IoScopeCom
 /// complete by the time f returns. Any IO operations
 /// that are in progress when f returns will be cancelled.
 pub fn io_scope<'a, T>(f: impl AsyncFnOnce() -> T + 'a) -> impl Future<Output = T> + 'a {
-    // remember completions from io_scope further up the stack and clear the current list
-    let old_completions = {
-        let task_state = TaskState::get();
-        let task = task_state.get_current_task();
-        task.replace_io_scope_completions(Some(IoScopeCompletions::default()))
-    };
-
-    CatchUnwindFuture { f: f() }.map(|result| {
-        io_scope_cancel_and_wait_internal(old_completions);
-
-        match result {
-            Ok(result) => result,
-            Err(e) => std::panic::resume_unwind(e),
-        }
-    })
+    IoScopeFuture {
+        inner: CatchUnwindFuture { f: f() },
+        completions: IoScopeCompletionsGuard(Some(IoScopeCompletions::default())),
+    }
 }
 
 pin_project_lite::pin_project! {
@@ -1817,6 +1806,87 @@ impl<F: Future> Future for CatchUnwindFuture<F> {
             Ok(Poll::Ready(result)) => Poll::Ready(Ok(result)),
             Ok(Poll::Pending) => Poll::Pending,
             Err(e) => Poll::Ready(Err(e)),
+        }
+    }
+}
+
+/// Guard that cancels any remaining I/O completions on drop.
+/// This ensures that if an `IoScopeFuture` is dropped while pending
+/// (e.g., a `select!` branch loses), captured I/O is properly cancelled.
+struct IoScopeCompletionsGuard(Option<IoScopeCompletions>);
+
+impl Drop for IoScopeCompletionsGuard {
+    fn drop(&mut self) {
+        if let Some(completions) = self.0.take() {
+            if completions.completions.is_empty() && completions.waits.is_empty() {
+                return;
+            }
+            // Temporarily install our completions on the task so
+            // io_scope_cancel_and_wait_internal can swap-and-cancel them.
+            let task_state = TaskState::get();
+            let task = task_state.get_current_task();
+            let outer = task.replace_io_scope_completions(Some(completions));
+            drop(task_state);
+            io_scope_cancel_and_wait_internal(outer);
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// Future returned by [`io_scope`]. Installs its completions list into
+    /// the task only while the inner future is being polled, ensuring that
+    /// sibling futures in combinators like `join!` do not have their I/O
+    /// captured by this scope.
+    ///
+    /// Field order matters: `inner` is declared before `completions` so that
+    /// the inner future (and any nested scopes) is dropped before this
+    /// scope's completions guard runs.
+    struct IoScopeFuture<F: Future> {
+        #[pin]
+        inner: CatchUnwindFuture<F>,
+        completions: IoScopeCompletionsGuard,
+    }
+}
+
+impl<F: Future> Future for IoScopeFuture<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+
+        // Install this scope's completions into the task for the duration
+        // of the inner poll. Any I/O initiated by the inner future will be
+        // registered into this list. Drop TaskState before polling to avoid
+        // recursive borrow panics.
+        let outer = {
+            let task_state = TaskState::get();
+            let task = task_state.get_current_task();
+            task.replace_io_scope_completions(this.completions.0.take())
+        };
+
+        let result = this.inner.poll(cx);
+
+        match result {
+            Poll::Ready(result) => {
+                // The inner future completed. Cancel all I/O captured by this
+                // scope and restore the outer scope's completions.
+                io_scope_cancel_and_wait_internal(outer);
+
+                Poll::Ready(match result {
+                    Ok(val) => val,
+                    Err(e) => std::panic::resume_unwind(e),
+                })
+            }
+            Poll::Pending => {
+                // Swap our completions back from the task so that sibling
+                // futures (e.g., in a join!) don't have their I/O captured
+                // by this scope.
+                let task_state = TaskState::get();
+                let task = task_state.get_current_task();
+                this.completions.0 = task.replace_io_scope_completions(outer);
+
+                Poll::Pending
+            }
         }
     }
 }
@@ -2761,6 +2831,102 @@ mod test {
             assert_eq!(wait1.await, Err(Errno::CANCELED));
         })
         .await;
+    }
+
+    /// Tests that an inner io_scope's implicit exit does not cancel the
+    /// outer scope's I/O. The inner scope captures and drops its own I/O;
+    /// the outer scope's wait should survive and complete normally afterward.
+    #[crate::test]
+    async fn test_nested_io_scope_preserves_outer_wait() {
+        let outer_event = AsyncEvent::new();
+
+        io_scope(async || {
+            // Register a wait in the outer scope's completions.
+            let mut outer_wait = outer_event.wait();
+            futures::select! {
+                _ = outer_wait => panic!("outer wait should not return yet"),
+                default => {}
+            }
+
+            // Inner scope: create and drop I/O without explicit cancel.
+            // When the inner scope exits, it should only cancel its own
+            // captured I/O and restore the outer scope's completions.
+            io_scope(async || {
+                let inner_event = AsyncEvent::new();
+                let mut inner_wait = inner_event.wait();
+                futures::select! {
+                    _ = inner_wait => panic!("inner wait should not return"),
+                    default => {}
+                }
+                // inner_wait is implicitly cancelled when the scope exits
+            })
+            .await;
+
+            // Outer scope's wait must still be alive.
+            outer_event.set();
+            assert_eq!(outer_wait.await, Ok(()));
+        })
+        .await;
+    }
+
+    /// Tests that io_scope cancellation does not cancel waits from a sibling
+    /// future running in the same task via join!.
+    ///
+    /// Future A creates an io_scope and waits for an event inside it.
+    /// Future B (outside the scope) waits on a oneshot channel.
+    /// When A's scope exits, it should only cancel I/O captured by the scope,
+    /// not B's channel wait. We then send a value on the channel and verify
+    /// B receives it without cancellation.
+    #[crate::test]
+    async fn test_io_scope_does_not_cancel_sibling_future() {
+        use crate::oneshot;
+
+        let (tx, rx) = oneshot::<i32>();
+        let sync_event = AsyncEvent::new();
+
+        // Future A: creates an io_scope, waits for sync_event inside it,
+        // then lets the scope exit (cancelling captured I/O).
+        let future_a = async {
+            io_scope(async || {
+                // Wait until future B is blocked on its channel recv.
+                // We use poll_once + any_waiting to synchronize.
+                loop {
+                    // The receiver's internal AsyncEvent will have a waiter
+                    // once B is blocked on recv().
+                    if sync_event.any_waiting() {
+                        break;
+                    }
+                    operations::yield_io().await;
+                }
+                // Scope exits here, cancelling all I/O it captured.
+            })
+            .await;
+
+            // Now send a value to B's channel — B should still be waiting.
+            tx.send(42).unwrap();
+        };
+
+        // Future B: signals it's ready via sync_event, then waits on the channel.
+        let future_b = async {
+            // Poll the sync_event wait once to register ourselves as a waiter,
+            // so A can detect we're ready via any_waiting().
+            let mut wait = std::pin::pin!(sync_event.wait());
+            futures::future::poll_fn(|cx| {
+                let _ = wait.as_mut().poll(cx);
+                std::task::Poll::Ready(())
+            })
+            .await;
+
+            // Wait for the value on the channel.
+            let result = rx.recv().await;
+            assert_eq!(
+                result,
+                Ok(42),
+                "B's channel recv was canceled by A's io_scope"
+            );
+        };
+
+        futures::join!(future_a, future_b);
     }
 
     #[crate::test]
