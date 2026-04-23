@@ -16,6 +16,7 @@ use openssl::ssl::ShutdownResult;
 use rustix_uring::Errno;
 
 use crate::{AsyncStreamRead, AsyncStreamWrite};
+use kimojio_tls::TlsServerError;
 
 #[cfg(test)]
 mod e2e_tests;
@@ -36,12 +37,19 @@ impl<S> SslStream<S> {
     }
 }
 
+fn io_to_tls_server_error(e: std::io::Error) -> TlsServerError {
+    match Errno::from_io_error(&e) {
+        Some(errno) => TlsServerError::Errno(errno),
+        None => TlsServerError::Errno(Errno::IO),
+    }
+}
+
 impl<S: AsyncStreamRead + AsyncStreamWrite> SslStream<S> {
     /// Corresponds to the OpenSSL [openssl:ssl::SslStream::connect] method.
     pub async fn connect(
         &mut self,
         deadline: Option<std::time::Instant>,
-    ) -> Result<(), std::io::Error> {
+    ) -> Result<(), TlsServerError> {
         loop {
             match self.inner_s.connect() {
                 Ok(_) => {
@@ -57,10 +65,10 @@ impl<S: AsyncStreamRead + AsyncStreamWrite> SslStream<S> {
                             };
                             continue;
                         }
-                        return Err(io_e);
+                        return Err(io_to_tls_server_error(io_e));
                     }
                     Err(other_e) => {
-                        return Err(std::io::Error::other(other_e));
+                        return Err(io_to_tls_server_error(std::io::Error::other(other_e)));
                     }
                 },
             }
@@ -70,7 +78,7 @@ impl<S: AsyncStreamRead + AsyncStreamWrite> SslStream<S> {
     pub async fn accept(
         &mut self,
         deadline: Option<std::time::Instant>,
-    ) -> Result<(), std::io::Error> {
+    ) -> Result<(), TlsServerError> {
         loop {
             match self.inner_s.accept() {
                 Ok(_) => {
@@ -86,17 +94,17 @@ impl<S: AsyncStreamRead + AsyncStreamWrite> SslStream<S> {
                             };
                             continue;
                         }
-                        return Err(io_e);
+                        return Err(io_to_tls_server_error(io_e));
                     }
                     Err(other_e) => {
-                        return Err(std::io::Error::other(other_e));
+                        return Err(io_to_tls_server_error(std::io::Error::other(other_e)));
                     }
                 },
             }
         }
     }
 
-    pub(crate) async fn shutdown_internal(&mut self) -> Result<ShutdownResult, std::io::Error> {
+    pub(crate) async fn shutdown_internal(&mut self) -> Result<ShutdownResult, TlsServerError> {
         // Flush the write buffer to the underlying stream
         self.flush_write_buffer(None).await?;
         // Shutdown the SSL stream
@@ -117,10 +125,10 @@ impl<S: AsyncStreamRead + AsyncStreamWrite> SslStream<S> {
                                 };
                                 continue;
                             }
-                            return Err(io_e);
+                            return Err(io_to_tls_server_error(io_e));
                         }
                         Err(other_e) => {
-                            return Err(std::io::Error::other(other_e));
+                            return Err(io_to_tls_server_error(std::io::Error::other(other_e)));
                         }
                     }
                 }
@@ -130,7 +138,10 @@ impl<S: AsyncStreamRead + AsyncStreamWrite> SslStream<S> {
 }
 
 impl<S: AsyncStreamRead> SslStream<S> {
-    async fn fill_read_buff(&mut self, deadline: Option<std::time::Instant>) -> Result<(), Errno> {
+    async fn fill_read_buff(
+        &mut self,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(), TlsServerError> {
         self.inner_s
             .get_mut()
             .fill_read_buff(&mut self.tcp, deadline)
@@ -142,7 +153,7 @@ impl<S: AsyncStreamRead> SslStream<S> {
         &mut self,
         buf: &mut [u8],
         deadline: Option<std::time::Instant>,
-    ) -> Result<usize, Errno> {
+    ) -> Result<usize, TlsServerError> {
         loop {
             match self.inner_s.read(buf) {
                 Ok(bytes_read) => return Ok(bytes_read),
@@ -151,7 +162,7 @@ impl<S: AsyncStreamRead> SslStream<S> {
                         self.fill_read_buff(deadline).await?;
                         continue;
                     }
-                    return Err(Errno::from_io_error(&e).unwrap());
+                    return Err(io_to_tls_server_error(e));
                 }
             }
         }
@@ -162,7 +173,7 @@ impl<S: AsyncStreamWrite> SslStream<S> {
     async fn flush_write_buffer(
         &mut self,
         deadline: Option<std::time::Instant>,
-    ) -> Result<usize, Errno> {
+    ) -> Result<usize, TlsServerError> {
         // Flush the write buffer to the underlying stream
         self.inner_s
             .get_mut()
@@ -175,7 +186,7 @@ impl<S: AsyncStreamWrite> SslStream<S> {
         &mut self,
         buf: &[u8],
         deadline: Option<std::time::Instant>,
-    ) -> Result<usize, Errno> {
+    ) -> Result<usize, TlsServerError> {
         loop {
             match self.inner_s.write(buf) {
                 Ok(bytes_written) => {
@@ -188,7 +199,7 @@ impl<S: AsyncStreamWrite> SslStream<S> {
                         self.flush_write_buffer(deadline).await?;
                         continue;
                     }
-                    return Err(Errno::from_io_error(&e).unwrap());
+                    return Err(io_to_tls_server_error(e));
                 }
             }
         }
@@ -200,19 +211,17 @@ impl<S: AsyncStreamWrite + AsyncStreamRead> AsyncStreamWrite for SslStream<S> {
         &'a mut self,
         buffer: &'a [u8],
         deadline: Option<std::time::Instant>,
-    ) -> Result<(), Errno> {
+    ) -> Result<(), TlsServerError> {
         self.write_internal(buffer, deadline).await?;
         Ok(())
     }
 
-    async fn shutdown(&mut self) -> Result<(), Errno> {
-        self.shutdown_internal()
-            .await
-            .map_err(|io_err: std::io::Error| Errno::from_io_error(&io_err).unwrap())?;
+    async fn shutdown(&mut self) -> Result<(), TlsServerError> {
+        self.shutdown_internal().await?;
         Ok(())
     }
 
-    async fn close(&mut self) -> Result<(), Errno> {
+    async fn close(&mut self) -> Result<(), TlsServerError> {
         // Close the underlying stream
         self.tcp.close().await
     }
@@ -223,7 +232,7 @@ impl<S: AsyncStreamWrite + AsyncStreamRead> AsyncStreamRead for SslStream<S> {
         &mut self,
         buffer: &mut [u8],
         deadline: Option<std::time::Instant>,
-    ) -> Result<usize, Errno> {
+    ) -> Result<usize, TlsServerError> {
         self.try_read_internal(buffer, deadline).await
     }
 
@@ -231,7 +240,7 @@ impl<S: AsyncStreamWrite + AsyncStreamRead> AsyncStreamRead for SslStream<S> {
         &mut self,
         buffer: &mut [u8],
         deadline: Option<std::time::Instant>,
-    ) -> Result<(), Errno> {
+    ) -> Result<(), TlsServerError> {
         // fill the buffer until it is full.
         let mut total_read = 0;
         while total_read < buffer.len() {
@@ -250,7 +259,8 @@ mod tests {
     use std::{ffi::CString, os::fd::OwnedFd, time::Instant};
 
     use openssl::ssl::{ShutdownResult, SslAcceptor, SslConnector, SslVersion};
-    use rustix_uring::Errno;
+
+    use kimojio_tls::TlsServerError;
 
     use crate::{
         AsyncStreamRead, AsyncStreamWrite, OwnedFdStream,
@@ -267,7 +277,7 @@ mod tests {
         ca_cert_name: CString,
         crl_path: Option<CString>,
         deadline: Option<Instant>,
-    ) -> Result<(), Errno> {
+    ) -> Result<(), TlsServerError> {
         crate::tlscontext::test::server(
             server_fd,
             cert_name,
@@ -285,7 +295,7 @@ mod tests {
         ca_cert_name: CString,
         crl_path: Option<CString>,
         deadline: Option<Instant>,
-    ) -> Result<(), Errno> {
+    ) -> Result<(), TlsServerError> {
         crate::tlscontext::test::client(
             client_fd,
             cert_name,

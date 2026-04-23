@@ -51,13 +51,19 @@ pub enum OpensslErrorType {
     InvalidErrorCode,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TlsServerError {
     Errno(Errno),
     TlsError(Vec<u64>),
 }
 
 impl std::error::Error for TlsServerError {}
+
+impl From<Errno> for TlsServerError {
+    fn from(errno: Errno) -> Self {
+        TlsServerError::Errno(errno)
+    }
+}
 
 impl std::fmt::Display for TlsServerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

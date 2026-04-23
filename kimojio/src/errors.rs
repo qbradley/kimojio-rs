@@ -79,6 +79,12 @@ impl From<CanceledError> for Errno {
     }
 }
 
+impl From<CanceledError> for kimojio_tls::TlsServerError {
+    fn from(_: CanceledError) -> Self {
+        kimojio_tls::TlsServerError::Errno(Errno::CANCELED)
+    }
+}
+
 /// An error from awaiting a task handle.
 pub enum TaskHandleError {
     /// The task was canceled before completion.

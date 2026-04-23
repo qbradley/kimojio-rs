@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 use crate::{AsyncEvent, AsyncLock, AsyncStreamRead, AsyncStreamWrite, Errno, SplittableStream};
+use kimojio_tls::TlsServerError;
 use std::{cell::Cell, rc::Rc, time::Instant};
 
 /// A simple in-memory pipe implementation for testing purposes.
@@ -33,27 +34,35 @@ impl AsyncStreamRead for BufferPipe {
         &mut self,
         buffer: &mut [u8],
         deadline: Option<Instant>,
-    ) -> Result<usize, Errno> {
-        self.read.try_read(buffer, deadline).await
+    ) -> Result<usize, TlsServerError> {
+        Ok(self.read.try_read(buffer, deadline).await?)
     }
 
-    async fn read(&mut self, buffer: &mut [u8], deadline: Option<Instant>) -> Result<(), Errno> {
-        self.read.read(buffer, deadline).await
+    async fn read(
+        &mut self,
+        buffer: &mut [u8],
+        deadline: Option<Instant>,
+    ) -> Result<(), TlsServerError> {
+        Ok(self.read.read(buffer, deadline).await?)
     }
 }
 
 impl AsyncStreamWrite for BufferPipe {
-    async fn write(&mut self, buffer: &[u8], deadline: Option<Instant>) -> Result<(), Errno> {
-        self.write.write(buffer, deadline).await
+    async fn write(
+        &mut self,
+        buffer: &[u8],
+        deadline: Option<Instant>,
+    ) -> Result<(), TlsServerError> {
+        Ok(self.write.write(buffer, deadline).await?)
     }
 
-    async fn shutdown(&mut self) -> Result<(), Errno> {
-        self.write.shutdown().await
+    async fn shutdown(&mut self) -> Result<(), TlsServerError> {
+        Ok(self.write.shutdown().await?)
     }
 
-    async fn close(&mut self) -> Result<(), Errno> {
+    async fn close(&mut self) -> Result<(), TlsServerError> {
         self.read.close().await?;
-        self.write.close().await
+        Ok(self.write.close().await?)
     }
 }
 
@@ -61,7 +70,7 @@ impl SplittableStream for BufferPipe {
     type ReadStream = BufferReadStream;
     type WriteStream = BufferWriteStream;
 
-    async fn split(self) -> Result<(Self::ReadStream, Self::WriteStream), Errno> {
+    async fn split(self) -> Result<(Self::ReadStream, Self::WriteStream), TlsServerError> {
         let read = self.read;
         let write = self.write;
         Ok((BufferReadStream(read), BufferWriteStream(write)))
@@ -210,26 +219,34 @@ impl AsyncStreamRead for BufferStream {
         &mut self,
         buffer: &mut [u8],
         deadline: Option<Instant>,
-    ) -> Result<usize, Errno> {
-        BufferStream::try_read(self, buffer, deadline).await
+    ) -> Result<usize, TlsServerError> {
+        Ok(BufferStream::try_read(self, buffer, deadline).await?)
     }
 
-    async fn read(&mut self, buffer: &mut [u8], deadline: Option<Instant>) -> Result<(), Errno> {
-        BufferStream::read(self, buffer, deadline).await
+    async fn read(
+        &mut self,
+        buffer: &mut [u8],
+        deadline: Option<Instant>,
+    ) -> Result<(), TlsServerError> {
+        Ok(BufferStream::read(self, buffer, deadline).await?)
     }
 }
 
 impl AsyncStreamWrite for BufferStream {
-    async fn write(&mut self, buffer: &[u8], deadline: Option<Instant>) -> Result<(), Errno> {
-        BufferStream::write(self, buffer, deadline).await
+    async fn write(
+        &mut self,
+        buffer: &[u8],
+        deadline: Option<Instant>,
+    ) -> Result<(), TlsServerError> {
+        Ok(BufferStream::write(self, buffer, deadline).await?)
     }
 
-    async fn shutdown(&mut self) -> Result<(), Errno> {
-        BufferStream::shutdown(self).await
+    async fn shutdown(&mut self) -> Result<(), TlsServerError> {
+        Ok(BufferStream::shutdown(self).await?)
     }
 
-    async fn close(&mut self) -> Result<(), Errno> {
-        BufferStream::close(self).await
+    async fn close(&mut self) -> Result<(), TlsServerError> {
+        Ok(BufferStream::close(self).await?)
     }
 }
 
@@ -244,23 +261,31 @@ impl AsyncStreamRead for BufferReadStream {
         &mut self,
         buffer: &mut [u8],
         deadline: Option<Instant>,
-    ) -> Result<usize, Errno> {
-        self.0.try_read(buffer, deadline).await
+    ) -> Result<usize, TlsServerError> {
+        Ok(self.0.try_read(buffer, deadline).await?)
     }
-    async fn read(&mut self, buffer: &mut [u8], deadline: Option<Instant>) -> Result<(), Errno> {
-        self.0.read(buffer, deadline).await
+    async fn read(
+        &mut self,
+        buffer: &mut [u8],
+        deadline: Option<Instant>,
+    ) -> Result<(), TlsServerError> {
+        Ok(self.0.read(buffer, deadline).await?)
     }
 }
 
 impl AsyncStreamWrite for BufferWriteStream {
-    async fn write(&mut self, buffer: &[u8], deadline: Option<Instant>) -> Result<(), Errno> {
-        self.0.write(buffer, deadline).await
+    async fn write(
+        &mut self,
+        buffer: &[u8],
+        deadline: Option<Instant>,
+    ) -> Result<(), TlsServerError> {
+        Ok(self.0.write(buffer, deadline).await?)
     }
-    async fn shutdown(&mut self) -> Result<(), Errno> {
-        self.0.shutdown().await
+    async fn shutdown(&mut self) -> Result<(), TlsServerError> {
+        Ok(self.0.shutdown().await?)
     }
-    async fn close(&mut self) -> Result<(), Errno> {
-        self.0.close().await
+    async fn close(&mut self) -> Result<(), TlsServerError> {
+        Ok(self.0.close().await?)
     }
 }
 
@@ -268,7 +293,7 @@ impl SplittableStream for BufferStream {
     type ReadStream = BufferReadStream;
     type WriteStream = BufferWriteStream;
 
-    async fn split(self) -> Result<(Self::ReadStream, Self::WriteStream), Errno> {
+    async fn split(self) -> Result<(Self::ReadStream, Self::WriteStream), TlsServerError> {
         let write = Rc::new(self);
         let read = write.clone();
 

@@ -1,0 +1,15 @@
+
+[registries]
+kimojio = { index = "sparse+https://msdata.pkgs.visualstudio.com/5603b9e3-ece0-4518-b9c8-1a36054d9970/_packaging/kimojio/Cargo/index/" }
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+popcnt,+sse2,+sse3,+ssse3,+sse4.1,+sse4.2,+avx,+avx2",
+            "-C", "link-arg=-Wl,-rpath,$ORIGIN",
+            "-C", "link-arg=-Wl,--no-undefined",
+            "-C", "link_arg=-Wl,-Bsymbolic",
+            "-C", "link-arg=-Wl,--no-rosegment",
+            "-C", "link_arg=-Wl,-Bsymbolic-functions",
+            "-C", "link-arg=-fuse-ld=lld",
+            "-C", "force-frame-pointers=yes",
+            "-C", "link-arg=-Wl,--warn-unresolved-symbols"]
+

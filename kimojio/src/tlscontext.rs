@@ -11,7 +11,7 @@
 //!
 //! TODO: implement client authentication
 //!
-use crate::{Errno, OwnedFd, operations, tlsstream::TlsStream, tracing::Events};
+use crate::{OwnedFd, operations, tlsstream::TlsStream, tracing::Events};
 use kimojio_tls::{TlsServerContext, TlsServerError};
 use std::time::Instant;
 
@@ -37,8 +37,8 @@ impl TlsContext {
         bufsize: usize,
         socket: OwnedFd,
         deadline: Option<Instant>,
-    ) -> Result<TlsStream, Errno> {
-        let ssl = self.ssl_ctx.server(bufsize).map_err(as_io_error)?;
+    ) -> Result<TlsStream, TlsServerError> {
+        let ssl = self.ssl_ctx.server(bufsize).inspect_err(trace_tls_error)?;
         let mut server = TlsStream::new_tlsstream(ssl, socket);
         server.server_side_handshake(deadline).await?;
         Ok(server)
@@ -50,15 +50,17 @@ impl TlsContext {
         bufsize: usize,
         socket: OwnedFd,
         deadline: Option<Instant>,
-    ) -> Result<TlsStream, Errno> {
-        let ssl = self.ssl_ctx.client(bufsize).map_err(as_io_error)?;
+    ) -> Result<TlsStream, TlsServerError> {
+        let ssl = self.ssl_ctx.client(bufsize).inspect_err(trace_tls_error)?;
         let mut client = TlsStream::new_tlsstream(ssl, socket);
         client.client_side_handshake(deadline).await?;
         Ok(client)
     }
 }
 
-pub(crate) fn as_io_error(result: TlsServerError) -> Errno {
+/// Emits tracing events for a `TlsServerError` without converting it, so callers
+/// can still inspect the full TLS error details.
+pub(crate) fn trace_tls_error(result: &TlsServerError) {
     let activity_id = operations::get_activity_id();
     match result {
         TlsServerError::Errno(code) => {
@@ -72,13 +74,14 @@ pub(crate) fn as_io_error(result: TlsServerError) -> Errno {
                 code: raw_code,
                 activity_id,
             });
-            code
         }
         TlsServerError::TlsError(codes) => {
             for code in codes {
-                operations::write_event(Events::TlsError { code, activity_id })
+                operations::write_event(Events::TlsError {
+                    code: *code,
+                    activity_id,
+                })
             }
-            Errno::from_raw_os_error(crate::EPROTO)
         }
     }
 }
@@ -106,6 +109,7 @@ pub(crate) mod test {
     use crate::tlsstream::TlsStream;
     use crate::{AsyncStreamRead, AsyncStreamWrite};
     use futures::select;
+    use kimojio_tls::TlsServerError;
     use test_utils::create_certs;
     use test_utils::create_crl_for_cert;
     use test_utils::create_self_signed_cert;
@@ -523,7 +527,7 @@ pub(crate) mod test {
         ca_cert_name: CString,
         crl_path: Option<CString>,
         deadline: Option<Instant>,
-    ) -> Result<(), Errno> {
+    ) -> Result<(), TlsServerError> {
         let bufsize = 16384;
         let tls_context = test_utils::make_test_client_ctx(
             cert_name.as_c_str(),
@@ -554,7 +558,7 @@ pub(crate) mod test {
         ca_cert_name: CString,
         crl_path: Option<CString>,
         deadline: Option<Instant>,
-    ) -> Result<(), Errno> {
+    ) -> Result<(), TlsServerError> {
         let bufsize = 16384;
         let tls_context = test_utils::make_test_server_ctx(
             cert_name.as_c_str(),

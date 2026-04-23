@@ -8,14 +8,14 @@
 //!
 //! TODO: implement client authentication
 //!
-use crate::tlscontext::as_io_error;
+use crate::tlscontext::trace_tls_error;
 use crate::{
     AsyncLock, AsyncStreamRead, AsyncStreamWrite, CanceledError, Errno, OwnedFd, SplittableStream,
     operations, try_clone_owned_fd,
 };
 use foreign_types_shared::ForeignTypeRef;
 use futures::TryFutureExt;
-use kimojio_tls::TlsServer;
+use kimojio_tls::{TlsServer, TlsServerError};
 use std::borrow::Borrow;
 use std::io::IoSlice;
 use std::rc::Rc;
@@ -83,7 +83,10 @@ impl TlsStream {
     }
 
     /// Performs the client side of TLS handshake.
-    pub async fn client_side_handshake(&mut self, deadline: Option<Instant>) -> Result<(), Errno> {
+    pub async fn client_side_handshake(
+        &mut self,
+        deadline: Option<Instant>,
+    ) -> Result<(), TlsServerError> {
         loop {
             let response = self.ssl.client_side_handshake();
             match response {
@@ -103,7 +106,10 @@ impl TlsStream {
     }
 
     /// Performs the server side of TLS handshake.
-    pub async fn server_side_handshake(&mut self, deadline: Option<Instant>) -> Result<(), Errno> {
+    pub async fn server_side_handshake(
+        &mut self,
+        deadline: Option<Instant>,
+    ) -> Result<(), TlsServerError> {
         loop {
             let response = self.ssl.server_side_handshake();
             match response {
@@ -118,7 +124,7 @@ impl TlsStream {
                     try_write(&mut self.ssl, &self.socket, deadline).await?
                 }
                 kimojio_tls::Response::Eof => {
-                    return Err(Errno::from_raw_os_error(crate::EPROTO));
+                    return Err(Errno::from_raw_os_error(crate::EPROTO).into());
                 }
             }
         }
@@ -137,7 +143,7 @@ impl SplittableStream for TlsStream {
     type ReadStream = TlsReadStream;
     type WriteStream = TlsWriteStream;
 
-    async fn split(self) -> Result<(TlsReadStream, TlsWriteStream), Errno> {
+    async fn split(self) -> Result<(TlsReadStream, TlsWriteStream), TlsServerError> {
         let read_socket = if let Some(socket) = self.socket {
             let read_socket = try_clone_owned_fd(&socket)?;
             Rc::new(SharedSocketPair {
@@ -170,19 +176,19 @@ async fn try_read(
     ssl: &mut TlsServer,
     socket: &impl SocketPair,
     deadline: Option<Instant>,
-) -> Result<(), Errno> {
+) -> Result<(), TlsServerError> {
     let socket = socket.read_socket().await?;
     if let Some(socket) = socket.borrow() {
         if let Some(buffer) = ssl.get_push_buffer() {
             let amount = operations::read_with_deadline(socket, buffer, deadline).await?;
             if amount == 0 {
-                return Err(Errno::from_raw_os_error(libc::EPIPE));
+                return Err(Errno::from_raw_os_error(libc::EPIPE).into());
             }
             ssl.use_push_buffer(amount);
         }
         Ok(())
     } else {
-        Err(Errno::from_raw_os_error(libc::EPIPE))
+        Err(Errno::from_raw_os_error(libc::EPIPE).into())
     }
 }
 
@@ -190,7 +196,7 @@ async fn try_write(
     ssl: &mut TlsServer,
     socket: &impl SocketPair,
     deadline: Option<Instant>,
-) -> Result<(), Errno> {
+) -> Result<(), TlsServerError> {
     let socket = socket.write_socket().await?;
     if let Some(socket) = socket.borrow() {
         // Keep writing until the pull buffer is exhausted. write_internal() advances
@@ -200,13 +206,13 @@ async fn try_write(
         while let Some(buffer) = ssl.get_pull_buffer() {
             let amount = operations::write_with_deadline(socket, buffer, deadline).await?;
             if amount == 0 {
-                return Err(Errno::from_raw_os_error(libc::EPIPE));
+                return Err(Errno::from_raw_os_error(libc::EPIPE).into());
             }
             ssl.use_pull_buffer(amount);
         }
         Ok(())
     } else {
-        Err(Errno::from_raw_os_error(libc::EPIPE))
+        Err(Errno::from_raw_os_error(libc::EPIPE).into())
     }
 }
 
@@ -218,7 +224,7 @@ async fn write_internal(
     socket: &impl SocketPair,
     mut buffer: &[u8],
     deadline: Option<Instant>,
-) -> Result<(), Errno> {
+) -> Result<(), TlsServerError> {
     while !buffer.is_empty() {
         match ssl.write(buffer) {
             kimojio_tls::Response::Success(amount) => {
@@ -227,7 +233,7 @@ async fn write_internal(
             kimojio_tls::Response::Fail(e) => handle_tls_error(socket, "write_internal", e).await?,
             kimojio_tls::Response::WantRead => try_read(ssl, socket, deadline).await?,
             kimojio_tls::Response::WantWrite => try_write(ssl, socket, deadline).await?,
-            kimojio_tls::Response::Eof => return Err(Errno::from_raw_os_error(libc::EPIPE)),
+            kimojio_tls::Response::Eof => return Err(Errno::from_raw_os_error(libc::EPIPE).into()),
         }
     }
     Ok(())
@@ -247,14 +253,15 @@ async fn handle_tls_error(
     socket: &impl SocketPair,
     _message: &str,
     e: kimojio_tls::TlsServerError,
-) -> Result<(), Errno> {
+) -> Result<(), TlsServerError> {
     let read_socket = socket.read_socket().await?;
     let write_socket = socket.write_socket().await?;
 
     if read_socket.borrow().is_some() && write_socket.borrow().is_some() {
-        Err(as_io_error(e))
+        trace_tls_error(&e);
+        Err(e)
     } else {
-        Err(Errno::from_raw_os_error(libc::EPIPE))
+        Err(Errno::from_raw_os_error(libc::EPIPE).into())
     }
 }
 
@@ -263,7 +270,7 @@ async fn try_read_impl(
     socket: &impl SocketPair,
     buffer: &mut [u8],
     deadline: Option<Instant>,
-) -> Result<usize, Errno> {
+) -> Result<usize, TlsServerError> {
     loop {
         match ssl.read(buffer) {
             kimojio_tls::Response::Success(amount) => return Ok(amount),
@@ -280,7 +287,7 @@ async fn read_impl(
     socket: &impl SocketPair,
     mut buffer: &mut [u8],
     deadline: Option<Instant>,
-) -> Result<(), Errno> {
+) -> Result<(), TlsServerError> {
     while !buffer.is_empty() {
         match ssl.read(buffer) {
             kimojio_tls::Response::Success(amount) => {
@@ -289,7 +296,7 @@ async fn read_impl(
             kimojio_tls::Response::Fail(e) => handle_tls_error(socket, "try_read", e).await?,
             kimojio_tls::Response::WantRead => try_read(ssl, socket, deadline).await?,
             kimojio_tls::Response::WantWrite => try_write(ssl, socket, deadline).await?,
-            kimojio_tls::Response::Eof => return Err(Errno::from_raw_os_error(libc::EPIPE)),
+            kimojio_tls::Response::Eof => return Err(Errno::from_raw_os_error(libc::EPIPE).into()),
         }
     }
     Ok(())
@@ -300,7 +307,7 @@ async fn writev_impl(
     socket: &impl SocketPair,
     buffers: &mut [IoSlice<'_>],
     deadline: Option<Instant>,
-) -> Result<(), Errno> {
+) -> Result<(), TlsServerError> {
     for buffer in buffers {
         write_internal(ssl, socket, buffer, deadline).await?;
     }
@@ -313,20 +320,23 @@ async fn write_impl(
     socket: &impl SocketPair,
     buffer: &[u8],
     deadline: Option<Instant>,
-) -> Result<(), Errno> {
+) -> Result<(), TlsServerError> {
     write_internal(ssl, socket, buffer, deadline).await?;
     // flush
     try_write(ssl, socket, deadline).await
 }
 
-async fn shutdown_impl(ssl: &mut TlsServer, socket: &impl SocketPair) -> Result<(), Errno> {
+async fn shutdown_impl(
+    ssl: &mut TlsServer,
+    socket: &impl SocketPair,
+) -> Result<(), TlsServerError> {
     loop {
         match ssl.shutdown() {
             kimojio_tls::Response::Success(_) => return Ok(()),
             kimojio_tls::Response::Fail(e) => handle_tls_error(socket, "read", e).await?,
             kimojio_tls::Response::WantRead => {
                 // Graceful shutdown returns 0 byte read on EOF.
-                if let Err(Errno::PIPE) = try_read(ssl, socket, None).await {
+                if let Err(TlsServerError::Errno(Errno::PIPE)) = try_read(ssl, socket, None).await {
                     return Ok(());
                 }
             }
@@ -336,12 +346,15 @@ async fn shutdown_impl(ssl: &mut TlsServer, socket: &impl SocketPair) -> Result<
     }
 }
 
-async fn close_impl(socket: &mut Option<OwnedFd>, cause: Result<(), Errno>) -> Result<(), Errno> {
+async fn close_impl(
+    socket: &mut Option<OwnedFd>,
+    cause: Result<(), TlsServerError>,
+) -> Result<(), TlsServerError> {
     if let Some(socket) = socket.take() {
         operations::close(socket).await?;
         cause
     } else {
-        Err(Errno::from_raw_os_error(libc::EPIPE))
+        Err(Errno::from_raw_os_error(libc::EPIPE).into())
     }
 }
 
@@ -350,21 +363,25 @@ impl AsyncStreamRead for TlsStream {
         &mut self,
         buffer: &mut [u8],
         deadline: Option<Instant>,
-    ) -> Result<usize, Errno> {
+    ) -> Result<usize, TlsServerError> {
         match try_read_impl(&mut self.ssl, &self.socket, buffer, deadline).await {
             Ok(amount) => Ok(amount),
             Err(e) => {
-                close_impl(&mut self.socket, Err(e)).await?;
+                close_impl(&mut self.socket, Err(e.clone())).await?;
                 Err(e)
             }
         }
     }
 
-    async fn read(&mut self, buffer: &mut [u8], deadline: Option<Instant>) -> Result<(), Errno> {
+    async fn read(
+        &mut self,
+        buffer: &mut [u8],
+        deadline: Option<Instant>,
+    ) -> Result<(), TlsServerError> {
         match read_impl(&mut self.ssl, &self.socket, buffer, deadline).await {
             Ok(()) => Ok(()),
             Err(e) => {
-                close_impl(&mut self.socket, Err(e)).await?;
+                close_impl(&mut self.socket, Err(e.clone())).await?;
                 Err(e)
             }
         }
@@ -376,7 +393,7 @@ impl AsyncStreamRead for TlsReadStream {
         &'a mut self,
         buffer: &'a mut [u8],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<usize, Errno>> + 'a {
+    ) -> impl Future<Output = Result<usize, TlsServerError>> + 'a {
         try_read_impl(&mut self.ssl, &self.socket, buffer, deadline)
             .or_else(|x| close_read_because(&self.socket, Err(x)))
     }
@@ -385,7 +402,7 @@ impl AsyncStreamRead for TlsReadStream {
         &'a mut self,
         buffer: &'a mut [u8],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<(), Errno>> + 'a {
+    ) -> impl Future<Output = Result<(), TlsServerError>> + 'a {
         read_impl(&mut self.ssl, &self.socket, buffer, deadline)
             .or_else(|x| close_read_because(&self.socket, Err(x)))
     }
@@ -396,63 +413,67 @@ impl AsyncStreamWrite for TlsStream {
         &mut self,
         buffers: &mut [IoSlice<'_>],
         deadline: Option<Instant>,
-    ) -> Result<(), Errno> {
+    ) -> Result<(), TlsServerError> {
         if let Err(e) = writev_impl(&mut self.ssl, &self.socket, buffers, deadline).await {
-            close_impl(&mut self.socket, Err(e)).await?;
+            close_impl(&mut self.socket, Err(e.clone())).await?;
             Err(e)
         } else {
             Ok(())
         }
     }
 
-    async fn write(&mut self, buffer: &[u8], deadline: Option<Instant>) -> Result<(), Errno> {
+    async fn write(
+        &mut self,
+        buffer: &[u8],
+        deadline: Option<Instant>,
+    ) -> Result<(), TlsServerError> {
         if let Err(e) = write_impl(&mut self.ssl, &self.socket, buffer, deadline).await {
-            close_impl(&mut self.socket, Err(e)).await?;
+            close_impl(&mut self.socket, Err(e.clone())).await?;
             Err(e)
         } else {
             Ok(())
         }
     }
 
-    async fn shutdown(&mut self) -> Result<(), Errno> {
+    async fn shutdown(&mut self) -> Result<(), TlsServerError> {
         if let Err(e) = shutdown_impl(&mut self.ssl, &self.socket).await {
-            close_impl(&mut self.socket, Err(e)).await?;
+            close_impl(&mut self.socket, Err(e.clone())).await?;
             Err(e)
         } else {
             Ok(())
         }
     }
 
-    fn close(&mut self) -> impl Future<Output = Result<(), Errno>> {
+    fn close(&mut self) -> impl Future<Output = Result<(), TlsServerError>> {
         close_impl(&mut self.socket, Ok(()))
     }
 }
 
 async fn close_read_because<T>(
     socket: &SharedSocketPair,
-    cause: Result<T, Errno>,
-) -> Result<T, Errno> {
+    cause: Result<T, TlsServerError>,
+) -> Result<T, TlsServerError> {
     let read_socket = socket.read_socket.lock().await?.take();
 
     if let Some(read_socket) = read_socket {
         operations::close(read_socket).await?;
         cause
     } else {
-        Err(Errno::from_raw_os_error(libc::EPIPE))
+        Err(Errno::from_raw_os_error(libc::EPIPE).into())
     }
 }
 
 async fn close_write_because<T>(
     socket: &SharedSocketPair,
-    cause: Result<T, Errno>,
-) -> Result<T, Errno> {
+    cause: Result<T, TlsServerError>,
+) -> Result<T, TlsServerError> {
     let write_socket = socket.write_socket.lock().await?.take();
 
     if let Some(write_socket) = write_socket {
         operations::close(write_socket).await?;
         cause
     } else {
-        Err(Errno::from_raw_os_error(libc::EPIPE))
+        Err(Errno::from_raw_os_error(libc::EPIPE).into())
     }
 }
 
@@ -461,7 +482,7 @@ impl AsyncStreamWrite for TlsWriteStream {
         &'a mut self,
         buffers: &'a mut [IoSlice<'_>],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<(), Errno>> + 'a {
+    ) -> impl Future<Output = Result<(), TlsServerError>> + 'a {
         writev_impl(&mut self.ssl, &self.socket, buffers, deadline)
             .or_else(|x| close_write_because(&self.socket, Err(x)))
     }
@@ -470,17 +491,17 @@ impl AsyncStreamWrite for TlsWriteStream {
         &'a mut self,
         buffer: &'a [u8],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<(), Errno>> + 'a {
+    ) -> impl Future<Output = Result<(), TlsServerError>> + 'a {
         write_impl(&mut self.ssl, &self.socket, buffer, deadline)
             .or_else(|x| close_write_because(&self.socket, Err(x)))
     }
 
-    fn shutdown(&mut self) -> impl Future<Output = Result<(), Errno>> {
+    fn shutdown(&mut self) -> impl Future<Output = Result<(), TlsServerError>> {
         shutdown_impl(&mut self.ssl, &self.socket)
             .or_else(|x| close_write_because(&self.socket, Err(x)))
     }
 
-    fn close(&mut self) -> impl Future<Output = Result<(), Errno>> {
+    fn close(&mut self) -> impl Future<Output = Result<(), TlsServerError>> {
         close_write_because(&self.socket, Ok(()))
     }
 }

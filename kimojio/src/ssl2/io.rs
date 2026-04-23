@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 use crate::{AsyncStreamRead, AsyncStreamWrite};
-use rustix_uring::Errno;
+use kimojio_tls::TlsServerError;
 use std::collections::VecDeque;
 
 fn would_block() -> std::io::Error {
@@ -70,7 +70,7 @@ impl SyncBufferedStream {
         &mut self,
         s: &mut impl AsyncStreamRead,
         deadline: Option<std::time::Instant>,
-    ) -> Result<(), Errno> {
+    ) -> Result<(), TlsServerError> {
         // TODO: reuse buffer and handle deadline.
         // VecDeque does not expose a way to get available slice, may need to use a different structure.
         let mut buf = [0u8; 1024]; // Example buffer size
@@ -89,7 +89,7 @@ impl SyncBufferedStream {
         &mut self,
         s: &mut impl AsyncStreamWrite,
         deadline: Option<std::time::Instant>,
-    ) -> Result<usize, Errno> {
+    ) -> Result<usize, TlsServerError> {
         let bytes_to_write = self.write_buff.len();
         if bytes_to_write == 0 {
             return Ok(0); // Nothing to write

@@ -1,6 +1,6 @@
 use std::{os::fd::OwnedFd, time::Instant};
 
-use rustix_uring::Errno;
+use kimojio_tls::TlsServerError;
 
 use crate::{
     AsyncStreamRead, AsyncStreamWrite,
@@ -14,7 +14,7 @@ async fn c_server2(
     cert_and_key_file_names: &CertAndKeyFileNames,
     server_fd: OwnedFd,
     deadline: Option<Instant>,
-) -> Result<(), Errno> {
+) -> Result<(), TlsServerError> {
     let bufsize = 16384;
     let acceptor = create_openssl_acceptor(cert_and_key_file_names);
     let ctx = acceptor.into_context();
@@ -34,7 +34,7 @@ pub(crate) async fn c_client2(
     cert_and_key_file_names: &CertAndKeyFileNames,
     client_fd: OwnedFd,
     deadline: Option<Instant>,
-) -> Result<(), Errno> {
+) -> Result<(), TlsServerError> {
     let bufsize = 16384;
     let connector = create_openssl_connector(cert_and_key_file_names);
 

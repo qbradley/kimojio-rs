@@ -7,6 +7,7 @@
 use std::{future::Future, io::IoSlice, time::Instant};
 
 use crate::{Errno, OwnedFd, operations, try_clone_owned_fd};
+use kimojio_tls::TlsServerError;
 
 /// A trait for asynchronous reading from a stream.
 ///
@@ -19,7 +20,7 @@ pub trait AsyncStreamRead {
         &'a mut self,
         buffer: &'a mut [u8],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<usize, Errno>> + 'a;
+    ) -> impl Future<Output = Result<usize, TlsServerError>> + 'a;
 
     /// Reads exactly enough bytes to fill the buffer.
     ///
@@ -28,7 +29,7 @@ pub trait AsyncStreamRead {
         &'a mut self,
         buffer: &'a mut [u8],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<(), Errno>> + 'a;
+    ) -> impl Future<Output = Result<(), TlsServerError>> + 'a;
 }
 
 /// A trait for asynchronous writing to a stream.
@@ -40,20 +41,20 @@ pub trait AsyncStreamWrite {
         &'a mut self,
         buffer: &'a [u8],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<(), Errno>> + 'a;
+    ) -> impl Future<Output = Result<(), TlsServerError>> + 'a;
 
     /// Shuts down the write side of the stream.
-    fn shutdown(&mut self) -> impl Future<Output = Result<(), Errno>>;
+    fn shutdown(&mut self) -> impl Future<Output = Result<(), TlsServerError>>;
 
     /// Closes the stream entirely.
-    fn close(&mut self) -> impl Future<Output = Result<(), Errno>>;
+    fn close(&mut self) -> impl Future<Output = Result<(), TlsServerError>>;
 
     /// Writes all data from multiple buffers to the stream.
     fn writev<'a>(
         &'a mut self,
         buffers: &'a mut [IoSlice<'a>],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<(), Errno>> + 'a {
+    ) -> impl Future<Output = Result<(), TlsServerError>> + 'a {
         async move {
             for buffer in buffers {
                 self.write(buffer, deadline).await?;
@@ -71,7 +72,7 @@ pub trait SplittableStream {
     type WriteStream: AsyncStreamWrite;
 
     /// Splits the stream into independent read and write halves.
-    async fn split(self) -> Result<(Self::ReadStream, Self::WriteStream), Errno>;
+    async fn split(self) -> Result<(Self::ReadStream, Self::WriteStream), TlsServerError>;
 }
 
 struct OwnedFdReadState {
@@ -132,7 +133,7 @@ impl SplittableStream for OwnedFdStream {
     type ReadStream = OwnedFdStreamRead;
     type WriteStream = OwnedFdStreamWrite;
 
-    async fn split(self) -> Result<(OwnedFdStreamRead, OwnedFdStreamWrite), Errno> {
+    async fn split(self) -> Result<(OwnedFdStreamRead, OwnedFdStreamWrite), TlsServerError> {
         let (read_fd, write_fd) = if let Some(fd) = self.fd {
             (Some(try_clone_owned_fd(&fd)?), Some(fd))
         } else {
@@ -153,7 +154,7 @@ async fn try_read_impl(
     buffer: &mut [u8],
     read_state: &mut OwnedFdReadState,
     deadline: Option<Instant>,
-) -> Result<usize, Errno> {
+) -> Result<usize, TlsServerError> {
     if let Some(fd) = fd {
         if read_state.read_available == 0 {
             let amount =
@@ -174,7 +175,7 @@ async fn try_read_impl(
         buffer[0..tocopy].copy_from_slice(&read_state.read_buffer[read_used..read_used + tocopy]);
         Ok(tocopy)
     } else {
-        Err(Errno::from_raw_os_error(crate::EPIPE))
+        Err(Errno::from_raw_os_error(crate::EPIPE).into())
     }
 }
 
@@ -183,11 +184,11 @@ async fn read_impl(
     mut buffer: &mut [u8],
     read_state: &mut OwnedFdReadState,
     deadline: Option<Instant>,
-) -> Result<(), Errno> {
+) -> Result<(), TlsServerError> {
     while !buffer.is_empty() {
         let amount = try_read_impl(fd, buffer, read_state, deadline).await?;
         if amount == 0 {
-            return Err(Errno::from_raw_os_error(crate::EPIPE));
+            return Err(Errno::from_raw_os_error(crate::EPIPE).into());
         }
         buffer = &mut buffer[amount..];
     }
@@ -199,7 +200,7 @@ impl AsyncStreamRead for OwnedFdStreamRead {
         &'a mut self,
         buffer: &'a mut [u8],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<usize, Errno>> + 'a {
+    ) -> impl Future<Output = Result<usize, TlsServerError>> + 'a {
         try_read_impl(&mut self.fd, buffer, &mut self.read_state, deadline)
     }
 
@@ -207,7 +208,7 @@ impl AsyncStreamRead for OwnedFdStreamRead {
         &'a mut self,
         buffer: &'a mut [u8],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<(), Errno>> + 'a {
+    ) -> impl Future<Output = Result<(), TlsServerError>> + 'a {
         read_impl(&mut self.fd, buffer, &mut self.read_state, deadline)
     }
 }
@@ -217,7 +218,7 @@ impl AsyncStreamRead for OwnedFdStream {
         &'a mut self,
         buffer: &'a mut [u8],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<usize, Errno>> + 'a {
+    ) -> impl Future<Output = Result<usize, TlsServerError>> + 'a {
         try_read_impl(&mut self.fd, buffer, &mut self.read_state, deadline)
     }
 
@@ -225,7 +226,7 @@ impl AsyncStreamRead for OwnedFdStream {
         &'a mut self,
         buffer: &'a mut [u8],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<(), Errno>> + 'a {
+    ) -> impl Future<Output = Result<(), TlsServerError>> + 'a {
         read_impl(&mut self.fd, buffer, &mut self.read_state, deadline)
     }
 }
@@ -234,18 +235,18 @@ async fn write_impl(
     fd: &mut Option<OwnedFd>,
     mut buffer: &[u8],
     deadline: Option<Instant>,
-) -> Result<(), Errno> {
+) -> Result<(), TlsServerError> {
     if let Some(fd) = fd {
         while !buffer.is_empty() {
             let amount = operations::write_with_deadline(&fd, buffer, deadline).await?;
             if amount == 0 {
-                return Err(Errno::from_raw_os_error(crate::EPIPE));
+                return Err(Errno::from_raw_os_error(crate::EPIPE).into());
             }
             buffer = &buffer[amount..];
         }
         Ok(())
     } else {
-        Err(Errno::from_raw_os_error(crate::EPIPE))
+        Err(Errno::from_raw_os_error(crate::EPIPE).into())
     }
 }
 
@@ -253,37 +254,37 @@ async fn writev_impl(
     fd: &mut Option<OwnedFd>,
     mut buffers: &mut [IoSlice<'_>],
     deadline: Option<Instant>,
-) -> Result<(), Errno> {
+) -> Result<(), TlsServerError> {
     if let Some(fd) = fd {
         while !buffers.is_empty() {
             let result = operations::writev_with_deadline(&fd, buffers, None, deadline).await?;
             if result == 0 {
-                return Err(Errno::from_raw_os_error(crate::EPIPE));
+                return Err(Errno::from_raw_os_error(crate::EPIPE).into());
             }
             IoSlice::advance_slices(&mut buffers, result);
         }
 
         Ok(())
     } else {
-        Err(Errno::from_raw_os_error(crate::EPIPE))
+        Err(Errno::from_raw_os_error(crate::EPIPE).into())
     }
 }
 
-async fn shutdown_impl(fd: &mut Option<OwnedFd>) -> Result<(), Errno> {
+async fn shutdown_impl(fd: &mut Option<OwnedFd>) -> Result<(), TlsServerError> {
     if let Some(fd) = fd {
         operations::shutdown(fd, libc::SHUT_RDWR).await?;
         Ok(())
     } else {
-        Err(Errno::from_raw_os_error(crate::EPIPE))
+        Err(Errno::from_raw_os_error(crate::EPIPE).into())
     }
 }
 
-async fn close_impl(fd: &mut Option<OwnedFd>) -> Result<(), Errno> {
+async fn close_impl(fd: &mut Option<OwnedFd>) -> Result<(), TlsServerError> {
     if let Some(fd) = fd.take() {
         operations::close(fd).await?;
         Ok(())
     } else {
-        Err(Errno::from_raw_os_error(crate::EPIPE))
+        Err(Errno::from_raw_os_error(crate::EPIPE).into())
     }
 }
 
@@ -292,7 +293,7 @@ impl AsyncStreamWrite for OwnedFdStreamWrite {
         &'a mut self,
         buffer: &'a [u8],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<(), Errno>> + 'a {
+    ) -> impl Future<Output = Result<(), TlsServerError>> + 'a {
         write_impl(&mut self.fd, buffer, deadline)
     }
 
@@ -300,15 +301,15 @@ impl AsyncStreamWrite for OwnedFdStreamWrite {
         &'a mut self,
         buffers: &'a mut [IoSlice<'a>],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<(), Errno>> + 'a {
+    ) -> impl Future<Output = Result<(), TlsServerError>> + 'a {
         writev_impl(&mut self.fd, buffers, deadline)
     }
 
-    fn shutdown(&mut self) -> impl Future<Output = Result<(), Errno>> {
+    fn shutdown(&mut self) -> impl Future<Output = Result<(), TlsServerError>> {
         shutdown_impl(&mut self.fd)
     }
 
-    fn close(&mut self) -> impl Future<Output = Result<(), Errno>> {
+    fn close(&mut self) -> impl Future<Output = Result<(), TlsServerError>> {
         close_impl(&mut self.fd)
     }
 }
@@ -318,7 +319,7 @@ impl AsyncStreamWrite for OwnedFdStream {
         &'a mut self,
         buffer: &'a [u8],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<(), Errno>> + 'a {
+    ) -> impl Future<Output = Result<(), TlsServerError>> + 'a {
         write_impl(&mut self.fd, buffer, deadline)
     }
 
@@ -326,15 +327,15 @@ impl AsyncStreamWrite for OwnedFdStream {
         &'a mut self,
         buffers: &'a mut [IoSlice<'a>],
         deadline: Option<Instant>,
-    ) -> impl Future<Output = Result<(), Errno>> + 'a {
+    ) -> impl Future<Output = Result<(), TlsServerError>> + 'a {
         writev_impl(&mut self.fd, buffers, deadline)
     }
 
-    fn shutdown(&mut self) -> impl Future<Output = Result<(), Errno>> {
+    fn shutdown(&mut self) -> impl Future<Output = Result<(), TlsServerError>> {
         shutdown_impl(&mut self.fd)
     }
 
-    fn close(&mut self) -> impl Future<Output = Result<(), Errno>> {
+    fn close(&mut self) -> impl Future<Output = Result<(), TlsServerError>> {
         close_impl(&mut self.fd)
     }
 }
