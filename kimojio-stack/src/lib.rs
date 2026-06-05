@@ -16,6 +16,7 @@ use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::panic::{self, AssertUnwindSafe};
 use std::rc::{Rc, Weak};
+use std::time::Duration;
 
 use corosensei::stack::DefaultStack;
 use corosensei::{Coroutine, CoroutineResult, Yielder};
@@ -24,14 +25,18 @@ use rustix::fd::{AsFd, AsRawFd};
 use rustix::io_uring::io_uring_user_data;
 pub use rustix_uring::Errno;
 use rustix_uring::opcode;
-use rustix_uring::{cqueue::Entry as Cqe, squeue::Entry as Sqe, types::Fd};
+use rustix_uring::{
+    cqueue::Entry as Cqe,
+    squeue::Entry as Sqe,
+    types::{Fd, Timespec},
+};
 
 const DEFAULT_STACK_SIZE: usize = 64 * 1024;
 const DEFAULT_RING_ENTRIES: u32 = 128;
 
 type TaskId = usize;
 type PanicPayload = Box<dyn Any + Send + 'static>;
-type IoResult = Result<u32, Errno>;
+type KernelIoResult = Result<u32, Errno>;
 type IoUring = rustix_uring::IoUring<Sqe, Cqe>;
 
 /// Runs stackful coroutines on the current OS thread.
@@ -203,6 +208,22 @@ impl RuntimeContext<'_> {
             .map(|result| result as usize)
     }
 
+    /// Starts a read into an owned buffer using io_uring.
+    ///
+    /// The returned [`IoResult`] owns `buffer` until completion, so it is safe to
+    /// drop the handle while the kernel operation is still pending.
+    pub fn read_async(&self, fd: &impl AsFd, mut buffer: Vec<u8>) -> IoResult<ReadOutput> {
+        let len = u32::try_from(buffer.len()).expect("io_uring read length exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::Read::new(Fd(fd), buffer.as_mut_ptr(), len)
+            .offset(u64::MAX)
+            .build();
+        let state = Rc::new(IoState::new(IoResource::Buffer(buffer)));
+
+        self.submit_io_state(entry, Rc::clone(&state));
+        IoResult::new(state, read_output)
+    }
+
     /// Writes `buf` to `fd` using io_uring.
     ///
     /// This blocks only the current stackful coroutine. Pass a borrowed fd to
@@ -219,6 +240,22 @@ impl RuntimeContext<'_> {
             .map(|result| result as usize)
     }
 
+    /// Starts a write from an owned buffer using io_uring.
+    ///
+    /// The returned [`IoResult`] owns `buffer` until completion, so it is safe to
+    /// drop the handle while the kernel operation is still pending.
+    pub fn write_async(&self, fd: &impl AsFd, buffer: Vec<u8>) -> IoResult<WriteOutput> {
+        let len = u32::try_from(buffer.len()).expect("io_uring write length exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::Write::new(Fd(fd), buffer.as_ptr(), len)
+            .offset(u64::MAX)
+            .build();
+        let state = Rc::new(IoState::new(IoResource::Buffer(buffer)));
+
+        self.submit_io_state(entry, Rc::clone(&state));
+        IoResult::new(state, write_output)
+    }
+
     /// Closes `fd` using io_uring.
     ///
     /// The fd is consumed immediately and will not be closed again on drop.
@@ -230,6 +267,46 @@ impl RuntimeContext<'_> {
         self.submit_and_wait_for_io(entry).map(|_| ())
     }
 
+    /// Waits until all IO results have completed.
+    ///
+    /// If `timeout` is supplied and expires first, the IO operations remain
+    /// pending and their handles can still be joined or completed later.
+    pub fn join(
+        &self,
+        results: &[&dyn IoHandle],
+        timeout: Option<Duration>,
+    ) -> Result<(), IoJoinError> {
+        if results.iter().all(|result| result.is_ready()) {
+            return Ok(());
+        }
+
+        let timeout = timeout.map(|duration| self.submit_timeout(duration));
+
+        loop {
+            if results.iter().all(|result| result.is_ready()) {
+                if let Some(timeout) = timeout {
+                    self.cancel_timeout(timeout);
+                }
+                return Ok(());
+            }
+
+            if timeout
+                .as_ref()
+                .is_some_and(|timeout| timeout.state.is_ready())
+            {
+                return Err(IoJoinError::TimedOut);
+            }
+
+            for result in results {
+                result.add_waiter(self);
+            }
+            if let Some(timeout) = &timeout {
+                timeout.state.add_waiter_from(self);
+            }
+            self.park();
+        }
+    }
+
     fn wait_for_scope(&self, state: &Rc<ScopeState>) {
         while state.remaining.get() != 0 {
             if let Some(waiter) = self.waiter() {
@@ -239,21 +316,49 @@ impl RuntimeContext<'_> {
         }
     }
 
-    fn submit_and_wait_for_io(&self, entry: Sqe) -> IoResult {
-        let state = Rc::new(IoState::new());
-        let user_data =
-            io_uring_user_data::from_ptr(Rc::into_raw(Rc::clone(&state)) as *mut c_void);
-        let entry = entry.user_data(user_data);
-        self.core.borrow_mut().submit_io(&entry);
+    fn submit_and_wait_for_io(&self, entry: Sqe) -> KernelIoResult {
+        let state = Rc::new(IoState::new(IoResource::None));
+        self.submit_io_state(entry, Rc::clone(&state));
 
         loop {
             if let Some(result) = state.take_result() {
                 return result;
             }
 
-            if let Some(waiter) = self.waiter() {
-                state.set_waiter(waiter);
-            }
+            state.add_waiter_from(self);
+            self.park();
+        }
+    }
+
+    fn submit_io_state(&self, entry: Sqe, state: Rc<IoState>) -> io_uring_user_data {
+        let user_data =
+            io_uring_user_data::from_ptr(Rc::into_raw(Rc::clone(&state)) as *mut c_void);
+        let entry = entry.user_data(user_data);
+        self.core.borrow_mut().submit_io(&entry);
+        user_data
+    }
+
+    fn submit_timeout(&self, duration: Duration) -> TimeoutState {
+        let timespec = Box::new(Timespec::from(duration));
+        let entry = opcode::Timeout::new(timespec.as_ref()).build();
+        let state = Rc::new(IoState::new(IoResource::Timespec(timespec)));
+        let user_data = self.submit_io_state(entry, Rc::clone(&state));
+
+        TimeoutState { state, user_data }
+    }
+
+    fn cancel_timeout(&self, timeout: TimeoutState) {
+        if timeout.state.is_ready() {
+            return;
+        }
+
+        let cancel_state = Rc::new(IoState::new(IoResource::None));
+        let entry = opcode::TimeoutRemove::new(timeout.user_data).build();
+        self.submit_io_state(entry, Rc::clone(&cancel_state));
+
+        while !timeout.state.is_ready() || !cancel_state.is_ready() {
+            timeout.state.add_waiter_from(self);
+            cancel_state.add_waiter_from(self);
             self.park();
         }
     }
@@ -421,6 +526,142 @@ impl fmt::Display for JoinError {
 
 impl std::error::Error for JoinError {}
 
+/// Completed read data.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ReadOutput {
+    /// Number of bytes read into `buffer`.
+    pub bytes: usize,
+    /// Buffer owned by the read operation.
+    pub buffer: Vec<u8>,
+}
+
+/// Completed write data.
+#[derive(Debug, Eq, PartialEq)]
+pub struct WriteOutput {
+    /// Number of bytes written from `buffer`.
+    pub bytes: usize,
+    /// Buffer owned by the write operation.
+    pub buffer: Vec<u8>,
+}
+
+/// Error returned when joining IO results times out.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IoJoinError {
+    /// The timeout expired before every IO result completed.
+    TimedOut,
+}
+
+impl fmt::Display for IoJoinError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TimedOut => f.write_str("timed out waiting for IO results"),
+        }
+    }
+}
+
+impl std::error::Error for IoJoinError {}
+
+/// Trait for pending IO handles that can be waited on together.
+pub trait IoHandle {
+    /// Returns whether this IO operation has completed.
+    fn is_ready(&self) -> bool;
+
+    #[doc(hidden)]
+    fn add_waiter(&self, cx: &RuntimeContext<'_>);
+}
+
+/// A pending io_uring operation.
+#[must_use = "pending IO should be completed with get, try_get, or RuntimeContext::join"]
+pub struct IoResult<T> {
+    state: Rc<IoState>,
+    output: fn(&IoState, u32) -> T,
+    taken: bool,
+    _output: PhantomData<T>,
+}
+
+impl<T> IoResult<T> {
+    fn new(state: Rc<IoState>, output: fn(&IoState, u32) -> T) -> Self {
+        Self {
+            state,
+            output,
+            taken: false,
+            _output: PhantomData,
+        }
+    }
+
+    /// Returns the completed value if the CQE has already been reaped.
+    ///
+    /// This does not enter io_uring or otherwise drive the scheduler.
+    pub fn try_get(&mut self) -> Option<Result<T, Errno>> {
+        assert!(!self.taken, "IoResult value already taken");
+
+        let result = self.state.result()?;
+        self.taken = true;
+
+        Some(match result {
+            Ok(value) => Ok((self.output)(&self.state, value)),
+            Err(error) => {
+                self.state.drop_resource();
+                Err(error)
+            }
+        })
+    }
+
+    /// Waits for the operation to complete and returns its value.
+    pub fn get(mut self, cx: &RuntimeContext<'_>) -> Result<T, Errno> {
+        loop {
+            if let Some(result) = self.try_get() {
+                return result;
+            }
+
+            self.state.add_waiter_from(cx);
+            cx.park();
+        }
+    }
+}
+
+impl<T> IoHandle for IoResult<T> {
+    fn is_ready(&self) -> bool {
+        self.state.is_ready()
+    }
+
+    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+        self.state.add_waiter_from(cx);
+    }
+}
+
+impl<T> fmt::Debug for IoResult<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IoResult")
+            .field("ready", &self.is_ready())
+            .field("taken", &self.taken)
+            .finish()
+    }
+}
+
+impl<T> Drop for IoResult<T> {
+    fn drop(&mut self) {
+        if !self.taken && self.state.is_ready() {
+            self.state.drop_resource();
+            self.taken = true;
+        }
+    }
+}
+
+fn read_output(state: &IoState, bytes: u32) -> ReadOutput {
+    ReadOutput {
+        bytes: bytes as usize,
+        buffer: state.take_buffer(),
+    }
+}
+
+fn write_output(state: &IoState, bytes: u32) -> WriteOutput {
+    WriteOutput {
+        bytes: bytes as usize,
+        buffer: state.take_buffer(),
+    }
+}
+
 struct JoinState<T> {
     result: RefCell<Option<Result<T, JoinError>>>,
     waiters: RefCell<Vec<Waiter>>,
@@ -446,32 +687,69 @@ impl<T> JoinState<T> {
     }
 }
 
+struct TimeoutState {
+    state: Rc<IoState>,
+    user_data: io_uring_user_data,
+}
+
+enum IoResource {
+    None,
+    Buffer(Vec<u8>),
+    #[allow(dead_code)]
+    Timespec(Box<Timespec>),
+}
+
 struct IoState {
-    result: RefCell<Option<IoResult>>,
-    waiter: RefCell<Option<Waiter>>,
+    result: RefCell<Option<KernelIoResult>>,
+    waiters: RefCell<Vec<Waiter>>,
+    resource: RefCell<IoResource>,
 }
 
 impl IoState {
-    fn new() -> Self {
+    fn new(resource: IoResource) -> Self {
         Self {
             result: RefCell::new(None),
-            waiter: RefCell::new(None),
+            waiters: RefCell::new(Vec::new()),
+            resource: RefCell::new(resource),
         }
     }
 
-    fn complete(&self, result: IoResult) {
+    fn complete(&self, result: KernelIoResult) {
         *self.result.borrow_mut() = Some(result);
-        if let Some(waiter) = self.waiter.borrow_mut().take() {
+        for waiter in self.waiters.borrow_mut().drain(..) {
             waiter.wake();
         }
     }
 
-    fn set_waiter(&self, waiter: Waiter) {
-        *self.waiter.borrow_mut() = Some(waiter);
+    fn add_waiter_from(&self, cx: &RuntimeContext<'_>) {
+        if let Some(waiter) = cx.waiter() {
+            self.waiters.borrow_mut().push(waiter);
+        }
     }
 
-    fn take_result(&self) -> Option<IoResult> {
+    fn is_ready(&self) -> bool {
+        self.result.borrow().is_some()
+    }
+
+    fn result(&self) -> Option<KernelIoResult> {
+        *self.result.borrow()
+    }
+
+    fn take_result(&self) -> Option<KernelIoResult> {
         self.result.borrow_mut().take()
+    }
+
+    fn take_buffer(&self) -> Vec<u8> {
+        match std::mem::replace(&mut *self.resource.borrow_mut(), IoResource::None) {
+            IoResource::Buffer(buffer) => buffer,
+            IoResource::None | IoResource::Timespec(_) => {
+                panic!("IoResult did not contain an owned buffer")
+            }
+        }
+    }
+
+    fn drop_resource(&self) {
+        *self.resource.borrow_mut() = IoResource::None;
     }
 }
 
@@ -637,7 +915,7 @@ impl Scheduler {
 
 struct CompletedIo {
     state: *const IoState,
-    result: IoResult,
+    result: KernelIoResult,
 }
 
 fn drive_scheduler(core: &Rc<RefCell<Scheduler>>) -> bool {
@@ -862,8 +1140,9 @@ pub mod once {
 
 #[cfg(test)]
 mod tests {
-    use super::{Runtime, once};
+    use super::{IoHandle, IoJoinError, Runtime, once};
     use rustix::pipe::pipe;
+    use std::time::Duration;
 
     #[test]
     fn once_channel_between_stackful_threads() {
@@ -992,5 +1271,124 @@ mod tests {
         });
 
         assert_eq!(output, (ROUNDS as usize) * 2);
+    }
+
+    #[test]
+    fn async_io_results_can_be_tried_joined_and_timed_out() {
+        let mut runtime = Runtime::new();
+
+        let output = runtime.block_on(|cx| {
+            let (first_read, first_write) = pipe().unwrap();
+            let (second_read, second_write) = pipe().unwrap();
+
+            let mut first = cx.read_async(&first_read, vec![0; 1]);
+            let mut second = cx.read_async(&second_read, vec![0; 1]);
+            assert!(first.try_get().is_none());
+            assert!(second.try_get().is_none());
+
+            let mut first_write_result = cx.write_async(&first_write, b"a".to_vec());
+            let mut second_write_result = cx.write_async(&second_write, b"b".to_vec());
+
+            let pending: [&dyn IoHandle; 4] =
+                [&first, &second, &first_write_result, &second_write_result];
+            cx.join(&pending, Some(Duration::from_secs(1))).unwrap();
+
+            assert_eq!(first_write_result.try_get().unwrap().unwrap().bytes, 1);
+            assert_eq!(second_write_result.try_get().unwrap().unwrap().bytes, 1);
+
+            let first = first.get(cx).unwrap();
+            let second = second.get(cx).unwrap();
+
+            cx.close(first_read).unwrap();
+            cx.close(first_write).unwrap();
+            cx.close(second_read).unwrap();
+            cx.close(second_write).unwrap();
+
+            (first.buffer[0], second.buffer[0])
+        });
+
+        assert_eq!(output, (b'a', b'b'));
+    }
+
+    #[test]
+    fn async_io_get_parks_stackful_tasks() {
+        const ROUNDS: u8 = 4;
+
+        let mut runtime = Runtime::new();
+
+        let output = runtime.block_on(|cx| {
+            let (ping_read, ping_write) = pipe().unwrap();
+            let (pong_read, pong_write) = pipe().unwrap();
+
+            cx.scope(|scope| {
+                let initiator = scope.spawn(move |cx| {
+                    let mut total = 0;
+
+                    for round in 0..ROUNDS {
+                        assert_eq!(
+                            cx.write_async(&ping_write, vec![round])
+                                .get(cx)
+                                .unwrap()
+                                .bytes,
+                            1
+                        );
+                        let pong = cx.read_async(&pong_read, vec![0]).get(cx).unwrap();
+                        assert_eq!(pong.buffer[0], round + 1);
+                        total += pong.buffer[0] as usize;
+                    }
+
+                    cx.close(ping_write).unwrap();
+                    cx.close(pong_read).unwrap();
+                    total
+                });
+
+                let responder = scope.spawn(move |cx| {
+                    for _ in 0..ROUNDS {
+                        let ping = cx.read_async(&ping_read, vec![0]).get(cx).unwrap();
+                        let response = vec![ping.buffer[0] + 1];
+                        assert_eq!(
+                            cx.write_async(&pong_write, response).get(cx).unwrap().bytes,
+                            1
+                        );
+                    }
+
+                    cx.close(ping_read).unwrap();
+                    cx.close(pong_write).unwrap();
+                });
+
+                responder.join(cx).unwrap();
+                initiator.join(cx).unwrap()
+            })
+        });
+
+        assert_eq!(output, (1..=ROUNDS).map(usize::from).sum::<usize>());
+    }
+
+    #[test]
+    fn async_io_join_timeout_leaves_result_usable() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let read = cx.read_async(&read_fd, vec![0; 1]);
+
+            let pending: [&dyn IoHandle; 1] = [&read];
+            assert_eq!(
+                cx.join(&pending, Some(Duration::from_millis(1))),
+                Err(IoJoinError::TimedOut)
+            );
+
+            let write = cx.write_async(&write_fd, b"z".to_vec());
+            let pending: [&dyn IoHandle; 2] = [&read, &write];
+            cx.join(&pending, Some(Duration::from_secs(1))).unwrap();
+
+            let read = read.get(cx).unwrap();
+            let write = write.get(cx).unwrap();
+            assert_eq!(read.buffer[0], b'z');
+            assert_eq!(write.bytes, 1);
+
+            cx.close(read_fd).unwrap();
+            cx.close(write_fd).unwrap();
+        });
     }
 }
