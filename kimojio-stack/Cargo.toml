@@ -1,0 +1,12 @@
+[package]
+name = "kimojio-stack"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "Stackful coroutine runtime with structured concurrency"
+
+[dependencies]
+corosensei.workspace = true
