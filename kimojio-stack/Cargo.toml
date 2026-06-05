@@ -10,3 +10,5 @@ description = "Stackful coroutine runtime with structured concurrency"
 
 [dependencies]
 corosensei.workspace = true
+rustix = { workspace = true, features = ["pipe"] }
+rustix-uring.workspace = true

@@ -644,6 +644,8 @@ name = "kimojio-stack"
 version = "0.16.4"
 dependencies = [
  "corosensei",
+ "rustix",
+ "rustix-uring",
 ]
 
 [[package]]
