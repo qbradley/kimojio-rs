@@ -63,7 +63,7 @@
 //! [`IoResult`]. `try_get` observes a completion that has already been reaped
 //! without entering io_uring or running other tasks. `get` waits cooperatively by
 //! parking the current coroutine. [`RuntimeContext::join`] waits for multiple
-//! [`IoHandle`] values at once and can optionally use an io_uring timeout; timed
+//! [`Waitable`] values at once and can optionally use an io_uring timeout; timed
 //! out operations remain pending and their handles can still be completed later.
 //!
 //! Async I/O takes ownership of buffers instead of borrowing them. This keeps the
@@ -75,6 +75,41 @@
 //! operation is still pending, the backing buffer is intentionally leaked rather
 //! than allowing io_uring to complete into freed memory. Complete pending results
 //! with `get` or `try_get` when buffer reclamation matters.
+//!
+//! # Synchronization primitives
+//!
+//! The crate provides stackful, cooperative synchronization primitives in
+//! separate modules rather than embedding them in the runtime core:
+//!
+//! - [`mutex`] provides [`Mutex`] and [`MutexGuard`].
+//! - [`semaphore`] provides [`Semaphore`] and [`SemaphorePermit`].
+//! - [`notify`] provides [`Notify`] and [`Notified`].
+//! - [`watch`] provides a latest-value watch channel.
+//! - [`barrier`] provides [`Barrier`].
+//! - [`rwlock`] provides [`RwLock`] with read and write guards.
+//! - [`channel`] provides bounded and unbounded multi-producer/multi-consumer
+//!   channels.
+//! - [`once`] provides a single-send channel.
+//!
+//! These primitives never block the OS thread. When a stackful coroutine cannot
+//! make progress, it records a waiter in the primitive and parks through the
+//! runtime scheduler. When a primitive changes state, it wakes one or more
+//! waiters, which requeues their coroutine task IDs.
+//!
+//! # Waiting on heterogeneous conditions
+//!
+//! [`Waitable`] is the common readiness abstraction used by I/O results,
+//! [`JoinHandle`], and synchronization primitives. It is intentionally
+//! readiness-only: [`RuntimeContext::wait_any`] returns the index of a ready
+//! condition and [`RuntimeContext::wait_all`] returns when every condition is
+//! ready. Values are consumed with typed APIs afterward, such as
+//! [`IoResult::try_get`], [`JoinHandle::try_join`], [`Mutex::try_lock`], channel
+//! `try_recv`, or semaphore `try_acquire`.
+//!
+//! Wait APIs take `&dyn Waitable` references rather than values. Taking
+//! references allows heterogeneous conditions to be combined without erasing
+//! their result types, avoids consuming pending operations on timeout, and keeps
+//! ownership with the typed handle that knows how to recover its value or guard.
 //!
 //! # Allocation model
 //!
@@ -124,6 +159,24 @@ use rustix_uring::{
     squeue::Entry as Sqe,
     types::{Fd, Timespec},
 };
+
+pub mod barrier;
+pub mod channel;
+pub mod mutex;
+pub mod notify;
+pub mod once;
+pub mod rwlock;
+pub mod semaphore;
+pub mod wait;
+pub mod watch;
+
+pub use barrier::{Barrier, BarrierWaitResult};
+pub use mutex::{Mutex, MutexGuard};
+pub use notify::{Notified, Notify};
+pub use rwlock::{ReadLock, RwLock, RwLockReadGuard, RwLockWriteGuard, WriteLock};
+pub use semaphore::{Semaphore, SemaphorePermit};
+pub use wait::{IoHandle, IoJoinError, WaitError, Waitable};
+pub use watch::{WatchReceiver, WatchSender};
 
 const DEFAULT_STACK_SIZE: usize = 64 * 1024;
 const DEFAULT_RING_ENTRIES: u32 = 128;
@@ -374,49 +427,6 @@ impl RuntimeContext<'_> {
         self.submit_and_wait_for_io(entry).map(|_| ())
     }
 
-    /// Waits until all IO results have completed.
-    ///
-    /// If `timeout` is supplied and expires first, the IO operations remain
-    /// pending and their handles can still be joined or completed later.
-    pub fn join(
-        &self,
-        results: &[&dyn IoHandle],
-        timeout: Option<Duration>,
-    ) -> Result<(), IoJoinError> {
-        if results.iter().all(|result| result.is_ready()) {
-            return Ok(());
-        }
-
-        let mut timeout = timeout.map(|duration| self.submit_timeout(duration));
-
-        loop {
-            if results.iter().all(|result| result.is_ready()) {
-                if let Some(timeout) = timeout.take() {
-                    self.cancel_timeout(timeout);
-                }
-                return Ok(());
-            }
-
-            if timeout
-                .as_ref()
-                .is_some_and(|timeout| timeout.state.is_ready())
-            {
-                if let Some(timeout) = timeout.take() {
-                    self.recycle_io_state(timeout.state);
-                }
-                return Err(IoJoinError::TimedOut);
-            }
-
-            for result in results {
-                result.add_waiter(self);
-            }
-            if let Some(timeout) = &timeout {
-                timeout.state.add_waiter_from(self);
-            }
-            self.park();
-        }
-    }
-
     fn wait_for_scope(&self, state: &Rc<ScopeState>) {
         while state.remaining.get() != 0 {
             if let Some(waiter) = self.waiter() {
@@ -449,7 +459,7 @@ impl RuntimeContext<'_> {
         user_data
     }
 
-    fn submit_timeout(&self, duration: Duration) -> TimeoutState {
+    pub(crate) fn submit_timeout(&self, duration: Duration) -> TimeoutState {
         let state = self.acquire_io_state();
         state.set_timeout(Timespec::from(duration));
         let entry = {
@@ -461,7 +471,7 @@ impl RuntimeContext<'_> {
         TimeoutState { state, user_data }
     }
 
-    fn cancel_timeout(&self, timeout: TimeoutState) {
+    pub(crate) fn cancel_timeout(&self, timeout: TimeoutState) {
         if timeout.state.is_ready() {
             self.recycle_io_state(timeout.state);
             return;
@@ -485,11 +495,11 @@ impl RuntimeContext<'_> {
         self.core.borrow_mut().acquire_io_state()
     }
 
-    fn recycle_io_state(&self, state: Rc<IoState>) {
+    pub(crate) fn recycle_io_state(&self, state: Rc<IoState>) {
         self.core.borrow_mut().recycle_io_state(state);
     }
 
-    fn park(&self) {
+    pub(crate) fn park(&self) {
         match self.current {
             CurrentTask::Root => {
                 assert!(
@@ -503,7 +513,7 @@ impl RuntimeContext<'_> {
         }
     }
 
-    fn waiter(&self) -> Option<Waiter> {
+    pub(crate) fn waiter(&self) -> Option<Waiter> {
         match self.current {
             CurrentTask::Root => None,
             CurrentTask::Coroutine { id, .. } => Some(Waiter {
@@ -583,6 +593,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
 
         JoinHandle {
             state: join,
+            taken: Cell::new(false),
             _scope: PhantomData,
         }
     }
@@ -597,22 +608,40 @@ impl fmt::Debug for Scope<'_, '_> {
 /// A handle returned by [`Scope::spawn`].
 pub struct JoinHandle<'scope, T> {
     state: Rc<JoinState<T>>,
+    taken: Cell<bool>,
     _scope: PhantomData<&'scope mut T>,
 }
 
 impl<T> JoinHandle<'_, T> {
+    /// Returns the completed stackful coroutine result if it is ready.
+    pub fn try_join(&self) -> Option<Result<T, JoinError>> {
+        assert!(!self.taken.get(), "JoinHandle value already taken");
+
+        let result = self.state.take_result()?;
+        self.taken.set(true);
+        Some(result)
+    }
+
     /// Waits for the stackful coroutine to finish and returns its result.
     pub fn join(self, cx: &RuntimeContext<'_>) -> Result<T, JoinError> {
         loop {
-            if let Some(result) = self.state.take_result() {
+            if let Some(result) = self.try_join() {
                 return result;
             }
 
-            if let Some(waiter) = cx.waiter() {
-                self.state.waiters.borrow_mut().push(waiter);
-            }
+            self.state.add_waiter_from(cx);
             cx.park();
         }
+    }
+}
+
+impl<T> Waitable for JoinHandle<'_, T> {
+    fn is_ready(&self) -> bool {
+        self.taken.get() || self.state.is_ready()
+    }
+
+    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+        self.state.add_waiter_from(cx);
     }
 }
 
@@ -744,32 +773,6 @@ pub struct WriteOutput<B = Vec<u8>> {
     pub buffer: B,
 }
 
-/// Error returned when joining IO results times out.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum IoJoinError {
-    /// The timeout expired before every IO result completed.
-    TimedOut,
-}
-
-impl fmt::Display for IoJoinError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TimedOut => f.write_str("timed out waiting for IO results"),
-        }
-    }
-}
-
-impl std::error::Error for IoJoinError {}
-
-/// Trait for pending IO handles that can be waited on together.
-pub trait IoHandle {
-    /// Returns whether this IO operation has completed.
-    fn is_ready(&self) -> bool;
-
-    #[doc(hidden)]
-    fn add_waiter(&self, cx: &RuntimeContext<'_>);
-}
-
 /// A pending io_uring operation.
 #[must_use = "pending IO should be completed with get, try_get, or RuntimeContext::join"]
 pub struct IoResult<T, B = Vec<u8>> {
@@ -841,7 +844,7 @@ impl<T, B> IoResult<T, B> {
     }
 }
 
-impl<T, B> IoHandle for IoResult<T, B> {
+impl<T, B> Waitable for IoResult<T, B> {
     fn is_ready(&self) -> bool {
         self.taken || self.state.as_ref().is_none_or(|state| state.is_ready())
     }
@@ -918,17 +921,27 @@ impl<T> JoinState<T> {
         self.waiters.borrow_mut().wake_all();
     }
 
+    fn add_waiter_from(&self, cx: &RuntimeContext<'_>) {
+        if let Some(waiter) = cx.waiter() {
+            self.waiters.borrow_mut().push(waiter);
+        }
+    }
+
+    pub(crate) fn is_ready(&self) -> bool {
+        self.result.borrow().is_some()
+    }
+
     fn take_result(&self) -> Option<Result<T, JoinError>> {
         self.result.borrow_mut().take()
     }
 }
 
-struct TimeoutState {
-    state: Rc<IoState>,
+pub(crate) struct TimeoutState {
+    pub(crate) state: Rc<IoState>,
     user_data: io_uring_user_data,
 }
 
-struct IoState {
+pub(crate) struct IoState {
     result: RefCell<Option<KernelIoResult>>,
     waiters: RefCell<Waiters>,
     timeout: RefCell<Option<Timespec>>,
@@ -954,7 +967,7 @@ impl IoState {
         self.waiters.borrow_mut().wake_all();
     }
 
-    fn add_waiter_from(&self, cx: &RuntimeContext<'_>) {
+    pub(crate) fn add_waiter_from(&self, cx: &RuntimeContext<'_>) {
         if let Some(waiter) = cx.waiter() {
             self.waiters.borrow_mut().push(waiter);
         }
@@ -995,13 +1008,13 @@ impl ScopeState {
 }
 
 #[derive(Clone)]
-struct Waiter {
+pub(crate) struct Waiter {
     core: Weak<RefCell<Scheduler>>,
     task_id: TaskId,
 }
 
 impl Waiter {
-    fn wake(self) {
+    pub(crate) fn wake(self) {
         if let Some(core) = self.core.upgrade() {
             core.borrow_mut().schedule(self.task_id);
         }
@@ -1009,13 +1022,13 @@ impl Waiter {
 }
 
 #[derive(Default)]
-struct Waiters {
+pub(crate) struct Waiters {
     first: Option<Waiter>,
     rest: Vec<Waiter>,
 }
 
 impl Waiters {
-    fn push(&mut self, waiter: Waiter) {
+    pub(crate) fn push(&mut self, waiter: Waiter) {
         if self.first.is_none() {
             self.first = Some(waiter);
         } else {
@@ -1023,7 +1036,7 @@ impl Waiters {
         }
     }
 
-    fn wake_all(&mut self) {
+    pub(crate) fn wake_all(&mut self) {
         if let Some(waiter) = self.first.take() {
             waiter.wake();
         }
@@ -1033,7 +1046,15 @@ impl Waiters {
         }
     }
 
-    fn clear(&mut self) {
+    pub(crate) fn wake_one(&mut self) {
+        if let Some(waiter) = self.first.take() {
+            waiter.wake();
+        } else if !self.rest.is_empty() {
+            self.rest.remove(0).wake();
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
         self.first = None;
         self.rest.clear();
     }
@@ -1270,155 +1291,6 @@ fn recycle_io_state(core: &Weak<RefCell<Scheduler>>, state: Rc<IoState>) {
     }
 }
 
-/// A single-send channel for stackful coroutines.
-pub mod once {
-    use super::{RuntimeContext, Waiter};
-    use std::cell::RefCell;
-    use std::fmt;
-    use std::rc::Rc;
-
-    /// Creates a channel that can deliver one value.
-    pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
-        let inner = Rc::new(RefCell::new(Inner {
-            value: None,
-            sender_alive: true,
-            receiver_alive: true,
-            receiver_waiter: None,
-        }));
-
-        (
-            Sender {
-                inner: Rc::clone(&inner),
-            },
-            Receiver { inner },
-        )
-    }
-
-    /// Sends one value to a [`Receiver`].
-    pub struct Sender<T> {
-        inner: Rc<RefCell<Inner<T>>>,
-    }
-
-    impl<T> Sender<T> {
-        /// Sends `value` to the receiver.
-        pub fn send(self, value: T) -> Result<(), SendError<T>> {
-            let waiter = {
-                let mut inner = self.inner.borrow_mut();
-                if !inner.receiver_alive {
-                    return Err(SendError(value));
-                }
-
-                inner.sender_alive = false;
-                inner.value = Some(value);
-                inner.receiver_waiter.take()
-            };
-
-            if let Some(waiter) = waiter {
-                waiter.wake();
-            }
-
-            Ok(())
-        }
-    }
-
-    impl<T> fmt::Debug for Sender<T> {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.debug_struct("Sender").finish_non_exhaustive()
-        }
-    }
-
-    impl<T> Drop for Sender<T> {
-        fn drop(&mut self) {
-            let waiter = {
-                let mut inner = self.inner.borrow_mut();
-                inner.sender_alive = false;
-                inner.receiver_waiter.take()
-            };
-
-            if let Some(waiter) = waiter {
-                waiter.wake();
-            }
-        }
-    }
-
-    /// Receives one value from a [`Sender`].
-    pub struct Receiver<T> {
-        inner: Rc<RefCell<Inner<T>>>,
-    }
-
-    impl<T> Receiver<T> {
-        /// Blocks cooperatively until the value is sent or the sender is dropped.
-        pub fn recv(self, cx: &RuntimeContext<'_>) -> Result<T, RecvError> {
-            loop {
-                {
-                    let mut inner = self.inner.borrow_mut();
-                    if let Some(value) = inner.value.take() {
-                        inner.receiver_alive = false;
-                        return Ok(value);
-                    }
-
-                    if !inner.sender_alive {
-                        inner.receiver_alive = false;
-                        return Err(RecvError);
-                    }
-
-                    inner.receiver_waiter = cx.waiter();
-                }
-
-                cx.park();
-            }
-        }
-    }
-
-    impl<T> fmt::Debug for Receiver<T> {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.debug_struct("Receiver").finish_non_exhaustive()
-        }
-    }
-
-    impl<T> Drop for Receiver<T> {
-        fn drop(&mut self) {
-            self.inner.borrow_mut().receiver_alive = false;
-        }
-    }
-
-    struct Inner<T> {
-        value: Option<T>,
-        sender_alive: bool,
-        receiver_alive: bool,
-        receiver_waiter: Option<Waiter>,
-    }
-
-    /// Error returned when the receiver has been dropped.
-    pub struct SendError<T>(pub T);
-
-    impl<T> fmt::Debug for SendError<T> {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.debug_tuple("SendError").finish()
-        }
-    }
-
-    impl<T> fmt::Display for SendError<T> {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("receiver dropped")
-        }
-    }
-
-    impl<T: fmt::Debug> std::error::Error for SendError<T> {}
-
-    /// Error returned when the sender is dropped before sending.
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub struct RecvError;
-
-    impl fmt::Display for RecvError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("sender dropped")
-        }
-    }
-
-    impl std::error::Error for RecvError {}
-}
-
 #[cfg(test)]
 mod allocation_tracking {
     use std::alloc::{GlobalAlloc, Layout, System};
@@ -1552,12 +1424,13 @@ mod allocation_tracking {
 
 #[cfg(test)]
 mod tests {
-    use super::{IoHandle, IoJoinError, Runtime, allocation_tracking, once};
+    use super::{IoJoinError, Runtime, Waitable, allocation_tracking, once};
     use rustix::pipe::pipe;
     use std::time::Duration;
 
     #[test]
     fn allocation_counter_reports_zero_for_noop() {
+        let _ = allocation_tracking::measure(|| ());
         let (_, counts) = allocation_tracking::measure(|| std::hint::black_box(42));
 
         assert_eq!(counts.allocating_operations(), 0);
@@ -1720,7 +1593,7 @@ mod tests {
             let mut first_write_result = cx.write_async(&first_write, b"a".to_vec());
             let mut second_write_result = cx.write_async(&second_write, b"b".to_vec());
 
-            let pending: [&dyn IoHandle; 4] =
+            let pending: [&dyn Waitable; 4] =
                 [&first, &second, &first_write_result, &second_write_result];
             cx.join(&pending, Some(Duration::from_secs(1))).unwrap();
 
@@ -1752,7 +1625,7 @@ mod tests {
 
             let read = cx.read_async(&read_fd, read_buffer);
             let write = cx.write_async(&write_fd, write_buffer);
-            let pending: [&dyn IoHandle; 2] = [&read, &write];
+            let pending: [&dyn Waitable; 2] = [&read, &write];
             cx.join(&pending, Some(Duration::from_secs(1))).unwrap();
 
             let read = read.get(cx).unwrap();
@@ -1828,14 +1701,14 @@ mod tests {
             let (read_fd, write_fd) = pipe().unwrap();
             let read = cx.read_async(&read_fd, vec![0; 1]);
 
-            let pending: [&dyn IoHandle; 1] = [&read];
+            let pending: [&dyn Waitable; 1] = [&read];
             assert_eq!(
                 cx.join(&pending, Some(Duration::from_millis(1))),
                 Err(IoJoinError::TimedOut)
             );
 
             let write = cx.write_async(&write_fd, b"z".to_vec());
-            let pending: [&dyn IoHandle; 2] = [&read, &write];
+            let pending: [&dyn Waitable; 2] = [&read, &write];
             cx.join(&pending, Some(Duration::from_secs(1))).unwrap();
 
             let read = read.get(cx).unwrap();
