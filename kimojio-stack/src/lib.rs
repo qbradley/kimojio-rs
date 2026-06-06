@@ -6,6 +6,100 @@
 //! This crate is intentionally not an async runtime. It runs stackful coroutines
 //! cooperatively on the current OS thread and exposes scoped spawning so
 //! coroutines cannot outlive the scope that created them.
+//!
+//! # Design
+//!
+//! [`Runtime`] owns a single-threaded cooperative scheduler. [`Runtime::block_on`]
+//! creates the scheduler, builds a root [`RuntimeContext`], runs the supplied
+//! closure, and returns that closure's value. The closure receives the
+//! [`RuntimeContext`] as the capability object for all runtime services: scoped
+//! spawning, cooperative yielding, io_uring operations, and I/O result joining.
+//!
+//! Stackful work is created with [`RuntimeContext::scope`] and [`Scope::spawn`].
+//! This mirrors `std::thread::scope`: spawned coroutines may borrow from the
+//! caller's stack, but the scope waits for all children before returning, so a
+//! stackful coroutine cannot outlive the stack frame it borrowed from. Each
+//! coroutine has a small guarded stack allocated by `corosensei`, so stack
+//! overflows trap instead of corrupting adjacent memory. [`JoinHandle::join`]
+//! retrieves the coroutine return value and propagates panics as [`JoinError`].
+//!
+//! The scheduler is deliberately flat. A coroutine that blocks on a join, scope,
+//! channel receive, or I/O operation records a [`Waiter`] and suspends with
+//! `yielder.suspend`; it never recursively drives the scheduler from inside that
+//! coroutine. Only the root context drives the scheduler loop. Waking a waiter
+//! requeues the suspended task by ID, and the scheduler later resumes it on its
+//! existing stack.
+//!
+//! # Scheduling and io_uring
+//!
+//! The scheduler keeps a ready queue of coroutine task IDs, a table of live
+//! coroutine stacks, and one io_uring instance. [`RingEnterPolicy`] controls how
+//! often ready tasks are polled before the runtime enters the ring:
+//!
+//! - [`RingEnterPolicy::AfterReadyBatch`] runs the tasks that were ready at the
+//!   beginning of the scheduler tick, then submits and reaps without blocking.
+//! - [`RingEnterPolicy::AfterReadyTasks`] runs up to the configured number of
+//!   ready tasks, then submits and reaps without blocking.
+//!
+//! If no tasks are ready but I/O is in flight, the root scheduler enters the ring
+//! in wait mode so an I/O completion can make progress. If tasks are ready, ring
+//! entry is nonblocking so the runtime does not stall runnable coroutines behind
+//! kernel work.
+//!
+//! Completion handling is split into two phases to avoid reentrant scheduler
+//! borrows. While the scheduler is mutably borrowed it submits SQEs, drains CQEs
+//! into scheduler-owned scratch storage, and updates the in-flight count. After
+//! releasing that borrow, completions are applied to their operation state and
+//! waiters are woken.
+//!
+//! # I/O APIs
+//!
+//! [`RuntimeContext::read`], [`RuntimeContext::write`], and
+//! [`RuntimeContext::close`] are blocking-from-the-coroutine operations. They
+//! submit one SQE, park only the current stackful coroutine, and return after the
+//! CQE has been reaped.
+//!
+//! [`RuntimeContext::read_async`] and [`RuntimeContext::write_async`] return an
+//! [`IoResult`]. `try_get` observes a completion that has already been reaped
+//! without entering io_uring or running other tasks. `get` waits cooperatively by
+//! parking the current coroutine. [`RuntimeContext::join`] waits for multiple
+//! [`IoHandle`] values at once and can optionally use an io_uring timeout; timed
+//! out operations remain pending and their handles can still be completed later.
+//!
+//! Async I/O takes ownership of buffers instead of borrowing them. This keeps the
+//! safe API sound even if a handle is dropped or forgotten while the kernel still
+//! has a pointer. Buffer ownership is abstracted with [`IoReadBuffer`] and
+//! [`IoWriteBuffer`]; `Vec<u8>` is the default buffer type and `Box<[u8]>` is
+//! also supported. Successful read/write completions return the original buffer
+//! in [`ReadOutput`] or [`WriteOutput`]. If an [`IoResult`] is dropped while its
+//! operation is still pending, the backing buffer is intentionally leaked rather
+//! than allowing io_uring to complete into freed memory. Complete pending results
+//! with `get` or `try_get` when buffer reclamation matters.
+//!
+//! # Allocation model
+//!
+//! Setup paths allocate: the runtime owns scheduler containers and io_uring, each
+//! spawned coroutine allocates a guarded stack and join state, and channels own
+//! their shared state. These allocations are expected and bounded by runtime
+//! structure.
+//!
+//! Hot I/O paths are designed to avoid Rust heap allocation after warmup. The
+//! scheduler reuses I/O operation state through an internal pool, reuses
+//! completion scratch storage across ring entries, and stores the common single
+//! waiter inline before falling back to an overflow vector. Tests install a
+//! test-only counting allocator and assert that warmed blocking and async
+//! pipe-ping-pong loops perform zero Rust allocations. Kernel allocations and
+//! io_uring mappings are outside those tests' scope.
+//!
+//! The crate does not install a global allocator for downstream users. Repository
+//! performance harnesses may choose an allocator such as mimalloc, but allocator
+//! selection is intentionally left to the final application.
+//!
+//! # Scope and limitations
+//!
+//! The runtime is currently single-threaded and Linux/io_uring oriented. It is
+//! intended for code that wants explicit control over cooperative scheduling and
+//! stackful call chains, not integration with Rust's `async`/`Future` ecosystem.
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -33,6 +127,11 @@ use rustix_uring::{
 
 const DEFAULT_STACK_SIZE: usize = 64 * 1024;
 const DEFAULT_RING_ENTRIES: u32 = 128;
+
+#[cfg(test)]
+#[global_allocator]
+static TEST_ALLOCATOR: allocation_tracking::CountingAllocator =
+    allocation_tracking::CountingAllocator;
 
 type TaskId = usize;
 type PanicPayload = Box<dyn Any + Send + 'static>;
@@ -212,16 +311,20 @@ impl RuntimeContext<'_> {
     ///
     /// The returned [`IoResult`] owns `buffer` until completion, so it is safe to
     /// drop the handle while the kernel operation is still pending.
-    pub fn read_async(&self, fd: &impl AsFd, mut buffer: Vec<u8>) -> IoResult<ReadOutput> {
-        let len = u32::try_from(buffer.len()).expect("io_uring read length exceeds u32::MAX");
+    pub fn read_async<B>(&self, fd: &impl AsFd, mut buffer: B) -> IoResult<ReadOutput<B>, B>
+    where
+        B: IoReadBuffer,
+    {
+        let len =
+            u32::try_from(buffer.io_buffer_len()).expect("io_uring read length exceeds u32::MAX");
         let fd = fd.as_fd().as_raw_fd();
-        let entry = opcode::Read::new(Fd(fd), buffer.as_mut_ptr(), len)
+        let entry = opcode::Read::new(Fd(fd), buffer.io_buffer_mut_ptr(), len)
             .offset(u64::MAX)
             .build();
-        let state = Rc::new(IoState::new(IoResource::Buffer(buffer)));
+        let state = self.acquire_io_state();
 
         self.submit_io_state(entry, Rc::clone(&state));
-        IoResult::new(state, read_output)
+        IoResult::new(Rc::downgrade(&self.core), state, buffer, read_output::<B>)
     }
 
     /// Writes `buf` to `fd` using io_uring.
@@ -244,16 +347,20 @@ impl RuntimeContext<'_> {
     ///
     /// The returned [`IoResult`] owns `buffer` until completion, so it is safe to
     /// drop the handle while the kernel operation is still pending.
-    pub fn write_async(&self, fd: &impl AsFd, buffer: Vec<u8>) -> IoResult<WriteOutput> {
-        let len = u32::try_from(buffer.len()).expect("io_uring write length exceeds u32::MAX");
+    pub fn write_async<B>(&self, fd: &impl AsFd, buffer: B) -> IoResult<WriteOutput<B>, B>
+    where
+        B: IoWriteBuffer,
+    {
+        let len =
+            u32::try_from(buffer.io_buffer_len()).expect("io_uring write length exceeds u32::MAX");
         let fd = fd.as_fd().as_raw_fd();
-        let entry = opcode::Write::new(Fd(fd), buffer.as_ptr(), len)
+        let entry = opcode::Write::new(Fd(fd), buffer.io_buffer_ptr(), len)
             .offset(u64::MAX)
             .build();
-        let state = Rc::new(IoState::new(IoResource::Buffer(buffer)));
+        let state = self.acquire_io_state();
 
         self.submit_io_state(entry, Rc::clone(&state));
-        IoResult::new(state, write_output)
+        IoResult::new(Rc::downgrade(&self.core), state, buffer, write_output::<B>)
     }
 
     /// Closes `fd` using io_uring.
@@ -280,11 +387,11 @@ impl RuntimeContext<'_> {
             return Ok(());
         }
 
-        let timeout = timeout.map(|duration| self.submit_timeout(duration));
+        let mut timeout = timeout.map(|duration| self.submit_timeout(duration));
 
         loop {
             if results.iter().all(|result| result.is_ready()) {
-                if let Some(timeout) = timeout {
+                if let Some(timeout) = timeout.take() {
                     self.cancel_timeout(timeout);
                 }
                 return Ok(());
@@ -294,6 +401,9 @@ impl RuntimeContext<'_> {
                 .as_ref()
                 .is_some_and(|timeout| timeout.state.is_ready())
             {
+                if let Some(timeout) = timeout.take() {
+                    self.recycle_io_state(timeout.state);
+                }
                 return Err(IoJoinError::TimedOut);
             }
 
@@ -317,11 +427,12 @@ impl RuntimeContext<'_> {
     }
 
     fn submit_and_wait_for_io(&self, entry: Sqe) -> KernelIoResult {
-        let state = Rc::new(IoState::new(IoResource::None));
+        let state = self.acquire_io_state();
         self.submit_io_state(entry, Rc::clone(&state));
 
         loop {
             if let Some(result) = state.take_result() {
+                self.recycle_io_state(state);
                 return result;
             }
 
@@ -339,9 +450,12 @@ impl RuntimeContext<'_> {
     }
 
     fn submit_timeout(&self, duration: Duration) -> TimeoutState {
-        let timespec = Box::new(Timespec::from(duration));
-        let entry = opcode::Timeout::new(timespec.as_ref()).build();
-        let state = Rc::new(IoState::new(IoResource::Timespec(timespec)));
+        let state = self.acquire_io_state();
+        state.set_timeout(Timespec::from(duration));
+        let entry = {
+            let timeout = state.timeout.borrow();
+            opcode::Timeout::new(timeout.as_ref().expect("timeout missing timespec")).build()
+        };
         let user_data = self.submit_io_state(entry, Rc::clone(&state));
 
         TimeoutState { state, user_data }
@@ -349,10 +463,11 @@ impl RuntimeContext<'_> {
 
     fn cancel_timeout(&self, timeout: TimeoutState) {
         if timeout.state.is_ready() {
+            self.recycle_io_state(timeout.state);
             return;
         }
 
-        let cancel_state = Rc::new(IoState::new(IoResource::None));
+        let cancel_state = self.acquire_io_state();
         let entry = opcode::TimeoutRemove::new(timeout.user_data).build();
         self.submit_io_state(entry, Rc::clone(&cancel_state));
 
@@ -361,6 +476,17 @@ impl RuntimeContext<'_> {
             cancel_state.add_waiter_from(self);
             self.park();
         }
+
+        self.recycle_io_state(timeout.state);
+        self.recycle_io_state(cancel_state);
+    }
+
+    fn acquire_io_state(&self) -> Rc<IoState> {
+        self.core.borrow_mut().acquire_io_state()
+    }
+
+    fn recycle_io_state(&self, state: Rc<IoState>) {
+        self.core.borrow_mut().recycle_io_state(state);
     }
 
     fn park(&self) {
@@ -526,22 +652,96 @@ impl fmt::Display for JoinError {
 
 impl std::error::Error for JoinError {}
 
+/// An owned buffer that can receive bytes from io_uring.
+///
+/// # Safety
+///
+/// Implementors must return a pointer that remains valid for writes of
+/// [`IoReadBuffer::io_buffer_len`] bytes until the buffer is dropped. Moving the
+/// buffer value must not invalidate the pointer previously submitted to the
+/// kernel. If an [`IoResult`] is leaked or dropped while pending, leaking the
+/// buffer value must keep the submitted memory valid.
+pub unsafe trait IoReadBuffer {
+    /// Returns the writable buffer pointer submitted to io_uring.
+    fn io_buffer_mut_ptr(&mut self) -> *mut u8;
+
+    /// Returns the number of bytes available at [`IoReadBuffer::io_buffer_mut_ptr`].
+    fn io_buffer_len(&self) -> usize;
+}
+
+/// An owned buffer that can provide bytes to io_uring.
+///
+/// # Safety
+///
+/// Implementors must return a pointer that remains valid for reads of
+/// [`IoWriteBuffer::io_buffer_len`] bytes until the buffer is dropped. Moving the
+/// buffer value must not invalidate the pointer previously submitted to the
+/// kernel. If an [`IoResult`] is leaked or dropped while pending, leaking the
+/// buffer value must keep the submitted memory valid.
+pub unsafe trait IoWriteBuffer {
+    /// Returns the readable buffer pointer submitted to io_uring.
+    fn io_buffer_ptr(&self) -> *const u8;
+
+    /// Returns the number of bytes available at [`IoWriteBuffer::io_buffer_ptr`].
+    fn io_buffer_len(&self) -> usize;
+}
+
+unsafe impl IoReadBuffer for Vec<u8> {
+    fn io_buffer_mut_ptr(&mut self) -> *mut u8 {
+        self.as_mut_ptr()
+    }
+
+    fn io_buffer_len(&self) -> usize {
+        self.len()
+    }
+}
+
+unsafe impl IoWriteBuffer for Vec<u8> {
+    fn io_buffer_ptr(&self) -> *const u8 {
+        self.as_ptr()
+    }
+
+    fn io_buffer_len(&self) -> usize {
+        self.len()
+    }
+}
+
+unsafe impl IoReadBuffer for Box<[u8]> {
+    fn io_buffer_mut_ptr(&mut self) -> *mut u8 {
+        self.as_mut_ptr()
+    }
+
+    fn io_buffer_len(&self) -> usize {
+        self.len()
+    }
+}
+
+unsafe impl IoWriteBuffer for Box<[u8]> {
+    fn io_buffer_ptr(&self) -> *const u8 {
+        self.as_ptr()
+    }
+
+    fn io_buffer_len(&self) -> usize {
+        self.len()
+    }
+}
+
 /// Completed read data.
 #[derive(Debug, Eq, PartialEq)]
-pub struct ReadOutput {
+pub struct ReadOutput<B = Vec<u8>> {
     /// Number of bytes read into `buffer`.
     pub bytes: usize,
     /// Buffer owned by the read operation.
-    pub buffer: Vec<u8>,
+    pub buffer: B,
 }
 
 /// Completed write data.
 #[derive(Debug, Eq, PartialEq)]
-pub struct WriteOutput {
+pub struct WriteOutput<B = Vec<u8>> {
     /// Number of bytes written from `buffer`.
     pub bytes: usize,
     /// Buffer owned by the write operation.
-    pub buffer: Vec<u8>,
+    pub buffer: B,
 }
 
 /// Error returned when joining IO results times out.
@@ -572,17 +772,26 @@ pub trait IoHandle {
 
 /// A pending io_uring operation.
 #[must_use = "pending IO should be completed with get, try_get, or RuntimeContext::join"]
-pub struct IoResult<T> {
-    state: Rc<IoState>,
-    output: fn(&IoState, u32) -> T,
+pub struct IoResult<T, B = Vec<u8>> {
+    core: Weak<RefCell<Scheduler>>,
+    state: Option<Rc<IoState>>,
+    buffer: ManuallyDrop<B>,
+    output: fn(B, u32) -> T,
     taken: bool,
     _output: PhantomData<T>,
 }
 
-impl<T> IoResult<T> {
-    fn new(state: Rc<IoState>, output: fn(&IoState, u32) -> T) -> Self {
+impl<T, B> IoResult<T, B> {
+    fn new(
+        core: Weak<RefCell<Scheduler>>,
+        state: Rc<IoState>,
+        buffer: B,
+        output: fn(B, u32) -> T,
+    ) -> Self {
         Self {
-            state,
+            core,
+            state: Some(state),
+            buffer: ManuallyDrop::new(buffer),
             output,
             taken: false,
             _output: PhantomData,
@@ -595,16 +804,25 @@ impl<T> IoResult<T> {
     pub fn try_get(&mut self) -> Option<Result<T, Errno>> {
         assert!(!self.taken, "IoResult value already taken");
 
-        let result = self.state.result()?;
+        let result = self.state.as_ref()?.take_result()?;
+        let state = self.state.take().expect("IoResult state missing");
         self.taken = true;
 
-        Some(match result {
-            Ok(value) => Ok((self.output)(&self.state, value)),
+        let output = match result {
+            Ok(value) => {
+                let buffer = unsafe { ManuallyDrop::take(&mut self.buffer) };
+                Ok((self.output)(buffer, value))
+            }
             Err(error) => {
-                self.state.drop_resource();
+                unsafe {
+                    ManuallyDrop::drop(&mut self.buffer);
+                }
                 Err(error)
             }
-        })
+        };
+        recycle_io_state(&self.core, state);
+
+        Some(output)
     }
 
     /// Waits for the operation to complete and returns its value.
@@ -614,23 +832,28 @@ impl<T> IoResult<T> {
                 return result;
             }
 
-            self.state.add_waiter_from(cx);
+            self.state
+                .as_ref()
+                .expect("IoResult state missing")
+                .add_waiter_from(cx);
             cx.park();
         }
     }
 }
 
-impl<T> IoHandle for IoResult<T> {
+impl<T, B> IoHandle for IoResult<T, B> {
     fn is_ready(&self) -> bool {
-        self.state.is_ready()
+        self.taken || self.state.as_ref().is_none_or(|state| state.is_ready())
     }
 
     fn add_waiter(&self, cx: &RuntimeContext<'_>) {
-        self.state.add_waiter_from(cx);
+        if let Some(state) = &self.state {
+            state.add_waiter_from(cx);
+        }
     }
 }
 
-impl<T> fmt::Debug for IoResult<T> {
+impl<T, B> fmt::Debug for IoResult<T, B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("IoResult")
             .field("ready", &self.is_ready())
@@ -639,47 +862,60 @@ impl<T> fmt::Debug for IoResult<T> {
     }
 }
 
-impl<T> Drop for IoResult<T> {
+impl<T, B> Drop for IoResult<T, B> {
     fn drop(&mut self) {
-        if !self.taken && self.state.is_ready() {
-            self.state.drop_resource();
-            self.taken = true;
+        if self.taken {
+            return;
         }
+
+        let Some(state) = self.state.take() else {
+            return;
+        };
+
+        if state.is_ready() {
+            unsafe {
+                ManuallyDrop::drop(&mut self.buffer);
+            }
+            self.taken = true;
+            recycle_io_state(&self.core, state);
+        }
+        // If the operation is still pending, deliberately leak the owned buffer.
+        // The raw io_uring reference keeps the state alive until the CQE arrives,
+        // and leaking the backing allocation keeps the kernel-visible memory
+        // valid even when safe code drops the handle early.
     }
 }
 
-fn read_output(state: &IoState, bytes: u32) -> ReadOutput {
+fn read_output<B>(buffer: B, bytes: u32) -> ReadOutput<B> {
     ReadOutput {
         bytes: bytes as usize,
-        buffer: state.take_buffer(),
+        buffer,
     }
 }
 
-fn write_output(state: &IoState, bytes: u32) -> WriteOutput {
+fn write_output<B>(buffer: B, bytes: u32) -> WriteOutput<B> {
     WriteOutput {
         bytes: bytes as usize,
-        buffer: state.take_buffer(),
+        buffer,
     }
 }
 
 struct JoinState<T> {
     result: RefCell<Option<Result<T, JoinError>>>,
-    waiters: RefCell<Vec<Waiter>>,
+    waiters: RefCell<Waiters>,
 }
 
 impl<T> JoinState<T> {
     fn new() -> Self {
         Self {
             result: RefCell::new(None),
-            waiters: RefCell::new(Vec::new()),
+            waiters: RefCell::new(Waiters::default()),
         }
     }
 
     fn complete(&self, result: Result<T, JoinError>) {
         *self.result.borrow_mut() = Some(result);
-        for waiter in self.waiters.borrow_mut().drain(..) {
-            waiter.wake();
-        }
+        self.waiters.borrow_mut().wake_all();
     }
 
     fn take_result(&self) -> Option<Result<T, JoinError>> {
@@ -692,33 +928,30 @@ struct TimeoutState {
     user_data: io_uring_user_data,
 }
 
-enum IoResource {
-    None,
-    Buffer(Vec<u8>),
-    #[allow(dead_code)]
-    Timespec(Box<Timespec>),
-}
-
 struct IoState {
     result: RefCell<Option<KernelIoResult>>,
-    waiters: RefCell<Vec<Waiter>>,
-    resource: RefCell<IoResource>,
+    waiters: RefCell<Waiters>,
+    timeout: RefCell<Option<Timespec>>,
 }
 
 impl IoState {
-    fn new(resource: IoResource) -> Self {
+    fn new() -> Self {
         Self {
             result: RefCell::new(None),
-            waiters: RefCell::new(Vec::new()),
-            resource: RefCell::new(resource),
+            waiters: RefCell::new(Waiters::default()),
+            timeout: RefCell::new(None),
         }
+    }
+
+    fn reset_for_reuse(&self) {
+        *self.result.borrow_mut() = None;
+        self.waiters.borrow_mut().clear();
+        *self.timeout.borrow_mut() = None;
     }
 
     fn complete(&self, result: KernelIoResult) {
         *self.result.borrow_mut() = Some(result);
-        for waiter in self.waiters.borrow_mut().drain(..) {
-            waiter.wake();
-        }
+        self.waiters.borrow_mut().wake_all();
     }
 
     fn add_waiter_from(&self, cx: &RuntimeContext<'_>) {
@@ -731,32 +964,19 @@ impl IoState {
         self.result.borrow().is_some()
     }
 
-    fn result(&self) -> Option<KernelIoResult> {
-        *self.result.borrow()
-    }
-
     fn take_result(&self) -> Option<KernelIoResult> {
         self.result.borrow_mut().take()
     }
 
-    fn take_buffer(&self) -> Vec<u8> {
-        match std::mem::replace(&mut *self.resource.borrow_mut(), IoResource::None) {
-            IoResource::Buffer(buffer) => buffer,
-            IoResource::None | IoResource::Timespec(_) => {
-                panic!("IoResult did not contain an owned buffer")
-            }
-        }
-    }
-
-    fn drop_resource(&self) {
-        *self.resource.borrow_mut() = IoResource::None;
+    fn set_timeout(&self, timeout: Timespec) {
+        *self.timeout.borrow_mut() = Some(timeout);
     }
 }
 
 #[derive(Default)]
 struct ScopeState {
     remaining: Cell<usize>,
-    waiters: RefCell<Vec<Waiter>>,
+    waiters: RefCell<Waiters>,
 }
 
 impl ScopeState {
@@ -769,9 +989,7 @@ impl ScopeState {
         self.remaining.set(remaining);
 
         if remaining == 0 {
-            for waiter in self.waiters.borrow_mut().drain(..) {
-                waiter.wake();
-            }
+            self.waiters.borrow_mut().wake_all();
         }
     }
 }
@@ -790,6 +1008,37 @@ impl Waiter {
     }
 }
 
+#[derive(Default)]
+struct Waiters {
+    first: Option<Waiter>,
+    rest: Vec<Waiter>,
+}
+
+impl Waiters {
+    fn push(&mut self, waiter: Waiter) {
+        if self.first.is_none() {
+            self.first = Some(waiter);
+        } else {
+            self.rest.push(waiter);
+        }
+    }
+
+    fn wake_all(&mut self) {
+        if let Some(waiter) = self.first.take() {
+            waiter.wake();
+        }
+
+        for waiter in self.rest.drain(..) {
+            waiter.wake();
+        }
+    }
+
+    fn clear(&mut self) {
+        self.first = None;
+        self.rest.clear();
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Suspend {
     Ready,
@@ -805,6 +1054,8 @@ struct Scheduler {
     queued: Vec<bool>,
     ready: VecDeque<TaskId>,
     ring: IoUring,
+    io_state_pool: Vec<Rc<IoState>>,
+    completed_io: Vec<CompletedIo>,
     in_flight_io: usize,
     ring_enter_policy: RingEnterPolicy,
 }
@@ -816,6 +1067,8 @@ impl Scheduler {
             queued: Vec::new(),
             ready: VecDeque::new(),
             ring: IoUring::new(config.ring_entries).expect("failed to create io_uring"),
+            io_state_pool: Vec::with_capacity(config.ring_entries as usize),
+            completed_io: Vec::with_capacity(config.ring_entries as usize),
             in_flight_io: 0,
             ring_enter_policy: config.ring_enter_policy,
         }
@@ -860,6 +1113,22 @@ impl Scheduler {
         self.tasks.iter().all(Option::is_none)
     }
 
+    fn acquire_io_state(&mut self) -> Rc<IoState> {
+        let state = self
+            .io_state_pool
+            .pop()
+            .unwrap_or_else(|| Rc::new(IoState::new()));
+        state.reset_for_reuse();
+        state
+    }
+
+    fn recycle_io_state(&mut self, state: Rc<IoState>) {
+        if Rc::strong_count(&state) == 1 {
+            state.reset_for_reuse();
+            self.io_state_pool.push(state);
+        }
+    }
+
     fn submit_io(&mut self, entry: &Sqe) {
         let push_result = unsafe { self.ring.submission().push(entry) };
         if push_result.is_err() {
@@ -888,14 +1157,13 @@ impl Scheduler {
         !submission.is_empty() || submission.cq_overflow()
     }
 
-    fn enter_ring(&mut self, want: usize) -> (usize, Vec<CompletedIo>) {
+    fn enter_ring(&mut self, want: usize) -> usize {
         let submitted = if self.should_enter(want) {
             self.submit_and_wait(want)
         } else {
             0
         };
 
-        let mut completed = Vec::new();
         for cqe in self.ring.completion() {
             let state = cqe.user_data_ptr() as *const IoState;
             assert!(!state.is_null(), "io_uring CQE missing user data");
@@ -903,13 +1171,13 @@ impl Scheduler {
                 .in_flight_io
                 .checked_sub(1)
                 .expect("io_uring in-flight count underflow");
-            completed.push(CompletedIo {
+            self.completed_io.push(CompletedIo {
                 state,
                 result: cqe.result(),
             });
         }
 
-        (submitted, completed)
+        submitted
     }
 }
 
@@ -964,7 +1232,7 @@ fn run_one(core: &Rc<RefCell<Scheduler>>) -> bool {
 }
 
 fn run_completed_io(core: &Rc<RefCell<Scheduler>>, wait: bool) -> bool {
-    let (submitted, completed) = {
+    let (submitted, mut completed) = {
         let mut scheduler = core.borrow_mut();
         if wait {
             debug_assert!(
@@ -977,16 +1245,29 @@ fn run_completed_io(core: &Rc<RefCell<Scheduler>>, wait: bool) -> bool {
             );
         }
 
-        scheduler.enter_ring(usize::from(wait))
+        let submitted = scheduler.enter_ring(usize::from(wait));
+        let completed = std::mem::take(&mut scheduler.completed_io);
+        (submitted, completed)
     };
 
     let had_completion = !completed.is_empty();
-    for completion in completed {
+    for completion in completed.drain(..) {
         let state = unsafe { Rc::from_raw(completion.state) };
         state.complete(completion.result);
+        if Rc::strong_count(&state) == 1 {
+            recycle_io_state(&Rc::downgrade(core), state);
+        }
     }
 
+    core.borrow_mut().completed_io = completed;
+
     submitted != 0 || had_completion
+}
+
+fn recycle_io_state(core: &Weak<RefCell<Scheduler>>, state: Rc<IoState>) {
+    if let Some(core) = core.upgrade() {
+        core.borrow_mut().recycle_io_state(state);
+    }
 }
 
 /// A single-send channel for stackful coroutines.
@@ -1139,10 +1420,160 @@ pub mod once {
 }
 
 #[cfg(test)]
+mod allocation_tracking {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    thread_local! {
+        static ACTIVE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+    static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+    static DEALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+    static DEALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+    static REALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+    static REALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+    pub struct CountingAllocator;
+
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub struct AllocationCounts {
+        pub allocations: usize,
+        pub allocated_bytes: usize,
+        pub deallocations: usize,
+        pub deallocated_bytes: usize,
+        pub reallocations: usize,
+        pub reallocated_bytes: usize,
+    }
+
+    impl AllocationCounts {
+        pub fn allocating_operations(self) -> usize {
+            self.allocations + self.reallocations
+        }
+
+        pub fn allocated_or_reallocated_bytes(self) -> usize {
+            self.allocated_bytes + self.reallocated_bytes
+        }
+    }
+
+    pub fn measure<T>(f: impl FnOnce() -> T) -> (T, AllocationCounts) {
+        ACTIVE.with(|active| {
+            assert!(!active.get(), "nested allocation measurement");
+        });
+        reset();
+
+        ACTIVE.with(|active| active.set(true));
+        let guard = MeasurementGuard;
+        let output = f();
+        drop(guard);
+
+        (output, current())
+    }
+
+    fn reset() {
+        ALLOCATIONS.store(0, Ordering::Relaxed);
+        ALLOCATED_BYTES.store(0, Ordering::Relaxed);
+        DEALLOCATIONS.store(0, Ordering::Relaxed);
+        DEALLOCATED_BYTES.store(0, Ordering::Relaxed);
+        REALLOCATIONS.store(0, Ordering::Relaxed);
+        REALLOCATED_BYTES.store(0, Ordering::Relaxed);
+    }
+
+    fn current() -> AllocationCounts {
+        AllocationCounts {
+            allocations: ALLOCATIONS.load(Ordering::Relaxed),
+            allocated_bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
+            deallocations: DEALLOCATIONS.load(Ordering::Relaxed),
+            deallocated_bytes: DEALLOCATED_BYTES.load(Ordering::Relaxed),
+            reallocations: REALLOCATIONS.load(Ordering::Relaxed),
+            reallocated_bytes: REALLOCATED_BYTES.load(Ordering::Relaxed),
+        }
+    }
+
+    fn record_allocation(bytes: usize) {
+        ACTIVE.with(|active| {
+            if active.get() {
+                ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+                ALLOCATED_BYTES.fetch_add(bytes, Ordering::Relaxed);
+            }
+        });
+    }
+
+    fn record_deallocation(bytes: usize) {
+        ACTIVE.with(|active| {
+            if active.get() {
+                DEALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+                DEALLOCATED_BYTES.fetch_add(bytes, Ordering::Relaxed);
+            }
+        });
+    }
+
+    fn record_reallocation(bytes: usize) {
+        ACTIVE.with(|active| {
+            if active.get() {
+                REALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+                REALLOCATED_BYTES.fetch_add(bytes, Ordering::Relaxed);
+            }
+        });
+    }
+
+    struct MeasurementGuard;
+
+    impl Drop for MeasurementGuard {
+        fn drop(&mut self) {
+            ACTIVE.with(|active| active.set(false));
+        }
+    }
+
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            record_allocation(layout.size());
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            record_allocation(layout.size());
+            unsafe { System.alloc_zeroed(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            record_deallocation(layout.size());
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            record_reallocation(new_size);
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use super::{IoHandle, IoJoinError, Runtime, once};
+    use super::{IoHandle, IoJoinError, Runtime, allocation_tracking, once};
     use rustix::pipe::pipe;
     use std::time::Duration;
+
+    #[test]
+    fn allocation_counter_reports_zero_for_noop() {
+        let (_, counts) = allocation_tracking::measure(|| std::hint::black_box(42));
+
+        assert_eq!(counts.allocating_operations(), 0);
+        assert_eq!(counts.allocated_or_reallocated_bytes(), 0);
+    }
+
+    #[test]
+    fn allocation_counter_detects_vec_allocation() {
+        let (_, counts) = allocation_tracking::measure(|| {
+            let values = vec![1_u8];
+            std::hint::black_box(values);
+        });
+
+        assert!(counts.allocating_operations() != 0);
+        assert!(counts.allocated_or_reallocated_bytes() != 0);
+    }
 
     #[test]
     fn once_channel_between_stackful_threads() {
@@ -1311,6 +1742,31 @@ mod tests {
     }
 
     #[test]
+    fn async_io_accepts_non_vec_owned_buffers() {
+        let mut runtime = Runtime::new();
+
+        let output = runtime.block_on(|cx| {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let read_buffer = vec![0_u8; 1].into_boxed_slice();
+            let write_buffer: Box<[u8]> = Box::new([b'x']);
+
+            let read = cx.read_async(&read_fd, read_buffer);
+            let write = cx.write_async(&write_fd, write_buffer);
+            let pending: [&dyn IoHandle; 2] = [&read, &write];
+            cx.join(&pending, Some(Duration::from_secs(1))).unwrap();
+
+            let read = read.get(cx).unwrap();
+            let write = write.get(cx).unwrap();
+            cx.close(read_fd).unwrap();
+            cx.close(write_fd).unwrap();
+
+            (read.buffer[0], write.bytes)
+        });
+
+        assert_eq!(output, (b'x', 1));
+    }
+
+    #[test]
     fn async_io_get_parks_stackful_tasks() {
         const ROUNDS: u8 = 4;
 
@@ -1390,5 +1846,149 @@ mod tests {
             cx.close(read_fd).unwrap();
             cx.close(write_fd).unwrap();
         });
+    }
+
+    #[test]
+    fn allocation_pipe_ping_pong_hot_path_no_allocations() {
+        const WARMUP_ROUNDS: u8 = 4;
+        const MEASURED_ROUNDS: u8 = 64;
+
+        let mut runtime = Runtime::new();
+
+        let counts = runtime.block_on(|cx| {
+            let (ping_read, ping_write) = pipe().unwrap();
+            let (pong_read, pong_write) = pipe().unwrap();
+
+            cx.scope(|scope| {
+                let responder = scope.spawn(move |cx| {
+                    let mut received = [0];
+
+                    for _ in 0..WARMUP_ROUNDS {
+                        assert_eq!(cx.read(&ping_read, &mut received).unwrap(), 1);
+                        assert_eq!(
+                            cx.write(&pong_write, &[received[0].wrapping_add(1)])
+                                .unwrap(),
+                            1
+                        );
+                    }
+
+                    for _ in 0..MEASURED_ROUNDS {
+                        assert_eq!(cx.read(&ping_read, &mut received).unwrap(), 1);
+                        assert_eq!(
+                            cx.write(&pong_write, &[received[0].wrapping_add(1)])
+                                .unwrap(),
+                            1
+                        );
+                    }
+
+                    cx.close(ping_read).unwrap();
+                    cx.close(pong_write).unwrap();
+                });
+
+                let initiator = scope.spawn(move |cx| {
+                    let mut received = [0];
+
+                    for round in 0..WARMUP_ROUNDS {
+                        assert_eq!(cx.write(&ping_write, &[round]).unwrap(), 1);
+                        assert_eq!(cx.read(&pong_read, &mut received).unwrap(), 1);
+                        assert_eq!(received[0], round.wrapping_add(1));
+                    }
+
+                    let (_, counts) = allocation_tracking::measure(|| {
+                        for round in 0..MEASURED_ROUNDS {
+                            assert_eq!(cx.write(&ping_write, &[round]).unwrap(), 1);
+                            assert_eq!(cx.read(&pong_read, &mut received).unwrap(), 1);
+                            assert_eq!(received[0], round.wrapping_add(1));
+                        }
+                    });
+
+                    cx.close(ping_write).unwrap();
+                    cx.close(pong_read).unwrap();
+                    counts
+                });
+
+                let counts = initiator.join(cx).unwrap();
+                responder.join(cx).unwrap();
+                counts
+            })
+        });
+
+        assert_eq!(counts.allocating_operations(), 0, "{counts:?}");
+        assert_eq!(counts.allocated_or_reallocated_bytes(), 0, "{counts:?}");
+    }
+
+    #[test]
+    fn allocation_async_pipe_ping_pong_reused_buffers_no_allocations() {
+        const WARMUP_ROUNDS: u8 = 4;
+        const MEASURED_ROUNDS: u8 = 64;
+
+        let mut runtime = Runtime::new();
+
+        let counts = runtime.block_on(|cx| {
+            let (ping_read, ping_write) = pipe().unwrap();
+            let (pong_read, pong_write) = pipe().unwrap();
+
+            cx.scope(|scope| {
+                let responder = scope.spawn(move |cx| {
+                    let mut read_buffer = vec![0];
+                    let mut write_buffer = vec![0];
+
+                    for _ in 0..WARMUP_ROUNDS {
+                        let read = cx.read_async(&ping_read, read_buffer).get(cx).unwrap();
+                        read_buffer = read.buffer;
+                        write_buffer[0] = read_buffer[0].wrapping_add(1);
+                        let write = cx.write_async(&pong_write, write_buffer).get(cx).unwrap();
+                        write_buffer = write.buffer;
+                    }
+
+                    for _ in 0..MEASURED_ROUNDS {
+                        let read = cx.read_async(&ping_read, read_buffer).get(cx).unwrap();
+                        read_buffer = read.buffer;
+                        write_buffer[0] = read_buffer[0].wrapping_add(1);
+                        let write = cx.write_async(&pong_write, write_buffer).get(cx).unwrap();
+                        write_buffer = write.buffer;
+                    }
+
+                    cx.close(ping_read).unwrap();
+                    cx.close(pong_write).unwrap();
+                });
+
+                let initiator = scope.spawn(move |cx| {
+                    let mut write_buffer = vec![0];
+                    let mut read_buffer = vec![0];
+
+                    for round in 0..WARMUP_ROUNDS {
+                        write_buffer[0] = round;
+                        let write = cx.write_async(&ping_write, write_buffer).get(cx).unwrap();
+                        write_buffer = write.buffer;
+                        let read = cx.read_async(&pong_read, read_buffer).get(cx).unwrap();
+                        assert_eq!(read.buffer[0], round.wrapping_add(1));
+                        read_buffer = read.buffer;
+                    }
+
+                    let (_, counts) = allocation_tracking::measure(|| {
+                        for round in 0..MEASURED_ROUNDS {
+                            write_buffer[0] = round;
+                            let write = cx.write_async(&ping_write, write_buffer).get(cx).unwrap();
+                            write_buffer = write.buffer;
+                            let read = cx.read_async(&pong_read, read_buffer).get(cx).unwrap();
+                            assert_eq!(read.buffer[0], round.wrapping_add(1));
+                            read_buffer = read.buffer;
+                        }
+                    });
+
+                    cx.close(ping_write).unwrap();
+                    cx.close(pong_read).unwrap();
+                    counts
+                });
+
+                let counts = initiator.join(cx).unwrap();
+                responder.join(cx).unwrap();
+                counts
+            })
+        });
+
+        assert_eq!(counts.allocating_operations(), 0, "{counts:?}");
+        assert_eq!(counts.allocated_or_reallocated_bytes(), 0, "{counts:?}");
     }
 }

@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 kimojio.workspace = true
+mimalloc.workspace = true
 rustix.workspace = true

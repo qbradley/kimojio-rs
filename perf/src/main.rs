@@ -59,7 +59,7 @@ fn pin_self_to_core(cpu: u16) {
 }
 
 struct MyAllocator {
-    system: System,
+    allocator: mimalloc::MiMalloc,
     noalloc: std::sync::Mutex<bool>,
 }
 
@@ -74,21 +74,19 @@ unsafe impl GlobalAlloc for MyAllocator {
         if *self.noalloc.lock().unwrap() {
             panic!("Not supposed to alloc");
         }
-        unsafe { self.system.alloc(layout) }
+        unsafe { self.allocator.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
         if *self.noalloc.lock().unwrap() {
             panic!("Not supposed to alloc");
         }
-        unsafe { self.system.dealloc(ptr, layout) }
+        unsafe { self.allocator.dealloc(ptr, layout) }
     }
 }
 
-use std::alloc::System;
-
 #[global_allocator]
 static A: MyAllocator = MyAllocator {
-    system: System,
+    allocator: mimalloc::MiMalloc,
     noalloc: std::sync::Mutex::new(false),
 };
