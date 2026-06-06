@@ -54,10 +54,17 @@
 //!
 //! # I/O APIs
 //!
-//! [`RuntimeContext::read`], [`RuntimeContext::write`], and
-//! [`RuntimeContext::close`] are blocking-from-the-coroutine operations. They
-//! submit one SQE, park only the current stackful coroutine, and return after the
-//! CQE has been reaped.
+//! [`RuntimeContext::read`], [`RuntimeContext::write`],
+//! [`RuntimeContext::send`], [`RuntimeContext::recv`],
+//! [`RuntimeContext::accept`], [`RuntimeContext::connect`],
+//! [`RuntimeContext::shutdown`], [`RuntimeContext::close`],
+//! [`RuntimeContext::nop`], and [`RuntimeContext::sleep`] are
+//! blocking-from-the-coroutine operations. They submit one SQE, park only the
+//! current stackful coroutine, and return after the CQE has been reaped.
+//! [`RuntimeContext::socket`] uses io_uring when the kernel supports
+//! `IORING_OP_SOCKET` and otherwise falls back to `socket(2)`. [`RuntimeContext::bind`]
+//! and [`RuntimeContext::listen`] are synchronous setup helpers because Linux has
+//! no io_uring operations for them.
 //!
 //! [`RuntimeContext::read_async`] and [`RuntimeContext::write_async`] return an
 //! [`IoResult`]. `try_get` observes a completion that has already been reaped
@@ -143,6 +150,7 @@ use std::ffi::c_void;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
+use std::os::fd::FromRawFd;
 use std::panic::{self, AssertUnwindSafe};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
@@ -152,9 +160,12 @@ use corosensei::{Coroutine, CoroutineResult, Yielder};
 pub use rustix::fd::OwnedFd;
 use rustix::fd::{AsFd, AsRawFd};
 use rustix::io_uring::io_uring_user_data;
+use rustix::net::{self, addr::SocketAddrArg};
+pub use rustix::net::{AddressFamily, Protocol, Shutdown, SocketType, ipproto};
 pub use rustix_uring::Errno;
 use rustix_uring::opcode;
 use rustix_uring::{
+    Probe,
     cqueue::Entry as Cqe,
     squeue::Entry as Sqe,
     types::{Fd, Timespec},
@@ -344,6 +355,88 @@ impl RuntimeContext<'_> {
         }
     }
 
+    /// Submits an io_uring no-op and waits for its completion.
+    pub fn nop(&self) -> Result<(), Errno> {
+        self.submit_and_wait_for_io(opcode::Nop::new().build())
+            .map(|_| ())
+    }
+
+    /// Parks the current stackful coroutine until `duration` has elapsed.
+    pub fn sleep(&self, duration: Duration) -> Result<(), Errno> {
+        let timeout = self.submit_timeout(duration);
+        let result = self.wait_for_io_state(&timeout.state);
+        self.recycle_io_state(timeout.state);
+
+        match result {
+            Ok(_) | Err(Errno::TIME) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Creates a socket.
+    ///
+    /// Uses io_uring when the kernel reports support for `IORING_OP_SOCKET`,
+    /// otherwise falls back to `socket(2)` synchronously.
+    pub fn socket(
+        &self,
+        domain: AddressFamily,
+        socket_type: SocketType,
+        protocol: Option<Protocol>,
+    ) -> Result<OwnedFd, Errno> {
+        if !self.core.borrow().supports_socket_opcode() {
+            return net::socket(domain, socket_type, protocol);
+        }
+
+        let domain = i32::from(domain.as_raw());
+        let socket_type = socket_type.as_raw() as i32;
+        let protocol = protocol
+            .map(|protocol| u32::from(protocol.as_raw()) as i32)
+            .unwrap_or(0);
+        let fd = self
+            .submit_and_wait_for_io(opcode::Socket::new(domain, socket_type, protocol).build())?;
+
+        Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+    }
+
+    /// Binds a socket to `address`.
+    ///
+    /// `bind(2)` is not currently an io_uring operation, so this is a synchronous
+    /// setup helper.
+    pub fn bind(&self, fd: &impl AsFd, address: &impl SocketAddrArg) -> Result<(), Errno> {
+        net::bind(fd, address)
+    }
+
+    /// Marks a socket as accepting incoming connections.
+    ///
+    /// `listen(2)` is not currently an io_uring operation, so this is a
+    /// synchronous setup helper.
+    pub fn listen(&self, fd: &impl AsFd, backlog: i32) -> Result<(), Errno> {
+        net::listen(fd, backlog)
+    }
+
+    /// Accepts one connection from a listening socket using io_uring.
+    pub fn accept(&self, fd: &impl AsFd) -> Result<OwnedFd, Errno> {
+        let fd = fd.as_fd().as_raw_fd();
+        let accepted = self.submit_and_wait_for_io(
+            opcode::Accept::new(Fd(fd), std::ptr::null_mut(), std::ptr::null_mut()).build(),
+        )?;
+
+        Ok(unsafe { OwnedFd::from_raw_fd(accepted as i32) })
+    }
+
+    /// Connects a socket to `address` using io_uring.
+    pub fn connect(&self, fd: &impl AsFd, address: &impl SocketAddrArg) -> Result<(), Errno> {
+        let fd = fd.as_fd().as_raw_fd();
+        unsafe {
+            address.with_sockaddr(|address, address_len| {
+                self.submit_and_wait_for_io(
+                    opcode::Connect::new(Fd(fd), address, address_len).build(),
+                )
+                .map(|_| ())
+            })
+        }
+    }
+
     /// Reads from `fd` into `buf` using io_uring.
     ///
     /// This blocks only the current stackful coroutine. Pass a borrowed fd to
@@ -396,6 +489,26 @@ impl RuntimeContext<'_> {
             .map(|result| result as usize)
     }
 
+    /// Sends bytes on a connected socket using io_uring.
+    pub fn send(&self, fd: &impl AsFd, buf: &[u8]) -> Result<usize, Errno> {
+        let len = u32::try_from(buf.len()).expect("io_uring send length exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::Send::new(Fd(fd), buf.as_ptr(), len).build();
+
+        self.submit_and_wait_for_io(entry)
+            .map(|result| result as usize)
+    }
+
+    /// Receives bytes from a connected socket using io_uring.
+    pub fn recv(&self, fd: &impl AsFd, buf: &mut [u8]) -> Result<usize, Errno> {
+        let len = u32::try_from(buf.len()).expect("io_uring recv length exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::Recv::new(Fd(fd), buf.as_mut_ptr(), len).build();
+
+        self.submit_and_wait_for_io(entry)
+            .map(|result| result as usize)
+    }
+
     /// Starts a write from an owned buffer using io_uring.
     ///
     /// The returned [`IoResult`] owns `buffer` until completion, so it is safe to
@@ -427,6 +540,14 @@ impl RuntimeContext<'_> {
         self.submit_and_wait_for_io(entry).map(|_| ())
     }
 
+    /// Shuts down part or all of a connected socket using io_uring.
+    pub fn shutdown(&self, fd: &impl AsFd, how: Shutdown) -> Result<(), Errno> {
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::Shutdown::new(Fd(fd), how as i32).build();
+
+        self.submit_and_wait_for_io(entry).map(|_| ())
+    }
+
     fn wait_for_scope(&self, state: &Rc<ScopeState>) {
         while state.remaining.get() != 0 {
             if let Some(waiter) = self.waiter() {
@@ -439,10 +560,14 @@ impl RuntimeContext<'_> {
     fn submit_and_wait_for_io(&self, entry: Sqe) -> KernelIoResult {
         let state = self.acquire_io_state();
         self.submit_io_state(entry, Rc::clone(&state));
+        let result = self.wait_for_io_state(&state);
+        self.recycle_io_state(state);
+        result
+    }
 
+    fn wait_for_io_state(&self, state: &Rc<IoState>) -> KernelIoResult {
         loop {
             if let Some(result) = state.take_result() {
-                self.recycle_io_state(state);
                 return result;
             }
 
@@ -1075,6 +1200,7 @@ struct Scheduler {
     queued: Vec<bool>,
     ready: VecDeque<TaskId>,
     ring: IoUring,
+    probe: Probe,
     io_state_pool: Vec<Rc<IoState>>,
     completed_io: Vec<CompletedIo>,
     in_flight_io: usize,
@@ -1083,11 +1209,16 @@ struct Scheduler {
 
 impl Scheduler {
     fn new(config: RuntimeConfig) -> Self {
+        let ring = IoUring::new(config.ring_entries).expect("failed to create io_uring");
+        let mut probe = Probe::new();
+        let _ = ring.submitter().register_probe(&mut probe);
+
         Self {
             tasks: Vec::new(),
             queued: Vec::new(),
             ready: VecDeque::new(),
-            ring: IoUring::new(config.ring_entries).expect("failed to create io_uring"),
+            ring,
+            probe,
             io_state_pool: Vec::with_capacity(config.ring_entries as usize),
             completed_io: Vec::with_capacity(config.ring_entries as usize),
             in_flight_io: 0,
@@ -1148,6 +1279,10 @@ impl Scheduler {
             state.reset_for_reuse();
             self.io_state_pool.push(state);
         }
+    }
+
+    fn supports_socket_opcode(&self) -> bool {
+        self.probe.is_supported(opcode::Socket::CODE)
     }
 
     fn submit_io(&mut self, entry: &Sqe) {
@@ -1424,9 +1559,36 @@ mod allocation_tracking {
 
 #[cfg(test)]
 mod tests {
-    use super::{IoJoinError, Runtime, Waitable, allocation_tracking, once};
+    use super::{
+        AddressFamily, IoJoinError, Runtime, RuntimeContext, Shutdown, SocketType, Waitable,
+        allocation_tracking, ipproto, once,
+    };
+    use rustix::fd::AsFd;
+    use rustix::net;
     use rustix::pipe::pipe;
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::time::Duration;
+
+    fn send_all(cx: &RuntimeContext<'_>, fd: &impl AsFd, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            let written = cx.send(fd, bytes).unwrap();
+            assert!(written != 0);
+            bytes = &bytes[written..];
+        }
+    }
+
+    fn recv_to_end(cx: &RuntimeContext<'_>, fd: &impl AsFd, expected_len: usize) -> Vec<u8> {
+        let mut output = Vec::with_capacity(expected_len);
+        let mut buffer = [0_u8; 3];
+
+        loop {
+            let read = cx.recv(fd, &mut buffer).unwrap();
+            if read == 0 {
+                return output;
+            }
+            output.extend_from_slice(&buffer[..read]);
+        }
+    }
 
     #[test]
     fn allocation_counter_reports_zero_for_noop() {
@@ -1575,6 +1737,79 @@ mod tests {
         });
 
         assert_eq!(output, (ROUNDS as usize) * 2);
+    }
+
+    #[test]
+    fn io_uring_nop_and_sleep_complete() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.nop().unwrap();
+            cx.sleep(Duration::from_millis(1)).unwrap();
+        });
+    }
+
+    #[test]
+    fn io_uring_tcp_echo_server_and_client_short_reads() {
+        let mut runtime = Runtime::new();
+
+        let echoed = runtime.block_on(|cx| {
+            let (addr_tx, addr_rx) = once::channel();
+            let message = b"stackful socket echo through io_uring".to_vec();
+
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let listener = cx
+                        .socket(AddressFamily::INET, SocketType::STREAM, Some(ipproto::TCP))
+                        .unwrap();
+                    let loopback = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0);
+                    cx.bind(&listener, &loopback).unwrap();
+                    cx.listen(&listener, 8).unwrap();
+                    let local_addr: SocketAddr =
+                        net::getsockname(&listener).unwrap().try_into().unwrap();
+                    addr_tx.send(local_addr).unwrap();
+
+                    let connection = cx.accept(&listener).unwrap();
+                    let mut buffer = [0_u8; 5];
+
+                    loop {
+                        let read = cx.recv(&connection, &mut buffer).unwrap();
+                        if read == 0 {
+                            break;
+                        }
+                        send_all(cx, &connection, &buffer[..read]);
+                    }
+
+                    cx.shutdown(&connection, Shutdown::Write).unwrap();
+                    cx.close(connection).unwrap();
+                    cx.close(listener).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let addr = addr_rx.recv(cx).unwrap();
+                    let socket = cx
+                        .socket(AddressFamily::INET, SocketType::STREAM, Some(ipproto::TCP))
+                        .unwrap();
+                    cx.connect(&socket, &addr).unwrap();
+
+                    for chunk in message.chunks(4) {
+                        send_all(cx, &socket, chunk);
+                    }
+                    cx.shutdown(&socket, Shutdown::Write).unwrap();
+
+                    let echoed = recv_to_end(cx, &socket, message.len());
+                    cx.close(socket).unwrap();
+                    assert_eq!(echoed, message);
+                    echoed
+                });
+
+                let echoed = client.join(cx).unwrap();
+                server.join(cx).unwrap();
+                echoed
+            })
+        });
+
+        assert_eq!(echoed.as_slice(), b"stackful socket echo through io_uring");
     }
 
     #[test]
