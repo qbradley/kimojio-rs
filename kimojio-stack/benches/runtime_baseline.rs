@@ -14,6 +14,16 @@ fn run_stackful(f: impl FnOnce(&RuntimeContext<'_>) -> Duration) -> Duration {
     runtime.block_on(f)
 }
 
+fn run_stackful_registered(
+    registered_file_slots: u32,
+    registered_buffer_slots: u16,
+    f: impl FnOnce(&RuntimeContext<'_>) -> Duration,
+) -> Duration {
+    let mut runtime =
+        Runtime::with_registered_resources(registered_file_slots, registered_buffer_slots);
+    runtime.block_on(f)
+}
+
 fn bench_runtime(c: &mut Criterion) {
     c.bench_function("runtime/block_on_empty", |b| {
         b.iter(|| {
@@ -214,6 +224,85 @@ fn bench_io(c: &mut Criterion) {
         });
     });
 
+    c.bench_function("io_uring/pipe_write_read_registered_fd", |b| {
+        b.iter_custom(|iters| {
+            run_stackful_registered(2, 0, |cx| {
+                let (read_fd, write_fd) = pipe().unwrap();
+                let read_fd = cx.register_fd(read_fd).unwrap();
+                let write_fd = cx.register_fd(write_fd).unwrap();
+                let mut read_buffer = [0_u8; 1];
+
+                cx.write_registered_fd(&write_fd, &[1]).unwrap();
+                cx.read_registered_fd(&read_fd, &mut read_buffer).unwrap();
+
+                let start = Instant::now();
+                for i in 0..iters {
+                    let byte = [i as u8];
+                    cx.write_registered_fd(&write_fd, &byte).unwrap();
+                    cx.read_registered_fd(&read_fd, &mut read_buffer).unwrap();
+                    black_box(read_buffer[0]);
+                }
+                start.elapsed()
+            })
+        });
+    });
+
+    c.bench_function("io_uring/pipe_write_read_registered_buffer", |b| {
+        b.iter_custom(|iters| {
+            run_stackful_registered(0, 2, |cx| {
+                let (read_fd, write_fd) = pipe().unwrap();
+                let mut write_buffer = cx.register_buffer(vec![0_u8]).unwrap();
+                let mut read_buffer = cx.register_buffer(vec![0_u8]).unwrap();
+
+                cx.write_registered_buffer(&write_fd, &write_buffer)
+                    .unwrap();
+                cx.read_registered_buffer(&read_fd, &mut read_buffer)
+                    .unwrap();
+
+                let start = Instant::now();
+                for i in 0..iters {
+                    write_buffer.buffer_mut()[0] = i as u8;
+                    cx.write_registered_buffer(&write_fd, &write_buffer)
+                        .unwrap();
+                    cx.read_registered_buffer(&read_fd, &mut read_buffer)
+                        .unwrap();
+                    black_box(read_buffer.buffer()[0]);
+                }
+                let elapsed = start.elapsed();
+
+                cx.close(read_fd).unwrap();
+                cx.close(write_fd).unwrap();
+                elapsed
+            })
+        });
+    });
+
+    c.bench_function("io_uring/pipe_write_read_registered_fd_buffer", |b| {
+        b.iter_custom(|iters| {
+            run_stackful_registered(2, 2, |cx| {
+                let (read_fd, write_fd) = pipe().unwrap();
+                let read_fd = cx.register_fd(read_fd).unwrap();
+                let write_fd = cx.register_fd(write_fd).unwrap();
+                let mut write_buffer = cx.register_buffer(vec![0_u8]).unwrap();
+                let mut read_buffer = cx.register_buffer(vec![0_u8]).unwrap();
+
+                cx.write_registered_fixed(&write_fd, &write_buffer).unwrap();
+                cx.read_registered_fixed(&read_fd, &mut read_buffer)
+                    .unwrap();
+
+                let start = Instant::now();
+                for i in 0..iters {
+                    write_buffer.buffer_mut()[0] = i as u8;
+                    cx.write_registered_fixed(&write_fd, &write_buffer).unwrap();
+                    cx.read_registered_fixed(&read_fd, &mut read_buffer)
+                        .unwrap();
+                    black_box(read_buffer.buffer()[0]);
+                }
+                start.elapsed()
+            })
+        });
+    });
+
     c.bench_function("io_uring/async_pipe_write_read", |b| {
         b.iter_custom(|iters| {
             run_stackful(|cx| {
@@ -240,6 +329,46 @@ fn bench_io(c: &mut Criterion) {
                 cx.close(read_fd).unwrap();
                 cx.close(write_fd).unwrap();
                 elapsed
+            })
+        });
+    });
+
+    c.bench_function("io_uring/async_pipe_write_read_registered_fd_buffer", |b| {
+        b.iter_custom(|iters| {
+            run_stackful_registered(2, 2, |cx| {
+                let (read_fd, write_fd) = pipe().unwrap();
+                let read_fd = cx.register_fd(read_fd).unwrap();
+                let write_fd = cx.register_fd(write_fd).unwrap();
+                let mut write_buffer = cx.register_buffer(vec![0_u8]).unwrap();
+                let mut read_buffer = cx.register_buffer(vec![0_u8]).unwrap();
+
+                let write = cx
+                    .write_registered_fixed_async(&write_fd, write_buffer)
+                    .get(cx)
+                    .unwrap();
+                write_buffer = write.buffer;
+                let read = cx
+                    .read_registered_fixed_async(&read_fd, read_buffer)
+                    .get(cx)
+                    .unwrap();
+                read_buffer = read.buffer;
+
+                let start = Instant::now();
+                for i in 0..iters {
+                    write_buffer.buffer_mut()[0] = i as u8;
+                    let write = cx
+                        .write_registered_fixed_async(&write_fd, write_buffer)
+                        .get(cx)
+                        .unwrap();
+                    write_buffer = write.buffer;
+                    let read = cx
+                        .read_registered_fixed_async(&read_fd, read_buffer)
+                        .get(cx)
+                        .unwrap();
+                    read_buffer = read.buffer;
+                    black_box(read_buffer.buffer()[0]);
+                }
+                start.elapsed()
             })
         });
     });
