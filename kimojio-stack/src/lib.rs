@@ -56,8 +56,15 @@
 //!
 //! [`RuntimeContext::read`], [`RuntimeContext::write`],
 //! [`RuntimeContext::send`], [`RuntimeContext::recv`],
+//! [`RuntimeContext::sendmsg`], [`RuntimeContext::recvmsg`],
 //! [`RuntimeContext::accept`], [`RuntimeContext::connect`],
-//! [`RuntimeContext::shutdown`], [`RuntimeContext::close`],
+//! [`RuntimeContext::shutdown`], [`RuntimeContext::open`],
+//! [`RuntimeContext::link`], [`RuntimeContext::symlink`],
+//! [`RuntimeContext::mkdir`], [`RuntimeContext::rmdir`],
+//! [`RuntimeContext::unlink`], [`RuntimeContext::rename`],
+//! [`RuntimeContext::fadvise`], [`RuntimeContext::madvise`],
+//! [`RuntimeContext::fallocate`], [`RuntimeContext::fsync`],
+//! [`RuntimeContext::sync_file_range`], [`RuntimeContext::close`],
 //! [`RuntimeContext::nop`], and [`RuntimeContext::sleep`] are
 //! blocking-from-the-coroutine operations. They submit one SQE, park only the
 //! current stackful coroutine, and return after the CQE has been reaped.
@@ -159,9 +166,17 @@ use corosensei::stack::DefaultStack;
 use corosensei::{Coroutine, CoroutineResult, Yielder};
 pub use rustix::fd::OwnedFd;
 use rustix::fd::{AsFd, AsRawFd};
-use rustix::io_uring::io_uring_user_data;
+use rustix::fs;
+pub use rustix::fs::{Advice as FileAdvice, AtFlags, FallocateFlags, Mode, OFlags, RenameFlags};
+use rustix::io_uring::{IoringOp, io_uring_user_data};
+pub use rustix::io_uring::{MsgHdr, iovec as IoVec};
+use rustix::mm;
+pub use rustix::mm::Advice as MemoryAdvice;
 use rustix::net::{self, addr::SocketAddrArg};
-pub use rustix::net::{AddressFamily, Protocol, Shutdown, SocketType, ipproto};
+pub use rustix::net::{
+    AddressFamily, Protocol, RecvFlags, SendFlags, Shutdown, SocketType, ipproto,
+};
+use rustix::path;
 pub use rustix_uring::Errno;
 use rustix_uring::opcode;
 use rustix_uring::{
@@ -201,6 +216,17 @@ type TaskId = usize;
 type PanicPayload = Box<dyn Any + Send + 'static>;
 type KernelIoResult = Result<u32, Errno>;
 type IoUring = rustix_uring::IoUring<Sqe, Cqe>;
+
+fn memory_advice_for_uring(advice: MemoryAdvice) -> Option<FileAdvice> {
+    match advice {
+        MemoryAdvice::Normal => Some(FileAdvice::Normal),
+        MemoryAdvice::Sequential => Some(FileAdvice::Sequential),
+        MemoryAdvice::Random => Some(FileAdvice::Random),
+        MemoryAdvice::WillNeed => Some(FileAdvice::WillNeed),
+        MemoryAdvice::LinuxDontNeed => Some(FileAdvice::DontNeed),
+        _ => None,
+    }
+}
 
 /// Runs stackful coroutines on the current OS thread.
 #[derive(Debug)]
@@ -373,6 +399,311 @@ impl RuntimeContext<'_> {
         }
     }
 
+    /// Opens `path` relative to the process current working directory using
+    /// io_uring.
+    pub fn open<P: path::Arg>(&self, path: P, flags: OFlags, mode: Mode) -> Result<OwnedFd, Errno> {
+        self.openat(&fs::CWD, path, flags, mode)
+    }
+
+    /// Opens `path` relative to `dirfd` using io_uring.
+    pub fn openat<P: path::Arg>(
+        &self,
+        dirfd: &impl AsFd,
+        path: P,
+        flags: OFlags,
+        mode: Mode,
+    ) -> Result<OwnedFd, Errno> {
+        if !self.core.borrow().supports_opcode(opcode::OpenAt::CODE) {
+            return fs::openat(dirfd.as_fd(), path, flags, mode);
+        }
+
+        path.into_with_c_str(|path| {
+            let fd = self.submit_and_wait_for_io(
+                opcode::OpenAt::new(Fd(dirfd.as_fd().as_raw_fd()), path.as_ptr())
+                    .flags(flags)
+                    .mode(mode)
+                    .build(),
+            )?;
+
+            Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+        })
+    }
+
+    /// Creates a hard link using paths relative to the process current working
+    /// directory.
+    pub fn link<P: path::Arg, Q: path::Arg>(
+        &self,
+        oldpath: P,
+        newpath: Q,
+        flags: AtFlags,
+    ) -> Result<(), Errno> {
+        self.linkat(&fs::CWD, oldpath, &fs::CWD, newpath, flags)
+    }
+
+    /// Creates a hard link using io_uring.
+    pub fn linkat<P: path::Arg, Q: path::Arg>(
+        &self,
+        olddirfd: &impl AsFd,
+        oldpath: P,
+        newdirfd: &impl AsFd,
+        newpath: Q,
+        flags: AtFlags,
+    ) -> Result<(), Errno> {
+        if !self.core.borrow().supports_opcode(opcode::LinkAt::CODE) {
+            return fs::linkat(olddirfd.as_fd(), oldpath, newdirfd.as_fd(), newpath, flags);
+        }
+
+        oldpath.into_with_c_str(|oldpath| {
+            newpath.into_with_c_str(|newpath| {
+                self.submit_and_wait_for_io(
+                    opcode::LinkAt::new(
+                        Fd(olddirfd.as_fd().as_raw_fd()),
+                        oldpath.as_ptr(),
+                        Fd(newdirfd.as_fd().as_raw_fd()),
+                        newpath.as_ptr(),
+                    )
+                    .flags(flags)
+                    .build(),
+                )
+                .map(|_| ())
+            })
+        })
+    }
+
+    /// Creates a symbolic link in the process current working directory using
+    /// io_uring.
+    pub fn symlink<P: path::Arg, Q: path::Arg>(&self, target: P, linkpath: Q) -> Result<(), Errno> {
+        self.symlinkat(target, &fs::CWD, linkpath)
+    }
+
+    /// Creates a symbolic link using io_uring.
+    pub fn symlinkat<P: path::Arg, Q: path::Arg>(
+        &self,
+        target: P,
+        newdirfd: &impl AsFd,
+        linkpath: Q,
+    ) -> Result<(), Errno> {
+        if !self.core.borrow().supports_opcode(opcode::SymlinkAt::CODE) {
+            return fs::symlinkat(target, newdirfd.as_fd(), linkpath);
+        }
+
+        target.into_with_c_str(|target| {
+            linkpath.into_with_c_str(|linkpath| {
+                self.submit_and_wait_for_io(
+                    opcode::SymlinkAt::new(
+                        Fd(newdirfd.as_fd().as_raw_fd()),
+                        target.as_ptr(),
+                        linkpath.as_ptr(),
+                    )
+                    .build(),
+                )
+                .map(|_| ())
+            })
+        })
+    }
+
+    /// Creates a directory relative to the process current working directory
+    /// using io_uring.
+    pub fn mkdir<P: path::Arg>(&self, path: P, mode: Mode) -> Result<(), Errno> {
+        self.mkdirat(&fs::CWD, path, mode)
+    }
+
+    /// Creates a directory relative to `dirfd` using io_uring.
+    pub fn mkdirat<P: path::Arg>(
+        &self,
+        dirfd: &impl AsFd,
+        path: P,
+        mode: Mode,
+    ) -> Result<(), Errno> {
+        if !self.core.borrow().supports_opcode(opcode::MkDirAt::CODE) {
+            return fs::mkdirat(dirfd.as_fd(), path, mode);
+        }
+
+        path.into_with_c_str(|path| {
+            self.submit_and_wait_for_io(
+                opcode::MkDirAt::new(Fd(dirfd.as_fd().as_raw_fd()), path.as_ptr())
+                    .mode(mode)
+                    .build(),
+            )
+            .map(|_| ())
+        })
+    }
+
+    /// Removes a directory using io_uring.
+    pub fn rmdir<P: path::Arg>(&self, path: P) -> Result<(), Errno> {
+        self.unlinkat(&fs::CWD, path, AtFlags::REMOVEDIR)
+    }
+
+    /// Removes a filesystem entry using io_uring.
+    pub fn unlink<P: path::Arg>(&self, path: P) -> Result<(), Errno> {
+        self.unlinkat(&fs::CWD, path, AtFlags::empty())
+    }
+
+    /// Removes a filesystem entry relative to `dirfd` using io_uring.
+    pub fn unlinkat<P: path::Arg>(
+        &self,
+        dirfd: &impl AsFd,
+        path: P,
+        flags: AtFlags,
+    ) -> Result<(), Errno> {
+        if !self.core.borrow().supports_opcode(opcode::UnlinkAt::CODE) {
+            return fs::unlinkat(dirfd.as_fd(), path, flags);
+        }
+
+        path.into_with_c_str(|path| {
+            self.submit_and_wait_for_io(
+                opcode::UnlinkAt::new(Fd(dirfd.as_fd().as_raw_fd()), path.as_ptr())
+                    .flags(flags)
+                    .build(),
+            )
+            .map(|_| ())
+        })
+    }
+
+    /// Renames a filesystem entry using io_uring.
+    pub fn rename<P: path::Arg, Q: path::Arg>(
+        &self,
+        oldpath: P,
+        newpath: Q,
+        flags: RenameFlags,
+    ) -> Result<(), Errno> {
+        self.renameat(&fs::CWD, oldpath, &fs::CWD, newpath, flags)
+    }
+
+    /// Renames a filesystem entry relative to directory fds using io_uring.
+    pub fn renameat<P: path::Arg, Q: path::Arg>(
+        &self,
+        olddirfd: &impl AsFd,
+        oldpath: P,
+        newdirfd: &impl AsFd,
+        newpath: Q,
+        flags: RenameFlags,
+    ) -> Result<(), Errno> {
+        if !self.core.borrow().supports_opcode(opcode::RenameAt::CODE) {
+            return fs::renameat_with(olddirfd.as_fd(), oldpath, newdirfd.as_fd(), newpath, flags);
+        }
+
+        oldpath.into_with_c_str(|oldpath| {
+            newpath.into_with_c_str(|newpath| {
+                self.submit_and_wait_for_io(
+                    opcode::RenameAt::new(
+                        Fd(olddirfd.as_fd().as_raw_fd()),
+                        oldpath.as_ptr(),
+                        Fd(newdirfd.as_fd().as_raw_fd()),
+                        newpath.as_ptr(),
+                    )
+                    .flags(flags)
+                    .build(),
+                )
+                .map(|_| ())
+            })
+        })
+    }
+
+    /// Declares an expected file access pattern using io_uring.
+    pub fn fadvise(
+        &self,
+        fd: &impl AsFd,
+        offset: u64,
+        len: u32,
+        advice: FileAdvice,
+    ) -> Result<(), Errno> {
+        if !self.core.borrow().supports_opcode(opcode::Fadvise::CODE) {
+            return fs::fadvise(
+                fd.as_fd(),
+                offset,
+                std::num::NonZeroU64::new(u64::from(len)),
+                advice,
+            );
+        }
+
+        let fd = fd.as_fd().as_raw_fd();
+        self.submit_and_wait_for_io(
+            opcode::Fadvise::new(Fd(fd), len, advice)
+                .offset(offset)
+                .build(),
+        )
+        .map(|_| ())
+    }
+
+    /// Gives advice about a memory range using io_uring.
+    ///
+    /// # Safety
+    ///
+    /// `addr..addr + len` must satisfy the safety requirements of
+    /// `madvise(2)` for `advice` and remain valid until this call returns.
+    pub unsafe fn madvise(
+        &self,
+        addr: *mut c_void,
+        len: usize,
+        advice: MemoryAdvice,
+    ) -> Result<(), Errno> {
+        let Some(uring_advice) = memory_advice_for_uring(advice) else {
+            return unsafe { mm::madvise(addr, len, advice) };
+        };
+
+        if !self.core.borrow().supports_opcode(opcode::Madvise::CODE) {
+            return unsafe { mm::madvise(addr, len, advice) };
+        }
+
+        let len = u32::try_from(len).expect("io_uring madvise length exceeds u32::MAX");
+        self.submit_and_wait_for_io(
+            opcode::Madvise::new(addr.cast_const(), len, uring_advice).build(),
+        )
+        .map(|_| ())
+    }
+
+    /// Preallocates or deallocates file space using io_uring.
+    pub fn fallocate(
+        &self,
+        fd: &impl AsFd,
+        mode: FallocateFlags,
+        offset: u64,
+        len: u64,
+    ) -> Result<(), Errno> {
+        if !self.core.borrow().supports_opcode(opcode::Fallocate::CODE) {
+            return fs::fallocate(fd.as_fd(), mode, offset, len);
+        }
+
+        let fd = fd.as_fd().as_raw_fd();
+        self.submit_and_wait_for_io(
+            opcode::Fallocate::new(Fd(fd), len)
+                .offset(offset)
+                .mode(mode.bits() as i32)
+                .build(),
+        )
+        .map(|_| ())
+    }
+
+    /// Synchronizes file data and metadata using io_uring.
+    pub fn fsync(&self, fd: &impl AsFd) -> Result<(), Errno> {
+        if !self.core.borrow().supports_opcode(opcode::Fsync::CODE) {
+            return fs::fsync(fd.as_fd());
+        }
+
+        let fd = fd.as_fd().as_raw_fd();
+        self.submit_and_wait_for_io(opcode::Fsync::new(Fd(fd)).build())
+            .map(|_| ())
+    }
+
+    /// Synchronizes a file range using io_uring.
+    pub fn sync_file_range(
+        &self,
+        fd: &impl AsFd,
+        offset: u64,
+        len: u32,
+        flags: u32,
+    ) -> Result<(), Errno> {
+        let fd = fd.as_fd().as_raw_fd();
+        self.submit_and_wait_for_io(
+            opcode::SyncFileRange::new(Fd(fd), len)
+                .offset(offset)
+                .flags(flags)
+                .build(),
+        )
+        .map(|_| ())
+    }
+
     /// Creates a socket.
     ///
     /// Uses io_uring when the kernel reports support for `IORING_OP_SOCKET`,
@@ -383,7 +714,7 @@ impl RuntimeContext<'_> {
         socket_type: SocketType,
         protocol: Option<Protocol>,
     ) -> Result<OwnedFd, Errno> {
-        if !self.core.borrow().supports_socket_opcode() {
+        if !self.core.borrow().supports_opcode(opcode::Socket::CODE) {
             return net::socket(domain, socket_type, protocol);
         }
 
@@ -499,11 +830,34 @@ impl RuntimeContext<'_> {
             .map(|result| result as usize)
     }
 
+    /// Sends a message on a socket using io_uring.
+    pub fn sendmsg(&self, fd: &impl AsFd, msg: &MsgHdr, flags: SendFlags) -> Result<usize, Errno> {
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::SendMsg::new(Fd(fd), msg).flags(flags).build();
+
+        self.submit_and_wait_for_io(entry)
+            .map(|result| result as usize)
+    }
+
     /// Receives bytes from a connected socket using io_uring.
     pub fn recv(&self, fd: &impl AsFd, buf: &mut [u8]) -> Result<usize, Errno> {
         let len = u32::try_from(buf.len()).expect("io_uring recv length exceeds u32::MAX");
         let fd = fd.as_fd().as_raw_fd();
         let entry = opcode::Recv::new(Fd(fd), buf.as_mut_ptr(), len).build();
+
+        self.submit_and_wait_for_io(entry)
+            .map(|result| result as usize)
+    }
+
+    /// Receives a message from a socket using io_uring.
+    pub fn recvmsg(
+        &self,
+        fd: &impl AsFd,
+        msg: &mut MsgHdr,
+        flags: RecvFlags,
+    ) -> Result<usize, Errno> {
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::RecvMsg::new(Fd(fd), msg).flags(flags).build();
 
         self.submit_and_wait_for_io(entry)
             .map(|result| result as usize)
@@ -1281,8 +1635,8 @@ impl Scheduler {
         }
     }
 
-    fn supports_socket_opcode(&self) -> bool {
-        self.probe.is_supported(opcode::Socket::CODE)
+    fn supports_opcode(&self, opcode: IoringOp) -> bool {
+        self.probe.is_supported(opcode)
     }
 
     fn submit_io(&mut self, entry: &Sqe) {
@@ -1560,14 +1914,18 @@ mod allocation_tracking {
 #[cfg(test)]
 mod tests {
     use super::{
-        AddressFamily, IoJoinError, Runtime, RuntimeContext, Shutdown, SocketType, Waitable,
-        allocation_tracking, ipproto, once,
+        AddressFamily, AtFlags, FallocateFlags, FileAdvice, IoJoinError, IoVec, MemoryAdvice, Mode,
+        MsgHdr, OFlags, RecvFlags, RenameFlags, Runtime, RuntimeContext, SendFlags, Shutdown,
+        SocketType, Waitable, allocation_tracking, ipproto, once,
     };
     use rustix::fd::AsFd;
+    use rustix::mm::{MapFlags, ProtFlags};
     use rustix::net;
     use rustix::pipe::pipe;
+    use std::ffi::c_void;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-    use std::time::Duration;
+    use std::ptr;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn send_all(cx: &RuntimeContext<'_>, fd: &impl AsFd, mut bytes: &[u8]) {
         while !bytes.is_empty() {
@@ -1588,6 +1946,17 @@ mod tests {
             }
             output.extend_from_slice(&buffer[..read]);
         }
+    }
+
+    fn unique_temp_dir(name: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "kimojio-stack-{name}-{}-{nanos}",
+            std::process::id()
+        ))
     }
 
     #[test]
@@ -1747,6 +2116,143 @@ mod tests {
             cx.nop().unwrap();
             cx.sleep(Duration::from_millis(1)).unwrap();
         });
+    }
+
+    #[test]
+    fn io_uring_filesystem_and_advisory_operations() {
+        let root = unique_temp_dir("fs");
+        let file = root.join("file");
+        let renamed = root.join("renamed");
+        let hard_link = root.join("hard-link");
+        let symlink = root.join("symlink");
+        let subdir = root.join("subdir");
+        let _ = std::fs::remove_dir_all(&root);
+
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.mkdir(&root, Mode::RWXU).unwrap();
+            let fd = cx
+                .open(
+                    &file,
+                    OFlags::CREATE | OFlags::RDWR | OFlags::TRUNC,
+                    Mode::RUSR | Mode::WUSR,
+                )
+                .unwrap();
+            assert_eq!(cx.write(&fd, b"hello").unwrap(), 5);
+
+            cx.fadvise(&fd, 0, 5, FileAdvice::Normal).unwrap();
+            cx.fallocate(&fd, FallocateFlags::empty(), 0, 4096).unwrap();
+            cx.sync_file_range(&fd, 0, 5, 0).unwrap();
+            cx.fsync(&fd).unwrap();
+            cx.close(fd).unwrap();
+
+            cx.rename(&file, &renamed, RenameFlags::empty()).unwrap();
+            cx.link(&renamed, &hard_link, AtFlags::empty()).unwrap();
+            cx.symlink(&renamed, &symlink).unwrap();
+            cx.unlink(&symlink).unwrap();
+            cx.unlink(&hard_link).unwrap();
+            cx.mkdir(&subdir, Mode::RWXU).unwrap();
+            cx.rmdir(&subdir).unwrap();
+
+            let mapping_len = 4096;
+            let mapping = unsafe {
+                rustix::mm::mmap_anonymous(
+                    ptr::null_mut(),
+                    mapping_len,
+                    ProtFlags::READ | ProtFlags::WRITE,
+                    MapFlags::PRIVATE,
+                )
+                .unwrap()
+            };
+            unsafe {
+                cx.madvise(mapping, mapping_len, MemoryAdvice::Normal)
+                    .unwrap();
+                rustix::mm::munmap(mapping, mapping_len).unwrap();
+            }
+
+            cx.unlink(&renamed).unwrap();
+            cx.rmdir(&root).unwrap();
+        });
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn io_uring_sendmsg_and_recvmsg_between_stackful_tasks() {
+        let mut runtime = Runtime::new();
+
+        let received = runtime.block_on(|cx| {
+            let (left, right) = net::socketpair(
+                AddressFamily::UNIX,
+                SocketType::STREAM,
+                net::SocketFlags::empty(),
+                None,
+            )
+            .unwrap();
+
+            cx.scope(|scope| {
+                let sender = scope.spawn(move |cx| {
+                    let first = b"hello ";
+                    let second = b"msg";
+                    let mut iov = [
+                        IoVec {
+                            iov_base: first.as_ptr().cast::<c_void>().cast_mut(),
+                            iov_len: first.len(),
+                        },
+                        IoVec {
+                            iov_base: second.as_ptr().cast::<c_void>().cast_mut(),
+                            iov_len: second.len(),
+                        },
+                    ];
+                    let msg = MsgHdr {
+                        msg_name: ptr::null_mut(),
+                        msg_namelen: 0,
+                        msg_iov: iov.as_mut_ptr(),
+                        msg_iovlen: iov.len(),
+                        msg_control: ptr::null_mut(),
+                        msg_controllen: 0,
+                        msg_flags: RecvFlags::empty(),
+                    };
+
+                    assert_eq!(cx.sendmsg(&left, &msg, SendFlags::empty()).unwrap(), 9);
+                    cx.close(left).unwrap();
+                });
+
+                let receiver = scope.spawn(move |cx| {
+                    let mut first = [0_u8; 5];
+                    let mut second = [0_u8; 4];
+                    let mut iov = [
+                        IoVec {
+                            iov_base: first.as_mut_ptr().cast::<c_void>(),
+                            iov_len: first.len(),
+                        },
+                        IoVec {
+                            iov_base: second.as_mut_ptr().cast::<c_void>(),
+                            iov_len: second.len(),
+                        },
+                    ];
+                    let mut msg = MsgHdr {
+                        msg_name: ptr::null_mut(),
+                        msg_namelen: 0,
+                        msg_iov: iov.as_mut_ptr(),
+                        msg_iovlen: iov.len(),
+                        msg_control: ptr::null_mut(),
+                        msg_controllen: 0,
+                        msg_flags: RecvFlags::empty(),
+                    };
+
+                    assert_eq!(cx.recvmsg(&right, &mut msg, RecvFlags::empty()).unwrap(), 9);
+                    cx.close(right).unwrap();
+                    [first.as_slice(), second.as_slice()].concat()
+                });
+
+                sender.join(cx).unwrap();
+                receiver.join(cx).unwrap()
+            })
+        });
+
+        assert_eq!(received, b"hello msg");
     }
 
     #[test]
