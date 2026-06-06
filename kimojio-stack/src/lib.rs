@@ -90,6 +90,17 @@
 //! than allowing io_uring to complete into freed memory. Complete pending results
 //! with `get` or `try_get` when buffer reclamation matters.
 //!
+//! [`Runtime::with_registered_resources`] configures io_uring fixed-file and
+//! fixed-buffer tables for lower-overhead I/O. [`RuntimeContext::register_fd`]
+//! returns a [`RegisteredFd`] that owns an [`OwnedFd`] in a fixed-file slot.
+//! [`RuntimeContext::register_buffer`] returns a [`RegisteredBuffer`] whose
+//! backing memory is registered in a fixed-buffer slot. Fixed-resource I/O
+//! records resource leases in the operation state and releases them at CQE
+//! completion, so dropping a registered fd while I/O is pending retires the slot
+//! only after the kernel is done with it. Forgetting a pending async result leaks
+//! the registered handle, which preserves safety by keeping the kernel-visible
+//! fd or buffer alive.
+//!
 //! # Synchronization primitives
 //!
 //! The crate provides stackful, cooperative synchronization primitives in
@@ -151,7 +162,7 @@
 //! stackful call chains, not integration with Rust's `async`/`Future` ecosystem.
 
 use std::any::Any;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::fmt;
@@ -183,7 +194,7 @@ use rustix_uring::{
     Probe,
     cqueue::Entry as Cqe,
     squeue::Entry as Sqe,
-    types::{Fd, Timespec},
+    types::{Fd, Fixed, Timespec},
 };
 
 pub mod barrier;
@@ -243,6 +254,10 @@ pub struct RuntimeConfig {
     pub ring_entries: u32,
     /// Policy controlling how often the scheduler enters the ring.
     pub ring_enter_policy: RingEnterPolicy,
+    /// Number of fixed-file slots to register with io_uring.
+    pub registered_file_slots: u32,
+    /// Number of fixed-buffer slots to register with io_uring.
+    pub registered_buffer_slots: u16,
 }
 
 impl Default for RuntimeConfig {
@@ -251,6 +266,8 @@ impl Default for RuntimeConfig {
             stack_size: DEFAULT_STACK_SIZE,
             ring_entries: DEFAULT_RING_ENTRIES,
             ring_enter_policy: RingEnterPolicy::default(),
+            registered_file_slots: 0,
+            registered_buffer_slots: 0,
         }
     }
 }
@@ -300,6 +317,20 @@ impl Runtime {
     /// Creates a runtime with custom configuration.
     pub fn with_config(config: RuntimeConfig) -> Self {
         Self { config }
+    }
+
+    /// Creates a runtime configured with fixed-file and fixed-buffer slots.
+    pub fn with_registered_resources(
+        registered_file_slots: u32,
+        registered_buffer_slots: u16,
+    ) -> Self {
+        Self {
+            config: RuntimeConfig {
+                registered_file_slots,
+                registered_buffer_slots,
+                ..RuntimeConfig::default()
+            },
+        }
     }
 
     /// Runs `main` to completion on the current OS thread.
@@ -397,6 +428,25 @@ impl RuntimeContext<'_> {
             Ok(_) | Err(Errno::TIME) => Ok(()),
             Err(error) => Err(error),
         }
+    }
+
+    /// Registers `fd` in the runtime's fixed-file table.
+    ///
+    /// The runtime must be configured with at least one registered file slot.
+    pub fn register_fd(&self, fd: OwnedFd) -> Result<RegisteredFd, Errno> {
+        RegisteredFd::new(Rc::downgrade(&self.core), fd)
+    }
+
+    /// Registers an owned buffer in the runtime's fixed-buffer table.
+    ///
+    /// The runtime must be configured with at least one registered buffer slot.
+    pub fn register_buffer<B>(&self, mut buffer: B) -> Result<RegisteredBuffer<B>, Errno>
+    where
+        B: IoReadBuffer + IoWriteBuffer + 'static,
+    {
+        let ptr = buffer.io_buffer_mut_ptr();
+        let len = IoReadBuffer::io_buffer_len(&buffer);
+        RegisteredBuffer::new(Rc::downgrade(&self.core), buffer, ptr, len)
     }
 
     /// Opens `path` relative to the process current working directory using
@@ -784,6 +834,59 @@ impl RuntimeContext<'_> {
             .map(|result| result as usize)
     }
 
+    /// Reads from a registered fixed fd into `buf`.
+    pub fn read_registered_fd(&self, fd: &RegisteredFd, buf: &mut [u8]) -> Result<usize, Errno> {
+        let len = u32::try_from(buf.len()).expect("io_uring read length exceeds u32::MAX");
+        let state = self.acquire_io_state();
+        self.submit_io_state(
+            opcode::Read::new(Fixed(fd.slot()), buf.as_mut_ptr(), len)
+                .offset(u64::MAX)
+                .build(),
+            Rc::clone(&state),
+        );
+        let result = self.wait_for_io_state(&state);
+        self.recycle_io_state(state);
+        result.map(|result| result as usize)
+    }
+    /// Reads from `fd` into a registered fixed buffer.
+    pub fn read_registered_buffer<B>(
+        &self,
+        fd: &impl AsFd,
+        buffer: &mut RegisteredBuffer<B>,
+    ) -> Result<usize, Errno> {
+        let len = u32::try_from(buffer.len()).expect("io_uring read length exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let state = self.acquire_io_state();
+        self.submit_io_state(
+            opcode::ReadFixed::new(Fd(fd), buffer.mut_ptr(), len, buffer.slot())
+                .offset(u64::MAX)
+                .build(),
+            Rc::clone(&state),
+        );
+        let result = self.wait_for_io_state(&state);
+        self.recycle_io_state(state);
+        result.map(|result| result as usize)
+    }
+
+    /// Reads from a registered fixed fd into a registered fixed buffer.
+    pub fn read_registered_fixed<B>(
+        &self,
+        fd: &RegisteredFd,
+        buffer: &mut RegisteredBuffer<B>,
+    ) -> Result<usize, Errno> {
+        let len = u32::try_from(buffer.len()).expect("io_uring read length exceeds u32::MAX");
+        let state = self.acquire_io_state();
+        self.submit_io_state(
+            opcode::ReadFixed::new(Fixed(fd.slot()), buffer.mut_ptr(), len, buffer.slot())
+                .offset(u64::MAX)
+                .build(),
+            Rc::clone(&state),
+        );
+        let result = self.wait_for_io_state(&state);
+        self.recycle_io_state(state);
+        result.map(|result| result as usize)
+    }
+
     /// Starts a read into an owned buffer using io_uring.
     ///
     /// The returned [`IoResult`] owns `buffer` until completion, so it is safe to
@@ -804,6 +907,79 @@ impl RuntimeContext<'_> {
         IoResult::new(Rc::downgrade(&self.core), state, buffer, read_output::<B>)
     }
 
+    /// Starts a read from a registered fixed fd into an owned buffer.
+    pub fn read_registered_fd_async<B>(
+        &self,
+        fd: &RegisteredFd,
+        mut buffer: B,
+    ) -> IoResult<ReadOutput<B>, B>
+    where
+        B: IoReadBuffer,
+    {
+        let len =
+            u32::try_from(buffer.io_buffer_len()).expect("io_uring read length exceeds u32::MAX");
+        let state = self.acquire_io_state();
+        state.attach_registered_resource(fd.resource());
+
+        self.submit_io_state(
+            opcode::Read::new(Fixed(fd.slot()), buffer.io_buffer_mut_ptr(), len)
+                .offset(u64::MAX)
+                .build(),
+            Rc::clone(&state),
+        );
+        IoResult::new(Rc::downgrade(&self.core), state, buffer, read_output::<B>)
+    }
+
+    /// Starts a read from `fd` into a registered fixed buffer.
+    pub fn read_registered_buffer_async<B: 'static>(
+        &self,
+        fd: &impl AsFd,
+        buffer: RegisteredBuffer<B>,
+    ) -> IoResult<ReadOutput<RegisteredBuffer<B>>, RegisteredBuffer<B>> {
+        let len = u32::try_from(buffer.len()).expect("io_uring read length exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let state = self.acquire_io_state();
+        state.attach_registered_resource(buffer.resource());
+
+        self.submit_io_state(
+            opcode::ReadFixed::new(Fd(fd), buffer.mut_ptr(), len, buffer.slot())
+                .offset(u64::MAX)
+                .build(),
+            Rc::clone(&state),
+        );
+        IoResult::new(
+            Rc::downgrade(&self.core),
+            state,
+            buffer,
+            read_output::<RegisteredBuffer<B>>,
+        )
+    }
+
+    /// Starts a read from a registered fixed fd into a registered fixed buffer.
+    pub fn read_registered_fixed_async<B: 'static>(
+        &self,
+        fd: &RegisteredFd,
+        buffer: RegisteredBuffer<B>,
+    ) -> IoResult<ReadOutput<RegisteredBuffer<B>>, RegisteredBuffer<B>> {
+        let len = u32::try_from(buffer.len()).expect("io_uring read length exceeds u32::MAX");
+        let state = self.acquire_io_state();
+        state.attach_registered_resource(fd.resource());
+        state.attach_registered_resource(buffer.resource());
+
+        self.submit_io_state(
+            opcode::ReadFixed::new(Fixed(fd.slot()), buffer.mut_ptr(), len, buffer.slot())
+                .offset(u64::MAX)
+                .build(),
+            Rc::clone(&state),
+        );
+        IoResult::new(
+            Rc::downgrade(&self.core),
+            state,
+            buffer,
+            read_output::<RegisteredBuffer<B>>,
+        )
+    }
+
     /// Writes `buf` to `fd` using io_uring.
     ///
     /// This blocks only the current stackful coroutine. Pass a borrowed fd to
@@ -818,6 +994,59 @@ impl RuntimeContext<'_> {
 
         self.submit_and_wait_for_io(entry)
             .map(|result| result as usize)
+    }
+
+    /// Writes `buf` to a registered fixed fd.
+    pub fn write_registered_fd(&self, fd: &RegisteredFd, buf: &[u8]) -> Result<usize, Errno> {
+        let len = u32::try_from(buf.len()).expect("io_uring write length exceeds u32::MAX");
+        let state = self.acquire_io_state();
+        self.submit_io_state(
+            opcode::Write::new(Fixed(fd.slot()), buf.as_ptr(), len)
+                .offset(u64::MAX)
+                .build(),
+            Rc::clone(&state),
+        );
+        let result = self.wait_for_io_state(&state);
+        self.recycle_io_state(state);
+        result.map(|result| result as usize)
+    }
+    /// Writes from a registered fixed buffer to `fd`.
+    pub fn write_registered_buffer<B>(
+        &self,
+        fd: &impl AsFd,
+        buffer: &RegisteredBuffer<B>,
+    ) -> Result<usize, Errno> {
+        let len = u32::try_from(buffer.len()).expect("io_uring write length exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let state = self.acquire_io_state();
+        self.submit_io_state(
+            opcode::WriteFixed::new(Fd(fd), buffer.ptr(), len, buffer.slot())
+                .offset(u64::MAX)
+                .build(),
+            Rc::clone(&state),
+        );
+        let result = self.wait_for_io_state(&state);
+        self.recycle_io_state(state);
+        result.map(|result| result as usize)
+    }
+
+    /// Writes from a registered fixed buffer to a registered fixed fd.
+    pub fn write_registered_fixed<B>(
+        &self,
+        fd: &RegisteredFd,
+        buffer: &RegisteredBuffer<B>,
+    ) -> Result<usize, Errno> {
+        let len = u32::try_from(buffer.len()).expect("io_uring write length exceeds u32::MAX");
+        let state = self.acquire_io_state();
+        self.submit_io_state(
+            opcode::WriteFixed::new(Fixed(fd.slot()), buffer.ptr(), len, buffer.slot())
+                .offset(u64::MAX)
+                .build(),
+            Rc::clone(&state),
+        );
+        let result = self.wait_for_io_state(&state);
+        self.recycle_io_state(state);
+        result.map(|result| result as usize)
     }
 
     /// Sends bytes on a connected socket using io_uring.
@@ -881,6 +1110,79 @@ impl RuntimeContext<'_> {
 
         self.submit_io_state(entry, Rc::clone(&state));
         IoResult::new(Rc::downgrade(&self.core), state, buffer, write_output::<B>)
+    }
+
+    /// Starts a write from an owned buffer to a registered fixed fd.
+    pub fn write_registered_fd_async<B>(
+        &self,
+        fd: &RegisteredFd,
+        buffer: B,
+    ) -> IoResult<WriteOutput<B>, B>
+    where
+        B: IoWriteBuffer,
+    {
+        let len =
+            u32::try_from(buffer.io_buffer_len()).expect("io_uring write length exceeds u32::MAX");
+        let state = self.acquire_io_state();
+        state.attach_registered_resource(fd.resource());
+
+        self.submit_io_state(
+            opcode::Write::new(Fixed(fd.slot()), buffer.io_buffer_ptr(), len)
+                .offset(u64::MAX)
+                .build(),
+            Rc::clone(&state),
+        );
+        IoResult::new(Rc::downgrade(&self.core), state, buffer, write_output::<B>)
+    }
+
+    /// Starts a write from a registered fixed buffer to `fd`.
+    pub fn write_registered_buffer_async<B: 'static>(
+        &self,
+        fd: &impl AsFd,
+        buffer: RegisteredBuffer<B>,
+    ) -> IoResult<WriteOutput<RegisteredBuffer<B>>, RegisteredBuffer<B>> {
+        let len = u32::try_from(buffer.len()).expect("io_uring write length exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let state = self.acquire_io_state();
+        state.attach_registered_resource(buffer.resource());
+
+        self.submit_io_state(
+            opcode::WriteFixed::new(Fd(fd), buffer.ptr(), len, buffer.slot())
+                .offset(u64::MAX)
+                .build(),
+            Rc::clone(&state),
+        );
+        IoResult::new(
+            Rc::downgrade(&self.core),
+            state,
+            buffer,
+            write_output::<RegisteredBuffer<B>>,
+        )
+    }
+
+    /// Starts a write from a registered fixed buffer to a registered fixed fd.
+    pub fn write_registered_fixed_async<B: 'static>(
+        &self,
+        fd: &RegisteredFd,
+        buffer: RegisteredBuffer<B>,
+    ) -> IoResult<WriteOutput<RegisteredBuffer<B>>, RegisteredBuffer<B>> {
+        let len = u32::try_from(buffer.len()).expect("io_uring write length exceeds u32::MAX");
+        let state = self.acquire_io_state();
+        state.attach_registered_resource(fd.resource());
+        state.attach_registered_resource(buffer.resource());
+
+        self.submit_io_state(
+            opcode::WriteFixed::new(Fixed(fd.slot()), buffer.ptr(), len, buffer.slot())
+                .offset(u64::MAX)
+                .build(),
+            Rc::clone(&state),
+        );
+        IoResult::new(
+            Rc::downgrade(&self.core),
+            state,
+            buffer,
+            write_output::<RegisteredBuffer<B>>,
+        )
     }
 
     /// Closes `fd` using io_uring.
@@ -1252,6 +1554,297 @@ pub struct WriteOutput<B = Vec<u8>> {
     pub buffer: B,
 }
 
+/// A file descriptor registered in the runtime's fixed-file table.
+pub struct RegisteredFd {
+    state: Rc<RegisteredFdState>,
+}
+
+impl RegisteredFd {
+    fn new(core: Weak<RefCell<Scheduler>>, fd: OwnedFd) -> Result<Self, Errno> {
+        let core = core.upgrade().expect("runtime scheduler dropped");
+        let slot = core.borrow_mut().register_fixed_fd(&fd)?;
+        let state = Rc::new(RegisteredFdState {
+            core: Rc::downgrade(&core),
+            slot,
+            fd: RefCell::new(Some(fd)),
+            in_flight: Cell::new(0),
+            retired: Cell::new(false),
+            active: Cell::new(true),
+        });
+
+        Ok(Self { state })
+    }
+
+    fn slot(&self) -> u32 {
+        self.state.slot
+    }
+
+    fn resource(&self) -> Rc<dyn RegisteredResource> {
+        self.state.clone()
+    }
+}
+
+impl Drop for RegisteredFd {
+    fn drop(&mut self) {
+        self.state.retire();
+    }
+}
+
+impl fmt::Debug for RegisteredFd {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RegisteredFd")
+            .field("slot", &self.state.slot)
+            .field("in_flight", &self.state.in_flight.get())
+            .finish()
+    }
+}
+
+/// An owned buffer registered in the runtime's fixed-buffer table.
+pub struct RegisteredBuffer<B> {
+    state: Rc<RegisteredBufferState<B>>,
+}
+
+impl<B> RegisteredBuffer<B> {
+    fn new(
+        core: Weak<RefCell<Scheduler>>,
+        buffer: B,
+        ptr: *mut u8,
+        len: usize,
+    ) -> Result<Self, Errno> {
+        let core = core.upgrade().expect("runtime scheduler dropped");
+        let slot = core.borrow_mut().register_fixed_buffer(ptr, len)?;
+        let state = Rc::new(RegisteredBufferState {
+            core: Rc::downgrade(&core),
+            slot,
+            buffer: UnsafeCell::new(buffer),
+            ptr,
+            len,
+            in_flight: Cell::new(0),
+            retired: Cell::new(false),
+            active: Cell::new(true),
+        });
+
+        Ok(Self { state })
+    }
+
+    fn slot(&self) -> u16 {
+        self.state.slot
+    }
+
+    fn ptr(&self) -> *const u8 {
+        self.state.ptr.cast_const()
+    }
+
+    fn mut_ptr(&self) -> *mut u8 {
+        self.state.ptr
+    }
+
+    fn len(&self) -> usize {
+        self.state.len
+    }
+
+    /// Returns the registered buffer.
+    pub fn buffer(&self) -> &B {
+        assert_eq!(
+            self.state.in_flight.get(),
+            0,
+            "registered buffer is in use by io_uring"
+        );
+        unsafe { &*self.state.buffer.get() }
+    }
+
+    /// Returns the registered buffer mutably.
+    pub fn buffer_mut(&mut self) -> &mut B {
+        assert_eq!(
+            self.state.in_flight.get(),
+            0,
+            "registered buffer is in use by io_uring"
+        );
+        unsafe { &mut *self.state.buffer.get() }
+    }
+}
+
+impl<B: 'static> RegisteredBuffer<B> {
+    fn resource(&self) -> Rc<dyn RegisteredResource> {
+        self.state.clone()
+    }
+}
+
+impl<B> Drop for RegisteredBuffer<B> {
+    fn drop(&mut self) {
+        self.state.retire();
+    }
+}
+
+impl<B> fmt::Debug for RegisteredBuffer<B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RegisteredBuffer")
+            .field("slot", &self.state.slot)
+            .field("len", &self.state.len)
+            .field("in_flight", &self.state.in_flight.get())
+            .finish()
+    }
+}
+
+unsafe impl<B> IoReadBuffer for RegisteredBuffer<B> {
+    fn io_buffer_mut_ptr(&mut self) -> *mut u8 {
+        self.mut_ptr()
+    }
+
+    fn io_buffer_len(&self) -> usize {
+        self.len()
+    }
+}
+
+unsafe impl<B> IoWriteBuffer for RegisteredBuffer<B> {
+    fn io_buffer_ptr(&self) -> *const u8 {
+        self.ptr()
+    }
+
+    fn io_buffer_len(&self) -> usize {
+        self.len()
+    }
+}
+
+trait RegisteredResource {
+    fn start_io(&self);
+    fn complete_io(&self);
+}
+
+struct RegisteredFdState {
+    core: Weak<RefCell<Scheduler>>,
+    slot: u32,
+    fd: RefCell<Option<OwnedFd>>,
+    in_flight: Cell<usize>,
+    retired: Cell<bool>,
+    active: Cell<bool>,
+}
+
+impl RegisteredFdState {
+    fn retire(&self) {
+        self.retired.set(true);
+        self.maybe_cleanup();
+    }
+
+    fn maybe_cleanup(&self) {
+        if !self.active.get() || !self.retired.get() || self.in_flight.get() != 0 {
+            return;
+        }
+
+        self.active.set(false);
+        if let Some(core) = self.core.upgrade() {
+            core.borrow_mut().unregister_fixed_fd(self.slot);
+        }
+        self.fd.borrow_mut().take();
+    }
+}
+
+impl RegisteredResource for RegisteredFdState {
+    fn start_io(&self) {
+        assert!(self.active.get(), "registered fd slot is inactive");
+        assert!(!self.retired.get(), "registered fd is retired");
+        self.in_flight.set(self.in_flight.get() + 1);
+    }
+
+    fn complete_io(&self) {
+        self.in_flight.set(
+            self.in_flight
+                .get()
+                .checked_sub(1)
+                .expect("registered fd in-flight underflow"),
+        );
+        self.maybe_cleanup();
+    }
+}
+
+struct RegisteredBufferState<B> {
+    core: Weak<RefCell<Scheduler>>,
+    slot: u16,
+    buffer: UnsafeCell<B>,
+    ptr: *mut u8,
+    len: usize,
+    in_flight: Cell<usize>,
+    retired: Cell<bool>,
+    active: Cell<bool>,
+}
+
+impl<B> RegisteredBufferState<B> {
+    fn retire(&self) {
+        self.retired.set(true);
+        self.maybe_cleanup();
+    }
+
+    fn maybe_cleanup(&self) {
+        if !self.active.get() || !self.retired.get() || self.in_flight.get() != 0 {
+            return;
+        }
+
+        self.active.set(false);
+        if let Some(core) = self.core.upgrade() {
+            core.borrow_mut().unregister_fixed_buffer(self.slot);
+        }
+    }
+}
+
+impl<B> RegisteredResource for RegisteredBufferState<B> {
+    fn start_io(&self) {
+        assert!(self.active.get(), "registered buffer slot is inactive");
+        assert!(!self.retired.get(), "registered buffer is retired");
+        self.in_flight.set(self.in_flight.get() + 1);
+    }
+
+    fn complete_io(&self) {
+        self.in_flight.set(
+            self.in_flight
+                .get()
+                .checked_sub(1)
+                .expect("registered buffer in-flight underflow"),
+        );
+        self.maybe_cleanup();
+    }
+}
+
+struct RegisteredResources {
+    first: Option<Rc<dyn RegisteredResource>>,
+    second: Option<Rc<dyn RegisteredResource>>,
+}
+
+impl RegisteredResources {
+    fn new() -> Self {
+        Self {
+            first: None,
+            second: None,
+        }
+    }
+
+    fn push(&mut self, resource: Rc<dyn RegisteredResource>) {
+        resource.start_io();
+        if self.first.is_none() {
+            self.first = Some(resource);
+        } else {
+            assert!(
+                self.second.is_none(),
+                "too many registered resources on one IO"
+            );
+            self.second = Some(resource);
+        }
+    }
+
+    fn complete_all(&mut self) {
+        if let Some(resource) = self.first.take() {
+            resource.complete_io();
+        }
+        if let Some(resource) = self.second.take() {
+            resource.complete_io();
+        }
+    }
+
+    fn clear(&mut self) {
+        self.first = None;
+        self.second = None;
+    }
+}
+
 /// A pending io_uring operation.
 #[must_use = "pending IO should be completed with get, try_get, or RuntimeContext::join"]
 pub struct IoResult<T, B = Vec<u8>> {
@@ -1424,6 +2017,7 @@ pub(crate) struct IoState {
     result: RefCell<Option<KernelIoResult>>,
     waiters: RefCell<Waiters>,
     timeout: RefCell<Option<Timespec>>,
+    registered_resources: RefCell<RegisteredResources>,
 }
 
 impl IoState {
@@ -1432,6 +2026,7 @@ impl IoState {
             result: RefCell::new(None),
             waiters: RefCell::new(Waiters::default()),
             timeout: RefCell::new(None),
+            registered_resources: RefCell::new(RegisteredResources::new()),
         }
     }
 
@@ -1439,10 +2034,12 @@ impl IoState {
         *self.result.borrow_mut() = None;
         self.waiters.borrow_mut().clear();
         *self.timeout.borrow_mut() = None;
+        self.registered_resources.borrow_mut().clear();
     }
 
     fn complete(&self, result: KernelIoResult) {
         *self.result.borrow_mut() = Some(result);
+        self.registered_resources.borrow_mut().complete_all();
         self.waiters.borrow_mut().wake_all();
     }
 
@@ -1462,6 +2059,10 @@ impl IoState {
 
     fn set_timeout(&self, timeout: Timespec) {
         *self.timeout.borrow_mut() = Some(timeout);
+    }
+
+    fn attach_registered_resource(&self, resource: Rc<dyn RegisteredResource>) {
+        self.registered_resources.borrow_mut().push(resource);
     }
 }
 
@@ -1555,6 +2156,8 @@ struct Scheduler {
     ready: VecDeque<TaskId>,
     ring: IoUring,
     probe: Probe,
+    registered_file_free: Vec<u32>,
+    registered_buffer_free: Vec<u16>,
     io_state_pool: Vec<Rc<IoState>>,
     completed_io: Vec<CompletedIo>,
     in_flight_io: usize,
@@ -1566,6 +2169,16 @@ impl Scheduler {
         let ring = IoUring::new(config.ring_entries).expect("failed to create io_uring");
         let mut probe = Probe::new();
         let _ = ring.submitter().register_probe(&mut probe);
+        if config.registered_file_slots != 0 {
+            ring.submitter()
+                .register_files_sparse(config.registered_file_slots)
+                .expect("failed to register io_uring fixed-file table");
+        }
+        if config.registered_buffer_slots != 0 {
+            ring.submitter()
+                .register_buffers_sparse(u32::from(config.registered_buffer_slots))
+                .expect("failed to register io_uring fixed-buffer table");
+        }
 
         Self {
             tasks: Vec::new(),
@@ -1573,6 +2186,8 @@ impl Scheduler {
             ready: VecDeque::new(),
             ring,
             probe,
+            registered_file_free: (0..config.registered_file_slots).rev().collect(),
+            registered_buffer_free: (0..config.registered_buffer_slots).rev().collect(),
             io_state_pool: Vec::with_capacity(config.ring_entries as usize),
             completed_io: Vec::with_capacity(config.ring_entries as usize),
             in_flight_io: 0,
@@ -1637,6 +2252,56 @@ impl Scheduler {
 
     fn supports_opcode(&self, opcode: IoringOp) -> bool {
         self.probe.is_supported(opcode)
+    }
+
+    fn register_fixed_fd(&mut self, fd: &OwnedFd) -> Result<u32, Errno> {
+        let slot = self.registered_file_free.pop().ok_or(Errno::NOBUFS)?;
+        let raw_fd = fd.as_fd().as_raw_fd();
+        match self.ring.submitter().register_files_update(slot, &[raw_fd]) {
+            Ok(()) => Ok(slot),
+            Err(error) => {
+                self.registered_file_free.push(slot);
+                Err(error)
+            }
+        }
+    }
+
+    fn unregister_fixed_fd(&mut self, slot: u32) {
+        let _ = self.ring.submitter().register_files_update(slot, &[-1]);
+        self.registered_file_free.push(slot);
+    }
+
+    fn register_fixed_buffer(&mut self, ptr: *mut u8, len: usize) -> Result<u16, Errno> {
+        let slot = self.registered_buffer_free.pop().ok_or(Errno::NOBUFS)?;
+        let iovec = IoVec {
+            iov_base: ptr.cast(),
+            iov_len: len,
+        };
+        let update = unsafe {
+            self.ring
+                .submitter()
+                .register_buffers_update(u32::from(slot), &[iovec], None)
+        };
+        match update {
+            Ok(()) => Ok(slot),
+            Err(error) => {
+                self.registered_buffer_free.push(slot);
+                Err(error)
+            }
+        }
+    }
+
+    fn unregister_fixed_buffer(&mut self, slot: u16) {
+        let iovec = IoVec {
+            iov_base: std::ptr::null_mut(),
+            iov_len: 0,
+        };
+        let _ = unsafe {
+            self.ring
+                .submitter()
+                .register_buffers_update(u32::from(slot), &[iovec], None)
+        };
+        self.registered_buffer_free.push(slot);
     }
 
     fn submit_io(&mut self, entry: &Sqe) {
@@ -1784,6 +2449,7 @@ fn recycle_io_state(core: &Weak<RefCell<Scheduler>>, state: Rc<IoState>) {
 mod allocation_tracking {
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
+    use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     thread_local! {
@@ -1796,6 +2462,7 @@ mod allocation_tracking {
     static DEALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
     static REALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
     static REALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+    static MEASUREMENT_LOCK: StdMutex<()> = StdMutex::new(());
 
     pub struct CountingAllocator;
 
@@ -1820,6 +2487,8 @@ mod allocation_tracking {
     }
 
     pub fn measure<T>(f: impl FnOnce() -> T) -> (T, AllocationCounts) {
+        let _measurement = MEASUREMENT_LOCK.lock().unwrap();
+
         ACTIVE.with(|active| {
             assert!(!active.get(), "nested allocation measurement");
         });
@@ -2106,6 +2775,124 @@ mod tests {
         });
 
         assert_eq!(output, (ROUNDS as usize) * 2);
+    }
+
+    #[test]
+    fn registered_fd_pipe_read_write() {
+        let mut runtime = Runtime::with_registered_resources(2, 0);
+
+        let output = runtime.block_on(|cx| {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = cx.register_fd(read_fd).unwrap();
+            let write_fd = cx.register_fd(write_fd).unwrap();
+            let mut buffer = [0_u8; 1];
+
+            assert_eq!(cx.write_registered_fd(&write_fd, &[42]).unwrap(), 1);
+            assert_eq!(cx.read_registered_fd(&read_fd, &mut buffer).unwrap(), 1);
+            buffer[0]
+        });
+
+        assert_eq!(output, 42);
+    }
+
+    #[test]
+    fn registered_buffer_pipe_read_write() {
+        let mut runtime = Runtime::with_registered_resources(0, 2);
+
+        let output = runtime.block_on(|cx| {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let write_buffer = cx.register_buffer(vec![7_u8]).unwrap();
+            let mut read_buffer = cx.register_buffer(vec![0_u8]).unwrap();
+
+            assert_eq!(
+                cx.write_registered_buffer(&write_fd, &write_buffer)
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                cx.read_registered_buffer(&read_fd, &mut read_buffer)
+                    .unwrap(),
+                1
+            );
+            cx.close(read_fd).unwrap();
+            cx.close(write_fd).unwrap();
+
+            read_buffer.buffer()[0]
+        });
+
+        assert_eq!(output, 7);
+    }
+
+    #[test]
+    fn registered_fd_and_buffer_pipe_read_write() {
+        let mut runtime = Runtime::with_registered_resources(2, 2);
+
+        let output = runtime.block_on(|cx| {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = cx.register_fd(read_fd).unwrap();
+            let write_fd = cx.register_fd(write_fd).unwrap();
+            let write_buffer = cx.register_buffer(vec![9_u8]).unwrap();
+            let mut read_buffer = cx.register_buffer(vec![0_u8]).unwrap();
+
+            assert_eq!(
+                cx.write_registered_fixed(&write_fd, &write_buffer).unwrap(),
+                1
+            );
+            assert_eq!(
+                cx.read_registered_fixed(&read_fd, &mut read_buffer)
+                    .unwrap(),
+                1
+            );
+
+            read_buffer.buffer()[0]
+        });
+
+        assert_eq!(output, 9);
+    }
+
+    #[test]
+    fn registered_fixed_async_io_returns_buffers() {
+        let mut runtime = Runtime::with_registered_resources(2, 2);
+
+        let output = runtime.block_on(|cx| {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = cx.register_fd(read_fd).unwrap();
+            let write_fd = cx.register_fd(write_fd).unwrap();
+            let read_buffer = cx.register_buffer(vec![0_u8]).unwrap();
+            let write_buffer = cx.register_buffer(vec![11_u8]).unwrap();
+
+            let read = cx.read_registered_fixed_async(&read_fd, read_buffer);
+            let write = cx.write_registered_fixed_async(&write_fd, write_buffer);
+            let pending: [&dyn Waitable; 2] = [&read, &write];
+            cx.join(&pending, Some(Duration::from_secs(1))).unwrap();
+
+            let read = read.get(cx).unwrap();
+            let write = write.get(cx).unwrap();
+
+            assert_eq!(write.bytes, 1);
+            assert_eq!(read.bytes, 1);
+            read.buffer.buffer()[0]
+        });
+
+        assert_eq!(output, 11);
+    }
+
+    #[test]
+    fn registered_resource_slots_are_reused_after_drop() {
+        let mut runtime = Runtime::with_registered_resources(1, 1);
+
+        runtime.block_on(|cx| {
+            let (first_read, first_write) = pipe().unwrap();
+            drop(cx.register_fd(first_read).unwrap());
+            cx.close(first_write).unwrap();
+
+            let (second_read, second_write) = pipe().unwrap();
+            drop(cx.register_fd(second_read).unwrap());
+            cx.close(second_write).unwrap();
+
+            drop(cx.register_buffer(vec![1_u8]).unwrap());
+            drop(cx.register_buffer(vec![2_u8]).unwrap());
+        });
     }
 
     #[test]
