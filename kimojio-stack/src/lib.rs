@@ -21,8 +21,11 @@
 //! caller's stack, but the scope waits for all children before returning, so a
 //! stackful coroutine cannot outlive the stack frame it borrowed from. Each
 //! coroutine has a small guarded stack allocated by `corosensei`, so stack
-//! overflows trap instead of corrupting adjacent memory. [`JoinHandle::join`]
-//! retrieves the coroutine return value and propagates panics as [`JoinError`].
+//! overflows trap instead of corrupting adjacent memory. [`Scope::spawn_with_stack_size`]
+//! overrides the inherited default stack size for one coroutine. [`RuntimeContext::stack_usage`]
+//! and [`JoinHandle::join_with_stack_usage`] expose current and final stack usage
+//! so applications can tune stack sizes. [`JoinHandle::join`] retrieves the
+//! coroutine return value and propagates panics as [`JoinError`].
 //!
 //! The scheduler is deliberately flat. A coroutine that blocks on a join, scope,
 //! channel receive, or I/O operation records a [`Waiter`] and suspends with
@@ -169,6 +172,7 @@ use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::fmt;
+use std::io;
 use std::marker::PhantomData;
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::os::fd::FromRawFd;
@@ -178,7 +182,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
 use std::time::Duration;
 
-use corosensei::stack::DefaultStack;
+use corosensei::stack::{DefaultStack, MIN_STACK_SIZE, Stack as CoroStack};
 use corosensei::{Coroutine, CoroutineResult, Yielder};
 pub use rustix::event::epoll::{
     Event as EpollEvent, EventData as EpollEventData, EventFlags as EpollEventFlags,
@@ -196,7 +200,6 @@ pub use rustix::io_uring::{
     FutexWaitFlags, FutexWaitvFlags, MsgHdr, SpliceFlags as UringSpliceFlags, iovec as IoVec,
 };
 use rustix::io_uring::{IoringOp, io_uring_user_data};
-use rustix::mm;
 pub use rustix::mm::Advice as MemoryAdvice;
 use rustix::net::{self, addr::SocketAddrArg};
 pub use rustix::net::{
@@ -204,6 +207,7 @@ pub use rustix::net::{
 };
 use rustix::path;
 pub use rustix::pipe::SpliceFlags;
+use rustix::{mm, param};
 pub use rustix_uring::Errno;
 use rustix_uring::opcode;
 use rustix_uring::{
@@ -244,6 +248,66 @@ type PanicPayload = Box<dyn Any + Send + 'static>;
 type KernelIoResult = Result<u32, Errno>;
 type IoUring = rustix_uring::IoUring<Sqe, Cqe>;
 
+fn effective_stack_size(stack_size: usize) -> usize {
+    let page_size = param::page_size();
+    stack_size
+        .max(MIN_STACK_SIZE)
+        .checked_add(page_size - 1)
+        .expect("stack size overflow")
+        & !(page_size - 1)
+}
+
+/// Stack usage information for one stackful coroutine.
+///
+/// `used` is a byte-level estimate from the current stack pointer. `high_water`
+/// is a conservative page-granular resident-stack estimate plus the largest
+/// current usage observed while taking the measurement. It may count a whole
+/// page after only part of that page was used, which is useful when tuning stack
+/// sizes because stacks are mapped and protected at page granularity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StackUsage {
+    size: usize,
+    used: usize,
+    high_water: usize,
+}
+
+impl StackUsage {
+    fn new(size: usize, used: usize, high_water: usize) -> Self {
+        debug_assert!(used <= size);
+        debug_assert!(high_water <= size);
+        Self {
+            size,
+            used,
+            high_water: high_water.max(used),
+        }
+    }
+
+    /// Returns usable stack bytes for this coroutine.
+    pub fn size(self) -> usize {
+        self.size
+    }
+
+    /// Returns the currently used stack bytes.
+    pub fn used(self) -> usize {
+        self.used
+    }
+
+    /// Returns currently unused stack bytes.
+    pub fn remaining(self) -> usize {
+        self.size - self.used
+    }
+
+    /// Returns the observed high-water stack usage.
+    pub fn high_water(self) -> usize {
+        self.high_water
+    }
+
+    /// Returns stack bytes not reached by the observed high-water mark.
+    pub fn high_water_remaining(self) -> usize {
+        self.size - self.high_water
+    }
+}
+
 /// Captured stack information for live stackful coroutines.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct StackDump {
@@ -267,22 +331,26 @@ impl StackDump {
 pub struct TaskStackDump {
     task_id: usize,
     state: TaskStackState,
+    stack_usage: StackUsage,
     backtrace: Option<String>,
 }
 
 impl TaskStackDump {
-    fn not_started(task_id: TaskId) -> Self {
+    fn not_started(task_id: TaskId, stack: StackTracker) -> Self {
         Self {
             task_id,
             state: TaskStackState::NotStarted,
+            stack_usage: stack.usage_without_current(),
             backtrace: None,
         }
     }
 
     fn suspended(interrupt: TaskInterrupt) -> Self {
+        let stack_usage = interrupt.stack_usage();
         Self {
             task_id: interrupt.task_id(),
             state: TaskStackState::Suspended,
+            stack_usage,
             backtrace: Some(std::backtrace::Backtrace::force_capture().to_string()),
         }
     }
@@ -295,6 +363,11 @@ impl TaskStackDump {
     /// Returns the observed coroutine state.
     pub fn state(&self) -> TaskStackState {
         self.state
+    }
+
+    /// Returns stack usage observed for this coroutine.
+    pub fn stack_usage(&self) -> StackUsage {
+        self.stack_usage
     }
 
     /// Returns the captured backtrace, if this task had started and was suspended.
@@ -438,7 +511,7 @@ impl Runtime {
         let core = Rc::new(RefCell::new(Scheduler::new(self.config)));
         let cx = RuntimeContext {
             core: Rc::clone(&core),
-            stack_size: self.config.stack_size,
+            stack_size: effective_stack_size(self.config.stack_size),
             current: CurrentTask::Root,
         };
         let output = main(&cx);
@@ -497,14 +570,34 @@ impl RuntimeContext<'_> {
         }
     }
 
+    /// Returns the default usable stack size inherited by new scopes.
+    ///
+    /// Root contexts report the runtime default. Stackful coroutine contexts
+    /// report that coroutine's configured stack size, which nested scopes inherit
+    /// unless a spawn overrides it with [`Scope::spawn_with_stack_size`].
+    pub fn stack_size(&self) -> usize {
+        self.stack_size
+    }
+
+    /// Returns stack usage for the current stackful coroutine.
+    ///
+    /// The root context runs on the caller's OS thread stack, not on a guarded
+    /// runtime stack, so it returns `None`.
+    pub fn stack_usage(&self) -> Option<StackUsage> {
+        match self.current {
+            CurrentTask::Root => None,
+            CurrentTask::Coroutine { stack, .. } => Some(stack.usage()),
+        }
+    }
+
     /// Cooperatively yields the current stackful coroutine.
     pub fn yield_now(&self) {
         match self.current {
             CurrentTask::Root => {
                 drive_scheduler(&self.core);
             }
-            CurrentTask::Coroutine { id, yielder } => {
-                suspend_task(id, yielder, Suspend::Ready);
+            CurrentTask::Coroutine { id, yielder, stack } => {
+                suspend_task(id, yielder, stack, Suspend::Ready);
             }
         }
     }
@@ -1747,8 +1840,8 @@ impl RuntimeContext<'_> {
                     "kimojio-stack runtime deadlocked: no runnable stackful coroutines"
                 );
             }
-            CurrentTask::Coroutine { id, yielder } => {
-                suspend_task(id, yielder, Suspend::Parked);
+            CurrentTask::Coroutine { id, yielder, stack } => {
+                suspend_task(id, yielder, stack, Suspend::Parked);
             }
         }
     }
@@ -1790,6 +1883,7 @@ enum CurrentTask<'cx> {
     Coroutine {
         id: TaskId,
         yielder: &'cx Yielder<ResumeAction, Suspend>,
+        stack: StackTracker,
     },
 }
 
@@ -1813,15 +1907,28 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
         F: FnOnce(&RuntimeContext<'_>) -> T + 'scope,
         T: 'scope,
     {
+        self.spawn_with_stack_size(self.stack_size, f)
+    }
+
+    /// Spawns a stackful coroutine with a custom usable stack size.
+    ///
+    /// The stack allocator may round the requested size up to the next page and
+    /// adds a guard page that is not included in [`StackUsage::size`].
+    pub fn spawn_with_stack_size<F, T>(&self, stack_size: usize, f: F) -> JoinHandle<'scope, T>
+    where
+        F: FnOnce(&RuntimeContext<'_>) -> T + 'scope,
+        T: 'scope,
+    {
+        let stack_size = effective_stack_size(stack_size);
         let id = self.core.borrow_mut().reserve_task();
         let state = Rc::clone(&self.state);
         let task_state = Rc::clone(&state);
         let join = Rc::new(JoinState::new());
         let task_join = Rc::clone(&join);
         let core = Rc::clone(&self.core);
-        let stack_size = self.stack_size;
-        let stack = DefaultStack::new(self.stack_size)
-            .expect("failed to allocate stackful coroutine stack");
+        let stack =
+            DefaultStack::new(stack_size).expect("failed to allocate stackful coroutine stack");
+        let stack_tracker = StackTracker::new(&stack);
 
         let coroutine: Coroutine<ResumeAction, Suspend, ()> = unsafe {
             // SAFETY: spawned closures and their return slots are bounded by the
@@ -1832,21 +1939,34 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                 let cx = RuntimeContext {
                     core: Rc::clone(&core),
                     stack_size,
-                    current: CurrentTask::Coroutine { id, yielder },
+                    current: CurrentTask::Coroutine {
+                        id,
+                        yielder,
+                        stack: stack_tracker,
+                    },
                 };
 
                 let result = panic::catch_unwind(AssertUnwindSafe(|| {
-                    handle_resume_action(id, yielder, Suspend::Ready, action);
+                    handle_resume_action(id, yielder, stack_tracker, Suspend::Ready, action);
                     f(&cx)
                 }))
                 .map_err(JoinError::from_payload);
-                task_join.complete(result);
+                let stack_usage = cx
+                    .stack_usage()
+                    .expect("stackful coroutine missing stack usage");
+                task_join.complete(result, stack_usage);
                 task_state.task_finished();
             })
         };
 
         state.remaining.set(state.remaining.get() + 1);
-        self.core.borrow_mut().insert_task(id, Task { coroutine });
+        self.core.borrow_mut().insert_task(
+            id,
+            Task {
+                coroutine,
+                stack: stack_tracker,
+            },
+        );
 
         JoinHandle {
             state: join,
@@ -1872,17 +1992,46 @@ pub struct JoinHandle<'scope, T> {
 impl<T> JoinHandle<'_, T> {
     /// Returns the completed stackful coroutine result if it is ready.
     pub fn try_join(&self) -> Option<Result<T, JoinError>> {
+        self.try_join_with_stack_usage().map(|(result, _)| result)
+    }
+
+    /// Returns final stack usage if the coroutine has completed.
+    pub fn stack_usage(&self) -> Option<StackUsage> {
+        self.state.stack_usage()
+    }
+
+    /// Returns the completed coroutine result and final stack usage if ready.
+    pub fn try_join_with_stack_usage(&self) -> Option<(Result<T, JoinError>, StackUsage)> {
         assert!(!self.taken.get(), "JoinHandle value already taken");
 
         let result = self.state.take_result()?;
+        let stack_usage = self
+            .state
+            .stack_usage()
+            .expect("completed JoinHandle missing stack usage");
         self.taken.set(true);
-        Some(result)
+        Some((result, stack_usage))
     }
 
     /// Waits for the stackful coroutine to finish and returns its result.
     pub fn join(self, cx: &RuntimeContext<'_>) -> Result<T, JoinError> {
         loop {
             if let Some(result) = self.try_join() {
+                return result;
+            }
+
+            self.state.add_waiter_from(cx);
+            cx.park();
+        }
+    }
+
+    /// Waits for the coroutine to finish and returns its result plus final stack usage.
+    pub fn join_with_stack_usage(
+        self,
+        cx: &RuntimeContext<'_>,
+    ) -> (Result<T, JoinError>, StackUsage) {
+        loop {
+            if let Some(result) = self.try_join_with_stack_usage() {
                 return result;
             }
 
@@ -2459,6 +2608,7 @@ fn write_output<B>(buffer: B, bytes: u32) -> WriteOutput<B> {
 
 struct JoinState<T> {
     result: RefCell<Option<Result<T, JoinError>>>,
+    stack_usage: Cell<Option<StackUsage>>,
     waiters: RefCell<Waiters>,
 }
 
@@ -2466,11 +2616,13 @@ impl<T> JoinState<T> {
     fn new() -> Self {
         Self {
             result: RefCell::new(None),
+            stack_usage: Cell::new(None),
             waiters: RefCell::new(Waiters::default()),
         }
     }
 
-    fn complete(&self, result: Result<T, JoinError>) {
+    fn complete(&self, result: Result<T, JoinError>, stack_usage: StackUsage) {
+        self.stack_usage.set(Some(stack_usage));
         *self.result.borrow_mut() = Some(result);
         self.waiters.borrow_mut().wake_all();
     }
@@ -2483,6 +2635,10 @@ impl<T> JoinState<T> {
 
     pub(crate) fn is_ready(&self) -> bool {
         self.result.borrow().is_some()
+    }
+
+    fn stack_usage(&self) -> Option<StackUsage> {
+        self.stack_usage.get()
     }
 
     fn take_result(&self) -> Option<Result<T, JoinError>> {
@@ -2949,6 +3105,7 @@ enum Suspend {
 
 struct Task {
     coroutine: Coroutine<ResumeAction, Suspend, ()>,
+    stack: StackTracker,
 }
 
 enum ResumeAction {
@@ -2961,15 +3118,105 @@ type TaskInterruptFn = Box<dyn FnOnce(TaskInterrupt)>;
 #[derive(Clone, Copy)]
 struct TaskInterrupt {
     task_id: TaskId,
+    stack: StackTracker,
 }
 
 impl TaskInterrupt {
-    fn new(task_id: TaskId) -> Self {
-        Self { task_id }
+    fn new(task_id: TaskId, stack: StackTracker) -> Self {
+        Self { task_id, stack }
     }
 
     fn task_id(self) -> usize {
         self.task_id
+    }
+
+    fn stack_usage(self) -> StackUsage {
+        self.stack.usage()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct StackTracker {
+    usable_low: usize,
+    base: usize,
+    size: usize,
+}
+
+impl StackTracker {
+    fn new(stack: &DefaultStack) -> Self {
+        let limit = stack.limit().get();
+        let base = stack.base().get();
+        let usable_low = limit
+            .checked_add(param::page_size())
+            .expect("stack lower bound overflow");
+        assert!(usable_low < base, "stack must contain writable pages");
+
+        Self {
+            usable_low,
+            base,
+            size: base - usable_low,
+        }
+    }
+
+    fn usage(self) -> StackUsage {
+        let marker = 0_u8;
+        self.usage_at((&marker as *const u8).addr())
+    }
+
+    fn usage_without_current(self) -> StackUsage {
+        StackUsage::new(self.size, 0, self.resident_high_water())
+    }
+
+    fn usage_at(self, stack_addr: usize) -> StackUsage {
+        let used = if stack_addr <= self.usable_low {
+            self.size
+        } else {
+            self.base.saturating_sub(stack_addr)
+        };
+
+        StackUsage::new(self.size, used, self.resident_high_water())
+    }
+
+    fn resident_high_water(self) -> usize {
+        let page_size = param::page_size();
+        debug_assert_eq!(self.usable_low % page_size, 0);
+        debug_assert_eq!(self.size % page_size, 0);
+
+        let page_count = self.size / page_size;
+        const INLINE_RESIDENCY_PAGES: usize = 256;
+
+        if page_count <= INLINE_RESIDENCY_PAGES {
+            let mut residency = [0_u8; INLINE_RESIDENCY_PAGES];
+            self.fill_residency(&mut residency[..page_count]);
+            return self.high_water_from_residency(&residency[..page_count], page_size);
+        }
+
+        let mut residency = vec![0_u8; page_count];
+        self.fill_residency(&mut residency);
+        self.high_water_from_residency(&residency, page_size)
+    }
+
+    fn fill_residency(self, residency: &mut [u8]) {
+        let result = unsafe {
+            libc::mincore(
+                self.usable_low as *mut c_void,
+                self.size,
+                residency.as_mut_ptr().cast(),
+            )
+        };
+        assert_eq!(
+            result,
+            0,
+            "failed to inspect stack residency with mincore: {}",
+            io::Error::last_os_error()
+        );
+    }
+
+    fn high_water_from_residency(self, residency: &[u8], page_size: usize) -> usize {
+        residency
+            .iter()
+            .position(|byte| byte & 1 != 0)
+            .map_or(0, |first_resident| self.size - first_resident * page_size)
     }
 }
 
@@ -3074,7 +3321,7 @@ impl Scheduler {
             if let Some(task) = &self.tasks[id]
                 && !task.coroutine.started()
             {
-                dump.tasks.push(TaskStackDump::not_started(id));
+                dump.tasks.push(TaskStackDump::not_started(id, task.stack));
             }
         }
 
@@ -3405,14 +3652,20 @@ fn run_one(core: &Rc<RefCell<Scheduler>>) -> bool {
     true
 }
 
-fn suspend_task(id: TaskId, yielder: &Yielder<ResumeAction, Suspend>, suspend: Suspend) {
+fn suspend_task(
+    id: TaskId,
+    yielder: &Yielder<ResumeAction, Suspend>,
+    stack: StackTracker,
+    suspend: Suspend,
+) {
     let action = yielder.suspend(suspend);
-    handle_resume_action(id, yielder, suspend, action);
+    handle_resume_action(id, yielder, stack, suspend, action);
 }
 
 fn handle_resume_action(
     id: TaskId,
     yielder: &Yielder<ResumeAction, Suspend>,
+    stack: StackTracker,
     suspend: Suspend,
     mut action: ResumeAction,
 ) {
@@ -3420,7 +3673,7 @@ fn handle_resume_action(
         match action {
             ResumeAction::Run => return,
             ResumeAction::Interrupt(interrupt) => {
-                interrupt(TaskInterrupt::new(id));
+                interrupt(TaskInterrupt::new(id, stack));
                 action = yielder.suspend(suspend);
             }
         }
@@ -3604,11 +3857,11 @@ mod allocation_tracking {
 #[cfg(test)]
 mod tests {
     use super::{
-        AddressFamily, AtFlags, EpollCtlOp, EpollEvent, EpollEventData, EpollEventFlags,
-        FallocateFlags, FileAdvice, FutexWaitFlags, IoJoinError, IoVec, MemoryAdvice, Mode, MsgHdr,
-        OFlags, RecvFlags, RenameFlags, ResolveFlags, Runtime, RuntimeContext, SendFlags, Shutdown,
-        SocketType, StatxFlags, TaskStackState, UringSpliceFlags, Waitable, allocation_tracking,
-        ipproto, once,
+        AddressFamily, AtFlags, DEFAULT_STACK_SIZE, EpollCtlOp, EpollEvent, EpollEventData,
+        EpollEventFlags, FallocateFlags, FileAdvice, FutexWaitFlags, IoJoinError, IoVec,
+        MemoryAdvice, Mode, MsgHdr, OFlags, RecvFlags, RenameFlags, ResolveFlags, Runtime,
+        RuntimeContext, SendFlags, Shutdown, SocketType, StatxFlags, TaskStackState,
+        UringSpliceFlags, Waitable, allocation_tracking, ipproto, once,
     };
     use rustix::event::{PollFlags, epoll};
     use rustix::fd::AsFd;
@@ -3798,6 +4051,106 @@ mod tests {
     }
 
     #[test]
+    fn root_context_reports_default_stack_size_without_stack_usage() {
+        let mut runtime = Runtime::with_stack_size(96 * 1024);
+
+        runtime.block_on(|cx| {
+            assert_eq!(cx.stack_size(), 96 * 1024);
+            assert_eq!(cx.stack_usage(), None);
+        });
+    }
+
+    #[test]
+    fn spawn_with_stack_size_overrides_inherited_default() {
+        let mut runtime = Runtime::with_stack_size(64 * 1024);
+
+        let output = runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let default = scope.spawn(|cx| {
+                    let usage = cx.stack_usage().expect("stackful task missing usage");
+                    assert_eq!(cx.stack_size(), 64 * 1024);
+                    usage.size()
+                });
+                let custom = scope.spawn_with_stack_size(96 * 1024, |cx| {
+                    let usage = cx.stack_usage().expect("stackful task missing usage");
+                    assert_eq!(cx.stack_size(), 96 * 1024);
+                    usage.size()
+                });
+
+                (default.join(cx).unwrap(), custom.join(cx).unwrap())
+            })
+        });
+
+        assert_eq!(output, (64 * 1024, 96 * 1024));
+    }
+
+    #[test]
+    fn join_with_stack_usage_reports_final_high_water() {
+        let mut runtime = Runtime::new();
+
+        let final_usage = runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let worker = scope.spawn_with_stack_size(128 * 1024, |cx| {
+                    let before = cx.stack_usage().expect("stackful task missing usage");
+                    assert_eq!(before.size(), 128 * 1024);
+                    assert!(before.used() != 0);
+
+                    stack_usage_touch::<{ 12 * 1024 }>();
+
+                    let after = cx.stack_usage().expect("stackful task missing usage");
+                    assert_eq!(after.size(), 128 * 1024);
+                    assert!(after.high_water() >= 12 * 1024, "{after:?}");
+                    assert!(after.high_water() >= after.used(), "{after:?}");
+                    7
+                });
+
+                let (result, usage) = worker.join_with_stack_usage(cx);
+                assert_eq!(result.unwrap(), 7);
+                usage
+            })
+        });
+
+        assert_eq!(final_usage.size(), 128 * 1024);
+        assert!(final_usage.high_water() >= 12 * 1024, "{final_usage:?}");
+        assert!(final_usage.high_water_remaining() < final_usage.size());
+    }
+
+    #[test]
+    fn completed_handle_exposes_stack_usage_before_result_is_taken() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let worker = scope.spawn(|cx| {
+                    stack_usage_touch::<4096>();
+                    cx.stack_usage()
+                        .expect("stackful task missing usage")
+                        .size()
+                });
+
+                cx.yield_now();
+                let usage = worker
+                    .stack_usage()
+                    .expect("completed task missing stack usage");
+                let (result, usage_from_join) = worker
+                    .try_join_with_stack_usage()
+                    .expect("worker should have completed");
+
+                assert_eq!(result.unwrap(), DEFAULT_STACK_SIZE);
+                assert_eq!(usage, usage_from_join);
+                assert!(usage.high_water() >= 4096, "{usage:?}");
+            });
+        });
+    }
+
+    #[inline(never)]
+    fn stack_usage_touch<const N: usize>() {
+        let mut buffer = [0_u8; N];
+        buffer.fill(0x5a);
+        std::hint::black_box(&mut buffer);
+    }
+
+    #[test]
     fn yield_now_reschedules_task() {
         let mut runtime = Runtime::new();
 
@@ -3828,6 +4181,8 @@ mod tests {
                 assert_eq!(dump.tasks().len(), 1);
                 let task = &dump.tasks()[0];
                 assert_eq!(task.state(), TaskStackState::NotStarted);
+                assert_eq!(task.stack_usage().size(), DEFAULT_STACK_SIZE);
+                assert_eq!(task.stack_usage().used(), 0);
                 assert_eq!(task.backtrace(), None);
                 assert_eq!(handle.join(cx).unwrap(), 42);
             });
@@ -3851,6 +4206,8 @@ mod tests {
                 assert_eq!(dump.tasks().len(), 1);
                 let task = &dump.tasks()[0];
                 assert_eq!(task.state(), TaskStackState::Suspended);
+                assert_eq!(task.stack_usage().size(), DEFAULT_STACK_SIZE);
+                assert!(task.stack_usage().used() != 0);
                 let backtrace = task.backtrace().expect("missing suspended task backtrace");
                 assert!(!backtrace.trim().is_empty());
                 assert_eq!(handle.join(cx).unwrap(), 42);

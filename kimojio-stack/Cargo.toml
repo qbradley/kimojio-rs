@@ -11,7 +11,8 @@ description = "Stackful coroutine runtime with structured concurrency"
 [dependencies]
 corosensei.workspace = true
 crossbeam-queue.workspace = true
-rustix = { workspace = true, features = ["event", "fs", "mm", "net", "pipe"] }
+libc.workspace = true
+rustix = { workspace = true, features = ["event", "fs", "mm", "net", "param", "pipe"] }
 rustix-uring.workspace = true
 
 [dev-dependencies]

@@ -881,6 +881,7 @@ dependencies = [
  "corosensei",
  "criterion",
  "crossbeam-queue",
+ "libc",
  "rustix",
  "rustix-uring",
  "tokio",
