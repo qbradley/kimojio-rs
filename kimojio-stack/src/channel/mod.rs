@@ -1,11 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Bounded and unbounded channels for stackful coroutines.
+//! Bounded and unbounded channels for stackful coroutines, plus cross-thread
+//! channels for stackful runtime, OS-thread, and Tokio-compatible interop.
 
 use std::fmt;
 
 pub mod bounded;
+pub mod cross_thread;
 pub mod unbounded;
 
 pub use bounded::channel as bounded;

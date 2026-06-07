@@ -114,7 +114,8 @@
 //! - [`barrier`] provides [`Barrier`].
 //! - [`rwlock`] provides [`RwLock`] with read and write guards.
 //! - [`channel`] provides bounded and unbounded multi-producer/multi-consumer
-//!   channels.
+//!   channels, including [`channel::cross_thread`] endpoints for crossing
+//!   runtime, OS-thread, and Tokio-compatible task boundaries.
 //! - [`once`] provides a single-send channel.
 //!
 //! These primitives never block the OS thread. When a stackful coroutine cannot
@@ -160,7 +161,8 @@
 //!
 //! The runtime is currently single-threaded and Linux/io_uring oriented. It is
 //! intended for code that wants explicit control over cooperative scheduling and
-//! stackful call chains, not integration with Rust's `async`/`Future` ecosystem.
+//! stackful call chains. Tokio-compatible integration is intentionally limited to
+//! explicit interop surfaces such as [`channel::cross_thread`].
 
 use std::any::Any;
 use std::cell::{Cell, RefCell, UnsafeCell};
@@ -172,7 +174,8 @@ use std::mem::{ManuallyDrop, MaybeUninit};
 use std::os::fd::FromRawFd;
 use std::panic::{self, AssertUnwindSafe};
 use std::rc::{Rc, Weak};
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Condvar, Mutex as StdMutex};
 use std::time::Duration;
 
 use corosensei::stack::DefaultStack;
@@ -180,6 +183,7 @@ use corosensei::{Coroutine, CoroutineResult, Yielder};
 pub use rustix::event::epoll::{
     Event as EpollEvent, EventData as EpollEventData, EventFlags as EpollEventFlags,
 };
+use rustix::event::{EventfdFlags, PollFlags, eventfd};
 pub use rustix::fd::OwnedFd;
 use rustix::fd::{AsFd, AsRawFd};
 use rustix::fs;
@@ -187,6 +191,7 @@ pub use rustix::fs::{
     Advice as FileAdvice, AtFlags, FallocateFlags, Mode, OFlags, RenameFlags, ResolveFlags, Statx,
     StatxFlags,
 };
+use rustix::io as rustix_io;
 pub use rustix::io_uring::{
     FutexWaitFlags, FutexWaitvFlags, MsgHdr, SpliceFlags as UringSpliceFlags, iovec as IoVec,
 };
@@ -1691,11 +1696,7 @@ impl RuntimeContext<'_> {
     }
 
     fn submit_io_state(&self, entry: impl Into<Sqe>, state: Rc<IoState>) -> io_uring_user_data {
-        let user_data =
-            io_uring_user_data::from_ptr(Rc::into_raw(Rc::clone(&state)) as *mut c_void);
-        let entry = entry.into().user_data(user_data);
-        self.core.borrow_mut().submit_io(&entry);
-        user_data
+        self.core.borrow_mut().submit_io_state(entry, state)
     }
 
     pub(crate) fn submit_timeout(&self, duration: Duration) -> TimeoutState {
@@ -1759,6 +1760,20 @@ impl RuntimeContext<'_> {
                 core: Rc::downgrade(&self.core),
                 task_id: id,
             }),
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "phase 1 infrastructure consumed by cross-thread channel phases"
+    )]
+    pub(crate) fn external_waiter(&self) -> Option<ExternalWaiter> {
+        match self.current {
+            CurrentTask::Root => None,
+            CurrentTask::Coroutine { id, .. } => {
+                let external_wake = self.core.borrow().external_wake();
+                Some(ExternalWaiter::new(&external_wake, id))
+            }
         }
     }
 }
@@ -2696,6 +2711,197 @@ impl Waiter {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "phase 1 infrastructure consumed by cross-thread channel phases"
+)]
+#[derive(Clone)]
+pub(crate) struct ExternalWaiter {
+    registration: Arc<ExternalWaiterRegistration>,
+}
+
+#[allow(
+    dead_code,
+    reason = "phase 1 infrastructure consumed by cross-thread channel phases"
+)]
+impl ExternalWaiter {
+    fn new(external_wake: &Arc<ExternalWake>, task_id: TaskId) -> Self {
+        external_wake.register_waiter();
+        Self {
+            registration: Arc::new(ExternalWaiterRegistration {
+                external_wake: Arc::downgrade(external_wake),
+                task_id,
+                active: AtomicBool::new(true),
+            }),
+        }
+    }
+
+    pub(crate) fn wake(self) {
+        self.registration.wake();
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "phase 1 infrastructure consumed by cross-thread channel phases"
+)]
+struct ExternalWaiterRegistration {
+    external_wake: std::sync::Weak<ExternalWake>,
+    task_id: TaskId,
+    active: AtomicBool,
+}
+
+impl ExternalWaiterRegistration {
+    fn wake(&self) {
+        if !self.active.swap(false, Ordering::AcqRel) {
+            return;
+        }
+
+        if let Some(external_wake) = self.external_wake.upgrade() {
+            external_wake.wake_task(self.task_id);
+        }
+    }
+}
+
+impl Drop for ExternalWaiterRegistration {
+    fn drop(&mut self) {
+        if !self.active.swap(false, Ordering::AcqRel) {
+            return;
+        }
+
+        if let Some(external_wake) = self.external_wake.upgrade() {
+            external_wake.unregister_waiter();
+        }
+    }
+}
+
+struct ExternalWake {
+    inner: StdMutex<ExternalWakeInner>,
+    wake_fd: OwnedFd,
+    ready: Condvar,
+}
+
+impl ExternalWake {
+    fn new() -> Self {
+        Self {
+            inner: StdMutex::new(ExternalWakeInner::default()),
+            wake_fd: eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK)
+                .expect("failed to create external wake eventfd"),
+            ready: Condvar::new(),
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "phase 1 infrastructure consumed by cross-thread channel phases"
+    )]
+    fn register_waiter(&self) {
+        let mut inner = self.inner();
+        inner.waiters += 1;
+    }
+
+    #[allow(
+        dead_code,
+        reason = "phase 1 infrastructure consumed by cross-thread channel phases"
+    )]
+    fn unregister_waiter(&self) {
+        let mut inner = self.inner();
+        inner.waiters = inner
+            .waiters
+            .checked_sub(1)
+            .expect("external waiter count underflow");
+        drop(inner);
+        self.signal();
+    }
+
+    #[allow(
+        dead_code,
+        reason = "phase 1 infrastructure consumed by cross-thread channel phases"
+    )]
+    fn wake_task(&self, task_id: TaskId) {
+        let mut inner = self.inner();
+        inner.waiters = inner
+            .waiters
+            .checked_sub(1)
+            .expect("external waiter count underflow");
+        inner.ready.push_back(task_id);
+        drop(inner);
+        self.signal();
+    }
+
+    fn take_ready(&self) -> VecDeque<TaskId> {
+        let mut inner = self.inner();
+        std::mem::take(&mut inner.ready)
+    }
+
+    fn has_waiters_or_ready(&self) -> bool {
+        let inner = self.inner();
+        inner.waiters != 0 || !inner.ready.is_empty()
+    }
+
+    fn wake_fd(&self) -> &OwnedFd {
+        &self.wake_fd
+    }
+
+    fn drain_signal(&self) {
+        let mut buffer = [0_u8; 8];
+        loop {
+            match rustix_io::read(&self.wake_fd, &mut buffer) {
+                Ok(8) => {}
+                Ok(bytes) => panic!("short read from external wake eventfd: {bytes} bytes"),
+                Err(rustix_io::Errno::AGAIN) => return,
+                Err(rustix_io::Errno::INTR) => {}
+                Err(error) => panic!("error reading external wake eventfd: {error:?}"),
+            }
+        }
+    }
+
+    fn signal(&self) {
+        let buffer = 1_u64.to_ne_bytes();
+        loop {
+            match rustix_io::write(&self.wake_fd, &buffer) {
+                Ok(8) => break,
+                Ok(bytes) => panic!("short write to external wake eventfd: {bytes} bytes"),
+                Err(rustix_io::Errno::AGAIN) => break,
+                Err(rustix_io::Errno::INTR) => {}
+                Err(error) => panic!("error writing external wake eventfd: {error:?}"),
+            }
+        }
+
+        self.ready.notify_one();
+    }
+
+    fn wait_for_ready(&self, timeout: Option<Duration>) {
+        let inner = self.inner();
+        match timeout {
+            Some(timeout) => {
+                let _guard = self
+                    .ready
+                    .wait_timeout_while(inner, timeout, |inner| {
+                        inner.ready.is_empty() && inner.waiters != 0
+                    })
+                    .expect("external wake mutex poisoned");
+            }
+            None => {
+                let _guard = self
+                    .ready
+                    .wait_while(inner, |inner| inner.ready.is_empty() && inner.waiters != 0)
+                    .expect("external wake mutex poisoned");
+            }
+        }
+    }
+
+    fn inner(&self) -> std::sync::MutexGuard<'_, ExternalWakeInner> {
+        self.inner.lock().expect("external wake mutex poisoned")
+    }
+}
+
+#[derive(Default)]
+struct ExternalWakeInner {
+    ready: VecDeque<TaskId>,
+    waiters: usize,
+}
+
 #[derive(Default)]
 pub(crate) struct Waiters {
     first: Option<Waiter>,
@@ -2779,6 +2985,8 @@ struct Scheduler {
     completed_io: Vec<CompletedIo>,
     in_flight_io: usize,
     ring_enter_policy: RingEnterPolicy,
+    external_wake: Arc<ExternalWake>,
+    external_wake_io: Option<Rc<IoState>>,
 }
 
 impl Scheduler {
@@ -2811,6 +3019,8 @@ impl Scheduler {
             completed_io: Vec::with_capacity(config.ring_entries as usize),
             in_flight_io: 0,
             ring_enter_policy: config.ring_enter_policy,
+            external_wake: Arc::new(ExternalWake::new()),
+            external_wake_io: None,
         }
     }
 
@@ -2827,10 +3037,13 @@ impl Scheduler {
         self.schedule(id);
     }
 
-    fn schedule(&mut self, id: TaskId) {
+    fn schedule(&mut self, id: TaskId) -> bool {
         if self.tasks.get(id).and_then(Option::as_ref).is_some() && !self.queued[id] {
             self.queued[id] = true;
             self.ready.push_back(id);
+            true
+        } else {
+            false
         }
     }
 
@@ -2924,6 +3137,76 @@ impl Scheduler {
 
     fn supports_opcode(&self, opcode: IoringOp) -> bool {
         self.probe.is_supported(opcode)
+    }
+
+    fn submit_io_state(&mut self, entry: impl Into<Sqe>, state: Rc<IoState>) -> io_uring_user_data {
+        let user_data =
+            io_uring_user_data::from_ptr(Rc::into_raw(Rc::clone(&state)) as *mut c_void);
+        let entry = entry.into().user_data(user_data);
+        self.submit_io(&entry);
+        user_data
+    }
+
+    fn external_wake(&self) -> Arc<ExternalWake> {
+        Arc::clone(&self.external_wake)
+    }
+
+    fn has_external_waiters_or_ready(&self) -> bool {
+        self.external_wake.has_waiters_or_ready()
+    }
+
+    fn drain_external_ready(&mut self) -> bool {
+        let ready = self.external_wake.take_ready();
+        let mut scheduled = false;
+        for id in ready {
+            scheduled |= self.schedule(id);
+        }
+        scheduled
+    }
+
+    fn prepare_external_wake(&mut self) -> bool {
+        let finished_wake_io = self.finish_external_wake_io();
+        let scheduled = self.drain_external_ready();
+        finished_wake_io || scheduled
+    }
+
+    fn arm_external_wake_io(&mut self) -> bool {
+        if self.external_wake_io.is_some()
+            || !self.external_wake.has_waiters_or_ready()
+            || !self.supports_opcode(opcode::PollAdd::CODE)
+        {
+            return false;
+        }
+
+        self.external_wake.drain_signal();
+        if self.drain_external_ready() {
+            return true;
+        }
+
+        let state = self.acquire_io_state();
+        let fd = self.external_wake.wake_fd().as_fd().as_raw_fd();
+        let entry = opcode::PollAdd::new(Fd(fd), u32::from(PollFlags::IN.bits())).build();
+        self.submit_io_state(entry, Rc::clone(&state));
+        self.external_wake_io = Some(state);
+        false
+    }
+
+    fn finish_external_wake_io(&mut self) -> bool {
+        let Some(state) = self.external_wake_io.as_ref() else {
+            return false;
+        };
+        if !state.is_ready() {
+            return false;
+        }
+
+        let state = self
+            .external_wake_io
+            .take()
+            .expect("external wake io state missing");
+        let _ = state.take_result();
+        self.external_wake.drain_signal();
+        self.recycle_io_state(state);
+        true
     }
 
     fn register_fixed_fd(&mut self, fd: &OwnedFd) -> Result<u32, Errno> {
@@ -3034,6 +3317,11 @@ struct CompletedIo {
 }
 
 fn drive_scheduler(core: &Rc<RefCell<Scheduler>>) -> bool {
+    {
+        let mut scheduler = core.borrow_mut();
+        scheduler.prepare_external_wake();
+    }
+
     let (ready_len, ring_enter_policy) = {
         let scheduler = core.borrow();
         (scheduler.ready_len(), scheduler.ring_enter_policy)
@@ -3050,10 +3338,49 @@ fn drive_scheduler(core: &Rc<RefCell<Scheduler>>) -> bool {
 
     let should_wait_for_io = core.borrow().in_flight_io != 0;
     if should_wait_for_io {
-        run_completed_io(core, true);
-        true
+        if core.borrow().has_external_waiters_or_ready() {
+            if run_completed_io(core, false) {
+                let mut scheduler = core.borrow_mut();
+                scheduler.finish_external_wake_io();
+                scheduler.drain_external_ready();
+                return true;
+            }
+
+            {
+                let mut scheduler = core.borrow_mut();
+                if scheduler.prepare_external_wake() {
+                    return true;
+                }
+                if scheduler.arm_external_wake_io() {
+                    return true;
+                }
+            }
+            run_completed_io(core, true);
+            let scheduled = {
+                let mut scheduler = core.borrow_mut();
+                scheduler.finish_external_wake_io();
+                scheduler.drain_external_ready()
+            };
+            let completed = run_completed_io(core, false);
+            scheduled || completed || core.borrow().in_flight_io != 0
+        } else {
+            run_completed_io(core, true);
+            true
+        }
     } else {
-        run_completed_io(core, false)
+        if run_completed_io(core, false) {
+            return true;
+        }
+
+        let external_wake = core.borrow().external_wake();
+        if external_wake.has_waiters_or_ready() {
+            external_wake.wait_for_ready(None);
+            let mut scheduler = core.borrow_mut();
+            scheduler.finish_external_wake_io();
+            scheduler.drain_external_ready()
+        } else {
+            false
+        }
     }
 }
 
@@ -3292,6 +3619,8 @@ mod tests {
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::ptr;
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::mpsc;
+    use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn send_all(cx: &RuntimeContext<'_>, fd: &impl AsFd, mut bytes: &[u8]) {
@@ -3344,6 +3673,89 @@ mod tests {
 
         assert!(counts.allocating_operations() != 0);
         assert!(counts.allocated_or_reallocated_bytes() != 0);
+    }
+
+    #[test]
+    fn external_waiter_wakes_parked_stackful_task_from_os_thread() {
+        let (waiter_tx, waiter_rx) = mpsc::channel::<super::ExternalWaiter>();
+        let waker = thread::spawn(move || {
+            let waiter = waiter_rx.recv().unwrap();
+            waiter.wake();
+        });
+        let mut runtime = Runtime::new();
+
+        let output = runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let worker = scope.spawn(|cx| {
+                    let waiter = cx
+                        .external_waiter()
+                        .expect("stackful coroutine should have an external waiter");
+                    assert!(waiter_tx.send(waiter).is_ok());
+                    cx.park();
+                    42
+                });
+
+                worker.join(cx).unwrap()
+            })
+        });
+
+        waker.join().unwrap();
+        assert_eq!(output, 42);
+    }
+
+    #[test]
+    fn external_wake_delivered_before_park_is_observed() {
+        let mut runtime = Runtime::new();
+
+        let output = runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let worker = scope.spawn(|cx| {
+                    let waiter = cx
+                        .external_waiter()
+                        .expect("stackful coroutine should have an external waiter");
+                    waiter.wake();
+                    cx.park();
+                    7
+                });
+
+                worker.join(cx).unwrap()
+            })
+        });
+
+        assert_eq!(output, 7);
+    }
+
+    #[test]
+    fn external_waiter_wakes_stackful_task_while_root_waits_in_io_uring() {
+        let (waiter_tx, waiter_rx) = mpsc::channel::<super::ExternalWaiter>();
+        let waker = thread::spawn(move || {
+            let waiter = waiter_rx.recv().unwrap();
+            waiter.wake();
+        });
+        let mut runtime = Runtime::new();
+
+        let output = runtime.block_on(|cx| {
+            let timeout = cx.timeout(Duration::from_secs(60));
+
+            let output = cx.scope(|scope| {
+                let worker = scope.spawn(|cx| {
+                    let waiter = cx
+                        .external_waiter()
+                        .expect("stackful coroutine should have an external waiter");
+                    assert!(waiter_tx.send(waiter).is_ok());
+                    cx.park();
+                    99
+                });
+
+                worker.join(cx).unwrap()
+            });
+
+            timeout.cancel(cx).unwrap();
+            output
+        });
+
+        waker.join().unwrap();
+        assert_eq!(output, 99);
     }
 
     #[test]

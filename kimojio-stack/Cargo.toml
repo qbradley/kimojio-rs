@@ -10,11 +10,13 @@ description = "Stackful coroutine runtime with structured concurrency"
 
 [dependencies]
 corosensei.workspace = true
+crossbeam-queue.workspace = true
 rustix = { workspace = true, features = ["event", "fs", "mm", "net", "pipe"] }
 rustix-uring.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+tokio.workspace = true
 
 [[bench]]
 name = "runtime_baseline"

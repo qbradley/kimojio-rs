@@ -2,12 +2,15 @@
 // Licensed under the MIT License.
 
 use std::hint::black_box;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use kimojio_stack::channel::{bounded, unbounded};
+use kimojio_stack::channel::{bounded, cross_thread, unbounded};
 use kimojio_stack::{Mutex, Runtime, RuntimeContext, Semaphore};
 use rustix::pipe::pipe;
+use tokio::runtime::Builder as TokioRuntimeBuilder;
 
 fn run_stackful(f: impl FnOnce(&RuntimeContext<'_>) -> Duration) -> Duration {
     let mut runtime = Runtime::new();
@@ -180,6 +183,139 @@ fn bench_sync(c: &mut Criterion) {
                     responder.join(cx).unwrap();
                     elapsed
                 })
+            })
+        });
+    });
+}
+
+fn bench_cross_thread_channel(c: &mut Criterion) {
+    c.bench_function("cross_thread/thread_ready_send_recv", |b| {
+        b.iter_custom(|iters| {
+            let (tx, rx) = cross_thread::thread(1);
+            tx.try_send(0).unwrap();
+            black_box(rx.try_recv().unwrap());
+
+            let start = Instant::now();
+            for i in 0..iters {
+                tx.try_send(i).unwrap();
+                black_box(rx.try_recv().unwrap());
+            }
+            start.elapsed()
+        });
+    });
+
+    c.bench_function("cross_thread/thread_ping_pong", |b| {
+        b.iter_custom(|iters| {
+            let (ping_tx, ping_rx) = cross_thread::thread(1);
+            let (pong_tx, pong_rx) = cross_thread::thread(1);
+            let (ready_tx, ready_rx) = mpsc::channel();
+
+            let responder = thread::spawn(move || {
+                ready_tx.send(()).unwrap();
+                for _ in 0..iters {
+                    let value = ping_rx.recv_blocking().unwrap();
+                    pong_tx.send_blocking(value).unwrap();
+                }
+            });
+
+            ready_rx.recv().unwrap();
+            let start = Instant::now();
+            for i in 0..iters {
+                ping_tx.send_blocking(i).unwrap();
+                black_box(pong_rx.recv_blocking().unwrap());
+            }
+            let elapsed = start.elapsed();
+
+            responder.join().unwrap();
+            elapsed
+        });
+    });
+
+    c.bench_function("cross_thread/stackful_cross_runtime_ping_pong", |b| {
+        b.iter_custom(|iters| {
+            let (ping_tx, ping_rx) = cross_thread::stackful(1);
+            let (pong_tx, pong_rx) = cross_thread::stackful(1);
+            let (ready_tx, ready_rx) = mpsc::channel();
+
+            let responder = thread::spawn(move || {
+                let mut runtime = Runtime::new();
+                runtime.block_on(|cx| {
+                    cx.scope(|scope| {
+                        let responder = scope.spawn(move |cx| {
+                            ready_tx.send(()).unwrap();
+                            for _ in 0..iters {
+                                let value = ping_rx.recv(cx).unwrap();
+                                pong_tx.send(cx, value).unwrap();
+                            }
+                        });
+
+                        responder.join(cx).unwrap();
+                    });
+                });
+            });
+
+            ready_rx.recv().unwrap();
+            let elapsed = run_stackful(|cx| {
+                cx.scope(|scope| {
+                    let sender = scope.spawn(move |cx| {
+                        let start = Instant::now();
+                        for i in 0..iters {
+                            ping_tx.send(cx, i).unwrap();
+                            black_box(pong_rx.recv(cx).unwrap());
+                        }
+                        start.elapsed()
+                    });
+
+                    sender.join(cx).unwrap()
+                })
+            });
+
+            responder.join().unwrap();
+            elapsed
+        });
+    });
+
+    c.bench_function("cross_thread/tokio_ready_send_recv", |b| {
+        b.iter_custom(|iters| {
+            let runtime = TokioRuntimeBuilder::new_current_thread().build().unwrap();
+            runtime.block_on(async move {
+                let (tx, rx) = cross_thread::tokio(1);
+                tx.send(0).await.unwrap();
+                black_box(rx.recv().await.unwrap());
+
+                let start = Instant::now();
+                for i in 0..iters {
+                    tx.send(i).await.unwrap();
+                    black_box(rx.recv().await.unwrap());
+                }
+                start.elapsed()
+            })
+        });
+    });
+
+    c.bench_function("cross_thread/tokio_ping_pong", |b| {
+        b.iter_custom(|iters| {
+            let runtime = TokioRuntimeBuilder::new_current_thread().build().unwrap();
+            runtime.block_on(async move {
+                let (ping_tx, ping_rx) = cross_thread::tokio(1);
+                let (pong_tx, pong_rx) = cross_thread::tokio(1);
+
+                let responder = tokio::spawn(async move {
+                    for _ in 0..iters {
+                        let value = ping_rx.recv().await.unwrap();
+                        pong_tx.send(value).await.unwrap();
+                    }
+                });
+
+                let start = Instant::now();
+                for i in 0..iters {
+                    ping_tx.send(i).await.unwrap();
+                    black_box(pong_rx.recv().await.unwrap());
+                }
+                let elapsed = start.elapsed();
+
+                responder.await.unwrap();
+                elapsed
             })
         });
     });
@@ -415,6 +551,6 @@ criterion_group!(
     config = Criterion::default()
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(4));
-    targets = bench_runtime, bench_scheduler, bench_sync, bench_io
+    targets = bench_runtime, bench_scheduler, bench_sync, bench_cross_thread_channel, bench_io
 );
 criterion_main!(benches);

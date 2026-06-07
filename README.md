@@ -16,7 +16,7 @@ Key characteristics:
 - Consistent task scheduling overhead.
 - Asynchronous disk I/O via io_uring.
 - Explicit control over concurrency and load balancing.
-- No locks, atomics, or other thread synchronization
+- Core runtime paths avoid implicit cross-thread synchronization.
 
 ## Stackful HTTP and gRPC
 
@@ -94,6 +94,13 @@ runtime.block_on(async {
 Enable with `features = ["virtual-clock"]`. See the
 [Virtual Clock Guide](docs/virtual-clock-guide.md) for detailed usage and the
 [Design Document](docs/virtual-clock-design.md) for architecture details.
+
+## Cross-runtime Channels
+
+`kimojio-stack` includes bounded in-memory channels for communication across
+stackful runtimes, OS threads, and Tokio-compatible async tasks. See the
+[Cross Runtime Channel Guide](docs/cross-runtime-channel.md) for endpoint
+selection and usage.
 
 ## License
 
