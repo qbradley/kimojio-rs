@@ -653,6 +653,7 @@ dependencies = [
 name = "kimojio-stack-tls"
 version = "0.16.5"
 dependencies = [
+ "criterion",
  "foreign-types-shared",
  "kimojio-stack",
  "kimojio-tls",

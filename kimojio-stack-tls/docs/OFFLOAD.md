@@ -81,6 +81,29 @@ connection. It is lower tail latency for mixed workloads where the runtime
 thread has useful non-crypto work to schedule while large TLS records are being
 encrypted or decrypted elsewhere.
 
+## RPC write benchmark
+
+The `rpc_write` Criterion benchmark exercises the prior custom-BIO workload
+shape with a 64-byte request header, 8/16/23/24 KiB body, and 64-byte response:
+
+```sh
+cargo bench -p kimojio-stack-tls --bench rpc_write
+```
+
+It has two three-connection topologies:
+
+- `rpc_write/client_fanout`: one client-side `Runtime` creates three stackful
+  tasks that write to three server runtimes on separate OS threads. Client-side
+  offload is enabled in the offload variants.
+- `rpc_write/server_fanin`: three client runtimes on separate OS threads write
+  to one server-side `Runtime` with three stackful tasks. Server-side offload is
+  enabled in the offload variants.
+
+Each topology compares inline TLS, threshold offload with an 8 KiB threshold, and
+always-offload. The benchmark asserts that the configured side actually uses the
+offload path, so a successful run validates both the topology and the offload
+routing.
+
 ## Open questions
 
 The POC currently copies plaintext because the worker pool requires owned
