@@ -20,7 +20,7 @@ impl BodyLimits {
         self.max_len
     }
 
-    fn check(self, actual: usize) -> Result<(), Error> {
+    pub fn check_body_len(self, actual: usize) -> Result<(), Error> {
         if actual > self.max_len {
             Err(Error::size_limit(LimitKind::Body, self.max_len, actual))
         } else {
@@ -49,7 +49,7 @@ impl Body {
     }
 
     pub fn from_bytes(bytes: Bytes, limits: BodyLimits) -> Result<Self, Error> {
-        limits.check(bytes.len())?;
+        limits.check_body_len(bytes.len())?;
         Ok(Self { bytes })
     }
 
@@ -91,7 +91,7 @@ impl BodyBuilder {
 
     pub fn append(&mut self, bytes: &[u8]) -> Result<(), Error> {
         let new_len = self.bytes.len().saturating_add(bytes.len());
-        self.limits.check(new_len)?;
+        self.limits.check_body_len(new_len)?;
         self.bytes.extend_from_slice(bytes);
         Ok(())
     }

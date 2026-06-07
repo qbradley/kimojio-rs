@@ -52,7 +52,7 @@ The architecture keeps public crates independent of tokio and other async runtim
 ## Phase Status
 
 - [x] **Phase 1: Workspace, dependencies, and transport foundation** - Add crate scaffolding, selected runtime-agnostic dependencies, shared errors/config/body types, and plaintext/TLS transport boundaries.
-- [ ] **Phase 2: HTTP/1.1 client and server** - Implement bounded HTTP/1.1 request/response parsing, serialization, connection handling, and stackful tests.
+- [x] **Phase 2: HTTP/1.1 client and server** - Implement bounded HTTP/1.1 request/response parsing, serialization, connection handling, and stackful tests.
 - [ ] **Phase 3: HTTP/2 frame, HPACK, and state core** - Implement HTTP/2 framing, header compression adapter, settings, stream state, and flow-control primitives.
 - [ ] **Phase 4: HTTP/2 client and server request/response** - Build stackful HTTP/2 client/server connection APIs over the Phase 3 core.
 - [ ] **Phase 5: HTTP TLS and tokio HTTP interoperability** - Validate stackful HTTP/1.1 and HTTP/2 clients/servers against tokio-based peers, including TLS coverage.
