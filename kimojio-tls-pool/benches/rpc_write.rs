@@ -507,15 +507,6 @@ fn run_encrypt_throughput_scaling(iters: u64, executor_count: usize) -> Duration
     for client in clients {
         client.join().unwrap();
     }
-    let stats = client_pool.stats();
-    eprintln!(
-        "encrypt stats executors={executor_count}: {:?}",
-        stats
-            .executors
-            .iter()
-            .map(|executor| (executor.id, executor.routed, executor.completed))
-            .collect::<Vec<_>>()
-    );
     drop(discard_flags);
     drop(servers);
     start.elapsed()
