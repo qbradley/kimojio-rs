@@ -45,9 +45,11 @@ impl TlsStream {
         }
     }
 
-    /// Submits a runtime-independent operation for this stream.
+    /// Submits a custom runtime-independent operation for this stream.
     ///
-    /// Later phases wire this low-level operation path to TLS reads and writes.
+    /// Use [`TlsStream::read`] and [`TlsStream::write`] for OpenSSL-backed TLS
+    /// I/O. This lower-level entry point is intended for tests and adapters that
+    /// need the same placement, callback, and same-stream serialization behavior.
     pub fn submit_operation<T, F>(
         &self,
         operation_size: usize,

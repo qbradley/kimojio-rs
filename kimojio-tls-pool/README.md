@@ -10,6 +10,8 @@ Create a `TlsPool` with `PoolConfig`, then create client or server streams from 
 
 Callbacks receive operation results exactly once. Immediate operations call back on the submitting thread; background operations call back on the selected executor thread.
 
+Operations submitted to the same stream are serialized, so OpenSSL stream state is not accessed concurrently even when adaptive placement moves later work between executors.
+
 ## Placement modes
 
 - `ImmediateOnly`: run operations on the submitting thread.
@@ -26,4 +28,14 @@ Pool statistics report submitted, immediate, background-routed, queued, complete
 cargo bench -p kimojio-tls-pool --bench rpc_write
 ```
 
+For a benchmark smoke test, run:
+
+```sh
+cargo bench -p kimojio-tls-pool --bench rpc_write -- --test
+```
+
 The benchmark covers single-pair and three-pair RPC write scenarios across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies.
+
+## Limitations
+
+The crate currently uses blocking OpenSSL streams and does not provide non-blocking socket readiness, tokio, kimojio runtime, kernel TLS, or hardware TLS offload integration.

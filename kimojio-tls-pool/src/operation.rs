@@ -20,7 +20,10 @@ pub enum OperationPlacement {
     /// Operation ran on the submitting thread.
     Immediate,
     /// Operation was routed to a background executor.
-    Background { executor: usize },
+    Background {
+        /// Executor selected for background execution.
+        executor: usize,
+    },
 }
 
 pub(crate) type OperationFn<T> = Box<dyn FnOnce() -> OperationResult<T> + Send + 'static>;
