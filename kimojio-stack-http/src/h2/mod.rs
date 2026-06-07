@@ -1,6 +1,18 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+pub mod connection;
+pub mod frame;
+mod hpack;
+pub mod settings;
+pub mod stream;
+
+pub use connection::ConnectionState;
+pub use frame::{Frame, FrameFlags, FramePayload, FrameType};
+pub use hpack::Header;
+pub use settings::{Setting, SettingId, Settings};
+pub use stream::{FlowControlWindow, Stream, StreamId, StreamState};
+
 /// HTTP/2 client connection preface.
 pub const CLIENT_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
@@ -21,5 +33,13 @@ impl Default for H2Config {
             max_frame_size: 16_384,
             max_concurrent_streams: 100,
         }
+    }
+}
+
+pub fn validate_client_preface(bytes: &[u8]) -> Result<(), crate::Error> {
+    if bytes == CLIENT_PREFACE {
+        Ok(())
+    } else {
+        Err(crate::Error::Protocol("invalid HTTP/2 client preface"))
     }
 }
