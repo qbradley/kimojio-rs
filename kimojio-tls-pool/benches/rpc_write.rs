@@ -102,6 +102,19 @@ fn stream_pair(mode: Mode) -> (TlsStream, TlsStream) {
     (client, server)
 }
 
+fn stream_pair_with_pools(client_pool: &TlsPool, server_pool: &TlsPool) -> (TlsStream, TlsStream) {
+    let (acceptor, connector) = make_contexts();
+    let (client_io, server_io) = UnixStream::pair().unwrap();
+    let server_pool = server_pool.clone();
+    let server_thread = thread::spawn(move || server_pool.server(&acceptor, server_io).unwrap());
+
+    let client = client_pool
+        .client(&connector, "localhost", client_io)
+        .unwrap();
+    let server = server_thread.join().unwrap();
+    (client, server)
+}
+
 fn make_rpc_header(body_len: usize) -> [u8; RPC_HEADER_LEN] {
     let mut header = [0xa5; RPC_HEADER_LEN];
     header[..size_of::<u64>()].copy_from_slice(&(body_len as u64).to_le_bytes());
@@ -227,6 +240,39 @@ fn run_three_pair(iters: u64, body_len: usize, mode: Mode) -> Duration {
     start.elapsed()
 }
 
+fn run_three_pair_shared_pool(iters: u64, body_len: usize, mode: Mode) -> Duration {
+    let counts = split_iters(iters);
+    let barrier = Arc::new(Barrier::new(CONNECTIONS * 2 + 1));
+    let client_pool = TlsPool::new(mode.config()).unwrap();
+    let server_pool = TlsPool::new(mode.config()).unwrap();
+    let mut clients = Vec::with_capacity(CONNECTIONS);
+    let mut servers = Vec::with_capacity(CONNECTIONS);
+
+    for count in counts {
+        let (client, server) = stream_pair_with_pools(&client_pool, &server_pool);
+        let client_barrier = Arc::clone(&barrier);
+        let server_barrier = Arc::clone(&barrier);
+        clients.push(thread::spawn(move || {
+            client_barrier.wait();
+            client_rpc_loop(&client, count, body_len);
+        }));
+        servers.push(thread::spawn(move || {
+            server_barrier.wait();
+            server_rpc_loop(&server, count);
+        }));
+    }
+
+    barrier.wait();
+    let start = Instant::now();
+    for client in clients {
+        client.join().unwrap();
+    }
+    for server in servers {
+        server.join().unwrap();
+    }
+    start.elapsed()
+}
+
 fn print_latency_summary(label: &str, mut run_once: impl FnMut() -> Duration) {
     let mut samples = (0..5).map(|_| run_once()).collect::<Vec<_>>();
     samples.sort_unstable();
@@ -290,6 +336,31 @@ fn bench_rpc_write(c: &mut Criterion) {
         }
     }
     three.finish();
+
+    let mut shared = c.benchmark_group("rpc_write/three_pair_shared_pool");
+    shared.warm_up_time(Duration::from_secs(1));
+    shared.measurement_time(Duration::from_secs(4));
+
+    for body_len in BODY_SIZES {
+        shared.throughput(Throughput::Bytes(
+            (RPC_HEADER_LEN + body_len + RPC_RESPONSE_LEN) as u64,
+        ));
+        for mode in [Mode::Immediate, Mode::Background, Mode::Adaptive] {
+            let label = format!(
+                "rpc_write/three_pair_shared_pool/{}/{body_len}",
+                mode.name()
+            );
+            print_latency_summary(&label, || run_three_pair_shared_pool(3, body_len, mode));
+            shared.bench_with_input(
+                BenchmarkId::new(mode.name(), body_len),
+                &(body_len, mode),
+                |b, &(body_len, mode)| {
+                    b.iter_custom(|iters| run_three_pair_shared_pool(iters, body_len, mode));
+                },
+            );
+        }
+    }
+    shared.finish();
 }
 
 criterion_group!(benches, bench_rpc_write);

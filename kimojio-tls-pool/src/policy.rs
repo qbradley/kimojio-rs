@@ -1,10 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use crate::operation::OperationKind;
 use crate::{OperationPlacement, PlacementMode, PoolConfig};
 
 pub(crate) fn choose_placement(
     config: &PoolConfig,
+    kind: OperationKind,
     operation_size: usize,
     executor_loads: &[u64],
     round_robin_start: usize,
@@ -14,9 +16,13 @@ pub(crate) fn choose_placement(
         PlacementMode::BackgroundOnly => OperationPlacement::Background {
             executor: select_executor(executor_loads, round_robin_start),
         },
-        PlacementMode::Adaptive => {
-            choose_adaptive(config, operation_size, executor_loads, round_robin_start)
-        }
+        PlacementMode::Adaptive => choose_adaptive(
+            config,
+            kind,
+            operation_size,
+            executor_loads,
+            round_robin_start,
+        ),
     }
 }
 
@@ -43,10 +49,17 @@ pub(crate) fn select_executor(executor_loads: &[u64], round_robin_start: usize) 
 
 fn choose_adaptive(
     config: &PoolConfig,
+    kind: OperationKind,
     operation_size: usize,
     executor_loads: &[u64],
     round_robin_start: usize,
 ) -> OperationPlacement {
+    if kind == OperationKind::Read {
+        return OperationPlacement::Background {
+            executor: select_executor(executor_loads, round_robin_start),
+        };
+    }
+
     let thresholds = config.thresholds();
     if operation_size <= thresholds.small_max() {
         return OperationPlacement::Immediate;
@@ -64,6 +77,7 @@ fn choose_adaptive(
 
 #[cfg(test)]
 mod tests {
+    use crate::operation::OperationKind;
     use crate::{OperationPlacement, PlacementMode, PoolConfig, SizeThresholds};
 
     use super::*;
@@ -72,7 +86,13 @@ mod tests {
     fn small_adaptive_operations_choose_immediate() {
         let config = PoolConfig::default();
         assert_eq!(
-            choose_placement(&config, config.thresholds().small_max(), &[0, 0], 0),
+            choose_placement(
+                &config,
+                OperationKind::Write,
+                config.thresholds().small_max(),
+                &[0, 0],
+                0
+            ),
             OperationPlacement::Immediate
         );
     }
@@ -81,7 +101,7 @@ mod tests {
     fn near_maximum_adaptive_operations_are_background_eligible() {
         let config = PoolConfig::default();
         assert_eq!(
-            choose_placement(&config, 32 * 1024, &[0, 0], 0),
+            choose_placement(&config, OperationKind::Write, 32 * 1024, &[0, 0], 0),
             OperationPlacement::Background { executor: 0 }
         );
     }
@@ -98,7 +118,7 @@ mod tests {
             .with_placement_mode(PlacementMode::Adaptive)
             .with_thresholds(SizeThresholds::new(4 * 1024, 24 * 1024));
         assert_eq!(
-            choose_placement(&config, 1024, &[0, 0], 0),
+            choose_placement(&config, OperationKind::Write, 1024, &[0, 0], 0),
             OperationPlacement::Immediate
         );
     }
@@ -109,7 +129,7 @@ mod tests {
             .with_placement_mode(PlacementMode::Adaptive)
             .with_thresholds(SizeThresholds::new(4 * 1024, 24 * 1024));
         assert_eq!(
-            choose_placement(&config, 8 * 1024, &[0, 100_000], 0),
+            choose_placement(&config, OperationKind::Write, 8 * 1024, &[0, 100_000], 0),
             OperationPlacement::Background { executor: 0 }
         );
     }
@@ -120,8 +140,23 @@ mod tests {
             .with_placement_mode(PlacementMode::Adaptive)
             .with_thresholds(SizeThresholds::new(4 * 1024, 24 * 1024));
         assert_eq!(
-            choose_placement(&config, 8 * 1024, &[100_000, 100_000], 0),
+            choose_placement(
+                &config,
+                OperationKind::Write,
+                8 * 1024,
+                &[100_000, 100_000],
+                0
+            ),
             OperationPlacement::Immediate
+        );
+    }
+
+    #[test]
+    fn adaptive_reads_choose_background() {
+        let config = PoolConfig::default();
+        assert_eq!(
+            choose_placement(&config, OperationKind::Read, 64, &[0, 0], 0),
+            OperationPlacement::Background { executor: 0 }
         );
     }
 }

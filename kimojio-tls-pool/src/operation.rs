@@ -1,16 +1,19 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::OperationResult;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use crate::{OperationError, OperationResult};
 
 /// Kind of TLS operation submitted to a stream.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OperationKind {
+pub(crate) enum OperationKind {
     /// Read/decrypt operation.
     Read,
     /// Write/encrypt operation.
     Write,
     /// Internal operation used by tests and future adapters.
+    #[cfg(test)]
     Generic,
 }
 
@@ -27,6 +30,12 @@ pub enum OperationPlacement {
 }
 
 pub(crate) type OperationFn<T> = Box<dyn FnOnce() -> OperationResult<T> + Send + 'static>;
+
+pub(crate) enum CompletionStatus {
+    Succeeded,
+    Failed,
+    Panicked,
+}
 
 pub(crate) struct OperationWork<T> {
     kind: OperationKind,
@@ -66,9 +75,16 @@ impl<T> OperationWork<T> {
 pub(crate) fn complete<T>(
     operation: OperationFn<T>,
     callback: crate::CompletionCallback<T>,
-) -> bool {
-    let result = operation();
+) -> CompletionStatus {
+    let result = match catch_unwind(AssertUnwindSafe(operation)) {
+        Ok(result) => result,
+        Err(_) => Err(OperationError::Panic("operation")),
+    };
     let success = result.is_ok();
-    callback(result);
-    success
+
+    match catch_unwind(AssertUnwindSafe(|| callback(result))) {
+        Ok(()) if success => CompletionStatus::Succeeded,
+        Ok(()) => CompletionStatus::Failed,
+        Err(_) => CompletionStatus::Panicked,
+    }
 }

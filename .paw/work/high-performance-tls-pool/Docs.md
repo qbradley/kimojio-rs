@@ -26,9 +26,9 @@ Each stream serializes its own operations. Adaptive routing may move a stream be
 
 The core crate uses the Rust OpenSSL crate directly and does not reuse the existing kimojio runtime TLS wrappers. This keeps the pool usable from normal threads and leaves runtime-specific adapters for future layers.
 
-Callbacks execute where the operation runs. Immediate operations call back on the submitting thread. Background operations call back on the selected executor thread. Callers that need callbacks delivered elsewhere can bridge them through channels or a future adapter layer.
+Callbacks execute where the operation runs. Immediate operations call back on the submitting thread. Background operations call back on the selected executor thread. Callback and operation panics are contained so stream/executor cleanup still runs; panic results are surfaced as operation failures where a callback can still be invoked.
 
-The adaptive policy starts intentionally simple. Small operations prefer immediate execution, near-maximum operations are eligible for background execution, and medium operations can route to an executor when the chosen executor's estimated queue cost is lower than the operation cost. The statistics and benchmarks are intended to guide future policy tuning.
+The adaptive policy starts intentionally simple. Small writes prefer immediate execution, near-maximum writes are eligible for background execution, and medium writes can route to an executor when the chosen executor's estimated queue cost is lower than the operation cost. Reads route to background execution in adaptive mode because readiness is not known to the pool and blocking reads can otherwise stall the caller thread.
 
 ### Integration Points
 
@@ -58,6 +58,8 @@ Placement modes:
 
 The pool exposes aggregate and per-executor statistics for submitted, immediate, background-routed, queued, completed, failed, ready-spin, and idle-transition counts. Streams expose local statistics including `max_active`, which verifies same-stream serialization.
 
+The aggregate queued count includes both same-stream queueing and executor queueing. Separate stream-queued and executor-queued counters expose the source for policy analysis.
+
 ## API Reference
 
 ### Key Components
@@ -74,6 +76,7 @@ The pool exposes aggregate and per-executor statistics for submitted, immediate,
 - Executor count controls how many background executor threads the pool starts.
 - Ready executor count and spin duration control how executors behave when work drains.
 - Size thresholds define the small-message immediate preference and near-maximum background eligibility for adaptive mode.
+- Maximum read length controls the largest buffer accepted by read operations. The default is 32 KiB.
 
 ## Testing
 
@@ -97,14 +100,15 @@ Run the benchmark:
 cargo bench -p kimojio-tls-pool --bench rpc_write
 ```
 
-The benchmark covers single client/server and three-pair RPC write scenarios. It compares immediate-only, background-only, and adaptive modes across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies and prints p50/p95/p99 summary lines.
+The benchmark covers single client/server, three-pair per-connection-pool, and three-pair shared-pool RPC write scenarios. It compares immediate-only, background-only, and adaptive modes across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies and prints p50/p95/p99 summary lines. The benchmark smoke command is wired into CI on the default Rust toolchain.
 
 ### Edge Cases
 
 - Same-stream operations are serialized even when submitted from multiple threads.
 - Operation callbacks are expected exactly once on success or error.
 - Operation-level I/O errors are surfaced through callback results.
-- Pool shutdown rejects new background work explicitly.
+- Pool shutdown rejects new background work explicitly and accepted queued work completes or receives an explicit shutdown result.
+- Panicking operations or callbacks do not leave stream activity counters wedged or executor load inflated.
 
 ## Limitations and Future Work
 

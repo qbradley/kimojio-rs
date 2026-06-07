@@ -18,7 +18,7 @@ mod tls;
 
 pub use config::{IdleBehavior, PlacementMode, PoolConfig, PoolConfigError, SizeThresholds};
 pub use error::{OperationError, OperationResult, TlsPoolError};
-pub use operation::{OperationKind, OperationPlacement};
+pub use operation::OperationPlacement;
 pub use pool::TlsPool;
 pub use stats::{ExecutorStatsSnapshot, PoolStats, PoolStatsSnapshot};
 pub use stream::{CompletionCallback, StreamStatsSnapshot, TlsStream};

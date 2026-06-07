@@ -4,6 +4,11 @@
 use std::fmt;
 use std::time::Duration;
 
+/// Default maximum read buffer length.
+pub const DEFAULT_MAX_READ_LEN: usize = 32 * 1024;
+/// Hard cap on executor count accepted by the configuration.
+pub const MAX_EXECUTORS: usize = 256;
+
 /// Pool placement behavior.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlacementMode {
@@ -104,6 +109,7 @@ pub struct PoolConfig {
     placement_mode: PlacementMode,
     thresholds: SizeThresholds,
     idle_behavior: IdleBehavior,
+    max_read_len: usize,
 }
 
 impl PoolConfig {
@@ -133,10 +139,22 @@ impl PoolConfig {
         self
     }
 
+    /// Sets the maximum buffer length accepted by [`crate::TlsStream::read`].
+    pub fn with_max_read_len(mut self, max_read_len: usize) -> Self {
+        self.max_read_len = max_read_len;
+        self
+    }
+
     /// Validates configuration invariants.
     pub fn validate(&self) -> Result<(), PoolConfigError> {
         if self.executor_count == 0 {
             return Err(PoolConfigError::NoExecutors);
+        }
+        if self.executor_count > MAX_EXECUTORS {
+            return Err(PoolConfigError::TooManyExecutors {
+                executor_count: self.executor_count,
+                max_executors: MAX_EXECUTORS,
+            });
         }
         if self.idle_behavior.ready_executors > self.executor_count {
             return Err(PoolConfigError::TooManyReadyExecutors {
@@ -166,6 +184,11 @@ impl PoolConfig {
     pub fn idle_behavior(&self) -> IdleBehavior {
         self.idle_behavior
     }
+
+    /// Maximum accepted read buffer length.
+    pub fn max_read_len(&self) -> usize {
+        self.max_read_len
+    }
 }
 
 impl Default for PoolConfig {
@@ -175,6 +198,7 @@ impl Default for PoolConfig {
             placement_mode: PlacementMode::Adaptive,
             thresholds: SizeThresholds::default(),
             idle_behavior: IdleBehavior::default(),
+            max_read_len: DEFAULT_MAX_READ_LEN,
         }
     }
 }
@@ -184,6 +208,13 @@ impl Default for PoolConfig {
 pub enum PoolConfigError {
     /// At least one background executor is required.
     NoExecutors,
+    /// Executor count exceeds the configured hard cap.
+    TooManyExecutors {
+        /// Configured executor count.
+        executor_count: usize,
+        /// Maximum accepted executor count.
+        max_executors: usize,
+    },
     /// Ready executor count cannot exceed total executor count.
     TooManyReadyExecutors {
         /// Configured ready executors.
@@ -198,12 +229,21 @@ pub enum PoolConfigError {
         /// Minimum background-eligible size.
         background_min: usize,
     },
+    /// Failed to spawn a background executor.
+    ExecutorSpawnFailed(String),
 }
 
 impl fmt::Display for PoolConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoExecutors => f.write_str("TLS pool requires at least one executor"),
+            Self::TooManyExecutors {
+                executor_count,
+                max_executors,
+            } => write!(
+                f,
+                "executor count {executor_count} exceeds maximum {max_executors}"
+            ),
             Self::TooManyReadyExecutors {
                 ready_executors,
                 executor_count,
@@ -218,6 +258,9 @@ impl fmt::Display for PoolConfigError {
                 f,
                 "small threshold {small_max} exceeds background threshold {background_min}"
             ),
+            Self::ExecutorSpawnFailed(error) => {
+                write!(f, "failed to spawn TLS pool executor: {error}")
+            }
         }
     }
 }
@@ -242,6 +285,18 @@ mod tests {
     fn rejects_zero_executors() {
         let config = PoolConfig::new(0);
         assert_eq!(config.validate(), Err(PoolConfigError::NoExecutors));
+    }
+
+    #[test]
+    fn rejects_too_many_executors() {
+        let config = PoolConfig::new(MAX_EXECUTORS + 1);
+        assert_eq!(
+            config.validate(),
+            Err(PoolConfigError::TooManyExecutors {
+                executor_count: MAX_EXECUTORS + 1,
+                max_executors: MAX_EXECUTORS,
+            })
+        );
     }
 
     #[test]

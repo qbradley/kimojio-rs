@@ -18,6 +18,10 @@ pub enum OperationError {
     Io(io::Error),
     /// The stream or pool has shut down.
     Shutdown,
+    /// A submitted operation or callback panicked.
+    Panic(&'static str),
+    /// A read request exceeded the configured maximum buffer length.
+    ReadTooLarge { requested: usize, max: usize },
     /// Another operation is already in flight for the stream.
     Busy,
     /// Internal stream state was poisoned.
@@ -31,6 +35,13 @@ impl fmt::Display for OperationError {
             Self::Handshake(error) => write!(f, "TLS handshake failed: {error}"),
             Self::Io(error) => write!(f, "I/O error: {error}"),
             Self::Shutdown => f.write_str("TLS pool operation rejected after shutdown"),
+            Self::Panic(context) => write!(f, "TLS pool {context} panicked"),
+            Self::ReadTooLarge { requested, max } => {
+                write!(
+                    f,
+                    "read buffer length {requested} exceeds configured maximum {max}"
+                )
+            }
             Self::Busy => f.write_str("TLS stream already has an in-flight operation"),
             Self::StatePoisoned => f.write_str("TLS stream state was poisoned"),
         }
@@ -42,7 +53,12 @@ impl std::error::Error for OperationError {
         match self {
             Self::Tls(error) => Some(error),
             Self::Io(error) => Some(error),
-            Self::Handshake(_) | Self::Shutdown | Self::Busy | Self::StatePoisoned => None,
+            Self::Handshake(_)
+            | Self::Shutdown
+            | Self::Panic(_)
+            | Self::ReadTooLarge { .. }
+            | Self::Busy
+            | Self::StatePoisoned => None,
         }
     }
 }

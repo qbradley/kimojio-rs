@@ -12,6 +12,8 @@ Callbacks receive operation results exactly once. Immediate operations call back
 
 Operations submitted to the same stream are serialized, so OpenSSL stream state is not accessed concurrently even when adaptive placement moves later work between executors.
 
+Reads reject buffers larger than the configured maximum read length. The default maximum is 32 KiB.
+
 ## Placement modes
 
 - `ImmediateOnly`: run operations on the submitting thread.
@@ -21,6 +23,8 @@ Operations submitted to the same stream are serialized, so OpenSSL stream state 
 ## Statistics
 
 Pool statistics report submitted, immediate, background-routed, queued, completed, failed, ready-spin, and idle-transition counts. Stream statistics report submitted, queued, active, and maximum active operations for same-stream serialization checks.
+
+The aggregate queued count includes both same-stream queueing and executor queueing; separate counters expose each source.
 
 ## Benchmarks
 
@@ -34,7 +38,7 @@ For a benchmark smoke test, run:
 cargo bench -p kimojio-tls-pool --bench rpc_write -- --test
 ```
 
-The benchmark covers single-pair and three-pair RPC write scenarios across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies.
+The benchmark covers single-pair, three-pair per-connection-pool, and three-pair shared-pool RPC write scenarios across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies.
 
 ## Limitations
 

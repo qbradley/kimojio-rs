@@ -10,6 +10,8 @@ pub struct PoolStats {
     immediate: AtomicU64,
     background_routed: AtomicU64,
     queued: AtomicU64,
+    stream_queued: AtomicU64,
+    executor_queued: AtomicU64,
     completed: AtomicU64,
     failed: AtomicU64,
     ready_spins: AtomicU64,
@@ -25,6 +27,8 @@ impl PoolStats {
             immediate: AtomicU64::new(0),
             background_routed: AtomicU64::new(0),
             queued: AtomicU64::new(0),
+            stream_queued: AtomicU64::new(0),
+            executor_queued: AtomicU64::new(0),
             completed: AtomicU64::new(0),
             failed: AtomicU64::new(0),
             ready_spins: AtomicU64::new(0),
@@ -51,12 +55,17 @@ impl PoolStats {
         }
     }
 
-    /// Records queueing for `executor`.
-    pub fn record_queued(&self, executor: Option<usize>) {
+    /// Records queueing behind another same-stream operation.
+    pub fn record_stream_queued(&self) {
         self.queued.fetch_add(1, Ordering::Relaxed);
-        if let Some(executor) = executor
-            && let Some(stats) = self.executors.get(executor)
-        {
+        self.stream_queued.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records queueing for `executor`.
+    pub fn record_executor_queued(&self, executor: usize) {
+        self.queued.fetch_add(1, Ordering::Relaxed);
+        self.executor_queued.fetch_add(1, Ordering::Relaxed);
+        if let Some(stats) = self.executors.get(executor) {
             stats.queued.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -104,6 +113,8 @@ impl PoolStats {
             immediate: self.immediate.load(Ordering::Relaxed),
             background_routed: self.background_routed.load(Ordering::Relaxed),
             queued: self.queued.load(Ordering::Relaxed),
+            stream_queued: self.stream_queued.load(Ordering::Relaxed),
+            executor_queued: self.executor_queued.load(Ordering::Relaxed),
             completed: self.completed.load(Ordering::Relaxed),
             failed: self.failed.load(Ordering::Relaxed),
             ready_spins: self.ready_spins.load(Ordering::Relaxed),
@@ -167,6 +178,10 @@ pub struct PoolStatsSnapshot {
     pub background_routed: u64,
     /// Operations queued for background executors.
     pub queued: u64,
+    /// Operations queued behind same-stream work.
+    pub stream_queued: u64,
+    /// Operations queued to background executors.
+    pub executor_queued: u64,
     /// Operations completed successfully.
     pub completed: u64,
     /// Operations completed with failure.
@@ -221,7 +236,7 @@ mod tests {
         stats.record_submitted();
         stats.record_immediate();
         stats.record_background_routed(1);
-        stats.record_queued(Some(1));
+        stats.record_executor_queued(1);
         stats.record_completed(Some(1));
         stats.record_failed(Some(1));
 
@@ -230,6 +245,8 @@ mod tests {
         assert_eq!(snapshot.immediate, 1);
         assert_eq!(snapshot.background_routed, 1);
         assert_eq!(snapshot.queued, 1);
+        assert_eq!(snapshot.stream_queued, 0);
+        assert_eq!(snapshot.executor_queued, 1);
         assert_eq!(snapshot.completed, 1);
         assert_eq!(snapshot.failed, 1);
         assert_eq!(snapshot.executors[1].routed, 1);
@@ -249,7 +266,7 @@ mod tests {
                 for _ in 0..100 {
                     stats.record_submitted();
                     stats.record_background_routed(0);
-                    stats.record_queued(Some(0));
+                    stats.record_executor_queued(0);
                     stats.record_completed(Some(0));
                 }
             }));

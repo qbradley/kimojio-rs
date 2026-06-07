@@ -40,6 +40,10 @@ jobs:
     - name: Run virtual-clock tests
       run: cargo +${{ matrix.rust }} test --all-targets --features virtual-clock
 
+    - name: Smoke TLS pool rpc_write benchmark
+      if: matrix.rust == env.DEFAULT_RUST_VERSION
+      run: cargo +${{ matrix.rust }} bench -p kimojio-tls-pool --bench rpc_write -- --test
+
     - name: Check docs
       run: cargo +${{ matrix.rust }} test --doc
 

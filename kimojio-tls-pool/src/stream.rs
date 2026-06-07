@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::operation::{self, OperationKind, OperationWork};
+use crate::operation::{self, CompletionStatus, OperationKind, OperationWork};
 use crate::pool::PoolInner;
 use crate::tls::BoxedTlsStream;
 use crate::{OperationError, OperationResult, PoolStatsSnapshot};
@@ -14,7 +14,13 @@ use crate::{OperationError, OperationResult, PoolStatsSnapshot};
 /// Callback invoked when a submitted TLS operation completes.
 pub type CompletionCallback<T> = Box<dyn FnOnce(OperationResult<T>) + Send + 'static>;
 
-type StreamJob = Box<dyn FnOnce(Arc<StreamState>) + Send + 'static>;
+type StreamJob = Box<dyn FnOnce(Arc<StreamState>) -> DispatchResult + Send + 'static>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DispatchResult {
+    Completed,
+    Pending,
+}
 
 /// User-facing TLS stream handle created by a pool.
 #[derive(Clone)]
@@ -23,6 +29,7 @@ pub struct TlsStream {
 }
 
 impl TlsStream {
+    #[cfg(test)]
     pub(crate) fn new(pool: Arc<PoolInner>) -> Self {
         Self {
             state: Arc::new(StreamState {
@@ -50,7 +57,8 @@ impl TlsStream {
     /// Use [`TlsStream::read`] and [`TlsStream::write`] for OpenSSL-backed TLS
     /// I/O. This lower-level entry point is intended for tests and adapters that
     /// need the same placement, callback, and same-stream serialization behavior.
-    pub fn submit_operation<T, F>(
+    #[cfg(test)]
+    pub(crate) fn submit_operation<T, F>(
         &self,
         operation_size: usize,
         operation: F,
@@ -61,6 +69,7 @@ impl TlsStream {
         F: FnOnce() -> OperationResult<T> + Send + 'static,
     {
         self.submit_work(OperationWork::new(
+            #[cfg(test)]
             OperationKind::Generic,
             operation_size,
             Box::new(operation),
@@ -69,7 +78,7 @@ impl TlsStream {
     }
 
     /// Submits a read work item for this stream.
-    pub fn submit_read<F>(
+    fn submit_read<F>(
         &self,
         buffer_len: usize,
         read: F,
@@ -97,7 +106,7 @@ impl TlsStream {
     }
 
     /// Submits a write work item for this stream.
-    pub fn submit_write<F>(
+    fn submit_write<F>(
         &self,
         byte_len: usize,
         write: F,
@@ -139,9 +148,8 @@ impl TlsStream {
     where
         T: Send + 'static,
     {
-        self.state.submit(Box::new(move |state| {
-            start_operation(state, work);
-        }))
+        self.state
+            .submit(Box::new(move |state| start_operation(state, work)))
     }
 }
 
@@ -164,7 +172,7 @@ impl StreamState {
             let mut queue = self.queue.lock().expect("stream queue poisoned");
             if queue.in_flight {
                 queue.pending.push_back(job);
-                self.pool.stats.record_queued(None);
+                self.pool.stats.record_stream_queued();
                 self.stats.record_queued();
                 None
             } else {
@@ -174,24 +182,36 @@ impl StreamState {
         };
 
         if let Some(job) = start {
-            job(Arc::clone(self));
+            self.drain_ready(job);
         }
         Ok(())
     }
 
     fn finish(self: &Arc<Self>) {
-        let next = {
-            let mut queue = self.queue.lock().expect("stream queue poisoned");
-            if let Some(job) = queue.pending.pop_front() {
-                Some(job)
-            } else {
-                queue.in_flight = false;
-                None
-            }
-        };
+        if let Some(job) = self.next_or_mark_idle() {
+            self.drain_ready(job);
+        }
+    }
 
-        if let Some(job) = next {
-            job(Arc::clone(self));
+    fn drain_ready(self: &Arc<Self>, first: StreamJob) {
+        let mut next = Some(first);
+        while let Some(job) = next {
+            match job(Arc::clone(self)) {
+                DispatchResult::Pending => return,
+                DispatchResult::Completed => {
+                    next = self.next_or_mark_idle();
+                }
+            }
+        }
+    }
+
+    fn next_or_mark_idle(&self) -> Option<StreamJob> {
+        let mut queue = self.queue.lock().expect("stream queue poisoned");
+        if let Some(job) = queue.pending.pop_front() {
+            Some(job)
+        } else {
+            queue.in_flight = false;
+            None
         }
     }
 
@@ -200,6 +220,13 @@ impl StreamState {
     }
 
     fn read_tls(&self, buffer_len: usize) -> OperationResult<Vec<u8>> {
+        let max = self.pool.config().max_read_len();
+        if buffer_len > max {
+            return Err(OperationError::ReadTooLarge {
+                requested: buffer_len,
+                max,
+            });
+        }
         let mut guard = self.tls.lock().map_err(|_| OperationError::StatePoisoned)?;
         let tls = guard.as_mut().ok_or(OperationError::Shutdown)?;
         let mut buffer = vec![0_u8; buffer_len];
@@ -277,26 +304,26 @@ pub struct StreamStatsSnapshot {
     pub max_active: usize,
 }
 
-fn start_operation<T>(state: Arc<StreamState>, work: OperationWork<T>)
+fn start_operation<T>(state: Arc<StreamState>, work: OperationWork<T>) -> DispatchResult
 where
     T: Send + 'static,
 {
     let operation_size = work.size();
-    let _kind = work.kind();
+    let kind = work.kind();
     let (operation, callback) = work.into_parts();
 
-    match state.pool.choose_placement(operation_size) {
+    match state.pool.choose_placement(kind, operation_size) {
         crate::OperationPlacement::Immediate => {
             state.pool.stats.record_immediate();
             state.stats.record_started();
-            let success = operation::complete(operation, callback);
+            let status = operation::complete(operation, callback);
             state.stats.record_finished();
-            record_completion(&state, None, success);
-            state.finish();
+            record_completion(&state, None, status);
+            DispatchResult::Completed
         }
         crate::OperationPlacement::Background { executor } => {
             state.pool.stats.record_background_routed(executor);
-            state.pool.stats.record_queued(Some(executor));
+            state.pool.stats.record_executor_queued(executor);
             let pool = Arc::clone(&state.pool);
             let job_state = Arc::clone(&state);
             let callback = Arc::new(Mutex::new(Some(callback)));
@@ -308,9 +335,9 @@ where
                     .expect("operation callback mutex poisoned")
                     .take()
                     .expect("operation callback missing");
-                let success = operation::complete(operation, callback);
+                let status = operation::complete(operation, callback);
                 job_state.stats.record_finished();
-                record_completion(&job_state, Some(executor), success);
+                record_completion(&job_state, Some(executor), status);
                 job_state.finish();
             });
 
@@ -323,17 +350,20 @@ where
                 {
                     callback(Err(error));
                 }
-                state.finish();
+                DispatchResult::Completed
+            } else {
+                DispatchResult::Pending
             }
         }
     }
 }
 
-fn record_completion(state: &StreamState, executor: Option<usize>, success: bool) {
-    if success {
-        state.pool.stats.record_completed(executor);
-    } else {
-        state.pool.stats.record_failed(executor);
+fn record_completion(state: &StreamState, executor: Option<usize>, status: CompletionStatus) {
+    match status {
+        CompletionStatus::Succeeded => state.pool.stats.record_completed(executor),
+        CompletionStatus::Failed | CompletionStatus::Panicked => {
+            state.pool.stats.record_failed(executor);
+        }
     }
 }
 
@@ -489,5 +519,188 @@ mod tests {
         assert_eq!(receiver.recv().unwrap(), 2);
         assert_eq!(max_active.load(Ordering::SeqCst), 1);
         assert_eq!(pool.stats().queued, 3);
+    }
+
+    #[test]
+    fn accepted_queued_background_work_gets_shutdown_callback() {
+        let pool =
+            TlsPool::new(PoolConfig::new(1).with_placement_mode(PlacementMode::BackgroundOnly))
+                .unwrap();
+        let stream = pool.stream();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let (result_sender, result_receiver) = mpsc::channel();
+        let first_result = result_sender.clone();
+
+        stream
+            .submit_operation(
+                32 * 1024,
+                move || {
+                    release_receiver.recv().unwrap();
+                    Ok(1)
+                },
+                Box::new(move |result| {
+                    first_result.send(result.map_err(|_| "err")).unwrap();
+                }),
+            )
+            .unwrap();
+
+        stream
+            .submit_operation(
+                32 * 1024,
+                || Ok(2),
+                Box::new(move |result| {
+                    result_sender.send(result.map_err(|_| "err")).unwrap();
+                }),
+            )
+            .unwrap();
+
+        pool.shutdown();
+        release_sender.send(()).unwrap();
+
+        assert_eq!(result_receiver.recv().unwrap(), Ok(1));
+        assert_eq!(result_receiver.recv().unwrap(), Err("err"));
+        assert_eq!(stream.stream_stats().active, 0);
+    }
+
+    #[test]
+    fn immediate_callback_panic_does_not_wedge_stream() {
+        let pool =
+            TlsPool::new(PoolConfig::new(1).with_placement_mode(PlacementMode::ImmediateOnly))
+                .unwrap();
+        let stream = pool.stream();
+
+        stream
+            .submit_operation(1, || Ok(()), Box::new(|_| panic!("callback panic")))
+            .unwrap();
+
+        let (sender, receiver) = mpsc::channel();
+        stream
+            .submit_operation(
+                1,
+                || Ok(7),
+                Box::new(move |result| {
+                    sender.send(result.unwrap()).unwrap();
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(receiver.recv().unwrap(), 7);
+        assert_eq!(stream.stream_stats().active, 0);
+        assert_eq!(pool.stats().failed, 1);
+    }
+
+    #[test]
+    fn background_callback_panic_does_not_stop_worker() {
+        let pool =
+            TlsPool::new(PoolConfig::new(1).with_placement_mode(PlacementMode::BackgroundOnly))
+                .unwrap();
+        let stream = pool.stream();
+
+        stream
+            .submit_operation(32 * 1024, || Ok(()), Box::new(|_| panic!("callback panic")))
+            .unwrap();
+
+        let (sender, receiver) = mpsc::channel();
+        stream
+            .submit_operation(
+                32 * 1024,
+                || Ok(9),
+                Box::new(move |result| {
+                    sender.send(result.unwrap()).unwrap();
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(1)).unwrap(), 9);
+        assert_eq!(stream.stream_stats().active, 0);
+        assert_eq!(pool.stats().failed, 1);
+    }
+
+    #[test]
+    fn operation_panic_reports_error_and_continues() {
+        let pool = TlsPool::default();
+        let stream = pool.stream();
+        let (sender, receiver) = mpsc::channel();
+
+        stream
+            .submit_operation::<(), _>(
+                1,
+                || panic!("operation panic"),
+                Box::new(move |result| {
+                    sender
+                        .send(matches!(result, Err(OperationError::Panic("operation"))))
+                        .unwrap();
+                }),
+            )
+            .unwrap();
+
+        assert!(receiver.recv().unwrap());
+        assert_eq!(stream.stream_stats().active, 0);
+        assert_eq!(pool.stats().failed, 1);
+    }
+
+    #[test]
+    fn read_rejects_oversized_buffer_before_tls_access() {
+        let pool = TlsPool::new(
+            PoolConfig::new(1)
+                .with_placement_mode(PlacementMode::ImmediateOnly)
+                .with_max_read_len(8),
+        )
+        .unwrap();
+        let stream = pool.stream();
+        let (sender, receiver) = mpsc::channel();
+
+        stream
+            .read(
+                9,
+                Box::new(move |result| {
+                    sender
+                        .send(matches!(
+                            result,
+                            Err(OperationError::ReadTooLarge {
+                                requested: 9,
+                                max: 8
+                            })
+                        ))
+                        .unwrap();
+                }),
+            )
+            .unwrap();
+
+        assert!(receiver.recv().unwrap());
+    }
+
+    #[test]
+    fn in_flight_background_job_survives_visible_handle_drop() {
+        let pool =
+            TlsPool::new(PoolConfig::new(1).with_placement_mode(PlacementMode::BackgroundOnly))
+                .unwrap();
+        let stream = pool.stream();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let (result_sender, result_receiver) = mpsc::channel();
+
+        stream
+            .submit_operation(
+                32 * 1024,
+                move || {
+                    release_receiver.recv().unwrap();
+                    Ok(42)
+                },
+                Box::new(move |result| {
+                    result_sender.send(result.unwrap()).unwrap();
+                }),
+            )
+            .unwrap();
+
+        drop(stream);
+        drop(pool);
+        release_sender.send(()).unwrap();
+
+        assert_eq!(
+            result_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap(),
+            42
+        );
     }
 }

@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
@@ -31,12 +32,13 @@ impl TlsPool {
     pub fn new(config: PoolConfig) -> Result<Self, PoolConfigError> {
         config.validate()?;
         Ok(Self {
-            inner: PoolInner::new(config),
+            inner: PoolInner::new(config)?,
         })
     }
 
     /// Creates a stream handle associated with this pool.
-    pub fn stream(&self) -> TlsStream {
+    #[cfg(test)]
+    pub(crate) fn stream(&self) -> TlsStream {
         TlsStream::new(Arc::clone(&self.inner))
     }
 
@@ -92,12 +94,14 @@ pub(crate) struct PoolInner {
     executor_loads: Vec<AtomicU64>,
     next_executor: AtomicUsize,
     shutdown: AtomicBool,
+    lifecycle: Mutex<()>,
 }
 
 impl PoolInner {
-    fn new(config: PoolConfig) -> Arc<Self> {
+    fn new(config: PoolConfig) -> Result<Arc<Self>, PoolConfigError> {
         let executor_count = config.executor_count();
-        Arc::new_cyclic(|weak: &std::sync::Weak<Self>| {
+        let mut spawn_error = None;
+        let inner = Arc::new_cyclic(|weak: &std::sync::Weak<Self>| {
             let stats = Arc::new(PoolStats::new(executor_count));
             let mut workers = Vec::with_capacity(executor_count);
 
@@ -106,14 +110,20 @@ impl PoolInner {
                 let worker_stats = Arc::clone(&stats);
                 let idle_behavior = config.idle_behavior();
                 let weak_pool = weak.clone();
-                let handle = thread::Builder::new()
+                let handle = match thread::Builder::new()
                     .name(format!("kimojio-tls-pool-{id}"))
                     .spawn(move || {
                         worker_loop(id, receiver, worker_stats, idle_behavior, weak_pool)
-                    })
-                    .expect("failed to spawn TLS pool executor");
+                    }) {
+                    Ok(handle) => handle,
+                    Err(error) => {
+                        spawn_error = Some(error.to_string());
+                        break;
+                    }
+                };
                 workers.push(WorkerHandle {
                     sender,
+                    thread_id: handle.thread().id(),
                     handle: Mutex::new(Some(handle)),
                 });
             }
@@ -125,14 +135,26 @@ impl PoolInner {
                 executor_loads: (0..executor_count).map(|_| AtomicU64::new(0)).collect(),
                 next_executor: AtomicUsize::new(0),
                 shutdown: AtomicBool::new(false),
+                lifecycle: Mutex::new(()),
             }
-        })
+        });
+
+        if let Some(error) = spawn_error {
+            inner.shutdown();
+            return Err(PoolConfigError::ExecutorSpawnFailed(error));
+        }
+        Ok(inner)
     }
 
-    pub(crate) fn choose_placement(&self, operation_size: usize) -> OperationPlacement {
+    pub(crate) fn choose_placement(
+        &self,
+        kind: crate::operation::OperationKind,
+        operation_size: usize,
+    ) -> OperationPlacement {
         let start = self.next_executor.fetch_add(1, Ordering::Relaxed);
         crate::policy::choose_placement(
             &self.config,
+            kind,
             operation_size,
             &self.executor_loads_snapshot(),
             start,
@@ -145,6 +167,10 @@ impl PoolInner {
         operation_size: usize,
         job: Job,
     ) -> Result<(), OperationError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .expect("pool lifecycle mutex poisoned");
         if self.shutdown.load(Ordering::Acquire) {
             return Err(OperationError::Shutdown);
         }
@@ -160,8 +186,12 @@ impl PoolInner {
         load.fetch_add(cost, Ordering::AcqRel);
         let inner = Arc::clone(self);
         let wrapped = Box::new(move || {
+            let _load_guard = LoadGuard {
+                inner: Arc::clone(&inner),
+                executor,
+                cost,
+            };
             job();
-            inner.executor_loads[executor].fetch_sub(cost, Ordering::AcqRel);
         });
 
         worker
@@ -177,7 +207,15 @@ impl PoolInner {
         self.shutdown.load(Ordering::Acquire)
     }
 
+    pub(crate) fn config(&self) -> &PoolConfig {
+        &self.config
+    }
+
     pub(crate) fn shutdown(&self) {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .expect("pool lifecycle mutex poisoned");
         if self.shutdown.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -203,8 +241,11 @@ impl PoolInner {
 impl Drop for PoolInner {
     fn drop(&mut self) {
         self.shutdown();
+        let current = thread::current().id();
         for worker in &self.workers {
-            if let Some(handle) = worker.handle.lock().expect("worker handle poisoned").take() {
+            if let Some(handle) = worker.handle.lock().expect("worker handle poisoned").take()
+                && worker.thread_id != current
+            {
                 let _ = handle.join();
             }
         }
@@ -213,7 +254,20 @@ impl Drop for PoolInner {
 
 struct WorkerHandle {
     sender: mpsc::Sender<WorkerMessage>,
+    thread_id: thread::ThreadId,
     handle: Mutex<Option<JoinHandle<()>>>,
+}
+
+struct LoadGuard {
+    inner: Arc<PoolInner>,
+    executor: usize,
+    cost: u64,
+}
+
+impl Drop for LoadGuard {
+    fn drop(&mut self) {
+        self.inner.executor_loads[self.executor].fetch_sub(self.cost, Ordering::AcqRel);
+    }
 }
 
 fn worker_loop(
@@ -291,7 +345,7 @@ fn spin_for_work(
 fn handle_worker_message(message: WorkerMessage) -> bool {
     match message {
         WorkerMessage::Run(job) => {
-            job();
+            let _ = catch_unwind(AssertUnwindSafe(job));
             false
         }
         WorkerMessage::Shutdown => true,
@@ -304,6 +358,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::operation::OperationKind;
     use crate::{PlacementMode, SizeThresholds};
 
     #[test]
@@ -367,7 +422,7 @@ mod tests {
         pool.inner.add_executor_load_for_test(0, 100);
 
         assert_eq!(
-            pool.inner.choose_placement(1),
+            pool.inner.choose_placement(OperationKind::Write, 1),
             OperationPlacement::Background { executor: 1 }
         );
     }
@@ -430,11 +485,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            pool.inner.choose_placement(4),
+            pool.inner.choose_placement(OperationKind::Write, 4),
             OperationPlacement::Immediate
         );
         assert_eq!(
-            pool.inner.choose_placement(8),
+            pool.inner.choose_placement(OperationKind::Write, 8),
             OperationPlacement::Background { executor: 0 }
         );
     }

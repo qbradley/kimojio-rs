@@ -162,7 +162,8 @@ pub fn read_once_blocking(stream: &TlsStream, len: usize) -> OperationResult<Vec
 pub fn read_exact_blocking(stream: &TlsStream, len: usize) -> OperationResult<Vec<u8>> {
     let mut output = Vec::with_capacity(len);
     while output.len() < len {
-        let chunk = read_once_blocking(stream, len - output.len())?;
+        let remaining = len - output.len();
+        let chunk = read_once_blocking(stream, remaining.min(32 * 1024))?;
         if chunk.is_empty() {
             return Err(OperationError::Shutdown);
         }
