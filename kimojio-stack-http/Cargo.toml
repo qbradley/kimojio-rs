@@ -24,5 +24,5 @@ http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "server", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["client", "server", "tokio", "http1", "http2"] }
 openssl.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
 tonic = { workspace = true, features = ["transport"] }

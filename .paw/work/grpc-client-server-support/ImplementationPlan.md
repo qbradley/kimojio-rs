@@ -55,7 +55,7 @@ The architecture keeps public crates independent of tokio and other async runtim
 - [x] **Phase 2: HTTP/1.1 client and server** - Implement bounded HTTP/1.1 request/response parsing, serialization, connection handling, and stackful tests.
 - [x] **Phase 3: HTTP/2 frame, HPACK, and state core** - Implement HTTP/2 framing, header compression adapter, settings, stream state, and flow-control primitives.
 - [x] **Phase 4: HTTP/2 client and server request/response** - Build stackful HTTP/2 client/server connection APIs over the Phase 3 core.
-- [ ] **Phase 5: HTTP TLS and tokio HTTP interoperability** - Validate stackful HTTP/1.1 and HTTP/2 clients/servers against tokio-based peers, including TLS coverage.
+- [x] **Phase 5: HTTP TLS and tokio HTTP interoperability** - Validate stackful HTTP/1.1 and HTTP/2 clients/servers against tokio-based peers, including TLS coverage.
 - [ ] **Phase 6: Unary gRPC core and local stackful tests** - Add gRPC framing, status/metadata/trailer handling, prost-compatible unary client/server APIs, and local stackful tests.
 - [ ] **Phase 7: Tokio gRPC interoperability** - Validate stackful unary gRPC clients/servers against tonic-based peers.
 - [ ] **Phase 8: Performance, allocation, and protocol-limit coverage** - Add benchmarks, allocation tests, and focused malformed/limit/backpressure tests.
@@ -187,21 +187,21 @@ The architecture keeps public crates independent of tokio and other async runtim
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `cargo fmt --check`
-- [ ] `cargo test -p kimojio-stack-http --test alpn`
-- [ ] `cargo test -p kimojio-stack-http --test http1_interop`
-- [ ] `cargo test -p kimojio-stack-http --test h2_interop`
-- [ ] `cargo test -p kimojio-stack-http --test tls_interop`
-- [ ] `cargo test -p kimojio-stack-http --test tls_errors`
-- [ ] `cargo clippy -p kimojio-stack-http --all-targets --all-features -- -D warnings`
-- [ ] `cargo tree -p kimojio-stack-http -e normal` shows tokio/hyper/tonic are absent from normal dependencies.
+- [x] `cargo fmt --check`
+- [x] `cargo test -p kimojio-stack-http --test alpn`
+- [x] `cargo test -p kimojio-stack-http --test http1_interop`
+- [x] `cargo test -p kimojio-stack-http --test h2_interop`
+- [x] `cargo test -p kimojio-stack-http --test tls_interop`
+- [x] `cargo test -p kimojio-stack-http --test tls_errors`
+- [x] `cargo clippy -p kimojio-stack-http --all-targets --all-features -- -D warnings`
+- [x] `cargo tree -p kimojio-stack-http -e normal` shows tokio/hyper/tonic are absent from normal dependencies.
 
 #### Manual Verification:
-- [ ] Test matrix covers stackful-client-to-tokio-server and tokio-client-to-stackful-server for both HTTP versions.
-- [ ] TLS/plaintext behavior is documented in test names and helper configuration.
-- [ ] TLS failure tests assert inspectable errors for handshake failure, certificate verification failure, and close-notify/EOF behavior.
-- [ ] HTTP/1.1 interop tests include legal header casing variations.
-- [ ] HTTP/2 interop tests include legal SETTINGS variations such as initial window size, max frame size, header-list size, or concurrent-stream settings.
+- [x] Test matrix covers stackful-client-to-tokio-server and tokio-client-to-stackful-server for both HTTP versions.
+- [x] TLS/plaintext behavior is documented in test names and helper configuration.
+- [x] TLS failure tests assert inspectable errors for handshake failure, certificate verification failure, and close-notify/EOF behavior.
+- [x] HTTP/1.1 interop tests include legal header casing variations.
+- [x] HTTP/2 interop tests include legal SETTINGS variations such as initial window size, max frame size, header-list size, or concurrent-stream settings.
 
 ---
 
