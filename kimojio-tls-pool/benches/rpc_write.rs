@@ -1,8 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::io::Read;
 use std::mem::size_of;
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -20,14 +22,16 @@ use openssl::{
     ssl::{SslAcceptor, SslConnector, SslMethod, SslVerifyMode},
     x509::{X509, X509NameBuilder},
 };
+use rustix::event::{PollFd, PollFlags, poll};
 
 const CONNECTIONS: usize = 3;
-const THROUGHPUT_CONNECTIONS: usize = 8;
+const THROUGHPUT_CONNECTIONS: usize = 16;
 const EXECUTOR_COUNTS: [usize; 4] = [1, 2, 4, 8];
 const RPC_HEADER_LEN: usize = 64;
 const RPC_RESPONSE_LEN: usize = 64;
 const BODY_SIZES: [usize; 5] = [4 * 1024, 8 * 1024, 16 * 1024, 24 * 1024, 32 * 1024];
 const THROUGHPUT_BODY_LEN: usize = 32 * 1024;
+const THROUGHPUT_MESSAGES_PER_ITER: u64 = 512;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
@@ -116,6 +120,23 @@ fn stream_pair_with_pools(client_pool: &TlsPool, server_pool: &TlsPool) -> (TlsS
         .unwrap();
     let server = server_thread.join().unwrap();
     (client, server)
+}
+
+fn stream_pair_with_raw_server_drain(
+    client_pool: &TlsPool,
+    server_pool: &TlsPool,
+) -> (TlsStream, UnixStream, TlsStream) {
+    let (acceptor, connector) = make_contexts();
+    let (client_io, server_io) = UnixStream::pair().unwrap();
+    let server_raw = server_io.try_clone().unwrap();
+    let server_pool = server_pool.clone();
+    let server_thread = thread::spawn(move || server_pool.server(&acceptor, server_io).unwrap());
+
+    let client = client_pool
+        .client(&connector, "localhost", client_io)
+        .unwrap();
+    let server = server_thread.join().unwrap();
+    (client, server_raw, server)
 }
 
 fn make_rpc_header(body_len: usize) -> [u8; RPC_HEADER_LEN] {
@@ -322,11 +343,45 @@ fn run_throughput_scaling(iters: u64, executor_count: usize) -> Duration {
     start.elapsed()
 }
 
-fn client_write_loop(client: &TlsStream, count: u64, body_len: usize) {
-    let body = vec![0x6d; body_len];
+fn client_write_pipelined(client: &TlsStream, count: u64, body_len: usize) {
+    let body: Arc<[u8]> = Arc::from(vec![0x6d; body_len].into_boxed_slice());
+    let remaining = Arc::new(AtomicU64::new(count));
+    let (sender, receiver) = mpsc::channel();
+
     for _ in 0..count {
-        write_blocking(client, &body).unwrap();
+        let body = Arc::clone(&body);
+        let remaining = Arc::clone(&remaining);
+        let sender = sender.clone();
+        client
+            .write_shared(
+                body,
+                Box::new(move |result| {
+                    result.unwrap();
+                    if remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
+                        sender.send(()).unwrap();
+                    }
+                }),
+            )
+            .unwrap();
     }
+    drop(sender);
+    receiver.recv().unwrap();
+}
+
+fn client_write_batch(client: &TlsStream, count: u64, body_len: usize) {
+    let body: Arc<[u8]> = Arc::from(vec![0x6d; body_len].into_boxed_slice());
+    let chunks = (0..count).map(|_| Arc::clone(&body)).collect::<Vec<_>>();
+    let (sender, receiver) = mpsc::channel();
+    client
+        .write_batch(
+            chunks,
+            Box::new(move |result| {
+                result.unwrap();
+                sender.send(()).unwrap();
+            }),
+        )
+        .unwrap();
+    receiver.recv().unwrap();
 }
 
 fn server_drain_loop(server: &TlsStream, count: u64, body_len: usize) {
@@ -339,9 +394,11 @@ fn server_drain_loop(server: &TlsStream, count: u64, body_len: usize) {
 fn run_write_throughput_scaling(iters: u64, executor_count: usize) -> Duration {
     let counts = split_iters_across(iters, THROUGHPUT_CONNECTIONS);
     let barrier = Arc::new(Barrier::new(THROUGHPUT_CONNECTIONS * 2 + 1));
-    let config = PoolConfig::new(executor_count).with_placement_mode(PlacementMode::BackgroundOnly);
-    let client_pool = TlsPool::new(config.clone()).unwrap();
-    let server_pool = TlsPool::new(config).unwrap();
+    let client_config =
+        PoolConfig::new(executor_count).with_placement_mode(PlacementMode::BackgroundOnly);
+    let server_config = PoolConfig::new(1).with_placement_mode(PlacementMode::ImmediateOnly);
+    let client_pool = TlsPool::new(client_config).unwrap();
+    let server_pool = TlsPool::new(server_config).unwrap();
     let mut clients = Vec::with_capacity(THROUGHPUT_CONNECTIONS);
     let mut servers = Vec::with_capacity(THROUGHPUT_CONNECTIONS);
 
@@ -351,7 +408,7 @@ fn run_write_throughput_scaling(iters: u64, executor_count: usize) -> Duration {
         let server_barrier = Arc::clone(&barrier);
         clients.push(thread::spawn(move || {
             client_barrier.wait();
-            client_write_loop(&client, count, THROUGHPUT_BODY_LEN);
+            client_write_pipelined(&client, count, THROUGHPUT_BODY_LEN);
         }));
         servers.push(thread::spawn(move || {
             server_barrier.wait();
@@ -366,6 +423,102 @@ fn run_write_throughput_scaling(iters: u64, executor_count: usize) -> Duration {
     }
     for server in servers {
         server.join().unwrap();
+    }
+    start.elapsed()
+}
+
+fn run_batched_write_throughput_scaling(iters: u64, executor_count: usize) -> Duration {
+    let counts = split_iters_across(iters, THROUGHPUT_CONNECTIONS);
+    let barrier = Arc::new(Barrier::new(THROUGHPUT_CONNECTIONS * 2 + 1));
+    let client_config =
+        PoolConfig::new(executor_count).with_placement_mode(PlacementMode::BackgroundOnly);
+    let server_config = PoolConfig::new(1).with_placement_mode(PlacementMode::ImmediateOnly);
+    let client_pool = TlsPool::new(client_config).unwrap();
+    let server_pool = TlsPool::new(server_config).unwrap();
+    let mut clients = Vec::with_capacity(THROUGHPUT_CONNECTIONS);
+    let mut servers = Vec::with_capacity(THROUGHPUT_CONNECTIONS);
+
+    for count in counts {
+        let (client, server) = stream_pair_with_pools(&client_pool, &server_pool);
+        let client_barrier = Arc::clone(&barrier);
+        let server_barrier = Arc::clone(&barrier);
+        clients.push(thread::spawn(move || {
+            client_barrier.wait();
+            client_write_batch(&client, count, THROUGHPUT_BODY_LEN);
+        }));
+        servers.push(thread::spawn(move || {
+            server_barrier.wait();
+            server_drain_loop(&server, count, THROUGHPUT_BODY_LEN);
+        }));
+    }
+
+    barrier.wait();
+    let start = Instant::now();
+    for client in clients {
+        client.join().unwrap();
+    }
+    for server in servers {
+        server.join().unwrap();
+    }
+    start.elapsed()
+}
+
+fn raw_drain_loop(mut raw: UnixStream, _server: TlsStream) {
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        match raw.read(&mut buffer) {
+            Ok(0) => return,
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                wait_for_raw_read(&raw);
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+fn wait_for_raw_read(raw: &UnixStream) {
+    let mut fds = [PollFd::new(raw, PollFlags::IN)];
+    let _ = poll(&mut fds, None);
+}
+
+fn run_encrypt_throughput_scaling(iters: u64, executor_count: usize) -> Duration {
+    let counts = split_iters_across(iters, THROUGHPUT_CONNECTIONS);
+    let barrier = Arc::new(Barrier::new(THROUGHPUT_CONNECTIONS * 2 + 1));
+    let client_config =
+        PoolConfig::new(executor_count).with_placement_mode(PlacementMode::BackgroundOnly);
+    let server_config = PoolConfig::new(1).with_placement_mode(PlacementMode::ImmediateOnly);
+    let client_pool = TlsPool::new(client_config).unwrap();
+    let server_pool = TlsPool::new(server_config).unwrap();
+    let mut clients = Vec::with_capacity(THROUGHPUT_CONNECTIONS);
+    let mut drainers = Vec::with_capacity(THROUGHPUT_CONNECTIONS);
+
+    for count in counts {
+        let (client, raw, server) = stream_pair_with_raw_server_drain(&client_pool, &server_pool);
+        let client_barrier = Arc::clone(&barrier);
+        let drainer_barrier = Arc::clone(&barrier);
+        clients.push(thread::spawn(move || {
+            client_barrier.wait();
+            client_write_batch(&client, count, THROUGHPUT_BODY_LEN);
+        }));
+        drainers.push(thread::spawn(move || {
+            drainer_barrier.wait();
+            raw_drain_loop(raw, server);
+        }));
+    }
+
+    barrier.wait();
+    let start = Instant::now();
+    for client in clients {
+        client.join().unwrap();
+    }
+    for drainer in drainers {
+        drainer.join().unwrap();
     }
     start.elapsed()
 }
@@ -466,7 +619,8 @@ fn bench_throughput_scaling(c: &mut Criterion) {
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(4));
     group.throughput(Throughput::Bytes(
-        (RPC_HEADER_LEN + THROUGHPUT_BODY_LEN + RPC_RESPONSE_LEN) as u64,
+        (RPC_HEADER_LEN + THROUGHPUT_BODY_LEN + RPC_RESPONSE_LEN) as u64
+            * THROUGHPUT_MESSAGES_PER_ITER,
     ));
 
     for executor_count in EXECUTOR_COUNTS {
@@ -478,7 +632,9 @@ fn bench_throughput_scaling(c: &mut Criterion) {
             BenchmarkId::new("executors", executor_count),
             &executor_count,
             |b, &executor_count| {
-                b.iter_custom(|iters| run_throughput_scaling(iters, executor_count));
+                b.iter_custom(|iters| {
+                    run_throughput_scaling(iters * THROUGHPUT_MESSAGES_PER_ITER, executor_count)
+                });
             },
         );
     }
@@ -491,7 +647,9 @@ fn bench_write_throughput_scaling(c: &mut Criterion) {
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(4));
-    group.throughput(Throughput::Bytes(THROUGHPUT_BODY_LEN as u64));
+    group.throughput(Throughput::Bytes(
+        THROUGHPUT_BODY_LEN as u64 * THROUGHPUT_MESSAGES_PER_ITER,
+    ));
 
     for executor_count in EXECUTOR_COUNTS {
         let label = format!("tls_write/throughput_scaling/{executor_count}_executors");
@@ -502,7 +660,74 @@ fn bench_write_throughput_scaling(c: &mut Criterion) {
             BenchmarkId::new("executors", executor_count),
             &executor_count,
             |b, &executor_count| {
-                b.iter_custom(|iters| run_write_throughput_scaling(iters, executor_count));
+                b.iter_custom(|iters| {
+                    run_write_throughput_scaling(
+                        iters * THROUGHPUT_MESSAGES_PER_ITER,
+                        executor_count,
+                    )
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_batched_write_throughput_scaling(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tls_write/batched_throughput_scaling");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(4));
+    group.throughput(Throughput::Bytes(
+        THROUGHPUT_BODY_LEN as u64 * THROUGHPUT_MESSAGES_PER_ITER,
+    ));
+
+    for executor_count in EXECUTOR_COUNTS {
+        let label = format!("tls_write/batched_throughput_scaling/{executor_count}_executors");
+        print_latency_summary(&label, || {
+            run_batched_write_throughput_scaling(THROUGHPUT_CONNECTIONS as u64, executor_count)
+        });
+        group.bench_with_input(
+            BenchmarkId::new("executors", executor_count),
+            &executor_count,
+            |b, &executor_count| {
+                b.iter_custom(|iters| {
+                    run_batched_write_throughput_scaling(
+                        iters * THROUGHPUT_MESSAGES_PER_ITER,
+                        executor_count,
+                    )
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_encrypt_throughput_scaling(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tls_write/encrypt_throughput_scaling");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(4));
+    group.throughput(Throughput::Bytes(
+        THROUGHPUT_BODY_LEN as u64 * THROUGHPUT_MESSAGES_PER_ITER,
+    ));
+
+    for executor_count in EXECUTOR_COUNTS {
+        let label = format!("tls_write/encrypt_throughput_scaling/{executor_count}_executors");
+        print_latency_summary(&label, || {
+            run_encrypt_throughput_scaling(THROUGHPUT_CONNECTIONS as u64, executor_count)
+        });
+        group.bench_with_input(
+            BenchmarkId::new("executors", executor_count),
+            &executor_count,
+            |b, &executor_count| {
+                b.iter_custom(|iters| {
+                    run_encrypt_throughput_scaling(
+                        iters * THROUGHPUT_MESSAGES_PER_ITER,
+                        executor_count,
+                    )
+                });
             },
         );
     }
@@ -514,6 +739,8 @@ criterion_group!(
     benches,
     bench_rpc_write,
     bench_throughput_scaling,
-    bench_write_throughput_scaling
+    bench_write_throughput_scaling,
+    bench_batched_write_throughput_scaling,
+    bench_encrypt_throughput_scaling
 );
 criterion_main!(benches);

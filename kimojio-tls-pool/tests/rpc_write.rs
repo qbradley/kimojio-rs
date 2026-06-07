@@ -1,5 +1,6 @@
 mod support;
 
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -110,6 +111,60 @@ fn buffered_plaintext_read_does_not_wait_for_new_socket_readiness() {
 
     let rest = support::read_once_blocking(&client, 63).unwrap();
     assert_eq!(rest, vec![0x33; 63]);
+}
+
+#[test]
+fn shared_write_sends_payload_without_per_call_payload_copy() {
+    let (client, server) = stream_pair(background_config(1), immediate_config());
+    let payload: Arc<[u8]> = Arc::from(vec![0x44; 32 * 1024].into_boxed_slice());
+    let expected = Arc::clone(&payload);
+    let server_thread = thread::spawn(move || {
+        let received = read_exact_blocking(&server, expected.len()).unwrap();
+        assert_eq!(&received[..], &expected[..]);
+    });
+
+    let (sender, receiver) = mpsc::channel();
+    client
+        .write_shared(
+            payload,
+            Box::new(move |result| {
+                sender.send(result.unwrap()).unwrap();
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(
+        receiver.recv_timeout(Duration::from_secs(5)).unwrap(),
+        32 * 1024
+    );
+    server_thread.join().unwrap();
+}
+
+#[test]
+fn shared_write_batch_sends_all_chunks_with_one_callback() {
+    let (client, server) = stream_pair(background_config(1), immediate_config());
+    let chunk: Arc<[u8]> = Arc::from(vec![0x45; 8 * 1024].into_boxed_slice());
+    let chunks = vec![Arc::clone(&chunk), Arc::clone(&chunk), Arc::clone(&chunk)];
+    let server_thread = thread::spawn(move || {
+        let received = read_exact_blocking(&server, 24 * 1024).unwrap();
+        assert_eq!(received, vec![0x45; 24 * 1024]);
+    });
+
+    let (sender, receiver) = mpsc::channel();
+    client
+        .write_batch(
+            chunks,
+            Box::new(move |result| {
+                sender.send(result.unwrap()).unwrap();
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(
+        receiver.recv_timeout(Duration::from_secs(5)).unwrap(),
+        24 * 1024
+    );
+    server_thread.join().unwrap();
 }
 
 fn run_single_pair_rpc(client_config: PoolConfig, server_config: PoolConfig, body_len: usize) {

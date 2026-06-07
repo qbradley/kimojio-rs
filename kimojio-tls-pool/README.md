@@ -28,7 +28,7 @@ Pool statistics report submitted, immediate, background-routed, queued, complete
 
 The aggregate queued count includes both same-stream queueing and executor queueing; separate counters expose each source.
 
-Callbacks are type-erased because they may execute on a different thread from the submitter. Future APIs may add lower-allocation completion targets for workloads that can use channels or fixed completion handles instead of arbitrary callbacks.
+Callbacks are type-erased because they may execute on a different thread from the submitter. For repeated payloads, `write_shared` accepts `Arc<[u8]>` so callers can avoid per-call payload allocation/copying. `write_batch` amortizes callback and queueing overhead across multiple shared chunks. Future APIs may add lower-allocation completion targets for workloads that can use channels or fixed completion handles instead of arbitrary callbacks.
 
 ## Benchmarks
 
@@ -42,7 +42,7 @@ For a benchmark smoke test, run:
 cargo bench -p kimojio-tls-pool --bench rpc_write -- --test
 ```
 
-The benchmark covers single-pair, three-pair per-connection-pool, and three-pair shared-pool RPC write scenarios across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies. It also includes `rpc_write/throughput_scaling` and `tls_write/throughput_scaling`, which run shared-pool 32 KiB workloads with 1, 2, 4, and 8 executor threads.
+The benchmark covers single-pair, three-pair per-connection-pool, and three-pair shared-pool RPC write scenarios across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies. It also includes `rpc_write/throughput_scaling`, `tls_write/throughput_scaling`, and `tls_write/batched_throughput_scaling`, which run shared-pool 32 KiB workloads with 1, 2, 4, and 8 executor threads.
 
 ## Limitations
 

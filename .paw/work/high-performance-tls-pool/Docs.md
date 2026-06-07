@@ -32,7 +32,7 @@ Callbacks execute where the operation runs. Immediate operations call back on th
 
 The adaptive policy starts intentionally simple. Small writes prefer immediate execution, near-maximum writes are eligible for background execution, and medium writes can route to an executor when the chosen executor's estimated queue cost is lower than the operation cost. Reads are readiness-driven rather than pure size-driven because readiness dominates read latency and blocking reads can otherwise starve the pool.
 
-The current callback API necessarily type-erases callbacks that may execute on another thread. Read/write operations also pass through an internal job queue, which still uses boxed jobs for heterogeneous work. The main alternative is an enum-only operation queue with fixed read/write variants and a separate typed completion channel API. That would reduce allocations on the hot path but would trade away arbitrary user callbacks, or require callbacks to be represented as a small fixed set of completion targets.
+The current callback API necessarily type-erases callbacks that may execute on another thread. Read/write operations also pass through an internal job queue, which still uses boxed jobs for heterogeneous work. The `write_shared` API accepts `Arc<[u8]>` so repeated payloads can avoid per-call payload allocation/copying, and `write_batch` amortizes callback and queueing overhead across multiple shared chunks. A deeper alternative is an enum-only operation queue with fixed read/write variants and a separate typed completion channel API. That would reduce allocations on the hot path but would trade away arbitrary user callbacks, or require callbacks to be represented as a small fixed set of completion targets.
 
 ### Integration Points
 
@@ -104,7 +104,7 @@ Run the benchmark:
 cargo bench -p kimojio-tls-pool --bench rpc_write
 ```
 
-The benchmark covers single client/server, three-pair per-connection-pool, and three-pair shared-pool RPC write scenarios. It compares immediate-only, background-only, and adaptive modes across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies and prints p50/p95/p99 summary lines. It also includes RPC and one-way TLS write throughput-scaling groups that run shared-pool 32 KiB workloads with 1, 2, 4, and 8 executor threads. The one-way write group removes response round-trip coupling so executor-count scaling is easier to observe. The benchmark smoke command is wired into CI on the default Rust toolchain.
+The benchmark covers single client/server, three-pair per-connection-pool, and three-pair shared-pool RPC write scenarios. It compares immediate-only, background-only, and adaptive modes across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies and prints p50/p95/p99 summary lines. It also includes RPC, one-way TLS write, and batched one-way TLS write throughput-scaling groups that run shared-pool 32 KiB workloads with 1, 2, 4, and 8 executor threads. The one-way groups remove response round-trip coupling; the batched group also amortizes per-message callback/queue overhead so executor-count scaling is easier to observe. The benchmark smoke command is wired into CI on the default Rust toolchain.
 
 ### Edge Cases
 

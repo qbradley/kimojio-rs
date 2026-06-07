@@ -136,6 +136,34 @@ impl TlsStream {
         self.submit_write(byte_len, move || state.write_tls(bytes), callback)
     }
 
+    /// Writes shared bytes and reports the plaintext byte count through `callback`.
+    ///
+    /// This avoids allocating or copying the payload for each submitted write
+    /// when the same payload can be safely shared across operations.
+    pub fn write_shared(
+        &self,
+        bytes: Arc<[u8]>,
+        callback: CompletionCallback<usize>,
+    ) -> OperationResult<()> {
+        let byte_len = bytes.len();
+        let state = Arc::clone(&self.state);
+        self.submit_write(byte_len, move || state.write_tls_shared(bytes), callback)
+    }
+
+    /// Writes a batch of shared byte chunks and reports the total plaintext bytes.
+    ///
+    /// Batching amortizes callback and queueing overhead for high-throughput
+    /// workloads while preserving same-stream serialization.
+    pub fn write_batch(
+        &self,
+        chunks: Vec<Arc<[u8]>>,
+        callback: CompletionCallback<usize>,
+    ) -> OperationResult<()> {
+        let byte_len = chunks.iter().map(|chunk| chunk.len()).sum();
+        let state = Arc::clone(&self.state);
+        self.submit_write(byte_len, move || state.write_tls_batch(chunks), callback)
+    }
+
     /// Returns a snapshot of the parent pool statistics.
     pub fn stats(&self) -> PoolStatsSnapshot {
         self.state.pool.stats.snapshot()
@@ -257,31 +285,28 @@ impl StreamState {
     }
 
     fn write_tls(&self, bytes: Vec<u8>) -> OperationResult<usize> {
-        let byte_len = bytes.len();
         let mut guard = self.tls.lock().map_err(|_| OperationError::StatePoisoned)?;
         let tls = guard.as_mut().ok_or(OperationError::Shutdown)?;
         crate::tls::set_blocking_stream(tls)?;
+        write_tls_bytes(tls, &bytes)
+    }
 
-        let mut written = 0;
-        while written < byte_len {
-            match tls.ssl_write(&bytes[written..]) {
-                Ok(0) => {
-                    return Err(OperationError::Io(std::io::Error::new(
-                        std::io::ErrorKind::WriteZero,
-                        "TLS write returned zero bytes",
-                    )));
-                }
-                Ok(amount) => written += amount,
-                Err(error) => {
-                    if let Some(interest) = ssl_wait_interest(&error) {
-                        wait_for_fd(crate::tls::raw_fd(tls), interest)?;
-                    } else {
-                        return map_ssl_error(error);
-                    }
-                }
-            }
+    fn write_tls_shared(&self, bytes: Arc<[u8]>) -> OperationResult<usize> {
+        let mut guard = self.tls.lock().map_err(|_| OperationError::StatePoisoned)?;
+        let tls = guard.as_mut().ok_or(OperationError::Shutdown)?;
+        crate::tls::set_blocking_stream(tls)?;
+        write_tls_bytes(tls, &bytes)
+    }
+
+    fn write_tls_batch(&self, chunks: Vec<Arc<[u8]>>) -> OperationResult<usize> {
+        let mut guard = self.tls.lock().map_err(|_| OperationError::StatePoisoned)?;
+        let tls = guard.as_mut().ok_or(OperationError::Shutdown)?;
+        crate::tls::set_blocking_stream(tls)?;
+        let mut total = 0;
+        for chunk in &chunks {
+            total += write_tls_bytes(tls, chunk)?;
         }
-        Ok(byte_len)
+        Ok(total)
     }
 
     fn raw_fd(&self) -> OperationResult<std::os::fd::RawFd> {
@@ -289,6 +314,30 @@ impl StreamState {
         let tls = guard.as_ref().ok_or(OperationError::Shutdown)?;
         Ok(crate::tls::raw_fd(tls))
     }
+}
+
+fn write_tls_bytes(tls: &mut BoxedTlsStream, bytes: &[u8]) -> OperationResult<usize> {
+    let byte_len = bytes.len();
+    let mut written = 0;
+    while written < byte_len {
+        match tls.ssl_write(&bytes[written..]) {
+            Ok(0) => {
+                return Err(OperationError::Io(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "TLS write returned zero bytes",
+                )));
+            }
+            Ok(amount) => written += amount,
+            Err(error) => {
+                if let Some(interest) = ssl_wait_interest(&error) {
+                    wait_for_fd(crate::tls::raw_fd(tls), interest)?;
+                } else {
+                    return map_ssl_error(error);
+                }
+            }
+        }
+    }
+    Ok(byte_len)
 }
 
 #[derive(Default)]
