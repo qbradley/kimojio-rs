@@ -5,6 +5,7 @@ members = [
     "kimojio-macros",
     "kimojio-stack",
     "kimojio-stack-tls",
+    "kimojio-stack-tls2",
     "kimojio-tls",
     "perf",
     "examples",
@@ -30,12 +31,14 @@ impls = "1"
 intrusive-collections = "0.10"
 kimojio = { path = "kimojio", version = "0.16.5" }
 kimojio-macros = { path = "kimojio-macros", version = "0.16.5" }
-kimojio-tls = { path = "kimojio-tls", version = "0.16.5" }
 kimojio-stack = { path = "kimojio-stack", version = "0.16.4" }
 kimojio-stack-tls = { path = "kimojio-stack-tls", version = "0.16.4" }
+kimojio-stack-tls2 = { path = "kimojio-stack-tls2", version = "0.16.4" }
+kimojio-tls = { path = "kimojio-tls", version = "0.16.5" }
 libc = "0.2"
 mimalloc = "0.1"
 openssl = "0.10"
+openssl-sys = "0.9"
 pin-project-lite = "0.2"
 rcgen = { version = "0.14", features = ["x509-parser"] }
 roaring = "0.11"

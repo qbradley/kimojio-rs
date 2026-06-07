@@ -1,0 +1,24 @@
+[package]
+name = "kimojio-stack-tls2"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "Direct OpenSSL BIO TLS streams for kimojio-stack"
+
+[dependencies]
+foreign-types-shared.workspace = true
+kimojio-stack.workspace = true
+openssl.workspace = true
+openssl-sys.workspace = true
+rustix = { workspace = true, features = ["net"] }
+
+[dev-dependencies]
+criterion.workspace = true
+kimojio-stack-tls.workspace = true
+
+[[bench]]
+name = "tls_compare"
+harness = false
