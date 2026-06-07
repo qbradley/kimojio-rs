@@ -274,9 +274,9 @@ impl TaskStackDump {
         }
     }
 
-    fn suspended(task_id: TaskId) -> Self {
+    fn suspended(interrupt: TaskInterrupt) -> Self {
         Self {
-            task_id,
+            task_id: interrupt.task_id(),
             state: TaskStackState::Suspended,
             backtrace: Some(std::backtrace::Backtrace::force_capture().to_string()),
         }
@@ -507,7 +507,7 @@ impl RuntimeContext<'_> {
     /// Captures stack traces for live stackful coroutines.
     ///
     /// This must be called from the root context. Started coroutines are resumed
-    /// with an inspection command that captures a [`std::backtrace::Backtrace`]
+    /// with an interrupt action that captures a [`std::backtrace::Backtrace`]
     /// on the coroutine stack and then immediately suspends again without
     /// advancing normal user work. Coroutines that have not started yet are
     /// reported as [`TaskStackState::NotStarted`] because they do not have a
@@ -1819,10 +1819,12 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                     stack_size,
                     current: CurrentTask::Coroutine { id, yielder },
                 };
-                handle_resume_action(id, yielder, Suspend::Ready, action);
 
-                let result = panic::catch_unwind(AssertUnwindSafe(|| f(&cx)))
-                    .map_err(JoinError::from_payload);
+                let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                    handle_resume_action(id, yielder, Suspend::Ready, action);
+                    f(&cx)
+                }))
+                .map_err(JoinError::from_payload);
                 task_join.complete(result);
                 task_state.task_finished();
             })
@@ -2745,7 +2747,24 @@ struct Task {
 
 enum ResumeAction {
     Run,
-    CaptureStack(Rc<RefCell<Vec<TaskStackDump>>>),
+    Interrupt(TaskInterruptFn),
+}
+
+type TaskInterruptFn = Box<dyn FnOnce(TaskInterrupt)>;
+
+#[derive(Clone, Copy)]
+struct TaskInterrupt {
+    task_id: TaskId,
+}
+
+impl TaskInterrupt {
+    fn new(task_id: TaskId) -> Self {
+        Self { task_id }
+    }
+
+    fn task_id(self) -> usize {
+        self.task_id
+    }
 }
 
 struct Scheduler {
@@ -2839,28 +2858,52 @@ impl Scheduler {
         let mut dump = StackDump::default();
 
         for id in 0..self.tasks.len() {
+            if let Some(task) = &self.tasks[id]
+                && !task.coroutine.started()
+            {
+                dump.tasks.push(TaskStackDump::not_started(id));
+            }
+        }
+
+        self.interrupt_started_tasks(|_| {
+            let task_captures = Rc::clone(&captures);
+            Box::new(move |interrupt| {
+                task_captures
+                    .borrow_mut()
+                    .push(TaskStackDump::suspended(interrupt));
+            })
+        });
+        dump.tasks.extend(captures.borrow_mut().drain(..));
+        dump.tasks.sort_by_key(TaskStackDump::task_id);
+
+        dump
+    }
+
+    fn interrupt_started_tasks<F>(&mut self, mut interrupt: F)
+    where
+        F: FnMut(TaskId) -> TaskInterruptFn,
+    {
+        for id in 0..self.tasks.len() {
+            let Some(task) = &self.tasks[id] else {
+                continue;
+            };
+            if !task.coroutine.started() {
+                continue;
+            }
+
+            let interrupt = interrupt(id);
             let Some(mut task) = self.tasks[id].take() else {
                 continue;
             };
 
-            if task.coroutine.started() {
-                let result = task
-                    .coroutine
-                    .resume(ResumeAction::CaptureStack(Rc::clone(&captures)));
-                match result {
-                    CoroutineResult::Yield(_) => {
-                        dump.tasks.extend(captures.borrow_mut().drain(..));
-                        self.tasks[id] = Some(task);
-                    }
-                    CoroutineResult::Return(()) => {}
+            let result = task.coroutine.resume(ResumeAction::Interrupt(interrupt));
+            match result {
+                CoroutineResult::Yield(_) => {
+                    self.tasks[id] = Some(task);
                 }
-            } else {
-                dump.tasks.push(TaskStackDump::not_started(id));
-                self.tasks[id] = Some(task);
+                CoroutineResult::Return(()) => {}
             }
         }
-
-        dump
     }
 
     fn acquire_io_state(&mut self) -> Rc<IoState> {
@@ -3049,8 +3092,8 @@ fn handle_resume_action(
     loop {
         match action {
             ResumeAction::Run => return,
-            ResumeAction::CaptureStack(captures) => {
-                captures.borrow_mut().push(TaskStackDump::suspended(id));
+            ResumeAction::Interrupt(interrupt) => {
+                interrupt(TaskInterrupt::new(id));
                 action = yielder.suspend(suspend);
             }
         }
@@ -3406,6 +3449,30 @@ mod tests {
     #[inline(never)]
     fn stack_dump_test_leaf(cx: &RuntimeContext<'_>) {
         cx.yield_now();
+    }
+
+    #[test]
+    fn interrupted_stackful_task_panics_are_join_errors() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let handle = scope.spawn(|cx| {
+                    cx.yield_now();
+                    42
+                });
+
+                cx.yield_now();
+                cx.core
+                    .borrow_mut()
+                    .interrupt_started_tasks(|_| Box::new(|_| panic!("interrupted")));
+
+                let error = handle.join(cx).unwrap_err();
+                let payload = error.into_payload();
+                let message = payload.downcast_ref::<&str>().copied();
+                assert_eq!(message, Some("interrupted"));
+            });
+        });
     }
 
     #[test]
