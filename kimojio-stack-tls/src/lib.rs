@@ -240,6 +240,8 @@ fn as_io_error(error: TlsServerError) -> Errno {
 
 #[cfg(test)]
 mod tests {
+    use std::mem::size_of;
+
     use kimojio_stack::Runtime;
     use openssl::{
         asn1::Asn1Time,
@@ -255,6 +257,8 @@ mod tests {
     use super::*;
 
     const TLS_BUFFER_SIZE: usize = 16 * 1024;
+    const RPC_HEADER_LEN: usize = 64;
+    const RPC_RESPONSE_LEN: usize = 64;
 
     fn make_contexts() -> (TlsContext, TlsContext) {
         let rsa = Rsa::generate(2048).unwrap();
@@ -289,6 +293,18 @@ mod tests {
             TlsContext::from_openssl(acceptor.build().into_context()),
             TlsContext::from_openssl(connector.build().into_context()),
         )
+    }
+
+    fn make_rpc_header(body_len: usize) -> [u8; RPC_HEADER_LEN] {
+        let mut header = [0xa5; RPC_HEADER_LEN];
+        header[..size_of::<u64>()].copy_from_slice(&(body_len as u64).to_le_bytes());
+        header
+    }
+
+    fn rpc_body_len(header: &[u8; RPC_HEADER_LEN]) -> usize {
+        let mut len = [0_u8; size_of::<u64>()];
+        len.copy_from_slice(&header[..size_of::<u64>()]);
+        u64::from_le_bytes(len) as usize
     }
 
     #[test]
@@ -347,6 +363,75 @@ mod tests {
                 server.join(cx).unwrap();
                 let echoed = client.join(cx).unwrap();
                 assert_eq!(echoed, message);
+            });
+        });
+    }
+
+    #[test]
+    fn tls_rpc_write_header_body_response_over_stackful_socketpair() {
+        let (server_ctx, client_ctx) = make_contexts();
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+
+        let header = make_rpc_header(8 * 1024);
+        let body = vec![0x5a; 8 * 1024];
+        let response = [0x7b; RPC_RESPONSE_LEN];
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut tls = server_ctx
+                        .server(cx, TLS_BUFFER_SIZE, server_fd)
+                        .expect("server TLS handshake failed");
+                    let mut header = [0_u8; RPC_HEADER_LEN];
+                    let mut body = vec![0_u8; 8 * 1024];
+
+                    let amount = tls
+                        .read_exact_or_eof(cx, &mut header)
+                        .expect("server TLS header read failed");
+                    assert_eq!(amount, RPC_HEADER_LEN);
+
+                    let body_len = rpc_body_len(&header);
+                    assert_eq!(body_len, body.len());
+                    let amount = tls
+                        .read_exact_or_eof(cx, &mut body[..body_len])
+                        .expect("server TLS body read failed");
+                    assert_eq!(amount, body_len);
+                    assert!(body.iter().all(|&byte| byte == 0x5a));
+
+                    tls.write(cx, &response)
+                        .expect("server TLS response write failed");
+                    tls.shutdown(cx).expect("server TLS shutdown failed");
+                    tls.close(cx).expect("server TLS close failed");
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut tls = client_ctx
+                        .client(cx, TLS_BUFFER_SIZE, client_fd)
+                        .expect("client TLS handshake failed");
+                    tls.write(cx, &header)
+                        .expect("client TLS header write failed");
+                    tls.write(cx, &body).expect("client TLS body write failed");
+
+                    let mut received = [0_u8; RPC_RESPONSE_LEN];
+                    let amount = tls
+                        .read_exact_or_eof(cx, &mut received)
+                        .expect("client TLS response read failed");
+                    assert_eq!(amount, RPC_RESPONSE_LEN);
+                    tls.shutdown(cx).expect("client TLS shutdown failed");
+                    tls.close(cx).expect("client TLS close failed");
+                    received
+                });
+
+                server.join(cx).unwrap();
+                let received = client.join(cx).unwrap();
+                assert_eq!(received, response);
             });
         });
     }

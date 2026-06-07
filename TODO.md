@@ -6,4 +6,4 @@
 - opentelemetry integration (logging and metrics)
 - panic behavior on nested threads (should they immediately propagate up?)
 - cancelation behavior (cancel I/O when scope exits)
-
+- need tokio/thread interop capabilities (e.g. channels)
