@@ -27,7 +27,7 @@ Wait queues can hold three classes of waiters:
 | Stackful | `ExternalWaiter` | Parks only the current stackful coroutine |
 | Tokio-compatible async | `Waker` | Returns `Poll::Pending` and wakes the async task |
 
-Ready send and receive operations try the queue first. If the operation succeeds, the channel wakes one opposite-side waiter and returns. If the operation cannot proceed, the blocking path registers an endpoint-specific waiter, rechecks readiness under the wait queue lock, and only then sleeps, parks, or returns `Pending`.
+Ready send and receive operations try the queue first. If the operation succeeds, the channel wakes one opposite-side waiter and returns. If a thread or stackful operation cannot proceed, it performs a short bounded adaptive retry phase before registering an endpoint-specific waiter, rechecking readiness under the wait queue lock, and only then sleeping or parking. Async futures register wakers immediately and return `Pending`.
 
 ### Design Decisions
 
@@ -42,6 +42,8 @@ Ready send and receive operations try the queue first. If the operation succeeds
 **External stackful wake path.** Existing stackful waiters are runtime-thread-local. Cross-runtime channels use the new external wake infrastructure instead, so a sender on another thread can enqueue a task ID into the target runtime's external ready queue. When the runtime root is waiting without io_uring work, it uses a condition variable. When it may be blocked in `io_uring_enter`, it arms an eventfd-backed `POLL_ADD` wake source so external notification interrupts the kernel wait. Correctness does not depend on new-kernel-only io_uring futex operations.
 
 **No kernel wait on ready paths.** A send with capacity or a receive with data completes by operating on the in-memory queue and notifying already-registered waiters if needed. Kernel-visible wakeups only matter after a stackful coroutine has actually parked and the runtime root must be interrupted.
+
+**Adaptive waiting before parking.** Thread and stackful waiting methods briefly poll the queue with CPU spin hints and a small number of OS-yield attempts before entering the heavier waiter path. This keeps near-ready cross-thread handoffs in userspace while preserving the lost-wakeup-safe registration and recheck discipline before any actual sleep or park.
 
 **Closure wakes all opposite waiters.** Dropping the final sender wakes receivers so they can drain remaining messages and then observe `RecvError`. Dropping the final receiver wakes senders so they can recover the unsent value through `SendError<T>`.
 
@@ -116,7 +118,7 @@ Use stackful endpoints from spawned stackful coroutines when the operation may w
 
 ### Configuration Options
 
-The only channel configuration is bounded capacity. Capacity controls backpressure and memory reserved by the underlying queue. There is no unbounded variant and no fairness or spinning configuration in this implementation.
+The only public channel configuration is bounded capacity. Capacity controls backpressure and memory reserved by the underlying queue. There is no unbounded variant and no public fairness or spinning configuration in this implementation.
 
 ## Testing
 

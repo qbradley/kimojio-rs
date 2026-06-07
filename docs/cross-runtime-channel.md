@@ -80,7 +80,10 @@ All endpoint types support nonblocking fast paths:
 
 Blocking or waiting methods only wait when the operation cannot complete
 immediately. Ready send and receive operations do not park, await, block, or
-enter a kernel wait.
+enter a kernel wait. Thread and stackful waiting methods also use a short
+adaptive retry phase before registering a waiter, so near-ready handoffs can
+complete without entering a condition-variable wait or external stackful wake
+path.
 
 Dropping the final sender wakes receivers. They may drain buffered messages and
 then receive `RecvError` once the channel is empty. Dropping the final receiver
@@ -94,8 +97,9 @@ calling the waiting methods.
 
 The message queue is backed by a preallocated `crossbeam_queue::ArrayQueue`.
 Ready paths are designed to avoid channel-owned heap allocation after channel
-construction. Contended paths allocate or register endpoint-specific waiters as
-needed.
+construction. Thread and stackful contended paths spin briefly, yield a small
+bounded number of times, and then allocate or register endpoint-specific waiters
+as needed.
 
 Stackful cross-thread wakeups use kimojio-stack external wake integration. A
 wake from another thread queues the target coroutine in the runtime's external

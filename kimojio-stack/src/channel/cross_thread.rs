@@ -36,16 +36,21 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
+use std::hint;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex as StdMutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
+use std::thread;
 
 use crossbeam_queue::ArrayQueue;
 
 use crate::channel::{RecvError, SendError, TryRecvError, TrySendError};
 use crate::{ExternalWaiter, RuntimeContext};
+
+const ADAPTIVE_SPIN_RETRIES: usize = 128;
+const ADAPTIVE_YIELD_RETRIES: usize = 2;
 
 /// Creates a bounded cross-thread channel builder.
 pub fn bounded<T>(capacity: usize) -> Builder<T> {
@@ -217,6 +222,15 @@ impl<T> ThreadSender<T> {
             Err(TrySendError::Full(value)) => value,
         };
 
+        value = match self.inner.try_send_after_adaptive_wait(value) {
+            Ok(()) => {
+                self.inner.recv_wait.notify_one();
+                return Ok(());
+            }
+            Err(TrySendError::Closed(value)) => return Err(SendError(value)),
+            Err(TrySendError::Full(value)) => value,
+        };
+
         let mut wait = self.inner.send_wait.prepare_wait();
         loop {
             match self.inner.try_send_without_notify(value) {
@@ -277,6 +291,15 @@ impl<T> ThreadReceiver<T> {
     /// Receives a value, blocking the current OS thread while the channel is empty and open.
     pub fn recv_blocking(&self) -> Result<T, RecvError> {
         match self.inner.try_recv_without_notify() {
+            Ok(value) => {
+                self.inner.send_wait.notify_one();
+                return Ok(value);
+            }
+            Err(TryRecvError::Closed) => return Err(RecvError),
+            Err(TryRecvError::Empty) => {}
+        }
+
+        match self.inner.try_recv_after_adaptive_wait() {
             Ok(value) => {
                 self.inner.send_wait.notify_one();
                 return Ok(value);
@@ -357,6 +380,15 @@ impl<T> StackfulSender<T> {
             Err(TrySendError::Full(value)) => value,
         };
 
+        value = match self.inner.try_send_after_adaptive_wait(value) {
+            Ok(()) => {
+                self.inner.recv_wait.notify_one();
+                return Ok(());
+            }
+            Err(TrySendError::Closed(value)) => return Err(SendError(value)),
+            Err(TrySendError::Full(value)) => value,
+        };
+
         loop {
             let Some(waiter) = cx.external_waiter() else {
                 cx.park();
@@ -428,6 +460,15 @@ impl<T> StackfulReceiver<T> {
     /// coroutine before calling `recv`.
     pub fn recv(&self, cx: &RuntimeContext<'_>) -> Result<T, RecvError> {
         match self.inner.try_recv_without_notify() {
+            Ok(value) => {
+                self.inner.send_wait.notify_one();
+                return Ok(value);
+            }
+            Err(TryRecvError::Closed) => return Err(RecvError),
+            Err(TryRecvError::Empty) => {}
+        }
+
+        match self.inner.try_recv_after_adaptive_wait() {
             Ok(value) => {
                 self.inner.send_wait.notify_one();
                 return Ok(value);
@@ -886,6 +927,50 @@ impl<T> Inner<T> {
         } else {
             Err(TryRecvError::Empty)
         }
+    }
+
+    fn try_send_after_adaptive_wait(&self, mut value: T) -> Result<(), TrySendError<T>> {
+        for _ in 0..ADAPTIVE_SPIN_RETRIES {
+            hint::spin_loop();
+            match self.try_send_without_notify(value) {
+                Ok(()) => return Ok(()),
+                Err(TrySendError::Closed(value)) => return Err(TrySendError::Closed(value)),
+                Err(TrySendError::Full(returned)) => value = returned,
+            }
+        }
+
+        for _ in 0..ADAPTIVE_YIELD_RETRIES {
+            thread::yield_now();
+            match self.try_send_without_notify(value) {
+                Ok(()) => return Ok(()),
+                Err(TrySendError::Closed(value)) => return Err(TrySendError::Closed(value)),
+                Err(TrySendError::Full(returned)) => value = returned,
+            }
+        }
+
+        Err(TrySendError::Full(value))
+    }
+
+    fn try_recv_after_adaptive_wait(&self) -> Result<T, TryRecvError> {
+        for _ in 0..ADAPTIVE_SPIN_RETRIES {
+            hint::spin_loop();
+            match self.try_recv_without_notify() {
+                Ok(value) => return Ok(value),
+                Err(TryRecvError::Closed) => return Err(TryRecvError::Closed),
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+
+        for _ in 0..ADAPTIVE_YIELD_RETRIES {
+            thread::yield_now();
+            match self.try_recv_without_notify() {
+                Ok(value) => return Ok(value),
+                Err(TryRecvError::Closed) => return Err(TryRecvError::Closed),
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+
+        Err(TryRecvError::Empty)
     }
 }
 
