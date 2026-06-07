@@ -104,7 +104,9 @@ Run the benchmark:
 cargo bench -p kimojio-tls-pool --bench rpc_write
 ```
 
-The benchmark covers single client/server, three-pair per-connection-pool, and three-pair shared-pool RPC write scenarios. It compares immediate-only, background-only, and adaptive modes across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies and prints p50/p95/p99 summary lines. It also includes RPC, one-way TLS write, and batched one-way TLS write throughput-scaling groups that run shared-pool 32 KiB workloads with 1, 2, 4, and 8 executor threads. The one-way groups remove response round-trip coupling; the batched group also amortizes per-message callback/queue overhead so executor-count scaling is easier to observe. The benchmark smoke command is wired into CI on the default Rust toolchain.
+The benchmark covers single client/server, three-pair per-connection-pool, and three-pair shared-pool RPC write scenarios. It compares immediate-only, background-only, and adaptive modes across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies and prints p50/p95/p99 summary lines. It also includes RPC, one-way TLS write, batched one-way TLS write, and encrypt-only throughput-scaling groups that run shared-pool 32 KiB workloads with 1, 2, 4, and 8 executor threads. The one-way groups remove response round-trip coupling; the batched and encrypt-only groups also amortize per-message callback/queue overhead and can isolate client-side encryption from server-side TLS decrypt/socket drain costs. The benchmark smoke command is wired into CI on the default Rust toolchain.
+
+Current measurements in this environment do not show near-linear scaling. The executor routing counters show jobs are distributed across executors, while throughput remains roughly flat. That indicates the remaining bottleneck is below the pool scheduler: OpenSSL/socket write behavior, transport drain behavior, or another shared lower-level limit. The benchmark groups are intentionally retained to make this visible and to validate future architecture changes such as record-queue or memory-BIO based encryption offload.
 
 ### Edge Cases
 
