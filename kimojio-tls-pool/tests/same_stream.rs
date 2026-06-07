@@ -11,12 +11,22 @@ use support::{
 
 #[test]
 fn same_stream_writes_are_ordered_immediate() {
-    run_same_stream_ordering(immediate_config(), immediate_config());
+    run_same_stream_ordering(
+        immediate_config(),
+        immediate_config(),
+        b"first".to_vec(),
+        b"second".to_vec(),
+    );
 }
 
 #[test]
 fn same_stream_writes_are_ordered_background() {
-    run_same_stream_ordering(background_config(2), background_config(1));
+    run_same_stream_ordering(
+        background_config(2),
+        background_config(1),
+        b"first".to_vec(),
+        b"second".to_vec(),
+    );
 }
 
 #[test]
@@ -24,15 +34,26 @@ fn same_stream_writes_are_ordered_adaptive() {
     run_same_stream_ordering(
         PoolConfig::new(2).with_placement_mode(PlacementMode::Adaptive),
         immediate_config(),
+        vec![b'a'; 24 * 1024],
+        vec![b'b'; 24 * 1024],
     );
 }
 
-fn run_same_stream_ordering(client_config: PoolConfig, server_config: PoolConfig) {
+fn run_same_stream_ordering(
+    client_config: PoolConfig,
+    server_config: PoolConfig,
+    first_payload: Vec<u8>,
+    second_payload: Vec<u8>,
+) {
+    let mut expected = first_payload.clone();
+    expected.extend_from_slice(&second_payload);
+    let first_len = first_payload.len();
+    let second_len = second_payload.len();
     let (client, server) = stream_pair(client_config, server_config);
     let callback_count = Arc::new(AtomicUsize::new(0));
     let server_thread = thread::spawn(move || {
-        let received = read_exact_blocking(&server, "firstsecond".len()).unwrap();
-        assert_eq!(received, b"firstsecond");
+        let received = read_exact_blocking(&server, expected.len()).unwrap();
+        assert_eq!(received, expected);
         write_blocking(&server, b"ok").unwrap();
     });
 
@@ -41,7 +62,7 @@ fn run_same_stream_ordering(client_config: PoolConfig, server_config: PoolConfig
     let first_count = Arc::clone(&callback_count);
     client
         .write(
-            b"first".to_vec(),
+            first_payload,
             Box::new(move |result| {
                 first_count.fetch_add(1, Ordering::SeqCst);
                 first_sender.send(result.unwrap()).unwrap();
@@ -51,7 +72,7 @@ fn run_same_stream_ordering(client_config: PoolConfig, server_config: PoolConfig
     let second_count = Arc::clone(&callback_count);
     client
         .write(
-            b"second".to_vec(),
+            second_payload,
             Box::new(move |result| {
                 second_count.fetch_add(1, Ordering::SeqCst);
                 sender.send(result.unwrap()).unwrap();
@@ -59,8 +80,8 @@ fn run_same_stream_ordering(client_config: PoolConfig, server_config: PoolConfig
         )
         .unwrap();
 
-    assert_eq!(receiver.recv().unwrap(), 5);
-    assert_eq!(receiver.recv().unwrap(), 6);
+    assert_eq!(receiver.recv().unwrap(), first_len);
+    assert_eq!(receiver.recv().unwrap(), second_len);
     assert_eq!(callback_count.load(Ordering::SeqCst), 2);
     let stats = client.stats();
     assert_eq!(stats.completed, 2);
