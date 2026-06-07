@@ -3,6 +3,7 @@
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::operation::{self, OperationKind, OperationWork};
@@ -28,6 +29,7 @@ impl TlsStream {
                 pool,
                 tls: Mutex::new(None),
                 queue: Mutex::new(StreamQueue::default()),
+                stats: StreamStats::default(),
             }),
         }
     }
@@ -38,6 +40,7 @@ impl TlsStream {
                 pool,
                 tls: Mutex::new(Some(tls)),
                 queue: Mutex::new(StreamQueue::default()),
+                stats: StreamStats::default(),
             }),
         }
     }
@@ -125,6 +128,11 @@ impl TlsStream {
         self.state.pool.stats.snapshot()
     }
 
+    /// Returns stream-local operation statistics.
+    pub fn stream_stats(&self) -> StreamStatsSnapshot {
+        self.state.stats.snapshot()
+    }
+
     fn submit_work<T>(&self, work: OperationWork<T>) -> OperationResult<()>
     where
         T: Send + 'static,
@@ -139,6 +147,7 @@ pub(crate) struct StreamState {
     pool: Arc<PoolInner>,
     tls: Mutex<Option<BoxedTlsStream>>,
     queue: Mutex<StreamQueue>,
+    stats: StreamStats,
 }
 
 impl StreamState {
@@ -148,11 +157,13 @@ impl StreamState {
         }
 
         self.pool.stats.record_submitted();
+        self.stats.record_submitted();
         let start = {
             let mut queue = self.queue.lock().expect("stream queue poisoned");
             if queue.in_flight {
                 queue.pending.push_back(job);
                 self.pool.stats.record_queued(None);
+                self.stats.record_queued();
                 None
             } else {
                 queue.in_flight = true;
@@ -215,6 +226,55 @@ struct StreamQueue {
     pending: VecDeque<StreamJob>,
 }
 
+#[derive(Default, Debug)]
+struct StreamStats {
+    submitted: AtomicUsize,
+    queued: AtomicUsize,
+    active: AtomicUsize,
+    max_active: AtomicUsize,
+}
+
+impl StreamStats {
+    fn record_submitted(&self) {
+        self.submitted.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_queued(&self) {
+        self.queued.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_started(&self) {
+        let active = self.active.fetch_add(1, Ordering::AcqRel) + 1;
+        self.max_active.fetch_max(active, Ordering::AcqRel);
+    }
+
+    fn record_finished(&self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    fn snapshot(&self) -> StreamStatsSnapshot {
+        StreamStatsSnapshot {
+            submitted: self.submitted.load(Ordering::Relaxed),
+            queued: self.queued.load(Ordering::Relaxed),
+            active: self.active.load(Ordering::Acquire),
+            max_active: self.max_active.load(Ordering::Acquire),
+        }
+    }
+}
+
+/// Point-in-time stream-local operation statistics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StreamStatsSnapshot {
+    /// Operations submitted to this stream.
+    pub submitted: usize,
+    /// Operations queued behind an already in-flight same-stream operation.
+    pub queued: usize,
+    /// Currently active operations for this stream.
+    pub active: usize,
+    /// Maximum simultaneous active operations observed for this stream.
+    pub max_active: usize,
+}
+
 fn start_operation<T>(state: Arc<StreamState>, work: OperationWork<T>)
 where
     T: Send + 'static,
@@ -226,7 +286,9 @@ where
     match state.pool.choose_placement(operation_size) {
         crate::OperationPlacement::Immediate => {
             state.pool.stats.record_immediate();
+            state.stats.record_started();
             let success = operation::complete(operation, callback);
+            state.stats.record_finished();
             record_completion(&state, None, success);
             state.finish();
         }
@@ -238,12 +300,14 @@ where
             let callback = Arc::new(Mutex::new(Some(callback)));
             let send_error_callback = Arc::clone(&callback);
             let job = Box::new(move || {
+                job_state.stats.record_started();
                 let callback = callback
                     .lock()
                     .expect("operation callback mutex poisoned")
                     .take()
                     .expect("operation callback missing");
                 let success = operation::complete(operation, callback);
+                job_state.stats.record_finished();
                 record_completion(&job_state, Some(executor), success);
                 job_state.finish();
             });

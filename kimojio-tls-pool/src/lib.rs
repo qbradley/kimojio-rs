@@ -20,7 +20,7 @@ pub use error::{OperationError, OperationResult, TlsPoolError};
 pub use operation::{OperationKind, OperationPlacement};
 pub use pool::TlsPool;
 pub use stats::{ExecutorStatsSnapshot, PoolStats, PoolStatsSnapshot};
-pub use stream::{CompletionCallback, TlsStream};
+pub use stream::{CompletionCallback, StreamStatsSnapshot, TlsStream};
 
 #[cfg(test)]
 mod tests {

@@ -62,5 +62,8 @@ fn run_same_stream_ordering(
     let response = read_exact_blocking(&client, 2).unwrap();
     assert_eq!(response, b"ok");
     assert_eq!(client.stats().completed, 3);
+    let stream_stats = client.stream_stats();
+    assert_eq!(stream_stats.max_active, 1);
+    assert_eq!(stream_stats.active, 0);
     server_thread.join().unwrap();
 }
