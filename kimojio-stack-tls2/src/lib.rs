@@ -21,10 +21,12 @@ use std::{
 };
 
 use foreign_types_shared::ForeignType;
-use kimojio_stack::{Errno, RuntimeContext};
+use kimojio_stack::{Errno, IoVec, RuntimeContext};
 use openssl::ssl::{Ssl, SslContext, SslRef};
 use openssl_sys as ffi;
 use rustix::{fd::OwnedFd, net::Shutdown};
+
+const DEFAULT_CORK_BUFFER_LIMIT: usize = 16 * 1024;
 
 /// A TLS context backed by an OpenSSL `SSL_CTX`.
 ///
@@ -110,6 +112,7 @@ impl<'io, 'cx> TlsStream<'io, 'cx> {
         if buf.is_empty() {
             return Ok(0);
         }
+        self.flush()?;
 
         loop {
             let mut read = 0;
@@ -186,13 +189,43 @@ impl<'io, 'cx> TlsStream<'io, 'cx> {
         Ok(())
     }
 
+    /// Runs `f` with encrypted output corked until scope exit.
+    ///
+    /// [`CorkedTlsStream::write_buffered`] encrypts plaintext immediately but
+    /// keeps the encrypted BIO output in this stream until an explicit flush,
+    /// a direct corked write, or scope exit. [`CorkedTlsStream::write_all`]
+    /// writes the provided plaintext directly; if buffered encrypted bytes are
+    /// pending, the BIO combines them with the direct encrypted output using
+    /// vectored I/O where possible.
+    pub fn write_corked<F, T>(&mut self, f: F) -> Result<T, Errno>
+    where
+        F: FnOnce(&mut CorkedTlsStream<'_, 'io, 'cx>) -> Result<T, Errno>,
+    {
+        self.flush()?;
+        self.state_mut().begin_cork();
+
+        let result = {
+            let mut corked = CorkedTlsStream { stream: self };
+            f(&mut corked)
+        };
+
+        self.state_mut().end_cork();
+        let flush = self.flush();
+        match (result, flush) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Ok(_), Err(errno)) => Err(errno),
+            (Err(errno), _) => Err(errno),
+        }
+    }
+
     /// Flushes the OpenSSL stream.
     pub fn flush(&mut self) -> Result<(), Errno> {
-        Ok(())
+        self.state_mut().flush_pending()
     }
 
     /// Sends and receives TLS close-notify.
     pub fn shutdown(&mut self) -> Result<(), Errno> {
+        self.flush()?;
         loop {
             let result = unsafe { ffi::SSL_shutdown(self.ssl.as_ptr()) };
             match result {
@@ -214,6 +247,7 @@ impl<'io, 'cx> TlsStream<'io, 'cx> {
 
     /// Closes the underlying socket through the stack runtime.
     pub fn close(mut self) -> Result<(), Errno> {
+        self.flush()?;
         self.state_mut().close()
     }
 
@@ -276,6 +310,33 @@ impl<'io, 'cx> TlsStream<'io, 'cx> {
     }
 }
 
+/// A scoped writer for opt-in TLS encrypted-output corking.
+pub struct CorkedTlsStream<'a, 'io, 'cx> {
+    stream: &'a mut TlsStream<'io, 'cx>,
+}
+
+impl CorkedTlsStream<'_, '_, '_> {
+    /// Encrypts `buf` now and buffers the resulting encrypted BIO output.
+    pub fn write_buffered(&mut self, buf: &[u8]) -> Result<(), Errno> {
+        self.stream.state_mut().begin_cork();
+        self.stream.write_all(buf)
+    }
+
+    /// Writes `buf` directly, combining pending encrypted output with the first
+    /// direct encrypted socket write where possible.
+    pub fn write_all(&mut self, buf: &[u8]) -> Result<(), Errno> {
+        self.stream.state_mut().end_cork();
+        let result = self.stream.write_all(buf);
+        self.stream.state_mut().begin_cork();
+        result
+    }
+
+    /// Flushes pending encrypted output without ending the corked scope.
+    pub fn flush(&mut self) -> Result<(), Errno> {
+        self.stream.flush()
+    }
+}
+
 enum SslError {
     Retry,
     Eof,
@@ -286,6 +347,10 @@ struct StackBioState {
     cx: *const RuntimeContext<'static>,
     socket: Option<OwnedFd>,
     errno: Option<Errno>,
+    output: BioOutput,
+    pending: Vec<u8>,
+    #[cfg(test)]
+    write_limit: Option<usize>,
 }
 
 impl StackBioState {
@@ -294,17 +359,31 @@ impl StackBioState {
             cx: (cx as *const RuntimeContext<'cx>).cast(),
             socket: Some(socket),
             errno: None,
+            output: BioOutput::Direct,
+            pending: Vec::new(),
+            #[cfg(test)]
+            write_limit: None,
         }
     }
 
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Errno> {
+        self.flush_pending()?;
         let socket = self.socket.as_ref().ok_or(Errno::PIPE)?;
         self.cx().read(socket, buf)
     }
 
     fn write(&mut self, buf: &[u8]) -> Result<usize, Errno> {
+        if self.output == BioOutput::Buffered {
+            self.buffer_encrypted(buf)?;
+            return Ok(buf.len());
+        }
+
+        if !self.pending.is_empty() {
+            return self.write_pending_and_current(buf);
+        }
+
         let socket = self.socket.as_ref().ok_or(Errno::PIPE)?;
-        self.cx().write(socket, buf)
+        self.write_socket(socket, buf)
     }
 
     fn shutdown_write(&self) -> Result<(), Errno> {
@@ -313,6 +392,7 @@ impl StackBioState {
     }
 
     fn close(&mut self) -> Result<(), Errno> {
+        self.flush_pending()?;
         let socket = self.socket.take().ok_or(Errno::PIPE)?;
         self.cx().close(socket)
     }
@@ -321,11 +401,157 @@ impl StackBioState {
         self.errno.take()
     }
 
+    fn begin_cork(&mut self) {
+        self.output = BioOutput::Buffered;
+    }
+
+    fn end_cork(&mut self) {
+        self.output = BioOutput::Direct;
+    }
+
+    fn buffer_encrypted(&mut self, buf: &[u8]) -> Result<(), Errno> {
+        if buf.is_empty() {
+            return Ok(());
+        }
+
+        if !self.pending.is_empty()
+            && self.pending.len().saturating_add(buf.len()) > DEFAULT_CORK_BUFFER_LIMIT
+        {
+            self.flush_pending()?;
+        }
+
+        if buf.len() >= DEFAULT_CORK_BUFFER_LIMIT {
+            self.write_all_socket(buf)
+        } else {
+            self.pending.extend_from_slice(buf);
+            Ok(())
+        }
+    }
+
+    fn flush_pending(&mut self) -> Result<(), Errno> {
+        let mut sent = 0;
+        while sent < self.pending.len() {
+            let socket = self.socket.as_ref().ok_or(Errno::PIPE)?;
+            let amount = self.write_socket(socket, &self.pending[sent..])?;
+            if amount == 0 {
+                if sent != 0 {
+                    self.pending.drain(..sent);
+                }
+                return Err(Errno::PIPE);
+            }
+            sent += amount;
+        }
+
+        self.pending.clear();
+        Ok(())
+    }
+
+    fn write_all_socket(&self, mut buf: &[u8]) -> Result<(), Errno> {
+        let socket = self.socket.as_ref().ok_or(Errno::PIPE)?;
+        while !buf.is_empty() {
+            let amount = self.write_socket(socket, buf)?;
+            if amount == 0 {
+                return Err(Errno::PIPE);
+            }
+            buf = &buf[amount..];
+        }
+        Ok(())
+    }
+
+    fn write_pending_and_current(&mut self, buf: &[u8]) -> Result<usize, Errno> {
+        loop {
+            if self.pending.is_empty() {
+                let socket = self.socket.as_ref().ok_or(Errno::PIPE)?;
+                return self.write_socket(socket, buf);
+            }
+
+            let pending_len = self.pending.len();
+            let amount = self.writev_pending_current(buf)?;
+            if amount == 0 {
+                return Err(Errno::PIPE);
+            }
+
+            if amount < pending_len {
+                self.pending.drain(..amount);
+                continue;
+            }
+
+            self.pending.clear();
+            let current = amount - pending_len;
+            if current != 0 {
+                return Ok(current);
+            }
+        }
+    }
+
+    fn writev_pending_current(&self, current: &[u8]) -> Result<usize, Errno> {
+        let socket = self.socket.as_ref().ok_or(Errno::PIPE)?;
+        let mut remaining = self.write_limit().unwrap_or(usize::MAX);
+        remaining = remaining.max(1);
+
+        let pending_len = self.pending.len().min(remaining);
+        remaining -= pending_len;
+        let current_len = current.len().min(remaining);
+
+        let iovecs = [
+            IoVec {
+                iov_base: self.pending.as_ptr().cast::<c_void>().cast_mut(),
+                iov_len: pending_len,
+            },
+            IoVec {
+                iov_base: current.as_ptr().cast::<c_void>().cast_mut(),
+                iov_len: current_len,
+            },
+        ];
+
+        let iovecs = if current_len == 0 {
+            &iovecs[..1]
+        } else {
+            &iovecs[..]
+        };
+        self.cx().writev(socket, iovecs)
+    }
+
+    fn write_socket(&self, socket: &OwnedFd, buf: &[u8]) -> Result<usize, Errno> {
+        let limit = self
+            .write_limit()
+            .unwrap_or(buf.len())
+            .min(buf.len())
+            .max(1);
+        self.cx().write(socket, &buf[..limit])
+    }
+
+    #[cfg(test)]
+    fn set_write_limit_for_test(&mut self, limit: Option<usize>) {
+        self.write_limit = limit;
+    }
+
+    #[cfg(test)]
+    fn pending_len_for_test(&self) -> usize {
+        self.pending.len()
+    }
+
+    #[cfg(test)]
+    fn write_limit(&self) -> Option<usize> {
+        self.write_limit
+    }
+
+    #[cfg(not(test))]
+    fn write_limit(&self) -> Option<usize> {
+        None
+    }
+
     fn cx(&self) -> &RuntimeContext<'_> {
         // SAFETY: `TlsStream` carries a phantom borrow tying this erased pointer
         // to the `RuntimeContext` lifetime supplied at construction.
         unsafe { &*self.cx }
     }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum BioOutput {
+    Direct,
+    Buffered,
 }
 
 fn stack_bio_method() -> Result<*const ffi::BIO_METHOD, Errno> {
@@ -536,6 +762,239 @@ mod tests {
                     let mut echoed = Vec::new();
                     let mut buf = [0_u8; 5];
                     while echoed.len() < message.len() {
+                        let amount = tls.read(&mut buf).expect("client TLS read failed");
+                        if amount == 0 {
+                            break;
+                        }
+                        echoed.extend_from_slice(&buf[..amount]);
+                    }
+                    tls.shutdown().expect("client TLS shutdown failed");
+                    tls.close().expect("client TLS close failed");
+                    echoed
+                });
+
+                server.join(cx).unwrap();
+                let echoed = client.join(cx).unwrap();
+                assert_eq!(echoed, message);
+            });
+        });
+    }
+
+    #[test]
+    fn tls_corked_small_writes_echo_over_stackful_socketpair() {
+        let (server_ctx, client_ctx) = make_contexts();
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+
+        let message = b"small buffered cork chunks";
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut tls = server_ctx
+                        .server(cx, server_fd)
+                        .expect("server TLS handshake failed");
+                    let mut buf = [0_u8; 9];
+                    let mut read = 0;
+                    while read < message.len() {
+                        let amount = tls.read(&mut buf).expect("server TLS read failed");
+                        assert_ne!(amount, 0);
+                        read += amount;
+                        tls.write_all(&buf[..amount])
+                            .expect("server TLS write failed");
+                    }
+                    tls.shutdown().expect("server TLS shutdown failed");
+                    tls.close().expect("server TLS close failed");
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut tls = client_ctx
+                        .client(cx, client_fd)
+                        .expect("client TLS handshake failed");
+                    tls.write_corked(|tls| {
+                        tls.write_buffered(b"small ")?;
+                        tls.write_buffered(b"buffered ")?;
+                        tls.write_buffered(b"cork chunks")?;
+                        Ok(())
+                    })
+                    .expect("client corked TLS write failed");
+
+                    let mut echoed = Vec::new();
+                    let mut buf = [0_u8; 5];
+                    while echoed.len() < message.len() {
+                        let amount = tls.read(&mut buf).expect("client TLS read failed");
+                        if amount == 0 {
+                            break;
+                        }
+                        echoed.extend_from_slice(&buf[..amount]);
+                    }
+                    tls.shutdown().expect("client TLS shutdown failed");
+                    tls.close().expect("client TLS close failed");
+                    echoed
+                });
+
+                server.join(cx).unwrap();
+                let echoed = client.join(cx).unwrap();
+                assert_eq!(echoed, message);
+            });
+        });
+    }
+
+    #[test]
+    fn tls_corked_small_header_large_body_echo_over_stackful_socketpair() {
+        let (server_ctx, client_ctx) = make_contexts();
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+
+        let mut message = Vec::from(&b"header-a header-b "[..]);
+        message.extend((0..8192).map(|i| i as u8));
+        let client_message = message.clone();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server_message_len = message.len();
+                let server = scope.spawn(move |cx| {
+                    let mut tls = server_ctx
+                        .server(cx, server_fd)
+                        .expect("server TLS handshake failed");
+                    let mut buf = [0_u8; 1024];
+                    let mut read = 0;
+                    while read < server_message_len {
+                        let amount = tls.read(&mut buf).expect("server TLS read failed");
+                        assert_ne!(amount, 0);
+                        read += amount;
+                        tls.write_all(&buf[..amount])
+                            .expect("server TLS write failed");
+                    }
+                    tls.shutdown().expect("server TLS shutdown failed");
+                    tls.close().expect("server TLS close failed");
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut tls = client_ctx
+                        .client(cx, client_fd)
+                        .expect("client TLS handshake failed");
+                    let body = &client_message[b"header-a header-b ".len()..];
+                    tls.write_corked(|tls| {
+                        tls.write_buffered(b"header-a ")?;
+                        tls.write_buffered(b"header-b ")?;
+                        tls.write_all(body)?;
+                        Ok(())
+                    })
+                    .expect("client corked TLS write failed");
+
+                    let mut echoed = Vec::new();
+                    let mut buf = [0_u8; 1024];
+                    while echoed.len() < client_message.len() {
+                        let amount = tls.read(&mut buf).expect("client TLS read failed");
+                        if amount == 0 {
+                            break;
+                        }
+                        echoed.extend_from_slice(&buf[..amount]);
+                    }
+                    tls.shutdown().expect("client TLS shutdown failed");
+                    tls.close().expect("client TLS close failed");
+                    echoed
+                });
+
+                server.join(cx).unwrap();
+                let echoed = client.join(cx).unwrap();
+                assert_eq!(echoed, message);
+            });
+        });
+    }
+
+    #[derive(Clone, Copy)]
+    enum ShortWriteCase {
+        LessThanBuffered,
+        BufferedBoundary,
+        IntoUnbuffered,
+    }
+
+    #[test]
+    fn tls_corked_writev_short_writes_recover() {
+        for case in [
+            ShortWriteCase::LessThanBuffered,
+            ShortWriteCase::BufferedBoundary,
+            ShortWriteCase::IntoUnbuffered,
+        ] {
+            run_corked_writev_short_write_case(case);
+        }
+    }
+
+    fn run_corked_writev_short_write_case(case: ShortWriteCase) {
+        let (server_ctx, client_ctx) = make_contexts();
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+
+        let mut message = Vec::from(&b"header-a header-b "[..]);
+        message.extend((0..4096).map(|i| i as u8));
+        let client_message = message.clone();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server_message_len = message.len();
+                let server = scope.spawn(move |cx| {
+                    let mut tls = server_ctx
+                        .server(cx, server_fd)
+                        .expect("server TLS handshake failed");
+                    let mut buf = [0_u8; 1024];
+                    let mut read = 0;
+                    while read < server_message_len {
+                        let amount = tls.read(&mut buf).expect("server TLS read failed");
+                        assert_ne!(amount, 0);
+                        read += amount;
+                        tls.write_all(&buf[..amount])
+                            .expect("server TLS write failed");
+                    }
+                    tls.shutdown().expect("server TLS shutdown failed");
+                    tls.close().expect("server TLS close failed");
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut tls = client_ctx
+                        .client(cx, client_fd)
+                        .expect("client TLS handshake failed");
+                    let body = &client_message[b"header-a header-b ".len()..];
+                    tls.write_corked(|tls| {
+                        tls.write_buffered(b"header-a ")?;
+                        tls.write_buffered(b"header-b ")?;
+
+                        let buffered = tls.stream.state_ref().pending_len_for_test();
+                        assert_ne!(buffered, 0);
+                        let limit = match case {
+                            ShortWriteCase::LessThanBuffered => (buffered / 2).max(1),
+                            ShortWriteCase::BufferedBoundary => buffered,
+                            ShortWriteCase::IntoUnbuffered => buffered + 5,
+                        };
+                        tls.stream.state_mut().set_write_limit_for_test(Some(limit));
+                        tls.write_all(body)?;
+                        tls.stream.state_mut().set_write_limit_for_test(None);
+                        Ok(())
+                    })
+                    .expect("client corked TLS write failed");
+
+                    let mut echoed = Vec::new();
+                    let mut buf = [0_u8; 1024];
+                    while echoed.len() < client_message.len() {
                         let amount = tls.read(&mut buf).expect("client TLS read failed");
                         if amount == 0 {
                             break;

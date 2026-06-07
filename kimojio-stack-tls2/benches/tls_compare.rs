@@ -194,6 +194,89 @@ fn bench_direct_bio_echo(iters: u64, message_len: usize) -> Duration {
     })
 }
 
+fn bench_direct_bio_fragments(iters: u64, body_len: usize, corked: bool) -> Duration {
+    let (server_ctx, client_ctx) = make_direct_bio_contexts();
+    let body = vec![0x5a; body_len];
+    let expected_len = b"header-a ".len() + b"header-b ".len() + body_len.max(b"small-tail".len());
+
+    run_stackful(|cx| {
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+
+        cx.scope(|scope| {
+            let server = scope.spawn(move |cx| {
+                let mut tls = server_ctx
+                    .server(cx, server_fd)
+                    .expect("direct BIO server handshake failed");
+                let mut buf = [0_u8; 1024];
+                for _ in 0..iters {
+                    let mut read = 0;
+                    while read < expected_len {
+                        let amount = tls.read(&mut buf).expect("direct BIO server read failed");
+                        assert_ne!(amount, 0);
+                        read += amount;
+                        tls.write_all(&buf[..amount])
+                            .expect("direct BIO server write failed");
+                    }
+                }
+                tls.shutdown().expect("direct BIO server shutdown failed");
+                tls.close().expect("direct BIO server close failed");
+            });
+
+            let mut tls = client_ctx
+                .client(cx, client_fd)
+                .expect("direct BIO client handshake failed");
+            let mut buf = vec![0_u8; expected_len];
+
+            let start = Instant::now();
+            for _ in 0..iters {
+                if corked {
+                    tls.write_corked(|tls| {
+                        tls.write_buffered(b"header-a ")?;
+                        tls.write_buffered(b"header-b ")?;
+                        if body.is_empty() {
+                            tls.write_buffered(b"small-tail")?;
+                        } else {
+                            tls.write_all(&body)?;
+                        }
+                        Ok(())
+                    })
+                    .expect("direct BIO corked client write failed");
+                } else {
+                    tls.write_all(b"header-a ")
+                        .expect("direct BIO client header write failed");
+                    tls.write_all(b"header-b ")
+                        .expect("direct BIO client header write failed");
+                    if body.is_empty() {
+                        tls.write_all(b"small-tail")
+                            .expect("direct BIO client tail write failed");
+                    } else {
+                        tls.write_all(&body)
+                            .expect("direct BIO client body write failed");
+                    }
+                }
+
+                let amount = tls
+                    .read_exact_or_eof(&mut buf)
+                    .expect("direct BIO client read failed");
+                assert_eq!(amount, expected_len);
+                black_box(buf[0]);
+            }
+            let elapsed = start.elapsed();
+
+            tls.shutdown().expect("direct BIO client shutdown failed");
+            tls.close().expect("direct BIO client close failed");
+            server.join(cx).unwrap();
+            elapsed
+        })
+    })
+}
+
 fn benchmark(c: &mut Criterion) {
     for message_len in [64, 1024, 16 * 1024] {
         c.bench_function(&format!("tls/memory_bio_echo_{message_len}b"), |b| {
@@ -204,6 +287,19 @@ fn benchmark(c: &mut Criterion) {
             b.iter_custom(|iters| bench_direct_bio_echo(iters, message_len));
         });
     }
+
+    c.bench_function("tls/direct_bio_uncorked_fragments_64b", |b| {
+        b.iter_custom(|iters| bench_direct_bio_fragments(iters, 0, false));
+    });
+    c.bench_function("tls/direct_bio_corked_fragments_64b", |b| {
+        b.iter_custom(|iters| bench_direct_bio_fragments(iters, 0, true));
+    });
+    c.bench_function("tls/direct_bio_uncorked_header_body_16384b", |b| {
+        b.iter_custom(|iters| bench_direct_bio_fragments(iters, 16 * 1024, false));
+    });
+    c.bench_function("tls/direct_bio_corked_header_body_16384b", |b| {
+        b.iter_custom(|iters| bench_direct_bio_fragments(iters, 16 * 1024, true));
+    });
 }
 
 criterion_group!(
