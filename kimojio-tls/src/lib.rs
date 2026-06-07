@@ -160,6 +160,9 @@ unsafe extern "C" {
     // and then the actual amounts read should be passed to tls_handle_pull_advance.
     fn tls_handle_pull_get_buffer(tls: *mut RawTlsServer, slice: &mut Slice) -> i32;
     fn tls_handle_pull_advance(tls: *mut RawTlsServer, amount: usize) -> i32;
+    fn tls_handle_pending_input(tls: *mut RawTlsServer) -> usize;
+    fn tls_handle_pending_output(tls: *mut RawTlsServer) -> usize;
+    fn tls_handle_ready_input_record(tls: *mut RawTlsServer) -> usize;
     fn tls_handle_read(tls: *mut RawTlsServer, buffer: *mut u8, length: isize) -> RawError;
     fn tls_handle_write(tls: *mut RawTlsServer, buffer: *const u8, length: isize) -> RawError;
     fn tls_handle_server_side_handshake(tls: *mut RawTlsServer) -> RawError;
@@ -373,6 +376,21 @@ impl TlsServer {
     pub fn use_pull_buffer(&mut self, amount: usize) {
         let result = unsafe { tls_handle_pull_advance(self.server, amount) };
         assert!(result as usize == amount);
+    }
+
+    pub fn pending_encrypted_input_len(&self) -> usize {
+        unsafe { tls_handle_pending_input(self.server) }
+    }
+
+    pub fn pending_encrypted_output_len(&self) -> usize {
+        unsafe { tls_handle_pending_output(self.server) }
+    }
+
+    pub fn ready_encrypted_input_record_len(&self) -> Option<usize> {
+        match unsafe { tls_handle_ready_input_record(self.server) } {
+            0 => None,
+            len => Some(len),
+        }
     }
 }
 

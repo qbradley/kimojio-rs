@@ -229,6 +229,36 @@ int tls_handle_pull_advance(TlsHandle *server, size_t amount)
     return BIO_nread(server->server_io, &buf, amount);
 }
 
+size_t tls_handle_pending_input(TlsHandle *server)
+{
+    return BIO_ctrl_pending(server->server);
+}
+
+size_t tls_handle_pending_output(TlsHandle *server)
+{
+    return BIO_ctrl_pending(server->server_io);
+}
+
+size_t tls_handle_ready_input_record(TlsHandle *server)
+{
+    char *buf = NULL;
+    int size = BIO_nread0(server->server, &buf);
+    if (size < SSL3_RT_HEADER_LENGTH)
+    {
+        return 0;
+    }
+
+    unsigned char *header = (unsigned char *)buf;
+    size_t record_len = SSL3_RT_HEADER_LENGTH +
+        (((size_t)header[3] << 8) | (size_t)header[4]);
+    if (BIO_ctrl_pending(server->server) < record_len)
+    {
+        return 0;
+    }
+
+    return record_len;
+}
+
 Response tls_handle_read(TlsHandle *tls, void *data, size_t length)
 {
     int result = SSL_read(tls->ssl, data, length);

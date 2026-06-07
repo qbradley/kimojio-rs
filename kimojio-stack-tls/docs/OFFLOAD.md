@@ -19,16 +19,18 @@ Offload is opt-in per stream:
 
 ```rust
 let pool = TlsOffloadPool::new(2)?;
-let offload = TlsOffloadConfig::new(pool)
-    .with_read_threshold(32 * 1024)
-    .with_write_threshold(32 * 1024);
+let offload = TlsOffloadConfig::large_records(pool);
 
-let stream = tls_context.client_with_offload(cx, 16 * 1024, socket, offload)?;
+let stream = tls_context.client_with_offload(cx, 32 * 1024, socket, offload)?;
 ```
 
+`TlsOffloadConfig::large_records(pool)` uses 24 KiB read/write thresholds. That
+keeps small replies and mid-sized RPC bodies inline while still exercising
+offload for near-maximum 32 KiB writes and reads.
+
 `TlsOffloadConfig::always(pool)` is available for comparison experiments. It
-offloads every non-empty TLS data read and write, including operations that are
-likely to return `WantRead` or `WantWrite` immediately.
+offloads every non-empty TLS data write and every non-empty TLS data read once a
+complete encrypted input record is buffered.
 
 ## Synchronization model
 
@@ -37,13 +39,22 @@ waits for the handle to be returned. `TlsServer` is `Send` but not `Sync`, so th
 OpenSSL object is never accessed concurrently. Completion is signaled through an
 atomic futex word:
 
-1. The stackful task sends a job to the offload pool and parks on
+1. Each stream is assigned to one worker queue when offload is enabled. This
+   preserves per-stream ordering and avoids a single mutex-protected global
+   receiver.
+2. The stackful task sends a job to its assigned offload worker and parks on
    `RuntimeContext::futex_wait` when the kernel supports io_uring futex waits.
-2. The worker finishes `SSL_read` or `SSL_write`, stores the result, sets the
+3. The worker finishes `SSL_read` or `SSL_write`, stores the result, sets the
    futex word, and wakes the waiter with a userspace futex wake.
-3. The stackful task resumes, restores the `TlsServer`, and handles
+4. The stackful task resumes, restores the `TlsServer`, and handles
    `Success`, `WantRead`, `WantWrite`, `Eof`, or failure exactly as the inline
    path would.
+
+Read/decrypt offload is additionally gated on OpenSSL BIO-pair readiness: the
+stream only offloads `SSL_read` after `kimojio-tls` can see that a complete
+encrypted TLS record is buffered. This avoids paying a worker handoff just to get
+`WantRead`. The BIO pair must be large enough to hold a full encrypted record;
+use at least 32 KiB for this POC.
 
 If io_uring futex wait support is unavailable, the POC falls back to cooperative
 yielding until the worker completes. That keeps the OS thread unblocked, but it
@@ -84,7 +95,8 @@ encrypted or decrypted elsewhere.
 ## RPC write benchmark
 
 The `rpc_write` Criterion benchmark exercises the prior custom-BIO workload
-shape with a 64-byte request header, 8/16/23/24 KiB body, and 64-byte response:
+shape with a 64-byte request header, 8/16/23/24/32 KiB body, and 64-byte
+response:
 
 ```sh
 cargo bench -p kimojio-stack-tls --bench rpc_write
@@ -99,17 +111,41 @@ It has two three-connection topologies:
   to one server-side `Runtime` with three stackful tasks. Server-side offload is
   enabled in the offload variants.
 
-Each topology compares inline TLS, threshold offload with an 8 KiB threshold, and
-always-offload. The benchmark asserts that the configured side actually uses the
-offload path, so a successful run validates both the topology and the offload
-routing.
+Each topology compares inline TLS, threshold offload with 8 KiB and 24 KiB
+thresholds, and always-offload. The benchmark asserts that the configured side
+actually uses the offload path when the body reaches the selected threshold, so a
+successful run validates both the topology and the offload routing.
+
+On the current POC, offload remains slower than inline whenever it actually runs:
+
+| Topology | Body | Inline | 8 KiB threshold | 24 KiB threshold | Always |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| client fanout | 8 KiB | 22.7 us | 31.9 us | 22.4 us | 42.9 us |
+| client fanout | 16 KiB | 26.1 us | 34.2 us | 26.0 us | 43.5 us |
+| client fanout | 23 KiB | 30.0 us | 36.3 us | 31.0 us | 52.9 us |
+| client fanout | 24 KiB | 29.9 us | 42.7 us | 36.9 us | 54.7 us |
+| client fanout | 32 KiB | 32.1 us | 56.0 us | 45.6 us | 69.3 us |
+| server fanin | 8 KiB | 16.0 us | 23.6 us | 17.5 us | 35.4 us |
+| server fanin | 16 KiB | 18.6 us | 24.6 us | 18.6 us | 35.9 us |
+| server fanin | 23 KiB | 20.9 us | 26.2 us | 20.5 us | 45.4 us |
+| server fanin | 24 KiB | 21.0 us | 34.3 us | 27.0 us | 46.6 us |
+| server fanin | 32 KiB | 25.8 us | 32.3 us | 31.6 us | 47.6 us |
+
+The 24 KiB threshold is useful as a guardrail because it keeps small replies and
+sub-threshold bodies near inline performance. It does not make the current
+offload handoff profitable. The remaining gap is the fundamental difference from
+FreeBSD kTLS: this POC still waits for the offloaded OpenSSL call before the
+`read` or `write` returns, while kTLS queues records into the socket layer and
+lets workers make those records ready later.
 
 ## Open questions
 
 The POC currently copies plaintext because the worker pool requires owned
 `'static` jobs. A scoped or registered-buffer design could reduce copies, but it
 would need to preserve the same rule that the OpenSSL handle is moved to exactly
-one thread at a time. The offload pool is also intentionally simple; a production
-version should measure whether per-runtime pools, per-core pools, bounded
-queues, or direct handoff to dedicated crypto threads provide better tail
-latency under overload.
+one thread at a time.
+
+The next design step is a true record queue: application writes enqueue plaintext
+records, crypto workers produce encrypted records, and stackful tasks only wait
+when the queue is full or a read has no decrypted record ready. That would match
+FreeBSD kTLS more closely than the current synchronous offload call.

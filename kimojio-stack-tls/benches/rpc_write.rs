@@ -26,17 +26,19 @@ use rustix::{
 };
 
 const CONNECTIONS: usize = 3;
-const TLS_BUFFER_SIZE: usize = 16 * 1024;
-const OFFLOAD_THRESHOLD: usize = 8 * 1024;
+const TLS_BUFFER_SIZE: usize = 32 * 1024;
+const OFFLOAD_THRESHOLD_8K: usize = 8 * 1024;
+const OFFLOAD_THRESHOLD_24K: usize = 24 * 1024;
 const OFFLOAD_WORKERS: usize = 3;
 const RPC_HEADER_LEN: usize = 64;
 const RPC_RESPONSE_LEN: usize = 64;
-const BODY_SIZES: [usize; 4] = [8 * 1024, 16 * 1024, 23 * 1024, 24 * 1024];
+const BODY_SIZES: [usize; 5] = [8 * 1024, 16 * 1024, 23 * 1024, 24 * 1024, 32 * 1024];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OffloadMode {
     Inline,
-    Threshold,
+    Threshold8k,
+    Threshold24k,
     Always,
 }
 
@@ -44,7 +46,8 @@ impl OffloadMode {
     fn name(self) -> &'static str {
         match self {
             Self::Inline => "inline",
-            Self::Threshold => "offload_threshold_8k",
+            Self::Threshold8k => "offload_threshold_8k",
+            Self::Threshold24k => "offload_threshold_24k",
             Self::Always => "offload_always",
         }
     }
@@ -56,12 +59,21 @@ impl OffloadMode {
     fn config(self, pool: &TlsOffloadPool) -> Option<TlsOffloadConfig> {
         match self {
             Self::Inline => None,
-            Self::Threshold => Some(
+            Self::Threshold8k => Some(
                 TlsOffloadConfig::new(pool.clone())
-                    .with_read_threshold(OFFLOAD_THRESHOLD)
-                    .with_write_threshold(OFFLOAD_THRESHOLD),
+                    .with_read_threshold(OFFLOAD_THRESHOLD_8K)
+                    .with_write_threshold(OFFLOAD_THRESHOLD_8K),
             ),
+            Self::Threshold24k => Some(TlsOffloadConfig::large_records(pool.clone())),
             Self::Always => Some(TlsOffloadConfig::always(pool.clone())),
+        }
+    }
+
+    fn threshold(self) -> Option<usize> {
+        match self {
+            Self::Threshold8k => Some(OFFLOAD_THRESHOLD_8K),
+            Self::Threshold24k => Some(OFFLOAD_THRESHOLD_24K),
+            Self::Inline | Self::Always => None,
         }
     }
 }
@@ -410,9 +422,11 @@ fn assert_client_fanout_stats(mode: OffloadMode, body_len: usize, stats: &[TlsOf
             assert_eq!(stats.offloaded_reads, 0);
             assert_eq!(stats.offloaded_writes, 0);
         }
-        OffloadMode::Threshold => {
-            if body_len >= OFFLOAD_THRESHOLD {
+        OffloadMode::Threshold8k | OffloadMode::Threshold24k => {
+            if body_len >= mode.threshold().unwrap() {
                 assert!(stats.offloaded_writes > 0);
+            } else {
+                assert_eq!(stats.offloaded_writes, 0);
             }
             assert_eq!(stats.offloaded_reads, 0);
         }
@@ -430,9 +444,11 @@ fn assert_server_fanin_stats(mode: OffloadMode, body_len: usize, stats: &[TlsOff
             assert_eq!(stats.offloaded_reads, 0);
             assert_eq!(stats.offloaded_writes, 0);
         }
-        OffloadMode::Threshold => {
-            if body_len >= OFFLOAD_THRESHOLD {
+        OffloadMode::Threshold8k | OffloadMode::Threshold24k => {
+            if body_len >= mode.threshold().unwrap() {
                 assert!(stats.offloaded_reads > 0);
+            } else {
+                assert_eq!(stats.offloaded_reads, 0);
             }
             assert_eq!(stats.offloaded_writes, 0);
         }
@@ -454,7 +470,8 @@ fn bench_client_fanout(c: &mut Criterion) {
         ));
         for mode in [
             OffloadMode::Inline,
-            OffloadMode::Threshold,
+            OffloadMode::Threshold8k,
+            OffloadMode::Threshold24k,
             OffloadMode::Always,
         ] {
             group.bench_with_input(
@@ -481,7 +498,8 @@ fn bench_server_fanin(c: &mut Criterion) {
         ));
         for mode in [
             OffloadMode::Inline,
-            OffloadMode::Threshold,
+            OffloadMode::Threshold8k,
+            OffloadMode::Threshold24k,
             OffloadMode::Always,
         ] {
             group.bench_with_input(

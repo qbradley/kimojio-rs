@@ -18,7 +18,7 @@ use std::{
     mem,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicUsize, Ordering},
         mpsc,
     },
     thread,
@@ -126,19 +126,21 @@ impl TlsOffloadPool {
             ));
         }
 
-        let (sender, receiver) = mpsc::channel();
-        let receiver = Arc::new(Mutex::new(receiver));
+        let mut senders = Vec::with_capacity(worker_count);
         let mut workers = Vec::with_capacity(worker_count);
 
         for worker in 0..worker_count {
-            let receiver = Arc::clone(&receiver);
+            let (sender, receiver) = mpsc::channel();
             match thread::Builder::new()
                 .name(format!("kimojio-tls-offload-{worker}"))
                 .spawn(move || run_offload_worker(receiver))
             {
-                Ok(handle) => workers.push(handle),
+                Ok(handle) => {
+                    senders.push(sender);
+                    workers.push(handle);
+                }
                 Err(error) => {
-                    for _ in 0..workers.len() {
+                    for sender in &senders {
                         let _ = sender.send(OffloadJob::Shutdown);
                     }
                     for worker in workers {
@@ -151,24 +153,32 @@ impl TlsOffloadPool {
 
         Ok(Self {
             inner: Arc::new(TlsOffloadPoolInner {
-                sender,
-                worker_count,
+                senders,
+                next_worker: AtomicUsize::new(0),
                 workers: Mutex::new(workers),
             }),
         })
     }
+
+    fn assign_worker(&self) -> TlsOffloadWorker {
+        let worker_count = self.inner.senders.len();
+        let index = self.inner.next_worker.fetch_add(1, Ordering::Relaxed) % worker_count;
+        TlsOffloadWorker {
+            sender: self.inner.senders[index].clone(),
+        }
+    }
 }
 
 struct TlsOffloadPoolInner {
-    sender: mpsc::Sender<OffloadJob>,
-    worker_count: usize,
+    senders: Vec<mpsc::Sender<OffloadJob>>,
+    next_worker: AtomicUsize,
     workers: Mutex<Vec<thread::JoinHandle<()>>>,
 }
 
 impl Drop for TlsOffloadPoolInner {
     fn drop(&mut self) {
-        for _ in 0..self.worker_count {
-            let _ = self.sender.send(OffloadJob::Shutdown);
+        for sender in &self.senders {
+            let _ = sender.send(OffloadJob::Shutdown);
         }
 
         let mut workers = self
@@ -179,6 +189,11 @@ impl Drop for TlsOffloadPoolInner {
             let _ = worker.join();
         }
     }
+}
+
+#[derive(Clone)]
+struct TlsOffloadWorker {
+    sender: mpsc::Sender<OffloadJob>,
 }
 
 /// Configuration for TLS CPU offload.
@@ -205,6 +220,15 @@ impl TlsOffloadConfig {
             pool,
             min_read_size: 1,
             min_write_size: 1,
+        }
+    }
+
+    /// Creates a config that only offloads large data records.
+    pub fn large_records(pool: TlsOffloadPool) -> Self {
+        Self {
+            pool,
+            min_read_size: 24 * 1024,
+            min_write_size: 24 * 1024,
         }
     }
 
@@ -239,6 +263,7 @@ pub struct TlsStream {
     ssl: Option<TlsServer>,
     socket: Option<OwnedFd>,
     offload: Option<TlsOffloadConfig>,
+    offload_worker: Option<TlsOffloadWorker>,
     offload_stats: TlsOffloadStats,
 }
 
@@ -249,28 +274,34 @@ impl TlsStream {
             ssl: Some(ssl),
             socket: Some(socket),
             offload: None,
+            offload_worker: None,
             offload_stats: TlsOffloadStats::default(),
         }
     }
 
     /// Creates a TLS stream with CPU offload enabled for data I/O.
     pub fn with_offload(ssl: TlsServer, socket: OwnedFd, offload: TlsOffloadConfig) -> Self {
+        let offload_worker = offload.pool.assign_worker();
         Self {
             ssl: Some(ssl),
             socket: Some(socket),
             offload: Some(offload),
+            offload_worker: Some(offload_worker),
             offload_stats: TlsOffloadStats::default(),
         }
     }
 
     /// Enables or replaces CPU offload for data I/O.
     pub fn set_offload(&mut self, offload: TlsOffloadConfig) {
+        let offload_worker = offload.pool.assign_worker();
         self.offload = Some(offload);
+        self.offload_worker = Some(offload_worker);
     }
 
     /// Disables CPU offload for data I/O.
     pub fn clear_offload(&mut self) {
         self.offload = None;
+        self.offload_worker = None;
     }
 
     /// Returns counters for inline and offloaded TLS data operations.
@@ -451,6 +482,11 @@ impl TlsStream {
                 .offload
                 .as_ref()
                 .is_some_and(|offload| len >= offload.min_read_size)
+            && self
+                .ssl
+                .as_ref()
+                .and_then(|ssl| ssl.ready_encrypted_input_record_len())
+                .is_some()
     }
 
     fn should_offload_write(&self, len: usize) -> bool {
@@ -462,14 +498,7 @@ impl TlsStream {
     }
 
     fn offload_read(&mut self, cx: &RuntimeContext<'_>, buf: &mut [u8]) -> Result<Response, Errno> {
-        let sender = self
-            .offload
-            .as_ref()
-            .ok_or(Errno::PIPE)?
-            .pool
-            .inner
-            .sender
-            .clone();
+        let sender = self.offload_sender()?;
         let ssl = self.take_ssl()?;
         let completion = Arc::new(OffloadState::new());
         let job = OffloadJob::Read {
@@ -498,14 +527,7 @@ impl TlsStream {
     }
 
     fn offload_write(&mut self, cx: &RuntimeContext<'_>, buf: &[u8]) -> Result<Response, Errno> {
-        let sender = self
-            .offload
-            .as_ref()
-            .ok_or(Errno::PIPE)?
-            .pool
-            .inner
-            .sender
-            .clone();
+        let sender = self.offload_sender()?;
         let ssl = self.take_ssl()?;
         let completion = Arc::new(OffloadState::new());
         let job = OffloadJob::Write {
@@ -525,6 +547,13 @@ impl TlsStream {
         self.restore_ssl(result.ssl);
         self.offload_stats.offloaded_writes += 1;
         Ok(result.response)
+    }
+
+    fn offload_sender(&self) -> Result<mpsc::Sender<OffloadJob>, Errno> {
+        self.offload_worker
+            .as_ref()
+            .map(|worker| worker.sender.clone())
+            .ok_or(Errno::PIPE)
     }
 
     fn ssl_mut(&mut self) -> Result<&mut TlsServer, Errno> {
@@ -627,16 +656,9 @@ impl<T> OffloadState<T> {
     }
 }
 
-fn run_offload_worker(receiver: Arc<Mutex<mpsc::Receiver<OffloadJob>>>) {
+fn run_offload_worker(receiver: mpsc::Receiver<OffloadJob>) {
     loop {
-        let job = {
-            let receiver = receiver
-                .lock()
-                .expect("TLS offload receiver mutex poisoned");
-            receiver.recv()
-        };
-
-        match job {
+        match receiver.recv() {
             Ok(OffloadJob::Read {
                 mut ssl,
                 len,
@@ -688,7 +710,7 @@ mod tests {
 
     use super::*;
 
-    const TLS_BUFFER_SIZE: usize = 16 * 1024;
+    const TLS_BUFFER_SIZE: usize = 32 * 1024;
     const RPC_HEADER_LEN: usize = 64;
     const RPC_RESPONSE_LEN: usize = 64;
 
