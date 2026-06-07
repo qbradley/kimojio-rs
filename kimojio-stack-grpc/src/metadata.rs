@@ -1,7 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{
+    Engine,
+    engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
+};
 use http::{HeaderMap, HeaderName, HeaderValue};
 
 use crate::Error;
@@ -49,8 +52,7 @@ impl Metadata {
         if !name.as_str().ends_with("-bin") {
             return Err(Error::Protocol("binary metadata name must end with -bin"));
         }
-        STANDARD
-            .decode(value.as_bytes())
+        decode_binary_header(value.as_bytes())
             .map(Some)
             .map_err(|_| Error::Protocol("invalid binary metadata"))
     }
@@ -106,4 +108,10 @@ fn is_reserved_transport_name(name: &HeaderName) -> bool {
         name.as_str(),
         "content-type" | "te" | "grpc-status" | "grpc-message" | "grpc-status-details-bin"
     )
+}
+
+fn decode_binary_header(bytes: &[u8]) -> Result<Vec<u8>, base64::DecodeError> {
+    STANDARD
+        .decode(bytes)
+        .or_else(|_| STANDARD_NO_PAD.decode(bytes))
 }

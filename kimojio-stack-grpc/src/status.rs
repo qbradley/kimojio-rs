@@ -3,12 +3,15 @@
 
 use std::fmt;
 
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{
+    Engine,
+    engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
+};
 use bytes::Bytes;
 use http::{HeaderName, HeaderValue};
 use kimojio_stack_http::Trailers;
 
-use crate::Error;
+use crate::{Error, Metadata};
 
 pub const GRPC_STATUS: HeaderName = HeaderName::from_static("grpc-status");
 pub const GRPC_MESSAGE: HeaderName = HeaderName::from_static("grpc-message");
@@ -72,6 +75,7 @@ pub struct Status {
     code: StatusCode,
     message: String,
     details: Bytes,
+    metadata: Box<Metadata>,
 }
 
 impl Status {
@@ -80,14 +84,29 @@ impl Status {
             code,
             message: message.into(),
             details: Bytes::new(),
+            metadata: Box::new(Metadata::new()),
         }
     }
 
     pub fn with_details(code: StatusCode, message: impl Into<String>, details: Bytes) -> Self {
+        Self::with_details_and_metadata(code, message, details, Metadata::new())
+    }
+
+    pub fn with_metadata(code: StatusCode, message: impl Into<String>, metadata: Metadata) -> Self {
+        Self::with_details_and_metadata(code, message, Bytes::new(), metadata)
+    }
+
+    pub fn with_details_and_metadata(
+        code: StatusCode,
+        message: impl Into<String>,
+        details: Bytes,
+        metadata: Metadata,
+    ) -> Self {
         Self {
             code,
             message: message.into(),
             details,
+            metadata: Box::new(metadata),
         }
     }
 
@@ -107,8 +126,22 @@ impl Status {
         &self.details
     }
 
+    pub fn metadata(&self) -> &Metadata {
+        &self.metadata
+    }
+
+    pub fn metadata_mut(&mut self) -> &mut Metadata {
+        &mut self.metadata
+    }
+
     pub fn to_trailers(&self) -> Result<Trailers, Error> {
         let mut trailers = Trailers::new();
+        for (name, value) in self.metadata.as_ref().clone().into_headers() {
+            let Some(name) = name else {
+                return Err(Error::Protocol("metadata continuation header unsupported"));
+            };
+            trailers.insert(name, value);
+        }
         trailers.insert(
             GRPC_STATUS,
             HeaderValue::from_str(&self.code.as_grpc_code().to_string())
@@ -155,17 +188,18 @@ impl Status {
         let details = trailers
             .get(&GRPC_STATUS_DETAILS_BIN)
             .map(|value| {
-                STANDARD
-                    .decode(value.as_bytes())
+                decode_binary_header(value.as_bytes())
                     .map(Bytes::from)
                     .map_err(|_| Error::Protocol("invalid grpc-status-details-bin"))
             })
             .transpose()?
             .unwrap_or_default();
+        let metadata = Metadata::from_headers(trailers.as_map().clone())?;
         Ok(Self {
             code,
             message,
             details,
+            metadata: Box::new(metadata),
         })
     }
 }
@@ -227,4 +261,10 @@ fn hex_value(byte: u8) -> Option<u8> {
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
     }
+}
+
+fn decode_binary_header(bytes: &[u8]) -> Result<Vec<u8>, base64::DecodeError> {
+    STANDARD
+        .decode(bytes)
+        .or_else(|_| STANDARD_NO_PAD.decode(bytes))
 }

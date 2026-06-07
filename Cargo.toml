@@ -71,6 +71,7 @@ static_assertions = "1"
 tempfile = "3"
 tokio = "1"
 tonic = "0.14"
+tonic-prost = "0.14"
 uuid = { version = "1", features = ["v4"] }
 zerocopy = { version = "0.8", features = ["derive"] }
 

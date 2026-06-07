@@ -180,6 +180,21 @@ impl ServerConnection {
         self.transport.close(cx)
     }
 
+    /// Half-closes writes, drains peer data until EOF, then closes the transport.
+    pub fn shutdown_write_and_close_after_peer(
+        mut self,
+        cx: &RuntimeContext<'_>,
+    ) -> Result<(), Error> {
+        self.transport.shutdown_write(cx)?;
+        let mut buffer = [0_u8; 1024];
+        loop {
+            match self.transport.read(cx, &mut buffer)? {
+                0 => return self.transport.close(cx),
+                _ => continue,
+            }
+        }
+    }
+
     fn ensure_initialized(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
         if self.initialized {
             return Ok(());

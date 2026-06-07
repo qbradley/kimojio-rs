@@ -56,8 +56,8 @@ The architecture keeps public crates independent of tokio and other async runtim
 - [x] **Phase 3: HTTP/2 frame, HPACK, and state core** - Implement HTTP/2 framing, header compression adapter, settings, stream state, and flow-control primitives.
 - [x] **Phase 4: HTTP/2 client and server request/response** - Build stackful HTTP/2 client/server connection APIs over the Phase 3 core.
 - [x] **Phase 5: HTTP TLS and tokio HTTP interoperability** - Validate stackful HTTP/1.1 and HTTP/2 clients/servers against tokio-based peers, including TLS coverage.
-- [ ] **Phase 6: Unary gRPC core and local stackful tests** - Add gRPC framing, status/metadata/trailer handling, prost-compatible unary client/server APIs, and local stackful tests.
-- [ ] **Phase 7: Tokio gRPC interoperability** - Validate stackful unary gRPC clients/servers against tonic-based peers.
+- [x] **Phase 6: Unary gRPC core and local stackful tests** - Add gRPC framing, status/metadata/trailer handling, prost-compatible unary client/server APIs, and local stackful tests.
+- [x] **Phase 7: Tokio gRPC interoperability** - Validate stackful unary gRPC clients/servers against tonic-based peers.
 - [ ] **Phase 8: Performance, allocation, and protocol-limit coverage** - Add benchmarks, allocation tests, and focused malformed/limit/backpressure tests.
 - [ ] **Phase 9: Documentation** - Add as-built Docs.md and project documentation for public HTTP/gRPC APIs and verification.
 
@@ -244,17 +244,17 @@ The architecture keeps public crates independent of tokio and other async runtim
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `cargo fmt --check`
-- [ ] `cargo test -p kimojio-stack-grpc --test client_interop`
-- [ ] `cargo test -p kimojio-stack-grpc --test server_interop`
-- [ ] `cargo test -p kimojio-stack-grpc --test tls_interop`
-- [ ] `cargo clippy -p kimojio-stack-grpc --all-targets --all-features -- -D warnings`
-- [ ] `cargo tree -p kimojio-stack-grpc -e normal` shows tokio/hyper/tonic are absent from normal dependencies.
+- [x] `cargo fmt --check`
+- [x] `cargo test -p kimojio-stack-grpc --test client_interop`
+- [x] `cargo test -p kimojio-stack-grpc --test server_interop`
+- [x] `cargo test -p kimojio-stack-grpc --test tls_interop`
+- [x] `cargo clippy -p kimojio-stack-grpc --all-targets --all-features -- -D warnings`
+- [x] `cargo tree -p kimojio-stack-grpc -e normal` shows tokio/hyper/tonic are absent from normal dependencies.
 
 #### Manual Verification:
-- [ ] Interop tests cover both directions required by SC-003 and SC-004 (`.paw/work/grpc-client-server-support/Spec.md:143-144`).
-- [ ] Test failures expose protocol/status details rather than opaque peer errors.
-- [ ] Interop tests include gRPC metadata variation, including binary metadata where supported by the low-level API.
+- [x] Interop tests cover both directions required by SC-003 and SC-004 (`.paw/work/grpc-client-server-support/Spec.md:143-144`).
+- [x] Test failures expose protocol/status details rather than opaque peer errors.
+- [x] Interop tests include gRPC metadata variation, including binary metadata where supported by the low-level API.
 
 ---
 

@@ -2,14 +2,14 @@
 // Licensed under the MIT License.
 
 use http::{
-    Request, Response, StatusCode,
+    HeaderMap, Request, Response, StatusCode,
     header::{CONTENT_TYPE, TE},
 };
 use kimojio_stack::RuntimeContext;
-use kimojio_stack_http::{Body, BodyLimits, h2};
+use kimojio_stack_http::{Body, BodyLimits, Trailers, h2};
 use prost::Message;
 
-use crate::{Error, Metadata, Status, StatusCode as GrpcStatusCode, codec};
+use crate::{Error, Metadata, Status, StatusCode as GrpcStatusCode, codec, status::GRPC_STATUS};
 
 /// Shared configuration for unary gRPC clients.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,7 +99,7 @@ where
         return Err(Error::Protocol("gRPC response HTTP status was not 200"));
     }
     validate_content_type(&response.response)?;
-    let status = Status::from_trailers(&response.trailers)?;
+    let status = response_status(response.response.headers(), &response.trailers)?;
     if status.code() != GrpcStatusCode::Ok {
         return Err(Error::Status(status));
     }
@@ -112,6 +112,18 @@ where
         status,
         trailers,
     })
+}
+
+fn response_status(headers: &HeaderMap, trailers: &Trailers) -> Result<Status, Error> {
+    if trailers.get(&GRPC_STATUS).is_some() {
+        return Status::from_trailers(trailers);
+    }
+
+    let mut trailers = Trailers::new();
+    for (name, value) in headers {
+        trailers.insert(name.clone(), value.clone());
+    }
+    Status::from_trailers(&trailers)
 }
 
 fn validate_content_type(response: &Response<Body>) -> Result<(), Error> {
