@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use openssl::ssl::{SslAcceptor, SslConnector};
 
 use crate::{
-    IdleBehavior, OperationError, OperationPlacement, PlacementMode, PoolConfig, PoolConfigError,
-    PoolStats, PoolStatsSnapshot, TlsPoolError, TlsStream,
+    IdleBehavior, OperationError, OperationPlacement, PoolConfig, PoolConfigError, PoolStats,
+    PoolStatsSnapshot, TlsPoolError, TlsStream,
 };
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
@@ -130,24 +130,13 @@ impl PoolInner {
     }
 
     pub(crate) fn choose_placement(&self, operation_size: usize) -> OperationPlacement {
-        match self.config.placement_mode() {
-            PlacementMode::ImmediateOnly => OperationPlacement::Immediate,
-            PlacementMode::BackgroundOnly => OperationPlacement::Background {
-                executor: self.choose_executor(),
-            },
-            PlacementMode::Adaptive => {
-                let thresholds = self.config.thresholds();
-                if operation_size <= thresholds.small_max() {
-                    OperationPlacement::Immediate
-                } else if operation_size >= thresholds.background_min() {
-                    OperationPlacement::Background {
-                        executor: self.choose_executor(),
-                    }
-                } else {
-                    OperationPlacement::Immediate
-                }
-            }
-        }
+        let start = self.next_executor.fetch_add(1, Ordering::Relaxed);
+        crate::policy::choose_placement(
+            &self.config,
+            operation_size,
+            &self.executor_loads_snapshot(),
+            start,
+        )
     }
 
     pub(crate) fn send_to_executor(
@@ -160,7 +149,7 @@ impl PoolInner {
             return Err(OperationError::Shutdown);
         }
 
-        let cost = estimated_cost(operation_size);
+        let cost = crate::policy::estimated_operation_cost(operation_size);
         let Some(load) = self.executor_loads.get(executor) else {
             return Err(OperationError::Shutdown);
         };
@@ -198,27 +187,16 @@ impl PoolInner {
         }
     }
 
-    fn choose_executor(&self) -> usize {
-        let start = self.next_executor.fetch_add(1, Ordering::Relaxed);
-        let len = self.executor_loads.len();
-        let mut best = start % len;
-        let mut best_load = self.executor_loads[best].load(Ordering::Acquire);
-
-        for offset in 1..len {
-            let index = (start + offset) % len;
-            let load = self.executor_loads[index].load(Ordering::Acquire);
-            if load < best_load {
-                best = index;
-                best_load = load;
-            }
-        }
-
-        best
-    }
-
     #[cfg(test)]
     fn add_executor_load_for_test(&self, executor: usize, load: u64) {
         self.executor_loads[executor].fetch_add(load, Ordering::AcqRel);
+    }
+
+    fn executor_loads_snapshot(&self) -> Vec<u64> {
+        self.executor_loads
+            .iter()
+            .map(|load| load.load(Ordering::Acquire))
+            .collect()
     }
 }
 
@@ -236,10 +214,6 @@ impl Drop for PoolInner {
 struct WorkerHandle {
     sender: mpsc::Sender<WorkerMessage>,
     handle: Mutex<Option<JoinHandle<()>>>,
-}
-
-fn estimated_cost(operation_size: usize) -> u64 {
-    u64::try_from(operation_size.max(1)).unwrap_or(u64::MAX)
 }
 
 fn worker_loop(
@@ -330,7 +304,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::SizeThresholds;
+    use crate::{PlacementMode, SizeThresholds};
 
     #[test]
     fn immediate_mode_callback_runs_on_submitter_thread() {

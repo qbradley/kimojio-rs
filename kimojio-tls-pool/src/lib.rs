@@ -10,6 +10,7 @@
 mod config;
 mod error;
 mod operation;
+mod policy;
 mod pool;
 mod stats;
 mod stream;

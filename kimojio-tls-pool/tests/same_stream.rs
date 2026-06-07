@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 
+use kimojio_tls_pool::{PlacementMode, PoolConfig};
 use support::{
     background_config, immediate_config, read_exact_blocking, stream_pair, write_blocking,
 };
@@ -18,10 +19,15 @@ fn same_stream_writes_are_ordered_background() {
     run_same_stream_ordering(background_config(2), background_config(1));
 }
 
-fn run_same_stream_ordering(
-    client_config: kimojio_tls_pool::PoolConfig,
-    server_config: kimojio_tls_pool::PoolConfig,
-) {
+#[test]
+fn same_stream_writes_are_ordered_adaptive() {
+    run_same_stream_ordering(
+        PoolConfig::new(2).with_placement_mode(PlacementMode::Adaptive),
+        immediate_config(),
+    );
+}
+
+fn run_same_stream_ordering(client_config: PoolConfig, server_config: PoolConfig) {
     let (client, server) = stream_pair(client_config, server_config);
     let callback_count = Arc::new(AtomicUsize::new(0));
     let server_thread = thread::spawn(move || {
