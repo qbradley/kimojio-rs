@@ -42,7 +42,7 @@ For a benchmark smoke test, run:
 cargo bench -p kimojio-tls-pool --bench rpc_write -- --test
 ```
 
-The benchmark covers single-pair, three-pair per-connection-pool, and three-pair shared-pool RPC write scenarios across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies.
+The benchmark covers single-pair, three-pair per-connection-pool, and three-pair shared-pool RPC write scenarios across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies. It also includes `rpc_write/throughput_scaling` and `tls_write/throughput_scaling`, which run shared-pool 32 KiB workloads with 1, 2, 4, and 8 executor threads.
 
 ## Limitations
 
