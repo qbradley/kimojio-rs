@@ -2,10 +2,12 @@
 // Licensed under the MIT License.
 
 use std::collections::VecDeque;
+use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
 use crate::operation::{self, OperationKind, OperationWork};
 use crate::pool::PoolInner;
+use crate::tls::BoxedTlsStream;
 use crate::{OperationError, OperationResult, PoolStatsSnapshot};
 
 /// Callback invoked when a submitted TLS operation completes.
@@ -24,6 +26,17 @@ impl TlsStream {
         Self {
             state: Arc::new(StreamState {
                 pool,
+                tls: Mutex::new(None),
+                queue: Mutex::new(StreamQueue::default()),
+            }),
+        }
+    }
+
+    pub(crate) fn from_tls(pool: Arc<PoolInner>, tls: BoxedTlsStream) -> Self {
+        Self {
+            state: Arc::new(StreamState {
+                pool,
+                tls: Mutex::new(Some(tls)),
                 queue: Mutex::new(StreamQueue::default()),
             }),
         }
@@ -68,6 +81,16 @@ impl TlsStream {
         ))
     }
 
+    /// Reads up to `buffer_len` decrypted bytes and reports them through `callback`.
+    pub fn read(
+        &self,
+        buffer_len: usize,
+        callback: CompletionCallback<Vec<u8>>,
+    ) -> OperationResult<()> {
+        let state = Arc::clone(&self.state);
+        self.submit_read(buffer_len, move || state.read_tls(buffer_len), callback)
+    }
+
     /// Submits a write work item for this stream.
     pub fn submit_write<F>(
         &self,
@@ -84,6 +107,17 @@ impl TlsStream {
             Box::new(write),
             callback,
         ))
+    }
+
+    /// Writes all bytes and reports the plaintext byte count through `callback`.
+    pub fn write(
+        &self,
+        bytes: Vec<u8>,
+        callback: CompletionCallback<usize>,
+    ) -> OperationResult<()> {
+        let byte_len = bytes.len();
+        let state = Arc::clone(&self.state);
+        self.submit_write(byte_len, move || state.write_tls(bytes), callback)
     }
 
     /// Returns a snapshot of the parent pool statistics.
@@ -103,6 +137,7 @@ impl TlsStream {
 
 pub(crate) struct StreamState {
     pool: Arc<PoolInner>,
+    tls: Mutex<Option<BoxedTlsStream>>,
     queue: Mutex<StreamQueue>,
 }
 
@@ -149,6 +184,28 @@ impl StreamState {
 
     fn pool_is_shutdown(&self) -> bool {
         self.pool.is_shutdown()
+    }
+
+    fn read_tls(&self, buffer_len: usize) -> OperationResult<Vec<u8>> {
+        let mut guard = self.tls.lock().map_err(|_| OperationError::StatePoisoned)?;
+        let tls = guard.as_mut().ok_or(OperationError::Shutdown)?;
+        let mut buffer = vec![0_u8; buffer_len];
+        if buffer_len == 0 {
+            return Ok(buffer);
+        }
+
+        let amount = crate::tls::map_io(tls.read(&mut buffer))?;
+        buffer.truncate(amount);
+        Ok(buffer)
+    }
+
+    fn write_tls(&self, bytes: Vec<u8>) -> OperationResult<usize> {
+        let byte_len = bytes.len();
+        let mut guard = self.tls.lock().map_err(|_| OperationError::StatePoisoned)?;
+        let tls = guard.as_mut().ok_or(OperationError::Shutdown)?;
+        crate::tls::map_io(tls.write_all(&bytes))?;
+        crate::tls::map_io(tls.flush())?;
+        Ok(byte_len)
     }
 }
 

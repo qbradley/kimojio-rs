@@ -13,6 +13,7 @@ mod operation;
 mod pool;
 mod stats;
 mod stream;
+mod tls;
 
 pub use config::{IdleBehavior, PlacementMode, PoolConfig, PoolConfigError, SizeThresholds};
 pub use error::{OperationError, OperationResult, TlsPoolError};

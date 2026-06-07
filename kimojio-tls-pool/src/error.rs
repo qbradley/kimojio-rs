@@ -12,21 +12,27 @@ pub type OperationResult<T> = Result<T, OperationError>;
 pub enum OperationError {
     /// OpenSSL reported a TLS error.
     Tls(openssl::error::ErrorStack),
+    /// TLS handshake failed.
+    Handshake(String),
     /// The underlying stream reported an I/O error.
     Io(io::Error),
     /// The stream or pool has shut down.
     Shutdown,
     /// Another operation is already in flight for the stream.
     Busy,
+    /// Internal stream state was poisoned.
+    StatePoisoned,
 }
 
 impl fmt::Display for OperationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Tls(error) => write!(f, "TLS error: {error}"),
+            Self::Handshake(error) => write!(f, "TLS handshake failed: {error}"),
             Self::Io(error) => write!(f, "I/O error: {error}"),
             Self::Shutdown => f.write_str("TLS pool operation rejected after shutdown"),
             Self::Busy => f.write_str("TLS stream already has an in-flight operation"),
+            Self::StatePoisoned => f.write_str("TLS stream state was poisoned"),
         }
     }
 }
@@ -36,7 +42,7 @@ impl std::error::Error for OperationError {
         match self {
             Self::Tls(error) => Some(error),
             Self::Io(error) => Some(error),
-            Self::Shutdown | Self::Busy => None,
+            Self::Handshake(_) | Self::Shutdown | Self::Busy | Self::StatePoisoned => None,
         }
     }
 }

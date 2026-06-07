@@ -6,9 +6,11 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use openssl::ssl::{SslAcceptor, SslConnector};
+
 use crate::{
     IdleBehavior, OperationError, OperationPlacement, PlacementMode, PoolConfig, PoolConfigError,
-    PoolStats, PoolStatsSnapshot, TlsStream,
+    PoolStats, PoolStatsSnapshot, TlsPoolError, TlsStream,
 };
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
@@ -36,6 +38,29 @@ impl TlsPool {
     /// Creates a stream handle associated with this pool.
     pub fn stream(&self) -> TlsStream {
         TlsStream::new(Arc::clone(&self.inner))
+    }
+
+    /// Creates a client TLS stream over a connected transport.
+    pub fn client<S>(
+        &self,
+        connector: &SslConnector,
+        domain: &str,
+        stream: S,
+    ) -> Result<TlsStream, TlsPoolError>
+    where
+        S: std::io::Read + std::io::Write + Send + 'static,
+    {
+        let tls = crate::tls::connect(connector, domain, stream)?;
+        Ok(TlsStream::from_tls(Arc::clone(&self.inner), tls))
+    }
+
+    /// Creates a server TLS stream over a connected transport.
+    pub fn server<S>(&self, acceptor: &SslAcceptor, stream: S) -> Result<TlsStream, TlsPoolError>
+    where
+        S: std::io::Read + std::io::Write + Send + 'static,
+    {
+        let tls = crate::tls::accept(acceptor, stream)?;
+        Ok(TlsStream::from_tls(Arc::clone(&self.inner), tls))
     }
 
     /// Returns the pool configuration.
