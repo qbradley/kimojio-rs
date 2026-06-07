@@ -14,7 +14,7 @@ Operations submitted to the same stream are serialized, so OpenSSL stream state 
 
 Reads reject buffers larger than the configured maximum read length. The default maximum is 32 KiB.
 
-Reads are readiness-gated before TLS progress is attempted, so a read waiting for a future peer response does not occupy a pool executor thread. This avoids starving the pool with response-waiting reads.
+Reads first attempt nonblocking TLS progress so already-buffered plaintext can complete immediately. If OpenSSL reports WANT_READ or WANT_WRITE, the pool waits for the requested socket readiness before resuming the read, so a read waiting for a future peer response does not occupy a pool executor thread.
 
 ## Placement modes
 

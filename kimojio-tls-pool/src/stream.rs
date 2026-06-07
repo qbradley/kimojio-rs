@@ -494,6 +494,7 @@ where
 fn schedule_read_after_readiness(
     state: Arc<StreamState>,
     fd: std::os::fd::RawFd,
+    interest: ReadinessInterest,
     buffer_len: usize,
     callback: Arc<Mutex<Option<CompletionCallback<Vec<u8>>>>>,
 ) -> DispatchResult {
@@ -525,14 +526,7 @@ fn schedule_read_after_readiness(
     });
 
     if pool
-        .send_to_executor_when_ready(
-            fd,
-            ReadinessInterest::Read,
-            executor,
-            buffer_len,
-            job,
-            shutdown,
-        )
+        .send_to_executor_when_ready(fd, interest, executor, buffer_len, job, shutdown)
         .is_err()
     {
         state.pool.stats.record_failed(None);
@@ -574,9 +568,9 @@ fn attempt_read_initial(
             record_completion(&state, None, status);
             DispatchResult::Completed
         }
-        TlsAttempt::WouldBlock(_interest) => {
+        TlsAttempt::WouldBlock(interest) => {
             state.stats.record_finished();
-            schedule_read_after_readiness(state, fd, buffer_len, callback)
+            schedule_read_after_readiness(state, fd, interest, buffer_len, callback)
         }
     }
 }
@@ -607,9 +601,9 @@ fn attempt_read_on_executor(
             }
             state.finish();
         }
-        TlsAttempt::WouldBlock(_interest) => {
+        TlsAttempt::WouldBlock(interest) => {
             state.stats.record_finished();
-            let result = schedule_read_after_readiness(state, fd, buffer_len, callback);
+            let result = schedule_read_after_readiness(state, fd, interest, buffer_len, callback);
             debug_assert_eq!(result, DispatchResult::Pending);
         }
     }

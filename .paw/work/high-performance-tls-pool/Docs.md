@@ -22,7 +22,7 @@ The crate is split into small modules:
 
 Each stream serializes its own operations. Adaptive routing may move a stream between executors over time, but the stream queue allows only one active operation for that stream at once. This preserves the OpenSSL requirement that a TLS stream not be mutably accessed concurrently.
 
-Read operations are readiness-gated before TLS progress is attempted. The pool sets accepted TLS transports to nonblocking mode, registers pending reads with a pool-owned readiness reactor, and only resumes TLS read progress when the underlying fd is readable. This prevents eventual-response reads from occupying all executor threads while they wait for peer traffic.
+Read operations first attempt nonblocking TLS progress so already-buffered plaintext can complete immediately. If OpenSSL reports WANT_READ or WANT_WRITE, the pool registers the required readiness interest with a pool-owned readiness reactor and resumes TLS read progress only after that readiness arrives. This prevents eventual-response reads from occupying all executor threads while they wait for peer traffic.
 
 ### Design Decisions
 
