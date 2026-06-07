@@ -25,6 +25,7 @@ use kimojio_stack::{Runtime, RuntimeConfig, RuntimeContext};
 
 type PanicPayload = Box<dyn Any + Send + 'static>;
 type Job = Box<dyn Runnable + Send + 'static>;
+type StealableJob = Box<dyn StealableRunnable + Send + 'static>;
 
 /// Identifier for a pinned worker.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -55,6 +56,74 @@ pub enum TaskPlacement {
     Pinned(PinnedWorkerId),
     /// The job was sent to the stealable worker pool.
     Stealable,
+}
+
+/// Context passed to stealable jobs that opt into worker-awareness.
+///
+/// Failover is an explicit continuation hop: the closure passed to
+/// [`StealableContext::failover_to`] runs on the target stealable worker and
+/// returns its value to the caller. This does not migrate an in-flight
+/// `kimojio_stack` coroutine stack or any worker-local io_uring operation.
+pub struct StealableContext<'runtime, 'cx> {
+    runtime: &'runtime RuntimeContext<'cx>,
+    worker: StealableWorkerId,
+    shared: Arc<StealShared>,
+}
+
+impl<'runtime, 'cx> StealableContext<'runtime, 'cx> {
+    /// Returns the local stackful runtime context for the current worker.
+    pub fn runtime(&self) -> &'runtime RuntimeContext<'cx> {
+        self.runtime
+    }
+
+    /// Returns the stealable worker currently running this continuation.
+    pub fn worker_id(&self) -> StealableWorkerId {
+        self.worker
+    }
+
+    /// Returns the number of stealable workers in this runtime.
+    pub fn worker_count(&self) -> usize {
+        self.shared.worker_count()
+    }
+
+    /// Returns the stealable worker id for `index`.
+    pub fn worker_id_for_index(&self, index: usize) -> Option<StealableWorkerId> {
+        (index < self.worker_count()).then_some(StealableWorkerId(index))
+    }
+
+    /// Runs `f` on `target` and waits for the continuation result.
+    ///
+    /// This method is intentionally explicit: it forces the next continuation to
+    /// run on a different stealable worker and returns an error if `target` is
+    /// the current worker. Values captured by `f` must be `Send + 'static`.
+    pub fn failover_to<F, T>(&self, target: StealableWorkerId, f: F) -> Result<T, FailoverError>
+    where
+        F: FnOnce(&StealableContext<'_, '_>) -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        if target == self.worker {
+            return Err(FailoverError::SameWorker { worker: target });
+        }
+
+        let (job, handle) = new_stealable_context_job(f, TaskPlacement::Stealable);
+        self.shared.submit_to(target.index(), job)?;
+        handle.join().map_err(FailoverError::from)
+    }
+
+    /// Runs `f` on the next stealable worker by index.
+    pub fn failover<F, T>(&self, f: F) -> Result<T, FailoverError>
+    where
+        F: FnOnce(&StealableContext<'_, '_>) -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let count = self.worker_count();
+        if count <= 1 {
+            return Err(FailoverError::NoOtherWorker);
+        }
+
+        let next = StealableWorkerId((self.worker.index() + 1) % count);
+        self.failover_to(next, f)
+    }
 }
 
 /// Configuration for [`MultiRuntime`].
@@ -197,6 +266,11 @@ impl MultiRuntime {
         (index < self.pinned_workers.len()).then_some(PinnedWorkerId(index))
     }
 
+    /// Returns the stealable worker id for `index`.
+    pub fn stealable_worker_id(&self, index: usize) -> Option<StealableWorkerId> {
+        (index < self.stealable_worker_count()).then_some(StealableWorkerId(index))
+    }
+
     /// Returns the current metrics snapshot.
     pub fn metrics(&self) -> RuntimeMetrics {
         self.metrics.snapshot()
@@ -263,7 +337,29 @@ impl MultiRuntime {
             return Err(SpawnError::NoStealableWorkers);
         };
 
-        let (job, handle) = new_job(f, TaskPlacement::Stealable);
+        let (job, handle) = new_stealable_runtime_job(f, TaskPlacement::Stealable);
+        pool.submit(job)?;
+        self.metrics
+            .stealable_submitted
+            .fetch_add(1, Ordering::Relaxed);
+        Ok(handle)
+    }
+
+    /// Runs `f` on the stealable worker pool with worker-aware context.
+    pub fn spawn_stealable_with_context<F, T>(&self, f: F) -> Result<JoinHandle<T>, SpawnError>
+    where
+        F: FnOnce(&StealableContext<'_, '_>) -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(SpawnError::ShuttingDown);
+        }
+
+        let Some(pool) = &self.stealable_pool else {
+            return Err(SpawnError::NoStealableWorkers);
+        };
+
+        let (job, handle) = new_stealable_context_job(f, TaskPlacement::Stealable);
         pool.submit(job)?;
         self.metrics
             .stealable_submitted
@@ -431,18 +527,8 @@ impl StealPool {
         self.threads.len()
     }
 
-    fn submit(&self, job: Job) -> Result<(), SpawnError> {
-        let mut state = self.shared.state.lock().expect("steal pool poisoned");
-        if state.stopping {
-            return Err(SpawnError::ShuttingDown);
-        }
-
-        let index = state.next_queue % state.queues.len();
-        state.next_queue = state.next_queue.wrapping_add(1);
-        state.queues[index].push_back(job);
-        state.pending += 1;
-        self.shared.available.notify_one();
-        Ok(())
+    fn submit(&self, job: StealableJob) -> Result<(), SpawnError> {
+        self.shared.submit(job)
     }
 
     fn request_stop(&self) {
@@ -476,7 +562,7 @@ fn stealable_worker_loop(id: StealableWorkerId, config: RuntimeConfig, shared: A
     let mut runtime = Runtime::with_config(config);
     runtime.block_on(|cx| {
         while let Some(job) = take_stealable_job(id, &shared) {
-            job.run(cx);
+            job.run(cx, id, Arc::clone(&shared));
             shared
                 .metrics
                 .stealable_completed
@@ -485,7 +571,7 @@ fn stealable_worker_loop(id: StealableWorkerId, config: RuntimeConfig, shared: A
     });
 }
 
-fn take_stealable_job(id: StealableWorkerId, shared: &StealShared) -> Option<Job> {
+fn take_stealable_job(id: StealableWorkerId, shared: &StealShared) -> Option<StealableJob> {
     let mut state = shared.state.lock().expect("steal pool poisoned");
     loop {
         if let Some(job) = pop_stealable_job(id, &mut state, &shared.metrics) {
@@ -504,7 +590,7 @@ fn pop_stealable_job(
     id: StealableWorkerId,
     state: &mut StealState,
     metrics: &MetricsInner,
-) -> Option<Job> {
+) -> Option<StealableJob> {
     if state.pending == 0 {
         return None;
     }
@@ -533,8 +619,48 @@ struct StealShared {
     metrics: Arc<MetricsInner>,
 }
 
+impl StealShared {
+    fn worker_count(&self) -> usize {
+        self.state.lock().expect("steal pool poisoned").queues.len()
+    }
+
+    fn submit(&self, job: StealableJob) -> Result<(), SpawnError> {
+        let mut state = self.state.lock().expect("steal pool poisoned");
+        if state.stopping {
+            return Err(SpawnError::ShuttingDown);
+        }
+
+        let index = state.next_queue % state.queues.len();
+        state.next_queue = state.next_queue.wrapping_add(1);
+        push_stealable_job(&mut state, index, job);
+        self.available.notify_one();
+        Ok(())
+    }
+
+    fn submit_to(&self, index: usize, job: StealableJob) -> Result<(), FailoverError> {
+        let mut state = self.state.lock().expect("steal pool poisoned");
+        if state.stopping {
+            return Err(FailoverError::ShuttingDown);
+        }
+
+        let workers = state.queues.len();
+        if index >= workers {
+            return Err(FailoverError::InvalidWorker { index, workers });
+        }
+
+        push_stealable_job(&mut state, index, job);
+        self.available.notify_all();
+        Ok(())
+    }
+}
+
+fn push_stealable_job(state: &mut StealState, index: usize, job: StealableJob) {
+    state.queues[index].push_back(job);
+    state.pending += 1;
+}
+
 struct StealState {
-    queues: Vec<VecDeque<Job>>,
+    queues: Vec<VecDeque<StealableJob>>,
     pending: usize,
     stopping: bool,
     next_queue: usize,
@@ -542,6 +668,15 @@ struct StealState {
 
 trait Runnable {
     fn run(self: Box<Self>, cx: &RuntimeContext<'_>);
+}
+
+trait StealableRunnable {
+    fn run(
+        self: Box<Self>,
+        cx: &RuntimeContext<'_>,
+        worker: StealableWorkerId,
+        shared: Arc<StealShared>,
+    );
 }
 
 struct Task<F, T> {
@@ -561,6 +696,56 @@ where
     }
 }
 
+struct StealableRuntimeTask<F, T> {
+    f: F,
+    result: mpsc::SyncSender<Result<T, JoinError>>,
+}
+
+impl<F, T> StealableRunnable for StealableRuntimeTask<F, T>
+where
+    F: FnOnce(&RuntimeContext<'_>) -> T + Send + 'static,
+    T: Send + 'static,
+{
+    fn run(
+        self: Box<Self>,
+        cx: &RuntimeContext<'_>,
+        _worker: StealableWorkerId,
+        _shared: Arc<StealShared>,
+    ) {
+        let Self { f, result } = *self;
+        let output = panic::catch_unwind(AssertUnwindSafe(|| f(cx))).map_err(JoinError::panicked);
+        let _ = result.send(output);
+    }
+}
+
+struct StealableContextTask<F, T> {
+    f: F,
+    result: mpsc::SyncSender<Result<T, JoinError>>,
+}
+
+impl<F, T> StealableRunnable for StealableContextTask<F, T>
+where
+    F: FnOnce(&StealableContext<'_, '_>) -> T + Send + 'static,
+    T: Send + 'static,
+{
+    fn run(
+        self: Box<Self>,
+        cx: &RuntimeContext<'_>,
+        worker: StealableWorkerId,
+        shared: Arc<StealShared>,
+    ) {
+        let Self { f, result } = *self;
+        let context = StealableContext {
+            runtime: cx,
+            worker,
+            shared,
+        };
+        let output =
+            panic::catch_unwind(AssertUnwindSafe(|| f(&context))).map_err(JoinError::panicked);
+        let _ = result.send(output);
+    }
+}
+
 fn new_job<F, T>(f: F, placement: TaskPlacement) -> (Job, JoinHandle<T>)
 where
     F: FnOnce(&RuntimeContext<'_>) -> T + Send + 'static,
@@ -568,6 +753,38 @@ where
 {
     let (sender, receiver) = mpsc::sync_channel(1);
     let job = Box::new(Task { f, result: sender });
+    (
+        job,
+        JoinHandle {
+            receiver,
+            placement,
+        },
+    )
+}
+
+fn new_stealable_runtime_job<F, T>(f: F, placement: TaskPlacement) -> (StealableJob, JoinHandle<T>)
+where
+    F: FnOnce(&RuntimeContext<'_>) -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let job = Box::new(StealableRuntimeTask { f, result: sender });
+    (
+        job,
+        JoinHandle {
+            receiver,
+            placement,
+        },
+    )
+}
+
+fn new_stealable_context_job<F, T>(f: F, placement: TaskPlacement) -> (StealableJob, JoinHandle<T>)
+where
+    F: FnOnce(&StealableContext<'_, '_>) -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let job = Box::new(StealableContextTask { f, result: sender });
     (
         job,
         JoinHandle {
@@ -732,6 +949,81 @@ impl fmt::Display for SpawnError {
 }
 
 impl std::error::Error for SpawnError {}
+
+/// Error returned by [`StealableContext::failover_to`].
+pub enum FailoverError {
+    /// No other stealable worker exists.
+    NoOtherWorker,
+    /// The requested worker id is invalid.
+    InvalidWorker {
+        /// Requested worker index.
+        index: usize,
+        /// Configured stealable worker count.
+        workers: usize,
+    },
+    /// The requested worker is the current worker.
+    SameWorker {
+        /// Current worker.
+        worker: StealableWorkerId,
+    },
+    /// The runtime is shutting down.
+    ShuttingDown,
+    /// The target worker stopped before the continuation could complete.
+    Canceled,
+    /// The continuation panicked.
+    Panicked(PanicPayload),
+}
+
+impl From<JoinError> for FailoverError {
+    fn from(error: JoinError) -> Self {
+        match error {
+            JoinError::Panicked(payload) => Self::Panicked(payload),
+            JoinError::Canceled => Self::Canceled,
+        }
+    }
+}
+
+impl fmt::Debug for FailoverError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoOtherWorker => f.write_str("FailoverError::NoOtherWorker"),
+            Self::InvalidWorker { index, workers } => f
+                .debug_struct("FailoverError::InvalidWorker")
+                .field("index", index)
+                .field("workers", workers)
+                .finish(),
+            Self::SameWorker { worker } => f
+                .debug_struct("FailoverError::SameWorker")
+                .field("worker", worker)
+                .finish(),
+            Self::ShuttingDown => f.write_str("FailoverError::ShuttingDown"),
+            Self::Canceled => f.write_str("FailoverError::Canceled"),
+            Self::Panicked(_) => f.write_str("FailoverError::Panicked(..)"),
+        }
+    }
+}
+
+impl fmt::Display for FailoverError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoOtherWorker => f.write_str("no other stealable worker configured"),
+            Self::InvalidWorker { index, workers } => {
+                write!(
+                    f,
+                    "stealable worker {index} is out of range for {workers} workers"
+                )
+            }
+            Self::SameWorker { worker } => {
+                write!(f, "cannot fail over to current stealable worker {worker:?}")
+            }
+            Self::ShuttingDown => f.write_str("runtime is shutting down"),
+            Self::Canceled => f.write_str("failover continuation was canceled"),
+            Self::Panicked(_) => f.write_str("failover continuation panicked"),
+        }
+    }
+}
+
+impl std::error::Error for FailoverError {}
 
 /// Error returned when worker shutdown observes panicked worker threads.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -915,6 +1207,81 @@ mod tests {
         assert_eq!(metrics.pinned_completed, 1);
         assert_eq!(metrics.stealable_submitted, 1);
         assert_eq!(metrics.stealable_completed, 1);
+    }
+
+    #[test]
+    fn stealable_failover_keeps_pipe_io_working_across_workers() {
+        let runtime = MultiRuntime::new(1, 3).unwrap();
+        let (stealable_read_fd, pinned_write_fd) = pipe().unwrap();
+        let (pinned_read_fd, stealable_write_fd) = pipe().unwrap();
+
+        let stealable = runtime
+            .spawn_stealable_with_context(move |ctx| {
+                let start_worker = ctx.worker_id();
+                let read_worker = ctx
+                    .worker_id_for_index((start_worker.index() + 1) % ctx.worker_count())
+                    .unwrap();
+                let write_worker = ctx
+                    .worker_id_for_index((read_worker.index() + 1) % ctx.worker_count())
+                    .unwrap();
+
+                let (actual_read_worker, actual_write_worker, bytes) = ctx
+                    .failover_to(read_worker, move |ctx| {
+                        assert_eq!(ctx.worker_id(), read_worker);
+
+                        let mut buffer = [0_u8; 5];
+                        let read = ctx.runtime().read(&stealable_read_fd, &mut buffer).unwrap();
+                        assert_eq!(read, buffer.len());
+                        ctx.runtime().close(stealable_read_fd).unwrap();
+
+                        let actual_write_worker = ctx
+                            .failover_to(write_worker, move |ctx| {
+                                assert_eq!(ctx.worker_id(), write_worker);
+                                let written =
+                                    ctx.runtime().write(&stealable_write_fd, b"world").unwrap();
+                                assert_eq!(written, 5);
+                                ctx.runtime().close(stealable_write_fd).unwrap();
+                                ctx.worker_id()
+                            })
+                            .unwrap();
+
+                        (ctx.worker_id(), actual_write_worker, buffer)
+                    })
+                    .unwrap();
+
+                (start_worker, actual_read_worker, actual_write_worker, bytes)
+            })
+            .unwrap();
+        let pinned = runtime
+            .spawn_pinned_index(0, move |cx| {
+                let written = cx.write(&pinned_write_fd, b"hello").unwrap();
+                assert_eq!(written, 5);
+                cx.close(pinned_write_fd).unwrap();
+
+                let mut buffer = [0_u8; 5];
+                let read = cx.read(&pinned_read_fd, &mut buffer).unwrap();
+                assert_eq!(read, buffer.len());
+                cx.close(pinned_read_fd).unwrap();
+
+                (worker_thread_name(cx), buffer)
+            })
+            .unwrap();
+
+        let (pinned_worker, pinned_bytes) = pinned.join().unwrap();
+        assert_eq!(pinned_worker, "kimojio-stack-pinned-0");
+        assert_eq!(&pinned_bytes, b"world");
+
+        let (start_worker, read_worker, write_worker, stealable_bytes) = stealable.join().unwrap();
+        assert_ne!(start_worker, read_worker);
+        assert_ne!(start_worker, write_worker);
+        assert_ne!(read_worker, write_worker);
+        assert_eq!(&stealable_bytes, b"hello");
+
+        let metrics = runtime.metrics();
+        assert_eq!(metrics.pinned_submitted, 1);
+        assert_eq!(metrics.pinned_completed, 1);
+        assert_eq!(metrics.stealable_submitted, 1);
+        assert_eq!(metrics.stealable_completed, 3);
     }
 
     #[test]
