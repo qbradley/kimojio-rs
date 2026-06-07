@@ -17,6 +17,8 @@ use crate::{
 };
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
+type ShutdownCallback = Box<dyn FnOnce() + Send + 'static>;
+type SharedShutdownCallback = Arc<Mutex<Option<ShutdownCallback>>>;
 
 enum WorkerMessage {
     Run(Job),
@@ -37,6 +39,7 @@ struct ReadinessWait {
     fd: RawFd,
     interest: ReadinessInterest,
     ready: Box<dyn FnOnce() + Send + 'static>,
+    shutdown: SharedShutdownCallback,
 }
 
 /// User-facing pool that owns TLS operation placement policy and shared stats.
@@ -234,20 +237,38 @@ impl PoolInner {
             })
     }
 
-    pub(crate) fn run_when_ready(
-        &self,
+    pub(crate) fn send_to_executor_when_ready(
+        self: &Arc<Self>,
         fd: RawFd,
         interest: ReadinessInterest,
+        executor: usize,
+        operation_size: usize,
         job: Job,
+        shutdown: Box<dyn FnOnce() + Send + 'static>,
     ) -> Result<(), OperationError> {
         if self.shutdown.load(Ordering::Acquire) {
             return Err(OperationError::Shutdown);
         }
+        let pool = Arc::clone(self);
+        let shutdown = Arc::new(Mutex::new(Some(shutdown)));
+        let send_failure_shutdown = Arc::clone(&shutdown);
         self.readiness_sender
             .send(ReadinessMessage::Wait(ReadinessWait {
                 fd,
                 interest,
-                ready: job,
+                ready: Box::new(move || {
+                    if pool
+                        .send_to_executor(executor, operation_size, job)
+                        .is_err()
+                        && let Some(shutdown) = send_failure_shutdown
+                            .lock()
+                            .expect("readiness shutdown callback poisoned")
+                            .take()
+                    {
+                        shutdown();
+                    }
+                }),
+                shutdown,
             }))
             .map_err(|_| OperationError::Shutdown)
     }
@@ -417,15 +438,26 @@ fn readiness_loop(receiver: mpsc::Receiver<ReadinessMessage>) {
         while let Ok(message) = receiver.try_recv() {
             match message {
                 ReadinessMessage::Wait(wait) => waits.push(wait),
-                ReadinessMessage::Shutdown => return,
+                ReadinessMessage::Shutdown => {
+                    for wait in waits.drain(..) {
+                        run_readiness_shutdown(wait);
+                    }
+                    return;
+                }
             }
         }
 
         if waits.is_empty() {
             match receiver.recv() {
                 Ok(ReadinessMessage::Wait(wait)) => waits.push(wait),
-                Ok(ReadinessMessage::Shutdown) | Err(_) => return,
+                Ok(ReadinessMessage::Shutdown) | Err(_) => {
+                    for wait in waits.drain(..) {
+                        run_readiness_shutdown(wait);
+                    }
+                    return;
+                }
             }
+
             continue;
         }
 
@@ -460,6 +492,17 @@ fn readiness_loop(receiver: mpsc::Receiver<ReadinessMessage>) {
                 (wait.ready)();
             }
         }
+    }
+}
+
+fn run_readiness_shutdown(wait: ReadinessWait) {
+    if let Some(shutdown) = wait
+        .shutdown
+        .lock()
+        .expect("readiness shutdown callback poisoned")
+        .take()
+    {
+        shutdown();
     }
 }
 

@@ -24,6 +24,11 @@ enum DispatchResult {
     Pending,
 }
 
+enum TlsAttempt<T> {
+    Ready(OperationResult<T>),
+    WouldBlock(ReadinessInterest),
+}
+
 /// User-facing TLS stream handle created by a pool.
 #[derive(Clone)]
 pub struct TlsStream {
@@ -79,25 +84,6 @@ impl TlsStream {
         ))
     }
 
-    /// Submits a read work item for this stream.
-    fn submit_read<F>(
-        &self,
-        buffer_len: usize,
-        read: F,
-        callback: CompletionCallback<Vec<u8>>,
-    ) -> OperationResult<()>
-    where
-        F: FnOnce() -> OperationResult<Vec<u8>> + Send + 'static,
-    {
-        let fd = self.state.raw_fd()?;
-        self.submit_work(OperationWork::new(
-            OperationKind::Read { fd },
-            buffer_len,
-            Box::new(read),
-            callback,
-        ))
-    }
-
     /// Reads up to `buffer_len` decrypted bytes and reports them through `callback`.
     pub fn read(
         &self,
@@ -113,7 +99,11 @@ impl TlsStream {
             return Ok(());
         }
         let state = Arc::clone(&self.state);
-        self.submit_read(buffer_len, move || state.read_tls(buffer_len), callback)
+        let fd = state.raw_fd()?;
+        let callback = Arc::new(Mutex::new(Some(callback)));
+        state.submit(Box::new(move |state| {
+            schedule_read_after_readiness(state, fd, buffer_len, callback)
+        }))
     }
 
     /// Submits a write work item for this stream.
@@ -231,36 +221,38 @@ impl StreamState {
         self.pool.is_shutdown()
     }
 
-    fn read_tls(&self, buffer_len: usize) -> OperationResult<Vec<u8>> {
+    fn read_tls_once(&self, buffer_len: usize) -> TlsAttempt<Vec<u8>> {
         let max = self.pool.config().max_read_len();
         if buffer_len > max {
-            return Err(OperationError::ReadTooLarge {
+            return TlsAttempt::Ready(Err(OperationError::ReadTooLarge {
                 requested: buffer_len,
                 max,
-            });
+            }));
         }
-        let mut guard = self.tls.lock().map_err(|_| OperationError::StatePoisoned)?;
-        let tls = guard.as_mut().ok_or(OperationError::Shutdown)?;
-        crate::tls::set_nonblocking_stream(tls)?;
+        let mut guard = match self.tls.lock() {
+            Ok(guard) => guard,
+            Err(_) => return TlsAttempt::Ready(Err(OperationError::StatePoisoned)),
+        };
+        let Some(tls) = guard.as_mut() else {
+            return TlsAttempt::Ready(Err(OperationError::Shutdown));
+        };
+        if let Err(error) = crate::tls::set_nonblocking_stream(tls) {
+            return TlsAttempt::Ready(Err(error));
+        }
         let mut buffer = vec![0_u8; buffer_len];
         if buffer_len == 0 {
-            return Ok(buffer);
+            return TlsAttempt::Ready(Ok(buffer));
         }
 
-        loop {
-            match tls.ssl_read(&mut buffer) {
-                Ok(amount) => {
-                    buffer.truncate(amount);
-                    return Ok(buffer);
-                }
-                Err(error) => {
-                    if let Some(interest) = ssl_wait_interest(&error) {
-                        wait_for_fd(crate::tls::raw_fd(tls), interest)?;
-                    } else {
-                        return map_ssl_error(error);
-                    }
-                }
+        match tls.ssl_read(&mut buffer) {
+            Ok(amount) => {
+                buffer.truncate(amount);
+                TlsAttempt::Ready(Ok(buffer))
             }
+            Err(error) => match ssl_wait_interest(&error) {
+                Some(interest) => TlsAttempt::WouldBlock(interest),
+                None => TlsAttempt::Ready(map_ssl_error(error)),
+            },
         }
     }
 
@@ -363,9 +355,14 @@ where
     let (operation, callback) = work.into_parts();
 
     match kind {
-        OperationKind::Read { fd } => {
-            schedule_after_readiness(state, fd, ReadinessInterest::Read, operation, callback)
-        }
+        OperationKind::Read { fd } => schedule_after_readiness(
+            state,
+            fd,
+            ReadinessInterest::Read,
+            operation_size,
+            operation,
+            callback,
+        ),
         OperationKind::Write { .. } => {
             start_generic_operation(state, operation_size, kind, operation, callback)
         }
@@ -436,6 +433,7 @@ fn schedule_after_readiness<T>(
     state: Arc<StreamState>,
     fd: std::os::fd::RawFd,
     interest: ReadinessInterest,
+    operation_size: usize,
     operation: crate::operation::OperationFn<T>,
     callback: CompletionCallback<T>,
 ) -> DispatchResult
@@ -443,6 +441,10 @@ where
     T: Send + 'static,
 {
     let pool = Arc::clone(&state.pool);
+    let executor = match pool.choose_placement(OperationKind::Read { fd }, operation_size) {
+        crate::OperationPlacement::Immediate => 0,
+        crate::OperationPlacement::Background { executor } => executor,
+    };
     let job_state = Arc::clone(&state);
     let callback = Arc::new(Mutex::new(Some(callback)));
     let readiness_error_callback = Arc::clone(&callback);
@@ -455,11 +457,26 @@ where
             .expect("operation callback missing");
         let status = operation::complete(operation, callback);
         job_state.stats.record_finished();
-        record_completion(&job_state, None, status);
+        record_completion(&job_state, Some(executor), status);
         job_state.finish();
     });
+    let shutdown_state = Arc::clone(&state);
+    let shutdown_callback = Arc::clone(&readiness_error_callback);
+    let shutdown = Box::new(move || {
+        shutdown_state.pool.stats.record_failed(None);
+        if let Some(callback) = shutdown_callback
+            .lock()
+            .expect("operation callback mutex poisoned")
+            .take()
+        {
+            callback(Err(OperationError::Shutdown));
+        }
+        shutdown_state.finish();
+    });
 
-    if let Err(error) = pool.run_when_ready(fd, interest, job) {
+    if let Err(error) =
+        pool.send_to_executor_when_ready(fd, interest, executor, operation_size, job, shutdown)
+    {
         state.pool.stats.record_failed(None);
         if let Some(callback) = readiness_error_callback
             .lock()
@@ -471,6 +488,110 @@ where
         DispatchResult::Completed
     } else {
         DispatchResult::Pending
+    }
+}
+
+fn schedule_read_after_readiness(
+    state: Arc<StreamState>,
+    fd: std::os::fd::RawFd,
+    buffer_len: usize,
+    callback: Arc<Mutex<Option<CompletionCallback<Vec<u8>>>>>,
+) -> DispatchResult {
+    let executor = match state
+        .pool
+        .choose_placement(OperationKind::Read { fd }, buffer_len)
+    {
+        crate::OperationPlacement::Immediate => 0,
+        crate::OperationPlacement::Background { executor } => executor,
+    };
+    let pool = Arc::clone(&state.pool);
+    let job_state = Arc::clone(&state);
+    let job_callback = Arc::clone(&callback);
+    let job = Box::new(move || {
+        attempt_read_on_executor(job_state, fd, buffer_len, job_callback, executor);
+    });
+    let shutdown_state = Arc::clone(&state);
+    let shutdown_callback = Arc::clone(&callback);
+    let shutdown = Box::new(move || {
+        shutdown_state.pool.stats.record_failed(None);
+        if let Some(callback) = shutdown_callback
+            .lock()
+            .expect("read callback mutex poisoned")
+            .take()
+        {
+            callback(Err(OperationError::Shutdown));
+        }
+        shutdown_state.finish();
+    });
+
+    if pool
+        .send_to_executor_when_ready(
+            fd,
+            ReadinessInterest::Read,
+            executor,
+            buffer_len,
+            job,
+            shutdown,
+        )
+        .is_err()
+    {
+        state.pool.stats.record_failed(None);
+        if let Some(callback) = callback
+            .lock()
+            .expect("read callback mutex poisoned")
+            .take()
+        {
+            callback(Err(OperationError::Shutdown));
+        }
+        DispatchResult::Completed
+    } else {
+        DispatchResult::Pending
+    }
+}
+
+fn attempt_read_on_executor(
+    state: Arc<StreamState>,
+    fd: std::os::fd::RawFd,
+    buffer_len: usize,
+    callback: Arc<Mutex<Option<CompletionCallback<Vec<u8>>>>>,
+    executor: usize,
+) {
+    state.stats.record_started();
+    match state.read_tls_once(buffer_len) {
+        TlsAttempt::Ready(result) => {
+            state.stats.record_finished();
+            let success = result.is_ok();
+            if let Some(callback) = callback
+                .lock()
+                .expect("read callback mutex poisoned")
+                .take()
+            {
+                let status = deliver_result(result, callback);
+                record_completion(&state, Some(executor), status);
+            } else if success {
+                state.pool.stats.record_completed(Some(executor));
+            } else {
+                state.pool.stats.record_failed(Some(executor));
+            }
+            state.finish();
+        }
+        TlsAttempt::WouldBlock(_interest) => {
+            state.stats.record_finished();
+            let result = schedule_read_after_readiness(state, fd, buffer_len, callback);
+            debug_assert_eq!(result, DispatchResult::Pending);
+        }
+    }
+}
+
+fn deliver_result<T>(
+    result: OperationResult<T>,
+    callback: CompletionCallback<T>,
+) -> CompletionStatus {
+    let success = result.is_ok();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(result))) {
+        Ok(()) if success => CompletionStatus::Succeeded,
+        Ok(()) => CompletionStatus::Failed,
+        Err(_) => CompletionStatus::Panicked,
     }
 }
 
