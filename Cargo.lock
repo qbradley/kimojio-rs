@@ -650,6 +650,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kimojio-stack-tls"
+version = "0.16.4"
+dependencies = [
+ "foreign-types-shared",
+ "kimojio-stack",
+ "kimojio-tls",
+ "openssl",
+ "rustix",
+ "rustix-uring",
+]
+
+[[package]]
 name = "kimojio-tls"
 version = "0.16.4"
 dependencies = [

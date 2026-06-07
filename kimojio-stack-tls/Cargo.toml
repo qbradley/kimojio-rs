@@ -1,0 +1,17 @@
+[package]
+name = "kimojio-stack-tls"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "OpenSSL TLS streams for kimojio-stack"
+
+[dependencies]
+foreign-types-shared.workspace = true
+kimojio-stack.workspace = true
+kimojio-tls.workspace = true
+openssl.workspace = true
+rustix = { workspace = true, features = ["net"] }
+rustix-uring.workspace = true
