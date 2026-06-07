@@ -1,0 +1,28 @@
+[package]
+name = "kimojio-stack-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "HTTP client and server foundations for kimojio-stack"
+
+[dependencies]
+bytes.workspace = true
+hpack.workspace = true
+http.workspace = true
+httpdate.workspace = true
+httparse.workspace = true
+kimojio-stack.workspace = true
+kimojio-stack-tls.workspace = true
+rustix = { workspace = true, features = ["net"] }
+
+[dev-dependencies]
+criterion.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "server", "http1", "http2"] }
+hyper-util = { workspace = true, features = ["client", "server", "tokio", "http1", "http2"] }
+openssl.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tonic = { workspace = true, features = ["transport"] }
