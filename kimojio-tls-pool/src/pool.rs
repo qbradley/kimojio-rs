@@ -1,7 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::io::{Read, Write};
 use std::os::fd::{BorrowedFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -9,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use openssl::ssl::{SslAcceptor, SslConnector};
-use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::event::{PollFd, PollFlags, poll};
 
 use crate::{
     IdleBehavior, OperationError, OperationPlacement, PoolConfig, PoolConfigError, PoolStats,
@@ -113,6 +115,7 @@ pub(crate) struct PoolInner {
     pub(crate) stats: Arc<PoolStats>,
     workers: Vec<WorkerHandle>,
     readiness_sender: mpsc::Sender<ReadinessMessage>,
+    readiness_waker: Mutex<UnixStream>,
     readiness_handle: Mutex<Option<JoinHandle<()>>>,
     readiness_thread_id: thread::ThreadId,
     executor_loads: Vec<AtomicU64>,
@@ -124,6 +127,14 @@ pub(crate) struct PoolInner {
 impl PoolInner {
     fn new(config: PoolConfig) -> Result<Arc<Self>, PoolConfigError> {
         let executor_count = config.executor_count();
+        let (wake_reader, wake_writer) = UnixStream::pair()
+            .map_err(|error| PoolConfigError::ExecutorSpawnFailed(error.to_string()))?;
+        wake_reader
+            .set_nonblocking(true)
+            .map_err(|error| PoolConfigError::ExecutorSpawnFailed(error.to_string()))?;
+        wake_writer
+            .set_nonblocking(true)
+            .map_err(|error| PoolConfigError::ExecutorSpawnFailed(error.to_string()))?;
         let mut spawn_error = None;
         let inner = Arc::new_cyclic(|weak: &std::sync::Weak<Self>| {
             let stats = Arc::new(PoolStats::new(executor_count));
@@ -155,7 +166,7 @@ impl PoolInner {
             let (readiness_sender, readiness_receiver) = mpsc::channel();
             let readiness_handle = thread::Builder::new()
                 .name("kimojio-tls-pool-readiness".to_string())
-                .spawn(move || readiness_loop(readiness_receiver))
+                .spawn(move || readiness_loop(readiness_receiver, wake_reader))
                 .expect("failed to spawn TLS pool readiness thread");
             let readiness_thread_id = readiness_handle.thread().id();
 
@@ -164,6 +175,7 @@ impl PoolInner {
                 stats,
                 workers,
                 readiness_sender,
+                readiness_waker: Mutex::new(wake_writer),
                 readiness_handle: Mutex::new(Some(readiness_handle)),
                 readiness_thread_id,
                 executor_loads: (0..executor_count).map(|_| AtomicU64::new(0)).collect(),
@@ -270,7 +282,9 @@ impl PoolInner {
                 }),
                 shutdown,
             }))
-            .map_err(|_| OperationError::Shutdown)
+            .map_err(|_| OperationError::Shutdown)?;
+        self.wake_readiness();
+        Ok(())
     }
 
     pub(crate) fn is_shutdown(&self) -> bool {
@@ -294,6 +308,7 @@ impl PoolInner {
             let _ = worker.sender.send(WorkerMessage::Shutdown);
         }
         let _ = self.readiness_sender.send(ReadinessMessage::Shutdown);
+        self.wake_readiness();
     }
 
     #[cfg(test)]
@@ -306,6 +321,12 @@ impl PoolInner {
             .iter()
             .map(|load| load.load(Ordering::Acquire))
             .collect()
+    }
+
+    fn wake_readiness(&self) {
+        if let Ok(mut waker) = self.readiness_waker.lock() {
+            let _ = waker.write(&[1]);
+        }
     }
 }
 
@@ -432,7 +453,7 @@ fn handle_worker_message(message: WorkerMessage) -> bool {
     }
 }
 
-fn readiness_loop(receiver: mpsc::Receiver<ReadinessMessage>) {
+fn readiness_loop(receiver: mpsc::Receiver<ReadinessMessage>, mut wake_reader: UnixStream) {
     let mut waits = Vec::new();
     loop {
         while let Ok(message) = receiver.try_recv() {
@@ -461,9 +482,8 @@ fn readiness_loop(receiver: mpsc::Receiver<ReadinessMessage>) {
             continue;
         }
 
-        let mut fds = waits
-            .iter()
-            .map(|wait| {
+        let mut fds = std::iter::once(PollFd::new(&wake_reader, PollFlags::IN))
+            .chain(waits.iter().map(|wait| {
                 let flags = match wait.interest {
                     ReadinessInterest::Read => PollFlags::IN,
                     ReadinessInterest::Write => PollFlags::OUT,
@@ -472,24 +492,39 @@ fn readiness_loop(receiver: mpsc::Receiver<ReadinessMessage>) {
                 // readiness callback. The borrow only lives for this poll call.
                 let fd = unsafe { BorrowedFd::borrow_raw(wait.fd) };
                 PollFd::from_borrowed_fd(fd, flags)
-            })
+            }))
             .collect::<Vec<_>>();
 
-        let timeout = Timespec {
-            tv_sec: 0,
-            tv_nsec: 1_000_000,
-        };
-        let _ = poll(&mut fds, Some(&timeout));
+        if poll(&mut fds, None).is_err() {
+            continue;
+        }
+
+        if fds[0].revents().intersects(PollFlags::IN) {
+            drain_wake_pipe(&mut wake_reader);
+            continue;
+        }
 
         let mut index = waits.len();
         while index != 0 {
             index -= 1;
-            let ready = fds[index].revents();
+            let ready = fds[index + 1].revents();
             if ready.intersects(
                 PollFlags::IN | PollFlags::OUT | PollFlags::ERR | PollFlags::HUP | PollFlags::NVAL,
             ) {
                 let wait = waits.swap_remove(index);
                 (wait.ready)();
+            }
+        }
+
+        fn drain_wake_pipe(wake_reader: &mut UnixStream) {
+            let mut buf = [0_u8; 64];
+            loop {
+                match wake_reader.read(&mut buf) {
+                    Ok(0) => return,
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return,
+                    Err(_) => return,
+                }
             }
         }
     }

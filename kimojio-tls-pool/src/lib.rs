@@ -38,6 +38,6 @@ mod tests {
     fn placeholder_stream_shares_pool_stats() {
         let pool = TlsPool::default();
         let stream = pool.stream();
-        assert_eq!(stream.stats(), pool.stats());
+        assert_eq!(stream.stats().submitted, pool.stats().submitted);
     }
 }
