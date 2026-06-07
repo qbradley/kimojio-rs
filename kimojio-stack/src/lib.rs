@@ -167,20 +167,29 @@ use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::fmt;
 use std::marker::PhantomData;
-use std::mem::ManuallyDrop;
+use std::mem::{ManuallyDrop, MaybeUninit};
 use std::os::fd::FromRawFd;
 use std::panic::{self, AssertUnwindSafe};
 use std::rc::{Rc, Weak};
+use std::sync::atomic::AtomicU32;
 use std::time::Duration;
 
 use corosensei::stack::DefaultStack;
 use corosensei::{Coroutine, CoroutineResult, Yielder};
+pub use rustix::event::epoll::{
+    Event as EpollEvent, EventData as EpollEventData, EventFlags as EpollEventFlags,
+};
 pub use rustix::fd::OwnedFd;
 use rustix::fd::{AsFd, AsRawFd};
 use rustix::fs;
-pub use rustix::fs::{Advice as FileAdvice, AtFlags, FallocateFlags, Mode, OFlags, RenameFlags};
+pub use rustix::fs::{
+    Advice as FileAdvice, AtFlags, FallocateFlags, Mode, OFlags, RenameFlags, ResolveFlags, Statx,
+    StatxFlags,
+};
+pub use rustix::io_uring::{
+    FutexWaitFlags, FutexWaitvFlags, MsgHdr, SpliceFlags as UringSpliceFlags, iovec as IoVec,
+};
 use rustix::io_uring::{IoringOp, io_uring_user_data};
-pub use rustix::io_uring::{MsgHdr, iovec as IoVec};
 use rustix::mm;
 pub use rustix::mm::Advice as MemoryAdvice;
 use rustix::net::{self, addr::SocketAddrArg};
@@ -188,13 +197,14 @@ pub use rustix::net::{
     AddressFamily, Protocol, RecvFlags, SendFlags, Shutdown, SocketType, ipproto,
 };
 use rustix::path;
+pub use rustix::pipe::SpliceFlags;
 pub use rustix_uring::Errno;
 use rustix_uring::opcode;
 use rustix_uring::{
     Probe,
     cqueue::Entry as Cqe,
-    squeue::Entry as Sqe,
-    types::{Fd, Fixed, Timespec},
+    squeue::Entry128 as Sqe,
+    types::{CancelBuilder, Fd, Fixed, FutexWaitV, OpenHow, Timespec},
 };
 
 pub mod barrier;
@@ -227,6 +237,17 @@ type TaskId = usize;
 type PanicPayload = Box<dyn Any + Send + 'static>;
 type KernelIoResult = Result<u32, Errno>;
 type IoUring = rustix_uring::IoUring<Sqe, Cqe>;
+
+/// Operation for [`RuntimeContext::epoll_ctl`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EpollCtlOp {
+    /// Add a file descriptor to an epoll interest list.
+    Add = 1,
+    /// Remove a file descriptor from an epoll interest list.
+    Delete = 2,
+    /// Modify an existing epoll interest.
+    Modify = 3,
+}
 
 fn memory_advice_for_uring(advice: MemoryAdvice) -> Option<FileAdvice> {
     match advice {
@@ -449,6 +470,11 @@ impl RuntimeContext<'_> {
         RegisteredBuffer::new(Rc::downgrade(&self.core), buffer, ptr, len)
     }
 
+    /// Returns whether the current kernel reports support for an io_uring opcode.
+    pub fn supports_io_uring_opcode(&self, opcode: IoringOp) -> bool {
+        self.core.borrow().supports_opcode(opcode)
+    }
+
     /// Opens `path` relative to the process current working directory using
     /// io_uring.
     pub fn open<P: path::Arg>(&self, path: P, flags: OFlags, mode: Mode) -> Result<OwnedFd, Errno> {
@@ -476,6 +502,81 @@ impl RuntimeContext<'_> {
             )?;
 
             Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+        })
+    }
+
+    /// Opens `path` relative to the process current working directory using
+    /// `openat2` through io_uring.
+    pub fn open2<P: path::Arg>(
+        &self,
+        path: P,
+        flags: OFlags,
+        mode: Mode,
+        resolve: ResolveFlags,
+    ) -> Result<OwnedFd, Errno> {
+        self.openat2(&fs::CWD, path, flags, mode, resolve)
+    }
+
+    /// Opens `path` relative to `dirfd` using `openat2` through io_uring.
+    pub fn openat2<P: path::Arg>(
+        &self,
+        dirfd: &impl AsFd,
+        path: P,
+        flags: OFlags,
+        mode: Mode,
+        resolve: ResolveFlags,
+    ) -> Result<OwnedFd, Errno> {
+        if !self.core.borrow().supports_opcode(opcode::OpenAt2::CODE) {
+            return fs::openat2(dirfd.as_fd(), path, flags, mode, resolve);
+        }
+
+        let how = OpenHow::new().flags(flags).mode(mode).resolve(resolve);
+        path.into_with_c_str(|path| {
+            let fd = self.submit_and_wait_for_io(
+                opcode::OpenAt2::new(Fd(dirfd.as_fd().as_raw_fd()), path.as_ptr(), &how).build(),
+            )?;
+
+            Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+        })
+    }
+
+    /// Gets extended file status for `path` in the process current working
+    /// directory using io_uring.
+    pub fn statx<P: path::Arg>(
+        &self,
+        path: P,
+        flags: AtFlags,
+        mask: StatxFlags,
+    ) -> Result<Statx, Errno> {
+        self.statxat(&fs::CWD, path, flags, mask)
+    }
+
+    /// Gets extended file status relative to `dirfd` using io_uring.
+    pub fn statxat<P: path::Arg>(
+        &self,
+        dirfd: &impl AsFd,
+        path: P,
+        flags: AtFlags,
+        mask: StatxFlags,
+    ) -> Result<Statx, Errno> {
+        if !self.core.borrow().supports_opcode(opcode::Statx::CODE) {
+            return fs::statx(dirfd.as_fd(), path, flags, mask);
+        }
+
+        path.into_with_c_str(|path| {
+            let mut statx = MaybeUninit::<Statx>::zeroed();
+            self.submit_and_wait_for_io(
+                opcode::Statx::new(
+                    Fd(dirfd.as_fd().as_raw_fd()),
+                    path.as_ptr(),
+                    statx.as_mut_ptr(),
+                )
+                .flags(flags)
+                .mask(mask)
+                .build(),
+            )?;
+
+            Ok(unsafe { statx.assume_init() })
         })
     }
 
@@ -725,6 +826,17 @@ impl RuntimeContext<'_> {
         .map(|_| ())
     }
 
+    /// Sets the length of a file using io_uring.
+    pub fn ftruncate(&self, fd: &impl AsFd, len: u64) -> Result<(), Errno> {
+        if !self.core.borrow().supports_opcode(opcode::Ftruncate::CODE) {
+            return fs::ftruncate(fd.as_fd(), len);
+        }
+
+        let fd = fd.as_fd().as_raw_fd();
+        self.submit_and_wait_for_io(opcode::Ftruncate::new(Fd(fd), len).build())
+            .map(|_| ())
+    }
+
     /// Synchronizes file data and metadata using io_uring.
     pub fn fsync(&self, fd: &impl AsFd) -> Result<(), Errno> {
         if !self.core.borrow().supports_opcode(opcode::Fsync::CODE) {
@@ -750,6 +862,102 @@ impl RuntimeContext<'_> {
                 .offset(offset)
                 .flags(flags)
                 .build(),
+        )
+        .map(|_| ())
+    }
+
+    /// Splices data between file descriptors using io_uring.
+    pub fn splice(
+        &self,
+        fd_in: &impl AsFd,
+        off_in: i64,
+        fd_out: &impl AsFd,
+        off_out: i64,
+        len: u32,
+        flags: UringSpliceFlags,
+    ) -> Result<usize, Errno> {
+        if !self.core.borrow().supports_opcode(opcode::Splice::CODE) {
+            return Err(Errno::OPNOTSUPP);
+        }
+
+        let entry = opcode::Splice::new(
+            Fd(fd_in.as_fd().as_raw_fd()),
+            off_in,
+            Fd(fd_out.as_fd().as_raw_fd()),
+            off_out,
+            len,
+        )
+        .flags(flags)
+        .build();
+
+        self.submit_and_wait_for_io(entry)
+            .map(|result| result as usize)
+    }
+
+    /// Duplicates pipe data between file descriptors using io_uring.
+    pub fn tee(
+        &self,
+        fd_in: &impl AsFd,
+        fd_out: &impl AsFd,
+        len: u32,
+        flags: UringSpliceFlags,
+    ) -> Result<usize, Errno> {
+        if !self.core.borrow().supports_opcode(opcode::Tee::CODE) {
+            return Err(Errno::OPNOTSUPP);
+        }
+
+        let entry = opcode::Tee::new(
+            Fd(fd_in.as_fd().as_raw_fd()),
+            Fd(fd_out.as_fd().as_raw_fd()),
+            len,
+        )
+        .flags(flags)
+        .build();
+
+        self.submit_and_wait_for_io(entry)
+            .map(|result| result as usize)
+    }
+
+    /// Waits for one poll event set on `fd` using io_uring.
+    pub fn poll(&self, fd: &impl AsFd, flags: u32) -> Result<u32, Errno> {
+        if !self.core.borrow().supports_opcode(opcode::PollAdd::CODE) {
+            return Err(Errno::OPNOTSUPP);
+        }
+
+        let fd = fd.as_fd().as_raw_fd();
+        self.submit_and_wait_for_io(opcode::PollAdd::new(Fd(fd), flags).build())
+    }
+
+    /// Removes a previously submitted poll request by user data.
+    pub fn poll_remove(&self, user_data: io_uring_user_data) -> Result<(), Errno> {
+        if !self.core.borrow().supports_opcode(opcode::PollRemove::CODE) {
+            return Err(Errno::OPNOTSUPP);
+        }
+
+        self.submit_and_wait_for_io(opcode::PollRemove::new(user_data).build())
+            .map(|_| ())
+    }
+
+    /// Modifies an epoll instance using io_uring.
+    pub fn epoll_ctl(
+        &self,
+        epfd: &impl AsFd,
+        fd: &impl AsFd,
+        op: EpollCtlOp,
+        event: &EpollEvent,
+    ) -> Result<(), Errno> {
+        if !self.core.borrow().supports_opcode(opcode::EpollCtl::CODE) {
+            return Err(Errno::OPNOTSUPP);
+        }
+
+        self.submit_and_wait_for_io(
+            opcode::EpollCtl::new(
+                Fd(epfd.as_fd().as_raw_fd()),
+                Fd(fd.as_fd().as_raw_fd()),
+                op as i32,
+                event,
+            )
+            .build(),
         )
         .map(|_| ())
     }
@@ -827,6 +1035,18 @@ impl RuntimeContext<'_> {
         let len = u32::try_from(buf.len()).expect("io_uring read length exceeds u32::MAX");
         let fd = fd.as_fd().as_raw_fd();
         let entry = opcode::Read::new(Fd(fd), buf.as_mut_ptr(), len)
+            .offset(u64::MAX)
+            .build();
+
+        self.submit_and_wait_for_io(entry)
+            .map(|result| result as usize)
+    }
+
+    /// Vectored read from `fd` into `iovecs` using io_uring.
+    pub fn readv(&self, fd: &impl AsFd, iovecs: &mut [IoVec]) -> Result<usize, Errno> {
+        let len = u32::try_from(iovecs.len()).expect("io_uring readv iovec count exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::Readv::new(Fd(fd), iovecs.as_ptr(), len)
             .offset(u64::MAX)
             .build();
 
@@ -989,6 +1209,19 @@ impl RuntimeContext<'_> {
         let len = u32::try_from(buf.len()).expect("io_uring write length exceeds u32::MAX");
         let fd = fd.as_fd().as_raw_fd();
         let entry = opcode::Write::new(Fd(fd), buf.as_ptr(), len)
+            .offset(u64::MAX)
+            .build();
+
+        self.submit_and_wait_for_io(entry)
+            .map(|result| result as usize)
+    }
+
+    /// Vectored write from `iovecs` to `fd` using io_uring.
+    pub fn writev(&self, fd: &impl AsFd, iovecs: &[IoVec]) -> Result<usize, Errno> {
+        let len =
+            u32::try_from(iovecs.len()).expect("io_uring writev iovec count exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::Writev::new(Fd(fd), iovecs.as_ptr(), len)
             .offset(u64::MAX)
             .build();
 
@@ -1204,6 +1437,143 @@ impl RuntimeContext<'_> {
         self.submit_and_wait_for_io(entry).map(|_| ())
     }
 
+    /// Starts an io_uring timeout and returns a waitable handle.
+    pub fn timeout(&self, duration: Duration) -> Timeout {
+        Timeout::new(Rc::downgrade(&self.core), self.submit_timeout(duration))
+    }
+
+    /// Attempts to cancel a pending [`IoResult`].
+    pub fn cancel_io<T, B>(&self, io: &IoResult<T, B>) -> Result<(), Errno> {
+        let Some(user_data) = io.user_data() else {
+            return Ok(());
+        };
+
+        if !self
+            .core
+            .borrow()
+            .supports_opcode(opcode::AsyncCancel::CODE)
+        {
+            return Err(Errno::OPNOTSUPP);
+        }
+
+        self.submit_and_wait_for_io(opcode::AsyncCancel::new(user_data).build())
+            .map(|_| ())
+    }
+
+    /// Attempts to cancel requests matched by `builder`.
+    pub fn cancel_matching(&self, builder: CancelBuilder) -> Result<(), Errno> {
+        if !self
+            .core
+            .borrow()
+            .supports_opcode(opcode::AsyncCancel2::CODE)
+        {
+            return Err(Errno::OPNOTSUPP);
+        }
+
+        self.submit_and_wait_for_io(opcode::AsyncCancel2::new(builder).build())
+            .map(|_| ())
+    }
+
+    /// Waits on one futex using io_uring.
+    pub fn futex_wait(
+        &self,
+        futex: &AtomicU32,
+        val: u64,
+        mask: u64,
+        futex_flags: FutexWaitFlags,
+    ) -> Result<(), Errno> {
+        if !self.core.borrow().supports_opcode(opcode::FutexWait::CODE) {
+            return Err(Errno::OPNOTSUPP);
+        }
+
+        self.submit_and_wait_for_io(
+            opcode::FutexWait::new(futex.as_ptr().cast_const(), val, mask, futex_flags).build(),
+        )
+        .map(|_| ())
+    }
+
+    /// Wakes waiters on one futex using io_uring.
+    pub fn futex_wake(
+        &self,
+        futex: &AtomicU32,
+        count: u64,
+        mask: u64,
+        futex_flags: FutexWaitFlags,
+    ) -> Result<usize, Errno> {
+        if !self.core.borrow().supports_opcode(opcode::FutexWake::CODE) {
+            return Err(Errno::OPNOTSUPP);
+        }
+
+        self.submit_and_wait_for_io(
+            opcode::FutexWake::new(futex.as_ptr().cast_const(), count, mask, futex_flags).build(),
+        )
+        .map(|result| result as usize)
+    }
+
+    /// Waits on any futex in `futexes` using io_uring.
+    pub fn futex_waitv(&self, futexes: &[FutexWaitV]) -> Result<usize, Errno> {
+        if !self.core.borrow().supports_opcode(opcode::FutexWaitV::CODE) {
+            return Err(Errno::OPNOTSUPP);
+        }
+
+        let len =
+            u32::try_from(futexes.len()).expect("io_uring futex_waitv count exceeds u32::MAX");
+        self.submit_and_wait_for_io(opcode::FutexWaitV::new(futexes.as_ptr(), len).build())
+            .map(|result| result as usize)
+    }
+
+    /// Issues a device-specific 80-byte io_uring command.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the command bytes, command opcode, optional fixed
+    /// buffer index, and target fd satisfy the target device driver's
+    /// requirements.
+    pub unsafe fn uring_cmd80(
+        &self,
+        fd: &impl AsFd,
+        cmd_op: u32,
+        cmd: [u8; 80],
+        buf_index: Option<u16>,
+    ) -> Result<u32, Errno> {
+        if !self.core.borrow().supports_opcode(opcode::UringCmd80::CODE) {
+            return Err(Errno::OPNOTSUPP);
+        }
+
+        self.submit_and_wait_for_io(
+            opcode::UringCmd80::new(Fd(fd.as_fd().as_raw_fd()), cmd_op)
+                .cmd(cmd)
+                .buf_index(buf_index)
+                .build(),
+        )
+    }
+
+    /// Issues a device-specific 80-byte io_uring command to a registered fd.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the command bytes, command opcode, optional fixed
+    /// buffer index, and target fixed fd satisfy the target device driver's
+    /// requirements.
+    pub unsafe fn uring_cmd80_registered_fd(
+        &self,
+        fd: &RegisteredFd,
+        cmd_op: u32,
+        cmd: [u8; 80],
+        buf_index: Option<u16>,
+    ) -> Result<u32, Errno> {
+        if !self.core.borrow().supports_opcode(opcode::UringCmd80::CODE) {
+            return Err(Errno::OPNOTSUPP);
+        }
+
+        self.submit_and_wait_for_io(
+            opcode::UringCmd80::new(Fixed(fd.slot()), cmd_op)
+                .cmd(cmd)
+                .buf_index(buf_index)
+                .build(),
+        )
+    }
+
     fn wait_for_scope(&self, state: &Rc<ScopeState>) {
         while state.remaining.get() != 0 {
             if let Some(waiter) = self.waiter() {
@@ -1213,7 +1583,7 @@ impl RuntimeContext<'_> {
         }
     }
 
-    fn submit_and_wait_for_io(&self, entry: Sqe) -> KernelIoResult {
+    fn submit_and_wait_for_io(&self, entry: impl Into<Sqe>) -> KernelIoResult {
         let state = self.acquire_io_state();
         self.submit_io_state(entry, Rc::clone(&state));
         let result = self.wait_for_io_state(&state);
@@ -1232,10 +1602,10 @@ impl RuntimeContext<'_> {
         }
     }
 
-    fn submit_io_state(&self, entry: Sqe, state: Rc<IoState>) -> io_uring_user_data {
+    fn submit_io_state(&self, entry: impl Into<Sqe>, state: Rc<IoState>) -> io_uring_user_data {
         let user_data =
             io_uring_user_data::from_ptr(Rc::into_raw(Rc::clone(&state)) as *mut c_void);
-        let entry = entry.user_data(user_data);
+        let entry = entry.into().user_data(user_data);
         self.core.borrow_mut().submit_io(&entry);
         user_data
     }
@@ -1914,6 +2284,12 @@ impl<T, B> IoResult<T, B> {
             cx.park();
         }
     }
+
+    fn user_data(&self) -> Option<io_uring_user_data> {
+        self.state
+            .as_ref()
+            .map(|state| io_uring_user_data::from_ptr(Rc::as_ptr(state).cast_mut().cast()))
+    }
 }
 
 impl<T, B> Waitable for IoResult<T, B> {
@@ -2011,6 +2387,134 @@ impl<T> JoinState<T> {
 pub(crate) struct TimeoutState {
     pub(crate) state: Rc<IoState>,
     user_data: io_uring_user_data,
+}
+
+/// A waitable io_uring timeout.
+#[must_use = "timeouts should be waited on, canceled, or allowed to complete"]
+pub struct Timeout {
+    core: Weak<RefCell<Scheduler>>,
+    state: Option<Rc<IoState>>,
+    user_data: io_uring_user_data,
+}
+
+impl Timeout {
+    fn new(core: Weak<RefCell<Scheduler>>, state: TimeoutState) -> Self {
+        Self {
+            core,
+            state: Some(state.state),
+            user_data: state.user_data,
+        }
+    }
+
+    /// Returns the completed timeout result if ready.
+    pub fn try_wait(&mut self) -> Option<Result<(), Errno>> {
+        let result = self.state.as_ref()?.take_result()?;
+        let state = self.state.take().expect("timeout state missing");
+        recycle_io_state(&self.core, state);
+        Some(timeout_result(result))
+    }
+
+    /// Waits until the timeout completes.
+    pub fn wait(mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+        loop {
+            if let Some(result) = self.try_wait() {
+                return result;
+            }
+
+            self.state
+                .as_ref()
+                .expect("timeout state missing")
+                .add_waiter_from(cx);
+            cx.park();
+        }
+    }
+
+    /// Updates this timeout to a new relative duration.
+    pub fn update(&self, cx: &RuntimeContext<'_>, duration: Duration) -> Result<(), Errno> {
+        let state = cx.acquire_io_state();
+        state.set_timeout(Timespec::from(duration));
+        let entry = {
+            let timeout = state.timeout.borrow();
+            opcode::TimeoutUpdate::new(
+                self.user_data,
+                timeout.as_ref().expect("timeout missing timespec"),
+            )
+            .build()
+        };
+
+        cx.submit_io_state(entry, Rc::clone(&state));
+        let result = cx.wait_for_io_state(&state);
+        cx.recycle_io_state(state);
+        result.map(|_| ())
+    }
+
+    /// Cancels this timeout.
+    pub fn cancel(mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+        let Some(state) = self.state.take() else {
+            return Ok(());
+        };
+
+        if state.is_ready() {
+            cx.recycle_io_state(state);
+            return Ok(());
+        }
+
+        let cancel_state = cx.acquire_io_state();
+        cx.submit_io_state(
+            opcode::TimeoutRemove::new(self.user_data).build(),
+            Rc::clone(&cancel_state),
+        );
+
+        while !state.is_ready() || !cancel_state.is_ready() {
+            state.add_waiter_from(cx);
+            cancel_state.add_waiter_from(cx);
+            cx.park();
+        }
+
+        let cancel_result = cancel_state.take_result().expect("cancel result missing");
+        cx.recycle_io_state(state);
+        cx.recycle_io_state(cancel_state);
+        cancel_result.map(|_| ())
+    }
+}
+
+impl Waitable for Timeout {
+    fn is_ready(&self) -> bool {
+        self.state.as_ref().is_none_or(|state| state.is_ready())
+    }
+
+    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+        if let Some(state) = &self.state {
+            state.add_waiter_from(cx);
+        }
+    }
+}
+
+impl fmt::Debug for Timeout {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Timeout")
+            .field("ready", &self.is_ready())
+            .finish()
+    }
+}
+
+impl Drop for Timeout {
+    fn drop(&mut self) {
+        let Some(state) = self.state.take() else {
+            return;
+        };
+
+        if state.is_ready() {
+            recycle_io_state(&self.core, state);
+        }
+    }
+}
+
+fn timeout_result(result: KernelIoResult) -> Result<(), Errno> {
+    match result {
+        Ok(_) | Err(Errno::TIME) => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 pub(crate) struct IoState {
@@ -2166,7 +2670,9 @@ struct Scheduler {
 
 impl Scheduler {
     fn new(config: RuntimeConfig) -> Self {
-        let ring = IoUring::new(config.ring_entries).expect("failed to create io_uring");
+        let ring = IoUring::builder()
+            .build(config.ring_entries)
+            .expect("failed to create io_uring");
         let mut probe = Probe::new();
         let _ = ring.submitter().register_probe(&mut probe);
         if config.registered_file_slots != 0 {
@@ -2583,10 +3089,12 @@ mod allocation_tracking {
 #[cfg(test)]
 mod tests {
     use super::{
-        AddressFamily, AtFlags, FallocateFlags, FileAdvice, IoJoinError, IoVec, MemoryAdvice, Mode,
-        MsgHdr, OFlags, RecvFlags, RenameFlags, Runtime, RuntimeContext, SendFlags, Shutdown,
-        SocketType, Waitable, allocation_tracking, ipproto, once,
+        AddressFamily, AtFlags, EpollCtlOp, EpollEvent, EpollEventData, EpollEventFlags,
+        FallocateFlags, FileAdvice, FutexWaitFlags, IoJoinError, IoVec, MemoryAdvice, Mode, MsgHdr,
+        OFlags, RecvFlags, RenameFlags, ResolveFlags, Runtime, RuntimeContext, SendFlags, Shutdown,
+        SocketType, StatxFlags, UringSpliceFlags, Waitable, allocation_tracking, ipproto, once,
     };
+    use rustix::event::{PollFlags, epoll};
     use rustix::fd::AsFd;
     use rustix::mm::{MapFlags, ProtFlags};
     use rustix::net;
@@ -2594,6 +3102,7 @@ mod tests {
     use std::ffi::c_void;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::ptr;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn send_all(cx: &RuntimeContext<'_>, fd: &impl AsFd, mut bytes: &[u8]) {
@@ -2963,6 +3472,191 @@ mod tests {
         });
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn io_uring_openat2_statx_ftruncate_and_vectored_io() {
+        let root = unique_temp_dir("fs-extra");
+        let file = root.join("file");
+        let _ = std::fs::remove_dir_all(&root);
+
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.mkdir(&root, Mode::RWXU).unwrap();
+            let fd = cx
+                .open2(
+                    &file,
+                    OFlags::CREATE | OFlags::RDWR | OFlags::TRUNC,
+                    Mode::RUSR | Mode::WUSR,
+                    ResolveFlags::empty(),
+                )
+                .unwrap();
+            assert_eq!(cx.write(&fd, b"abcdef").unwrap(), 6);
+            cx.ftruncate(&fd, 3).unwrap();
+            let stat = cx
+                .statx(&file, AtFlags::empty(), StatxFlags::BASIC_STATS)
+                .unwrap();
+            assert_eq!(stat.stx_size, 3);
+            cx.close(fd).unwrap();
+
+            let (read_fd, write_fd) = pipe().unwrap();
+            let first = b"vec";
+            let second = b"tor";
+            let write_iov = [
+                IoVec {
+                    iov_base: first.as_ptr().cast::<c_void>().cast_mut(),
+                    iov_len: first.len(),
+                },
+                IoVec {
+                    iov_base: second.as_ptr().cast::<c_void>().cast_mut(),
+                    iov_len: second.len(),
+                },
+            ];
+            assert_eq!(cx.writev(&write_fd, &write_iov).unwrap(), 6);
+
+            let mut left = [0_u8; 3];
+            let mut right = [0_u8; 3];
+            let mut read_iov = [
+                IoVec {
+                    iov_base: left.as_mut_ptr().cast::<c_void>(),
+                    iov_len: left.len(),
+                },
+                IoVec {
+                    iov_base: right.as_mut_ptr().cast::<c_void>(),
+                    iov_len: right.len(),
+                },
+            ];
+            assert_eq!(cx.readv(&read_fd, &mut read_iov).unwrap(), 6);
+            assert_eq!([left.as_slice(), right.as_slice()].concat(), b"vector");
+            cx.close(read_fd).unwrap();
+            cx.close(write_fd).unwrap();
+
+            cx.unlink(&file).unwrap();
+            cx.rmdir(&root).unwrap();
+        });
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn io_uring_splice_tee_poll_and_epoll_ctl() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            if cx.supports_io_uring_opcode(rustix_uring::opcode::Splice::CODE) {
+                let (src_read, src_write) = pipe().unwrap();
+                let (dst_read, dst_write) = pipe().unwrap();
+                assert_eq!(cx.write(&src_write, b"abc").unwrap(), 3);
+                assert_eq!(
+                    cx.splice(&src_read, -1, &dst_write, -1, 3, UringSpliceFlags::empty())
+                        .unwrap(),
+                    3
+                );
+                let mut out = [0_u8; 3];
+                assert_eq!(cx.read(&dst_read, &mut out).unwrap(), 3);
+                assert_eq!(&out, b"abc");
+                cx.close(src_read).unwrap();
+                cx.close(src_write).unwrap();
+                cx.close(dst_read).unwrap();
+                cx.close(dst_write).unwrap();
+            }
+
+            if cx.supports_io_uring_opcode(rustix_uring::opcode::Tee::CODE) {
+                let (src_read, src_write) = pipe().unwrap();
+                let (dst_read, dst_write) = pipe().unwrap();
+                assert_eq!(cx.write(&src_write, b"xy").unwrap(), 2);
+                assert_eq!(
+                    cx.tee(&src_read, &dst_write, 2, UringSpliceFlags::empty())
+                        .unwrap(),
+                    2
+                );
+                let mut dst = [0_u8; 2];
+                let mut src = [0_u8; 2];
+                assert_eq!(cx.read(&dst_read, &mut dst).unwrap(), 2);
+                assert_eq!(cx.read(&src_read, &mut src).unwrap(), 2);
+                assert_eq!(&dst, b"xy");
+                assert_eq!(&src, b"xy");
+                cx.close(src_read).unwrap();
+                cx.close(src_write).unwrap();
+                cx.close(dst_read).unwrap();
+                cx.close(dst_write).unwrap();
+            }
+
+            if cx.supports_io_uring_opcode(rustix_uring::opcode::PollAdd::CODE) {
+                let (read_fd, write_fd) = pipe().unwrap();
+                assert_eq!(cx.write(&write_fd, &[1]).unwrap(), 1);
+                let events = cx.poll(&read_fd, PollFlags::IN.bits().into()).unwrap();
+                assert_ne!(events & u32::from(PollFlags::IN.bits()), 0);
+                cx.close(read_fd).unwrap();
+                cx.close(write_fd).unwrap();
+            }
+
+            if cx.supports_io_uring_opcode(rustix_uring::opcode::EpollCtl::CODE) {
+                let (read_fd, write_fd) = pipe().unwrap();
+                let epoll_fd = epoll::create(epoll::CreateFlags::CLOEXEC).unwrap();
+                let event = EpollEvent {
+                    flags: EpollEventFlags::IN,
+                    data: EpollEventData::new_u64(42),
+                };
+                cx.epoll_ctl(&epoll_fd, &read_fd, EpollCtlOp::Add, &event)
+                    .unwrap();
+                cx.close(read_fd).unwrap();
+                cx.close(write_fd).unwrap();
+                cx.close(epoll_fd).unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn io_uring_timeout_cancel_and_futex_operations() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let timeout = cx.timeout(Duration::from_secs(60));
+            timeout.cancel(cx).unwrap();
+
+            if cx.supports_io_uring_opcode(rustix_uring::opcode::AsyncCancel::CODE) {
+                let (read_fd, write_fd) = pipe().unwrap();
+                let read = cx.read_async(&read_fd, vec![0]);
+                cx.cancel_io(&read).unwrap();
+                assert!(read.get(cx).is_err());
+                cx.close(read_fd).unwrap();
+                cx.close(write_fd).unwrap();
+            }
+
+            if cx.supports_io_uring_opcode(rustix_uring::opcode::FutexWait::CODE)
+                && cx.supports_io_uring_opcode(rustix_uring::opcode::FutexWake::CODE)
+            {
+                let futex = AtomicU32::new(0);
+                cx.scope(|scope| {
+                    let waiter = scope.spawn(|cx| {
+                        cx.futex_wait(
+                            &futex,
+                            0,
+                            u64::from(u32::MAX),
+                            FutexWaitFlags::SIZE_U32 | FutexWaitFlags::PRIVATE,
+                        )
+                        .unwrap();
+                        futex.load(Ordering::Acquire)
+                    });
+                    let waker = scope.spawn(|cx| {
+                        cx.yield_now();
+                        futex.store(1, Ordering::Release);
+                        cx.futex_wake(
+                            &futex,
+                            1,
+                            u64::from(u32::MAX),
+                            FutexWaitFlags::SIZE_U32 | FutexWaitFlags::PRIVATE,
+                        )
+                        .unwrap()
+                    });
+
+                    assert_eq!(waker.join(cx).unwrap(), 1);
+                    assert_eq!(waiter.join(cx).unwrap(), 1);
+                });
+            }
+        });
     }
 
     #[test]
