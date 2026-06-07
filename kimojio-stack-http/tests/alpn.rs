@@ -27,7 +27,7 @@ fn stack_tls_negotiates_h2_alpn_for_http2() {
             let client = scope.spawn(move |cx| {
                 let stream = contexts
                     .client
-                    .client(cx, support::TLS_BUFFER_SIZE, client_fd)
+                    .client(cx, support::TLS_BUFFER_SIZE, client_fd, "localhost")
                     .unwrap();
                 let selected = tls::selected_protocol(&stream);
                 stream.close(cx).unwrap();

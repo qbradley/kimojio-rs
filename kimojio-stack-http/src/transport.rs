@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 use kimojio_stack::{Errno, RuntimeContext};
+#[cfg(feature = "tls")]
 use kimojio_stack_tls::TlsStream;
 use rustix::{fd::OwnedFd, net::Shutdown};
 
@@ -10,6 +11,7 @@ use crate::error::Error;
 /// Stackful plaintext or TLS transport over a connected socket.
 pub enum StackTransport {
     Plaintext(OwnedFd),
+    #[cfg(feature = "tls")]
     Tls(TlsStream),
 }
 
@@ -18,6 +20,7 @@ impl StackTransport {
         Self::Plaintext(fd)
     }
 
+    #[cfg(feature = "tls")]
     pub fn tls(stream: TlsStream) -> Self {
         Self::Tls(stream)
     }
@@ -25,6 +28,7 @@ impl StackTransport {
     pub fn read(&mut self, cx: &RuntimeContext<'_>, buf: &mut [u8]) -> Result<usize, Error> {
         match self {
             Self::Plaintext(fd) => cx.read(fd, buf).map_err(Error::io),
+            #[cfg(feature = "tls")]
             Self::Tls(stream) => stream.read(cx, buf).map_err(Error::tls),
         }
     }
@@ -48,6 +52,7 @@ impl StackTransport {
     pub fn write(&mut self, cx: &RuntimeContext<'_>, buf: &[u8]) -> Result<usize, Error> {
         match self {
             Self::Plaintext(fd) => cx.write(fd, buf).map_err(Error::io),
+            #[cfg(feature = "tls")]
             Self::Tls(stream) => stream.write(cx, buf).map_err(Error::tls),
         }
     }
@@ -66,6 +71,7 @@ impl StackTransport {
     pub fn shutdown_write(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
         match self {
             Self::Plaintext(fd) => cx.shutdown(fd, Shutdown::Write).map_err(Error::io),
+            #[cfg(feature = "tls")]
             Self::Tls(stream) => stream.shutdown_write(cx).map_err(Error::tls),
         }
     }
@@ -73,6 +79,7 @@ impl StackTransport {
     pub fn shutdown(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
         match self {
             Self::Plaintext(fd) => cx.shutdown(fd, Shutdown::Both).map_err(Error::io),
+            #[cfg(feature = "tls")]
             Self::Tls(stream) => stream.shutdown(cx).map_err(Error::tls),
         }
     }
@@ -80,6 +87,7 @@ impl StackTransport {
     pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
         match self {
             Self::Plaintext(fd) => cx.close(fd).map_err(Error::io),
+            #[cfg(feature = "tls")]
             Self::Tls(stream) => stream.close(cx).map_err(Error::tls),
         }
     }

@@ -889,7 +889,6 @@ dependencies = [
  "openssl",
  "rustix",
  "tokio",
- "tonic",
 ]
 
 [[package]]

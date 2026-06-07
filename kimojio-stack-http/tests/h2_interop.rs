@@ -3,10 +3,13 @@
 
 mod support;
 
-use std::{net::Ipv4Addr, sync::mpsc, thread};
+use std::{convert::Infallible, net::Ipv4Addr, sync::mpsc, thread};
 
 use bytes::{Bytes, BytesMut};
 use http::{Request, Response, StatusCode};
+use http_body_util::{BodyExt, Full};
+use hyper::{body::Incoming, service::service_fn};
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use kimojio_stack::Runtime;
 use kimojio_stack_http::{
     HttpConfig, StackTransport,
@@ -16,6 +19,105 @@ use kimojio_stack_http::{
     },
 };
 use tokio::net::{TcpListener, TcpStream};
+
+#[test]
+fn stackful_h2_client_talks_to_hyper_http2_server() {
+    let (addr_tx, addr_rx) = mpsc::channel();
+    let server = support::spawn_tokio(async move {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        addr_tx.send(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let service = service_fn(|request: Request<Incoming>| async move {
+            assert_eq!(request.method(), "POST");
+            assert_eq!(request.uri().path(), "/hyper");
+            let body = request.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(body.as_ref(), b"ping");
+            Ok::<_, Infallible>(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .body(Full::new(Bytes::from_static(b"pong")))
+                    .unwrap(),
+            )
+        });
+        hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+            .serve_connection(TokioIo::new(stream), service)
+            .await
+            .unwrap();
+    });
+
+    let addr = addr_rx.recv().unwrap();
+    let response = support::run_stackful(|cx| {
+        let transport = support::stack_connect(cx, addr);
+        let mut client = ClientConnection::new(transport, HttpConfig::default());
+        let request = Request::builder()
+            .method("POST")
+            .uri("/hyper")
+            .body(support::body(b"ping"))
+            .unwrap();
+        let response = client.send(cx, &request).unwrap();
+        client.close(cx).unwrap();
+        response
+    });
+
+    server.join().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.body().as_bytes(), b"pong");
+}
+
+#[test]
+fn hyper_http2_client_talks_to_stackful_h2_server() {
+    let (addr_tx, addr_rx) = mpsc::channel();
+    let server = thread::spawn(move || {
+        Runtime::new().block_on(|cx| {
+            let (listener, addr) = support::stack_listener(cx);
+            addr_tx.send(addr).unwrap();
+            let connection = cx.accept(&listener).unwrap();
+            let transport = StackTransport::plaintext(connection);
+            let mut server = ServerConnection::new(transport, HttpConfig::default());
+            let incoming = server.accept(cx).unwrap().unwrap();
+            assert_eq!(incoming.request.uri(), "/hyper-client");
+            assert_eq!(incoming.request.body().as_bytes(), b"ping");
+            let response = Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .body(support::body(b"pong"))
+                .unwrap();
+            server
+                .send_response(cx, incoming.stream_id, &response)
+                .unwrap();
+            server.shutdown_write_and_close_after_peer(cx).unwrap();
+            cx.close(listener).unwrap();
+        });
+    });
+
+    let addr = addr_rx.recv().unwrap();
+    let (status, body) = support::spawn_tokio(async move {
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let (mut sender, connection) =
+            hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(stream))
+                .await
+                .unwrap();
+        let connection = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("http://localhost/hyper-client")
+            .body(Full::new(Bytes::from_static(b"ping")))
+            .unwrap();
+        let response = sender.send_request(request).await.unwrap();
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        drop(sender);
+        let _ = connection.await;
+        (status, body)
+    })
+    .join()
+    .unwrap();
+
+    server.join().unwrap();
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(body.as_ref(), b"pong");
+}
 
 #[test]
 fn stackful_h2_client_talks_to_tokio_h2_server_with_settings_variations() {

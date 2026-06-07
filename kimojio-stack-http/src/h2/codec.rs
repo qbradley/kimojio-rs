@@ -8,7 +8,7 @@ use http::{
 };
 use kimojio_stack::RuntimeContext;
 
-use crate::{Body, Error, HttpConfig, StackTransport, Trailers};
+use crate::{Body, Error, HttpConfig, LimitKind, StackTransport, Trailers};
 
 use super::{
     CLIENT_PREFACE, ConnectionState, Frame, FrameFlags, FramePayload, FrameType, Header, Setting,
@@ -19,6 +19,7 @@ pub(super) fn settings_from_config(config: HttpConfig) -> Settings {
     Settings {
         enable_push: false,
         max_header_list_size: config.max_header_bytes.min(u32::MAX as usize) as u32,
+        max_concurrent_streams: super::H2Config::default().max_concurrent_streams,
         ..Settings::default()
     }
 }
@@ -29,6 +30,10 @@ pub(super) fn settings_frame(settings: Settings) -> Frame {
         Setting::new(SettingId::EnablePush, u32::from(settings.enable_push)),
         Setting::new(SettingId::InitialWindowSize, settings.initial_window_size),
         Setting::new(SettingId::MaxFrameSize, settings.max_frame_size),
+        Setting::new(
+            SettingId::MaxConcurrentStreams,
+            settings.max_concurrent_streams,
+        ),
         Setting::new(SettingId::MaxHeaderListSize, settings.max_header_list_size),
     ])
 }
@@ -43,6 +48,13 @@ pub(super) fn read_frame(
         return Err(Error::Eof);
     }
     let len = ((header[0] as usize) << 16) | ((header[1] as usize) << 8) | header[2] as usize;
+    if len > max_frame_size as usize {
+        return Err(Error::size_limit(
+            LimitKind::Frame,
+            max_frame_size as usize,
+            len,
+        ));
+    }
     let mut bytes = Vec::with_capacity(header.len() + len);
     bytes.extend_from_slice(&header);
     bytes.resize(header.len() + len, 0);
@@ -59,6 +71,54 @@ pub(super) fn write_frame(
 ) -> Result<(), Error> {
     let bytes = frame.encode()?;
     transport.write_all(cx, &bytes)
+}
+
+pub(super) fn write_header_block(
+    cx: &RuntimeContext<'_>,
+    transport: &mut StackTransport,
+    stream_id: StreamId,
+    block: Bytes,
+    end_stream: bool,
+    max_frame_size: u32,
+) -> Result<(), Error> {
+    let max_frame_size = max_frame_size as usize;
+    if max_frame_size == 0 {
+        return Err(Error::Protocol("peer max frame size is zero"));
+    }
+    if block.len() <= max_frame_size {
+        return write_frame(cx, transport, &Frame::headers(stream_id, block, end_stream));
+    }
+
+    let mut offset = 0;
+    let first_len = block.len().min(max_frame_size);
+    write_frame(
+        cx,
+        transport,
+        &Frame::headers_fragment(
+            stream_id,
+            block.slice(offset..offset + first_len),
+            end_stream,
+            first_len == block.len(),
+        ),
+    )?;
+    offset += first_len;
+
+    while offset < block.len() {
+        let chunk_len = (block.len() - offset).min(max_frame_size);
+        let end_headers = offset + chunk_len == block.len();
+        write_frame(
+            cx,
+            transport,
+            &Frame::continuation(
+                stream_id,
+                block.slice(offset..offset + chunk_len),
+                end_headers,
+            ),
+        )?;
+        offset += chunk_len;
+    }
+
+    Ok(())
 }
 
 pub(super) fn flush_pending(
@@ -102,11 +162,13 @@ pub(super) fn collect_header_block(
     let end_stream = first.flags.contains(FrameFlags::END_STREAM);
     let mut end_headers = first.flags.contains(FrameFlags::END_HEADERS);
     let mut block = BytesMut::new();
+    let header_block_limit = state.local_settings().max_header_list_size as usize;
 
     state.track_inbound_frame(&first)?;
     let FramePayload::Headers(bytes) = first.payload else {
         return Err(Error::Protocol("expected HEADERS frame"));
     };
+    ensure_header_block_capacity(block.len(), bytes.len(), header_block_limit)?;
     block.extend_from_slice(&bytes);
 
     while !end_headers {
@@ -119,10 +181,20 @@ pub(super) fn collect_header_block(
         let FramePayload::Continuation(bytes) = frame.payload else {
             return Err(Error::Protocol("expected CONTINUATION payload"));
         };
+        ensure_header_block_capacity(block.len(), bytes.len(), header_block_limit)?;
         block.extend_from_slice(&bytes);
     }
 
     Ok((stream_id, end_stream, block.freeze()))
+}
+
+fn ensure_header_block_capacity(current: usize, next: usize, limit: usize) -> Result<(), Error> {
+    let actual = current.saturating_add(next);
+    if actual > limit {
+        Err(Error::size_limit(LimitKind::Headers, limit, actual))
+    } else {
+        Ok(())
+    }
 }
 
 pub(super) fn request_headers(request: &Request<Body>) -> Result<Vec<Header>, Error> {
@@ -185,6 +257,8 @@ pub(super) fn request_from_headers(
 ) -> Result<Request<Body>, Error> {
     let mut method = None;
     let mut path = None;
+    let mut scheme = None;
+    let mut authority = None;
     let mut regular = HeaderMap::new();
     let mut saw_regular = false;
 
@@ -197,7 +271,8 @@ pub(super) fn request_from_headers(
             match name {
                 b":method" => assign_pseudo(&mut method, &header.value)?,
                 b":path" => assign_pseudo(&mut path, &header.value)?,
-                b":scheme" | b":authority" => {}
+                b":scheme" => assign_pseudo(&mut scheme, &header.value)?,
+                b":authority" => assign_pseudo(&mut authority, &header.value)?,
                 _ => return Err(Error::Protocol("invalid request pseudo-header")),
             }
             continue;
@@ -214,6 +289,13 @@ pub(super) fn request_from_headers(
         .ok_or(Error::Protocol("missing :path"))?
         .parse::<Uri>()
         .map_err(|_| Error::Protocol("invalid :path"))?;
+    let scheme = scheme.ok_or(Error::Protocol("missing :scheme"))?;
+    if scheme.is_empty() {
+        return Err(Error::Protocol("invalid :scheme"));
+    }
+    if authority.as_deref().is_some_and(str::is_empty) {
+        return Err(Error::Protocol("invalid :authority"));
+    }
     let mut builder = Request::builder()
         .method(method)
         .uri(uri)

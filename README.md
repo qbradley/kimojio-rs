@@ -18,6 +18,21 @@ Key characteristics:
 - Explicit control over concurrency and load balancing.
 - No locks, atomics, or other thread synchronization
 
+## Stackful HTTP and gRPC
+
+The workspace includes low-level stackful networking crates for applications
+that need explicit scheduling and predictable latency:
+
+- `kimojio-stack-http` provides HTTP/1.1 and HTTP/2 client/server foundations.
+- `kimojio-stack-grpc` provides unary gRPC client/server foundations over the
+  HTTP/2 transport.
+
+See the [Stackful HTTP and gRPC Guide][stack-http-grpc-guide] for supported
+protocol features, transport setup, interoperability guarantees, and current
+benchmark observations.
+
+[stack-http-grpc-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-http-grpc.md
+
 ## Getting Started
 
 ### Prerequisites

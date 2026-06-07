@@ -67,6 +67,7 @@ fn tls_certificate_verification_failure_maps_to_tls_error_kind() {
                     &client_ctx,
                     support::TLS_BUFFER_SIZE,
                     client_fd,
+                    "localhost",
                     None,
                 ) {
                     Ok(_) => panic!("untrusted self-signed certificate was accepted"),
@@ -76,6 +77,39 @@ fn tls_certificate_verification_failure_maps_to_tls_error_kind() {
 
             assert_eq!(client.join(cx).unwrap(), ErrorKind::Tls);
             let _ = server.join(cx).unwrap();
+        });
+    });
+}
+
+#[test]
+fn tls_client_handshake_eof_maps_to_tls_error_kind() {
+    let contexts = support::tls_contexts(None, false);
+    let client_ctx = contexts.client;
+    let (client_fd, server_fd) = support::tls_socket_pair();
+    let mut runtime = Runtime::new();
+
+    runtime.block_on(|cx| {
+        cx.scope(|scope| {
+            let server = scope.spawn(move |cx| {
+                StackTransport::plaintext(server_fd).close(cx).unwrap();
+            });
+
+            let client = scope.spawn(move |cx| {
+                match tls::client_transport(
+                    cx,
+                    &client_ctx,
+                    support::TLS_BUFFER_SIZE,
+                    client_fd,
+                    "localhost",
+                    None,
+                ) {
+                    Ok(_) => panic!("EOF handshake unexpectedly completed"),
+                    Err(error) => error.kind(),
+                }
+            });
+
+            server.join(cx).unwrap();
+            assert_eq!(client.join(cx).unwrap(), ErrorKind::Tls);
         });
     });
 }
@@ -100,7 +134,7 @@ fn tls_close_notify_maps_to_eof_read() {
 
             let client = scope.spawn(move |cx| {
                 let mut stream = client_ctx
-                    .client(cx, support::TLS_BUFFER_SIZE, client_fd)
+                    .client(cx, support::TLS_BUFFER_SIZE, client_fd, "localhost")
                     .unwrap();
                 let mut byte = [0_u8; 1];
                 let amount = stream.read_exact_or_eof(cx, &mut byte).unwrap();

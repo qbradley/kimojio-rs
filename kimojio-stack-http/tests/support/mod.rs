@@ -176,6 +176,10 @@ pub fn settings_frame(settings: Settings) -> Frame {
         Setting::new(SettingId::EnablePush, u32::from(settings.enable_push)),
         Setting::new(SettingId::InitialWindowSize, settings.initial_window_size),
         Setting::new(SettingId::MaxFrameSize, settings.max_frame_size),
+        Setting::new(
+            SettingId::MaxConcurrentStreams,
+            settings.max_concurrent_streams,
+        ),
         Setting::new(SettingId::MaxHeaderListSize, settings.max_header_list_size),
     ])
 }

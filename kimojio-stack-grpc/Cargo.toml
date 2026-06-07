@@ -13,7 +13,7 @@ base64.workspace = true
 bytes.workspace = true
 http.workspace = true
 kimojio-stack.workspace = true
-kimojio-stack-http.workspace = true
+kimojio-stack-http = { path = "../kimojio-stack-http", version = "0.16.4", default-features = false }
 prost.workspace = true
 
 [dev-dependencies]
@@ -21,9 +21,14 @@ criterion.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "server", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["client", "server", "tokio", "http1", "http2"] }
+kimojio-stack-http = { path = "../kimojio-stack-http", version = "0.16.4", features = ["tls"] }
 kimojio-stack-tls.workspace = true
 openssl.workspace = true
 rustix = { workspace = true, features = ["net"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 tonic = { workspace = true, features = ["transport", "tls-ring"] }
 tonic-prost.workspace = true
+
+[[bench]]
+name = "unary_rpc"
+harness = false

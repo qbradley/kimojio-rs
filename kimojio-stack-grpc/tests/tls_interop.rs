@@ -49,6 +49,7 @@ fn stackful_grpc_client_calls_tonic_server_over_tls() {
             &material.client,
             TLS_BUFFER_SIZE,
             socket,
+            "localhost",
             Some(HttpProtocol::Http2),
         )
         .unwrap();

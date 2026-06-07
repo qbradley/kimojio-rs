@@ -14,6 +14,7 @@ pub mod h2;
 pub mod headers;
 pub mod http1;
 pub mod server;
+#[cfg(feature = "tls")]
 pub mod tls;
 pub mod transport;
 
@@ -24,7 +25,115 @@ pub use headers::{Headers, Trailers};
 pub use transport::StackTransport;
 
 #[cfg(test)]
+#[global_allocator]
+static TEST_ALLOCATOR: allocation_tracking::CountingAllocator =
+    allocation_tracking::CountingAllocator;
+
+#[cfg(test)]
+mod allocation_tracking {
+    use std::{
+        alloc::{GlobalAlloc, Layout, System},
+        cell::Cell,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    thread_local! {
+        static ACTIVE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+    static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+    static REALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+    static REALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+    static MEASUREMENT_LOCK: Mutex<()> = Mutex::new(());
+
+    pub struct CountingAllocator;
+
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub struct AllocationCounts {
+        pub allocations: usize,
+        pub allocated_bytes: usize,
+        pub reallocations: usize,
+        pub reallocated_bytes: usize,
+    }
+
+    impl AllocationCounts {
+        pub fn allocating_operations(self) -> usize {
+            self.allocations + self.reallocations
+        }
+
+        pub fn allocated_or_reallocated_bytes(self) -> usize {
+            self.allocated_bytes + self.reallocated_bytes
+        }
+    }
+
+    pub fn measure<T>(f: impl FnOnce() -> T) -> (T, AllocationCounts) {
+        let _measurement = MEASUREMENT_LOCK.lock().unwrap();
+        ACTIVE.with(|active| assert!(!active.get(), "nested allocation measurement"));
+        ALLOCATIONS.store(0, Ordering::Relaxed);
+        ALLOCATED_BYTES.store(0, Ordering::Relaxed);
+        REALLOCATIONS.store(0, Ordering::Relaxed);
+        REALLOCATED_BYTES.store(0, Ordering::Relaxed);
+
+        ACTIVE.with(|active| active.set(true));
+        let output = f();
+        ACTIVE.with(|active| active.set(false));
+
+        (
+            output,
+            AllocationCounts {
+                allocations: ALLOCATIONS.load(Ordering::Relaxed),
+                allocated_bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
+                reallocations: REALLOCATIONS.load(Ordering::Relaxed),
+                reallocated_bytes: REALLOCATED_BYTES.load(Ordering::Relaxed),
+            },
+        )
+    }
+
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            ACTIVE.with(|active| {
+                if active.get() {
+                    ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+                    ALLOCATED_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+                }
+            });
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            ACTIVE.with(|active| {
+                if active.get() {
+                    ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+                    ALLOCATED_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+                }
+            });
+            unsafe { System.alloc_zeroed(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            ACTIVE.with(|active| {
+                if active.get() {
+                    REALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+                    REALLOCATED_BYTES.fetch_add(new_size, Ordering::Relaxed);
+                }
+            });
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use std::hint::black_box;
+
     use http::{HeaderName, HeaderValue, header::CONTENT_TYPE};
     use kimojio_stack::Runtime;
     use kimojio_stack_tls::TlsContext;
@@ -39,7 +148,10 @@ mod tests {
     };
     use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 
-    use super::{Body, BodyLimits, Headers, StackTransport, Trailers};
+    use super::{
+        Body, BodyLimits, Headers, HttpConfig, StackTransport, Trailers, allocation_tracking, h2,
+        http1,
+    };
 
     const TLS_BUFFER_SIZE: usize = 16 * 1024;
 
@@ -75,6 +187,20 @@ mod tests {
         (
             TlsContext::from_openssl(acceptor.build().into_context()),
             TlsContext::from_openssl(connector.build().into_context()),
+        )
+    }
+
+    fn socket_transport_pair() -> (StackTransport, StackTransport) {
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+        (
+            StackTransport::plaintext(client_fd),
+            StackTransport::plaintext(server_fd),
         )
     }
 
@@ -177,7 +303,7 @@ mod tests {
 
                 let client = scope.spawn(move |cx| {
                     let tls = client_ctx
-                        .client(cx, TLS_BUFFER_SIZE, client_fd)
+                        .client(cx, TLS_BUFFER_SIZE, client_fd, "localhost")
                         .expect("client TLS handshake failed");
                     let mut transport = StackTransport::tls(tls);
                     transport.write_all(cx, b"hello").unwrap();
@@ -194,5 +320,115 @@ mod tests {
                 assert_eq!(&received, b"world");
             });
         });
+    }
+
+    #[test]
+    fn allocation_http1_warmed_local_loop_records_current_hot_path_allocations() {
+        const WARMUP_ROUNDS: u64 = 2;
+        const MEASURED_ROUNDS: u64 = 4;
+
+        let counts = Runtime::new().block_on(|cx| {
+            let (client_transport, server_transport) = socket_transport_pair();
+            let request = request("/allocation-http1", b"ping");
+            let response = response(b"pong");
+
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut server =
+                        http1::ServerConnection::new(server_transport, HttpConfig::default());
+                    for _ in 0..WARMUP_ROUNDS + MEASURED_ROUNDS {
+                        let request = server.read_request(cx).unwrap().unwrap();
+                        black_box(request.body().len());
+                        server.write_response(cx, &response).unwrap();
+                    }
+                    server.close(cx).unwrap();
+                });
+
+                let mut client =
+                    http1::ClientConnection::new(client_transport, HttpConfig::default());
+                for _ in 0..WARMUP_ROUNDS {
+                    black_box(client.send(cx, &request).unwrap());
+                }
+
+                let (_, counts) = allocation_tracking::measure(|| {
+                    for _ in 0..MEASURED_ROUNDS {
+                        black_box(client.send(cx, &request).unwrap());
+                    }
+                });
+                client.close(cx).unwrap();
+                server.join(cx).unwrap();
+                counts
+            })
+        });
+
+        assert!(counts.allocating_operations() <= 256, "{counts:?}");
+        assert!(
+            counts.allocated_or_reallocated_bytes() <= 256 * 1024,
+            "{counts:?}"
+        );
+    }
+
+    #[test]
+    fn allocation_h2_warmed_local_loop_records_current_hot_path_allocations() {
+        const WARMUP_ROUNDS: u64 = 2;
+        const MEASURED_ROUNDS: u64 = 4;
+
+        let counts = Runtime::new().block_on(|cx| {
+            let (client_transport, server_transport) = socket_transport_pair();
+            let request = request("/allocation-h2", b"ping");
+            let response = response(b"pong");
+
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut server =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    for _ in 0..WARMUP_ROUNDS + MEASURED_ROUNDS {
+                        let incoming = server.accept(cx).unwrap().unwrap();
+                        black_box(incoming.request.body().len());
+                        server
+                            .send_response(cx, incoming.stream_id, &response)
+                            .unwrap();
+                    }
+                    server.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let mut client = h2::ClientConnection::new(client_transport, HttpConfig::default());
+                for _ in 0..WARMUP_ROUNDS {
+                    black_box(client.send(cx, &request).unwrap());
+                }
+
+                let (_, counts) = allocation_tracking::measure(|| {
+                    for _ in 0..MEASURED_ROUNDS {
+                        black_box(client.send(cx, &request).unwrap());
+                    }
+                });
+                client.close(cx).unwrap();
+                server.join(cx).unwrap();
+                counts
+            })
+        });
+
+        assert!(counts.allocating_operations() <= 512, "{counts:?}");
+        assert!(
+            counts.allocated_or_reallocated_bytes() <= 512 * 1024,
+            "{counts:?}"
+        );
+    }
+
+    fn request(uri: &str, bytes: &[u8]) -> http::Request<Body> {
+        http::Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("x-test", "allocation")
+            .body(Body::copy_from_slice(bytes, BodyLimits::new(64 * 1024)).unwrap())
+            .unwrap()
+    }
+
+    fn response(bytes: &[u8]) -> http::Response<Body> {
+        http::Response::builder()
+            .status(200)
+            .header("x-test", "allocation")
+            .body(Body::copy_from_slice(bytes, BodyLimits::new(64 * 1024)).unwrap())
+            .unwrap()
     }
 }

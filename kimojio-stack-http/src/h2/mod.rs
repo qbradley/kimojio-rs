@@ -109,7 +109,7 @@ mod tests {
                     server
                         .send_response(cx, incoming.stream_id, &response)
                         .unwrap();
-                    server.close(cx).unwrap();
+                    server.shutdown_write_and_close_after_peer(cx).unwrap();
                 });
 
                 let client = scope.spawn(move |cx| {
@@ -159,7 +159,7 @@ mod tests {
                             Some(&trailers),
                         )
                         .unwrap();
-                    server.close(cx).unwrap();
+                    server.shutdown_write_and_close_after_peer(cx).unwrap();
                 });
 
                 let client = scope.spawn(move |cx| {
@@ -217,7 +217,7 @@ mod tests {
                     server
                         .send_response(cx, first.stream_id, &first_response)
                         .unwrap();
-                    server.close(cx).unwrap();
+                    server.shutdown_write_and_close_after_peer(cx).unwrap();
                 });
 
                 let client = scope.spawn(move |cx| {
@@ -274,7 +274,7 @@ mod tests {
                     server
                         .send_response(cx, incoming.stream_id, &response)
                         .unwrap();
-                    server.close(cx).unwrap();
+                    server.shutdown_write_and_close_after_peer(cx).unwrap();
                 });
 
                 let client = scope.spawn(move |cx| {
@@ -291,6 +291,50 @@ mod tests {
 
                 server.join(cx).unwrap();
                 let response = client.join(cx).unwrap();
+                assert_eq!(response.body().as_bytes(), b"ok");
+            });
+        });
+    }
+
+    #[test]
+    fn h2_large_header_block_uses_continuation_frames() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+        let large_header = "x".repeat(20 * 1024);
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server_header = large_header.clone();
+                let server = scope.spawn(move |cx| {
+                    let mut server = ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = server.accept(cx).unwrap().unwrap();
+                    let response = Response::builder()
+                        .status(StatusCode::OK)
+                        .header("x-large", server_header)
+                        .body(body(b"ok"))
+                        .unwrap();
+                    server
+                        .send_response(cx, incoming.stream_id, &response)
+                        .unwrap();
+                    server.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut client = ClientConnection::new(client_transport, HttpConfig::default());
+                    let request = Request::builder()
+                        .method("GET")
+                        .uri("/large-headers")
+                        .body(Body::empty())
+                        .unwrap();
+                    let response = client.send(cx, &request).unwrap();
+                    client.close(cx).unwrap();
+                    response
+                });
+
+                server.join(cx).unwrap();
+                let response = client.join(cx).unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                assert_eq!(response.headers()["x-large"], large_header);
                 assert_eq!(response.body().as_bytes(), b"ok");
             });
         });
@@ -358,7 +402,7 @@ mod tests {
                             ServerConnection::new(server_transport, HttpConfig::default());
                         let incoming = server.accept(cx).unwrap().unwrap();
                         if goaway {
-                            server.goaway(cx, incoming.stream_id.get(), 0).unwrap();
+                            server.goaway(cx, 0, 8).unwrap();
                         } else {
                             server.reset_stream(cx, incoming.stream_id, 8).unwrap();
                         }
@@ -405,7 +449,7 @@ mod tests {
                                 .unwrap())
                         })
                         .unwrap();
-                    server.close(cx).unwrap();
+                    server.shutdown_write_and_close_after_peer(cx).unwrap();
                 });
 
                 let client = scope.spawn(move |cx| {

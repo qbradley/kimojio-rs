@@ -116,8 +116,9 @@ pub fn read_response(
     )
     .map_err(|_| Error::Parse("invalid HTTP response status"))?;
     let mut header_map = headers_to_map(parsed.headers)?;
-    let close_after_response = wants_close(version, &header_map);
-    let body_kind = response_body_kind(status, close_after_response, &header_map)?;
+    let mut close_after_response = wants_close(version, &header_map);
+    let body_kind = response_body_kind(status, &header_map)?;
+    close_after_response |= body_kind == BodyKind::Eof;
     let body = read_body(
         cx,
         transport,
@@ -303,11 +304,7 @@ fn request_body_kind(headers: &HeaderMap) -> Result<BodyKind, Error> {
     content_length(headers).map(|len| len.map_or(BodyKind::Empty, BodyKind::ContentLength))
 }
 
-fn response_body_kind(
-    status: StatusCode,
-    close_after_response: bool,
-    headers: &HeaderMap,
-) -> Result<BodyKind, Error> {
+fn response_body_kind(status: StatusCode, headers: &HeaderMap) -> Result<BodyKind, Error> {
     if status.is_informational()
         || status == StatusCode::NO_CONTENT
         || status == StatusCode::NOT_MODIFIED
@@ -321,11 +318,7 @@ fn response_body_kind(
     if let Some(len) = content_length(headers)? {
         return Ok(BodyKind::ContentLength(len));
     }
-    if close_after_response {
-        Ok(BodyKind::Eof)
-    } else {
-        Ok(BodyKind::Empty)
-    }
+    Ok(BodyKind::Eof)
 }
 
 fn content_length(headers: &HeaderMap) -> Result<Option<usize>, Error> {

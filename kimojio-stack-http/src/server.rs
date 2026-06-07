@@ -45,4 +45,11 @@ impl ServerConnection {
             Self::Http2(connection) => connection.close(cx),
         }
     }
+
+    pub fn shutdown_write_and_close_after_peer(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
+        match self {
+            Self::Http1(connection) => connection.close(cx),
+            Self::Http2(connection) => connection.shutdown_write_and_close_after_peer(cx),
+        }
+    }
 }

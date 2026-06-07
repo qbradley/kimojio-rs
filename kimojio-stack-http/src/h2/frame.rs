@@ -106,14 +106,25 @@ impl Frame {
     }
 
     pub fn headers(stream_id: StreamId, block: impl Into<Bytes>, end_stream: bool) -> Self {
-        let flags = if end_stream {
-            FrameFlags::from_bits(FrameFlags::END_HEADERS.bits() | FrameFlags::END_STREAM.bits())
-        } else {
-            FrameFlags::END_HEADERS
-        };
+        Self::headers_fragment(stream_id, block, end_stream, true)
+    }
+
+    pub fn headers_fragment(
+        stream_id: StreamId,
+        block: impl Into<Bytes>,
+        end_stream: bool,
+        end_headers: bool,
+    ) -> Self {
+        let mut flags = 0;
+        if end_stream {
+            flags |= FrameFlags::END_STREAM.bits();
+        }
+        if end_headers {
+            flags |= FrameFlags::END_HEADERS.bits();
+        }
         Self {
             frame_type: FrameType::Headers,
-            flags,
+            flags: FrameFlags::from_bits(flags),
             stream_id: stream_id.get(),
             payload: FramePayload::Headers(block.into()),
         }

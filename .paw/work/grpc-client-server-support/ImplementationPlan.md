@@ -58,8 +58,8 @@ The architecture keeps public crates independent of tokio and other async runtim
 - [x] **Phase 5: HTTP TLS and tokio HTTP interoperability** - Validate stackful HTTP/1.1 and HTTP/2 clients/servers against tokio-based peers, including TLS coverage.
 - [x] **Phase 6: Unary gRPC core and local stackful tests** - Add gRPC framing, status/metadata/trailer handling, prost-compatible unary client/server APIs, and local stackful tests.
 - [x] **Phase 7: Tokio gRPC interoperability** - Validate stackful unary gRPC clients/servers against tonic-based peers.
-- [ ] **Phase 8: Performance, allocation, and protocol-limit coverage** - Add benchmarks, allocation tests, and focused malformed/limit/backpressure tests.
-- [ ] **Phase 9: Documentation** - Add as-built Docs.md and project documentation for public HTTP/gRPC APIs and verification.
+- [x] **Phase 8: Performance, allocation, and protocol-limit coverage** - Add benchmarks, allocation tests, and focused malformed/limit/backpressure tests.
+- [x] **Phase 9: Documentation** - Add as-built Docs.md and project documentation for public HTTP/gRPC APIs and verification.
 
 ## Phase Candidates
 
@@ -272,18 +272,25 @@ The architecture keeps public crates independent of tokio and other async runtim
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `cargo fmt --check`
-- [ ] `cargo test -p kimojio-stack-http protocol_limits`
-- [ ] `cargo test -p kimojio-stack-grpc protocol_limits`
-- [ ] `cargo bench -p kimojio-stack-http --bench http_request_response -- --noplot`
-- [ ] `cargo bench -p kimojio-stack-grpc --bench unary_rpc -- --noplot`
-- [ ] `cargo clippy -p kimojio-stack-http --all-targets --all-features -- -D warnings`
-- [ ] `cargo clippy -p kimojio-stack-grpc --all-targets --all-features -- -D warnings`
+- [x] `cargo fmt --check`
+- [x] `cargo test -p kimojio-stack-http protocol_limits`
+- [x] `cargo test -p kimojio-stack-grpc protocol_limits`
+- [x] `cargo bench -p kimojio-stack-http --bench http_request_response -- --noplot`
+- [x] `cargo bench -p kimojio-stack-grpc --bench unary_rpc -- --noplot`
+- [x] `cargo clippy -p kimojio-stack-http --all-targets --all-features -- -D warnings`
+- [x] `cargo clippy -p kimojio-stack-grpc --all-targets --all-features -- -D warnings`
 
 #### Manual Verification:
-- [ ] Benchmark output records representative latency observations for HTTP and gRPC, satisfying SC-008 (`.paw/work/grpc-client-server-support/Spec.md:148-148`).
-- [ ] Benchmark output distinguishes plaintext and TLS measurements for HTTP and unary gRPC whenever TLS support is implemented; any skipped TLS measurement has a documented reason.
-- [ ] Any measured hot-path allocation is documented with source and rationale rather than left implicit.
+- [x] Benchmark output records representative latency observations for HTTP and gRPC, satisfying SC-008 (`.paw/work/grpc-client-server-support/Spec.md:148-148`).
+- [x] Benchmark output distinguishes plaintext and TLS measurements for HTTP and unary gRPC whenever TLS support is implemented; any skipped TLS measurement has a documented reason.
+- [x] Any measured hot-path allocation is documented with source and rationale rather than left implicit.
+
+### Phase 8 Implementation Notes:
+
+- HTTP benchmark medians observed in this phase: HTTP/1.1 plaintext small/large bodies ~6.47 us / ~12.95 us; HTTP/1.1 TLS small/large ~14.31 us / ~42.05 us; HTTP/2 plaintext small/large ~18.52 us / ~36.65 us; HTTP/2 TLS small/large ~44.18 us / ~93.42 us.
+- Unary gRPC benchmark medians observed in this phase: plaintext small/moderate payloads ~28.93 us / ~65.27 us; TLS small/moderate payloads ~70.60 us / ~123.30 us.
+- Warmed allocation tests now cover HTTP/1.1, HTTP/2, and unary gRPC local loops with explicit current-hot-path allocation thresholds. Protocol-limit tests cover HTTP/1 oversized headers/bodies, HTTP/2 invalid frames/body limits/peer close/flow-control stalls/repeated end-stream flow-control updates, and gRPC message/status/metadata framing limits.
+- Repeated HTTP/2 terminal DATA frames now replenish the connection-level receive window; otherwise long-running unary-style HTTP/2/gRPC connections could stall after the initial connection window was exhausted.
 
 ---
 
@@ -300,29 +307,43 @@ The architecture keeps public crates independent of tokio and other async runtim
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `cargo fmt --check`
-- [ ] `cargo test --doc`
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] `cargo test`
+- [x] `cargo fmt --check`
+- [x] `cargo test --doc`
+- [x] `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] `cargo test`
 
 #### Manual Verification:
-- [ ] Docs accurately describe the implemented protocol subset and explicit out-of-scope items.
-- [ ] Docs include verification commands and benchmark summaries from implementation.
-- [ ] Public documentation does not imply generated stubs or streaming support are available in the initial release.
+- [x] Docs accurately describe the implemented protocol subset and explicit out-of-scope items.
+- [x] Docs include verification commands and benchmark summaries from implementation.
+- [x] Public documentation does not imply generated stubs or streaming support are available in the initial release.
+
+### Phase 9 Implementation Notes:
+
+- Created `.paw/work/grpc-client-server-support/Docs.md` as the comprehensive as-built technical reference, including architecture, API surfaces, support matrices, limits/backpressure, interop coverage, benchmarks, and future streaming extension points.
+- Added `docs/stack-http-grpc.md` as the user-facing project guide and linked it from the root README.
+- Did not add crate-local README files because publishable workspace crates consistently inherit the root `README.md` through `readme.workspace = true`; the new guide and root README keep project documentation proportional to existing style.
 
 ---
 
 ## Final Verification Before Workflow Completion
 
-- [ ] `cargo fmt --check`
-- [ ] `cargo clippy`
-- [ ] `cargo clippy --all-targets --all-features`
-- [ ] `cargo test`
-- [ ] `cargo test --doc`
-- [ ] Focused HTTP interoperability tests pass.
-- [ ] Focused gRPC interoperability tests pass.
-- [ ] HTTP and gRPC benchmarks have been run in release/bench profile.
-- [ ] Normal dependency trees for `kimojio-stack-http` and `kimojio-stack-grpc` do not include tokio/hyper/tonic.
+- [x] `cargo fmt --check`
+- [x] `cargo clippy`
+- [x] `cargo clippy --all-targets --all-features`
+- [x] `cargo test`
+- [x] `cargo test --doc`
+- [x] Focused HTTP interoperability tests pass.
+- [x] Focused gRPC interoperability tests pass.
+- [x] HTTP and gRPC benchmarks have been run in release/bench profile.
+- [x] Normal dependency trees for `kimojio-stack-http` and `kimojio-stack-grpc` do not include tokio/hyper/tonic.
+
+### Final Review Resolution Notes:
+
+- Ran Society-of-Thought final review across architecture, assumptions, correctness, edge-cases, maintainability, performance, release-management, security, and testing specialists.
+- Addressed direct must/should findings by enforcing HTTP/2 pre-allocation frame/header limits, splitting outbound HEADERS/CONTINUATION blocks, eliminating duplicate retained stream body buffers, adding closed-stream cleanup/late WINDOW_UPDATE handling, making reset/GOAWAY diagnostics explicit, validating request pseudo-headers more strictly, enforcing max-concurrent-streams, tracking inbound connection flow-control credit, replenishing stream windows by threshold, supporting close-delimited HTTP/1.1 responses, requiring TLS server names and failing client-handshake EOF, adding real hyper HTTP/2 interop coverage, rejecting non-POST and unsupported gRPC content-types, and documenting TLS/dependency/API scope decisions.
+- Verified plaintext-only builds for `kimojio-stack-http` and `kimojio-stack-grpc` after making HTTP TLS optional and disabling it for normal gRPC dependencies.
+- Reran Criterion benchmarks after final review fixes. Representative medians: HTTP/1.1 plaintext small/large ~6.55 us / ~13.72 us; HTTP/1.1 TLS small/large ~14.35 us / ~44.96 us; HTTP/2 plaintext small/large ~18.27 us / ~24.46 us; HTTP/2 TLS small/large ~54.17 us / ~84.10 us; gRPC plaintext small/moderate ~25.61 us / ~46.65 us; gRPC TLS small/moderate ~72.41 us / ~102.26 us.
+- Final validation command passed: `cargo fmt --check && cargo clippy && cargo clippy --all-targets --all-features -- -D warnings && cargo test --doc && cargo test`.
 
 ## References
 

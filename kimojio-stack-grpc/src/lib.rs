@@ -10,15 +10,123 @@ pub mod metadata;
 pub mod server;
 pub mod status;
 
-pub use client::{UnaryClient, UnaryResponse};
+pub use client::{ClientConfig, UnaryClient, UnaryResponse};
 pub use codec::{decode_message, encode_message};
 pub use error::{Error, ErrorKind};
 pub use metadata::Metadata;
-pub use server::{UnaryReply, UnaryServer};
+pub use server::{ServerConfig, UnaryReply, UnaryServer};
 pub use status::{Status, StatusCode};
 
 #[cfg(test)]
+#[global_allocator]
+static TEST_ALLOCATOR: allocation_tracking::CountingAllocator =
+    allocation_tracking::CountingAllocator;
+
+#[cfg(test)]
+mod allocation_tracking {
+    use std::{
+        alloc::{GlobalAlloc, Layout, System},
+        cell::Cell,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    thread_local! {
+        static ACTIVE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+    static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+    static REALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+    static REALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+    static MEASUREMENT_LOCK: Mutex<()> = Mutex::new(());
+
+    pub struct CountingAllocator;
+
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub struct AllocationCounts {
+        pub allocations: usize,
+        pub allocated_bytes: usize,
+        pub reallocations: usize,
+        pub reallocated_bytes: usize,
+    }
+
+    impl AllocationCounts {
+        pub fn allocating_operations(self) -> usize {
+            self.allocations + self.reallocations
+        }
+
+        pub fn allocated_or_reallocated_bytes(self) -> usize {
+            self.allocated_bytes + self.reallocated_bytes
+        }
+    }
+
+    pub fn measure<T>(f: impl FnOnce() -> T) -> (T, AllocationCounts) {
+        let _measurement = MEASUREMENT_LOCK.lock().unwrap();
+        ACTIVE.with(|active| assert!(!active.get(), "nested allocation measurement"));
+        ALLOCATIONS.store(0, Ordering::Relaxed);
+        ALLOCATED_BYTES.store(0, Ordering::Relaxed);
+        REALLOCATIONS.store(0, Ordering::Relaxed);
+        REALLOCATED_BYTES.store(0, Ordering::Relaxed);
+
+        ACTIVE.with(|active| active.set(true));
+        let output = f();
+        ACTIVE.with(|active| active.set(false));
+
+        (
+            output,
+            AllocationCounts {
+                allocations: ALLOCATIONS.load(Ordering::Relaxed),
+                allocated_bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
+                reallocations: REALLOCATIONS.load(Ordering::Relaxed),
+                reallocated_bytes: REALLOCATED_BYTES.load(Ordering::Relaxed),
+            },
+        )
+    }
+
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            ACTIVE.with(|active| {
+                if active.get() {
+                    ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+                    ALLOCATED_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+                }
+            });
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            ACTIVE.with(|active| {
+                if active.get() {
+                    ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+                    ALLOCATED_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+                }
+            });
+            unsafe { System.alloc_zeroed(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            ACTIVE.with(|active| {
+                if active.get() {
+                    REALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+                    REALLOCATED_BYTES.fetch_add(new_size, Ordering::Relaxed);
+                }
+            });
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use std::hint::black_box;
+
     use bytes::Bytes;
     use http::{
         HeaderName, HeaderValue, Request, Response, StatusCode as HttpStatusCode,
@@ -31,8 +139,8 @@ mod tests {
 
     use super::{
         Error, ErrorKind, Metadata, Status, StatusCode, UnaryClient, UnaryReply, UnaryResponse,
-        UnaryServer, client::ClientConfig, codec, decode_message, encode_message,
-        server::ServerConfig,
+        UnaryServer, allocation_tracking, client::ClientConfig, codec, decode_message,
+        encode_message, server::ServerConfig,
     };
 
     #[derive(Clone, PartialEq, Message)]
@@ -121,7 +229,7 @@ mod tests {
                         },
                     );
                     grpc.serve_one(cx, &mut http).unwrap();
-                    http.close(cx).unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
                 });
 
                 let client = scope.spawn(move |cx| {
@@ -244,7 +352,7 @@ mod tests {
                         .unwrap();
                     http.send_response(cx, incoming.stream_id, &response)
                         .unwrap();
-                    http.close(cx).unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
                 });
 
                 let client = scope.spawn(move |cx| {
@@ -305,6 +413,75 @@ mod tests {
             ServerConfig { max_message_len: 1 },
         );
         assert_eq!(status.code(), StatusCode::ResourceExhausted);
+    }
+
+    #[test]
+    fn allocation_unary_grpc_warmed_local_loop_records_current_hot_path_allocations() {
+        const WARMUP_ROUNDS: u64 = 2;
+        const MEASURED_ROUNDS: u64 = 4;
+
+        let counts = Runtime::new().block_on(|cx| {
+            let (client_transport, server_transport) = socket_transport_pair();
+            let request = TestMessage {
+                value: "allocation".to_owned(),
+            };
+
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let mut grpc = UnaryServer::new(ServerConfig::default());
+                    grpc.add_unary::<TestMessage, TestMessage, _>(
+                        "/test.Echo/Allocation",
+                        |_cx, _metadata, request| Ok(UnaryReply::new(request)),
+                    );
+                    for _ in 0..WARMUP_ROUNDS + MEASURED_ROUNDS {
+                        grpc.serve_one(cx, &mut http).unwrap();
+                    }
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let http = h2::ClientConnection::new(client_transport, HttpConfig::default());
+                let mut client = UnaryClient::new(http, ClientConfig::default());
+                for _ in 0..WARMUP_ROUNDS {
+                    black_box(
+                        client
+                            .call::<_, TestMessage>(
+                                cx,
+                                "/test.Echo/Allocation",
+                                Metadata::new(),
+                                &request,
+                            )
+                            .unwrap(),
+                    );
+                }
+
+                let (_, counts) = allocation_tracking::measure(|| {
+                    for _ in 0..MEASURED_ROUNDS {
+                        black_box(
+                            client
+                                .call::<_, TestMessage>(
+                                    cx,
+                                    "/test.Echo/Allocation",
+                                    Metadata::new(),
+                                    &request,
+                                )
+                                .unwrap(),
+                        );
+                    }
+                });
+
+                client.close(cx).unwrap();
+                server.join(cx).unwrap();
+                counts
+            })
+        });
+
+        assert!(counts.allocating_operations() <= 768, "{counts:?}");
+        assert!(
+            counts.allocated_or_reallocated_bytes() <= 768 * 1024,
+            "{counts:?}"
+        );
     }
 
     fn unary_call_with_handler<F>(

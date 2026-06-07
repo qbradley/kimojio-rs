@@ -43,6 +43,8 @@ pub struct ClientConnection {
     next_stream_id: u32,
     pending: BTreeMap<StreamId, PendingResponse>,
     completed: BTreeMap<StreamId, ResponseWithTrailers>,
+    reset_streams: BTreeMap<StreamId, Error>,
+    goaway: Option<Error>,
 }
 
 impl ClientConnection {
@@ -64,6 +66,8 @@ impl ClientConnection {
             next_stream_id: 1,
             pending: BTreeMap::new(),
             completed: BTreeMap::new(),
+            reset_streams: BTreeMap::new(),
+            goaway: None,
         }
     }
 
@@ -88,7 +92,7 @@ impl ClientConnection {
             .next_stream_id
             .checked_add(2)
             .ok_or(Error::Protocol("HTTP/2 stream id overflow"))?;
-        self.state.open_stream(stream_id)?;
+        self.state.open_outbound_stream(stream_id)?;
 
         let headers = codec::request_headers(request)?;
         let block = self.state.encode_header_block(&headers);
@@ -98,10 +102,13 @@ impl ClientConnection {
             .stream_mut(stream_id)
             .ok_or(Error::Protocol("unknown stream"))?
             .send_headers(end_stream)?;
-        codec::write_frame(
+        codec::write_header_block(
             cx,
             &mut self.transport,
-            &Frame::headers(stream_id, Bytes::from(block), end_stream),
+            stream_id,
+            Bytes::from(block),
+            end_stream,
+            self.state.peer_settings().max_frame_size,
         )?;
         if !end_stream {
             self.write_data(cx, stream_id, body)?;
@@ -127,6 +134,12 @@ impl ClientConnection {
         if let Some(response) = self.completed.remove(&stream_id) {
             return Ok(response);
         }
+        if let Some(error) = self.reset_streams.remove(&stream_id) {
+            return Err(error);
+        }
+        if let Some(error) = self.goaway_for_stream(stream_id) {
+            return Err(error);
+        }
         loop {
             let frame = codec::read_frame(
                 cx,
@@ -136,6 +149,12 @@ impl ClientConnection {
             self.process_frame(cx, frame)?;
             if let Some(response) = self.completed.remove(&stream_id) {
                 return Ok(response);
+            }
+            if let Some(error) = self.reset_streams.remove(&stream_id) {
+                return Err(error);
+            }
+            if let Some(error) = self.goaway_for_stream(stream_id) {
+                return Err(error);
             }
         }
     }
@@ -243,7 +262,36 @@ impl ClientConnection {
                 }
                 Ok(())
             }
-            FrameType::Goaway | FrameType::RstStream => Err(Error::PeerReset),
+            FrameType::RstStream => {
+                self.state.track_inbound_frame(&frame)?;
+                let FramePayload::RstStream { error_code } = frame.payload else {
+                    return Err(Error::Protocol("expected RST_STREAM payload"));
+                };
+                let stream_id = StreamId::new(frame.stream_id)?;
+                self.state.remove_stream(stream_id);
+                self.pending.remove(&stream_id);
+                self.completed.remove(&stream_id);
+                self.reset_streams
+                    .insert(stream_id, Error::stream_reset(frame.stream_id, error_code));
+                Ok(())
+            }
+            FrameType::Goaway => {
+                self.state.track_inbound_frame(&frame)?;
+                let FramePayload::Goaway {
+                    last_stream_id,
+                    error_code,
+                    debug_data,
+                } = frame.payload
+                else {
+                    return Err(Error::Protocol("expected GOAWAY payload"));
+                };
+                self.goaway = Some(Error::goaway(
+                    last_stream_id,
+                    error_code,
+                    debug_data.to_vec(),
+                ));
+                Ok(())
+            }
             FrameType::Headers => self.process_headers(cx, frame),
             FrameType::Data => self.process_data(cx, frame),
             FrameType::Continuation => {
@@ -302,17 +350,13 @@ impl ClientConnection {
             .stream_mut(stream_id)
             .ok_or(Error::Protocol("unknown stream"))?
             .receive_data(&data, end_stream, limits)?;
+        let data_len = data.len();
+        self.state.consume_inbound_connection_window(data_len)?;
+        self.state.queue_connection_window_update(data_len)?;
         pending.body.append(&data)?;
-        let should_update = !end_stream
-            && self
-                .state
-                .stream(stream_id)
-                .ok_or(Error::Protocol("unknown stream"))?
-                .inbound_window()
-                .available()
-                == 0;
-        if should_update {
-            self.state.queue_window_update(stream_id, data.len())?;
+        let should_update =
+            !end_stream && self.state.queue_stream_window_update_to_target(stream_id)?;
+        if data_len != 0 || should_update {
             codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
         }
         if end_stream {
@@ -337,6 +381,28 @@ impl ClientConnection {
                 trailers: pending.trailers,
             },
         );
+        self.state.remove_stream(stream_id);
         Ok(())
+    }
+
+    fn goaway_for_stream(&self, stream_id: StreamId) -> Option<Error> {
+        let Some(Error::PeerReset {
+            last_stream_id: Some(last_stream_id),
+            error_code,
+            debug_data,
+            ..
+        }) = &self.goaway
+        else {
+            return None;
+        };
+        if stream_id.get() > *last_stream_id || *error_code != 0 {
+            Some(Error::goaway(
+                *last_stream_id,
+                *error_code,
+                debug_data.clone(),
+            ))
+        } else {
+            None
+        }
     }
 }

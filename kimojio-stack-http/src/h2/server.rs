@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use bytes::Bytes;
 use http::{Request, Response};
+use kimojio_stack::Errno;
 use kimojio_stack::RuntimeContext;
 
 use crate::{Body, BodyBuilder, BodyLimits, Error, HttpConfig, StackTransport, Trailers};
@@ -40,6 +41,7 @@ pub struct ServerConnection {
     initialized: bool,
     pending: BTreeMap<StreamId, PendingRequest>,
     completed: VecDeque<IncomingRequest>,
+    goaway: Option<Error>,
 }
 
 impl ServerConnection {
@@ -60,6 +62,7 @@ impl ServerConnection {
             initialized: false,
             pending: BTreeMap::new(),
             completed: VecDeque::new(),
+            goaway: None,
         }
     }
 
@@ -81,6 +84,9 @@ impl ServerConnection {
             self.process_frame(cx, frame)?;
             if let Some(request) = self.completed.pop_front() {
                 return Ok(Some(request));
+            }
+            if self.goaway.is_some() && self.pending.is_empty() {
+                return Ok(None);
             }
         }
     }
@@ -111,10 +117,13 @@ impl ServerConnection {
             .stream_mut(stream_id)
             .ok_or(Error::Protocol("unknown stream"))?
             .send_headers(end_stream)?;
-        codec::write_frame(
+        codec::write_header_block(
             cx,
             &mut self.transport,
-            &Frame::headers(stream_id, Bytes::from(block), end_stream),
+            stream_id,
+            Bytes::from(block),
+            end_stream,
+            self.state.peer_settings().max_frame_size,
         )?;
         if !body.is_empty() {
             self.write_data(cx, stream_id, body, !has_trailers)?;
@@ -126,12 +135,16 @@ impl ServerConnection {
                 .stream_mut(stream_id)
                 .ok_or(Error::Protocol("unknown stream"))?
                 .send_headers(true)?;
-            codec::write_frame(
+            codec::write_header_block(
                 cx,
                 &mut self.transport,
-                &Frame::headers(stream_id, Bytes::from(block), true),
+                stream_id,
+                Bytes::from(block),
+                true,
+                self.state.peer_settings().max_frame_size,
             )?;
         }
+        self.state.remove_stream(stream_id);
         Ok(())
     }
 
@@ -185,12 +198,19 @@ impl ServerConnection {
         mut self,
         cx: &RuntimeContext<'_>,
     ) -> Result<(), Error> {
-        self.transport.shutdown_write(cx)?;
+        if let Err(error) = self.transport.shutdown_write(cx) {
+            if peer_closed(&error) {
+                return self.transport.close(cx);
+            }
+            return Err(error);
+        }
         let mut buffer = [0_u8; 1024];
         loop {
-            match self.transport.read(cx, &mut buffer)? {
-                0 => return self.transport.close(cx),
-                _ => continue,
+            match self.transport.read(cx, &mut buffer) {
+                Ok(0) => return self.transport.close(cx),
+                Ok(_) => continue,
+                Err(error) if peer_closed(&error) => return self.transport.close(cx),
+                Err(error) => return Err(error),
             }
         }
     }
@@ -199,6 +219,7 @@ impl ServerConnection {
         if self.initialized {
             return Ok(());
         }
+
         codec::read_client_preface(cx, &mut self.transport, &mut self.state)?;
         let frame = codec::read_frame(
             cx,
@@ -288,7 +309,35 @@ impl ServerConnection {
                 }
                 Ok(())
             }
-            FrameType::Goaway | FrameType::RstStream => Err(Error::PeerReset),
+            FrameType::RstStream => {
+                self.state.track_inbound_frame(&frame)?;
+                let FramePayload::RstStream { error_code: _ } = frame.payload else {
+                    return Err(Error::Protocol("expected RST_STREAM payload"));
+                };
+                let stream_id = StreamId::new(frame.stream_id)?;
+                self.state.remove_stream(stream_id);
+                self.pending.remove(&stream_id);
+                self.completed
+                    .retain(|request| request.stream_id != stream_id);
+                Ok(())
+            }
+            FrameType::Goaway => {
+                self.state.track_inbound_frame(&frame)?;
+                let FramePayload::Goaway {
+                    last_stream_id,
+                    error_code,
+                    debug_data,
+                } = frame.payload
+                else {
+                    return Err(Error::Protocol("expected GOAWAY payload"));
+                };
+                self.goaway = Some(Error::goaway(
+                    last_stream_id,
+                    error_code,
+                    debug_data.to_vec(),
+                ));
+                Ok(())
+            }
             FrameType::Headers => self.process_headers(cx, frame),
             FrameType::Data => self.process_data(cx, frame),
             FrameType::Continuation => {
@@ -304,7 +353,7 @@ impl ServerConnection {
         if stream_id.get().is_multiple_of(2) {
             return Err(Error::Protocol("client stream id must be odd"));
         }
-        self.state.open_stream(stream_id)?;
+        self.state.open_inbound_stream(stream_id)?;
         let headers = self.state.decode_header_block(&block)?;
         let limits = BodyLimits::new(self.config.max_body_bytes);
         let pending = self
@@ -350,17 +399,13 @@ impl ServerConnection {
             .stream_mut(stream_id)
             .ok_or(Error::Protocol("unknown stream"))?
             .receive_data(&data, end_stream, limits)?;
+        let data_len = data.len();
+        self.state.consume_inbound_connection_window(data_len)?;
+        self.state.queue_connection_window_update(data_len)?;
         pending.body.append(&data)?;
-        let should_update = !end_stream
-            && self
-                .state
-                .stream(stream_id)
-                .ok_or(Error::Protocol("unknown stream"))?
-                .inbound_window()
-                .available()
-                == 0;
-        if should_update {
-            self.state.queue_window_update(stream_id, data.len())?;
+        let should_update =
+            !end_stream && self.state.queue_stream_window_update_to_target(stream_id)?;
+        if data_len != 0 || should_update {
             codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
         }
         if end_stream {
@@ -382,4 +427,8 @@ impl ServerConnection {
             .push_back(IncomingRequest { stream_id, request });
         Ok(())
     }
+}
+
+fn peer_closed(error: &Error) -> bool {
+    matches!(error, Error::Io(Errno::PIPE) | Error::Tls(Errno::PIPE))
 }

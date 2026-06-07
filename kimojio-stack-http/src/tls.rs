@@ -55,10 +55,11 @@ pub fn client_transport(
     context: &TlsContext,
     buffer_size: usize,
     socket: OwnedFd,
+    server_name: &str,
     expected: Option<HttpProtocol>,
 ) -> Result<StackTransport, Error> {
     let stream = context
-        .client(cx, buffer_size, socket)
+        .client(cx, buffer_size, socket, server_name)
         .map_err(Error::tls)?;
     if let Some(expected) = expected {
         validate_protocol(&stream, expected)?;

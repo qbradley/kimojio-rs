@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::Error;
 
@@ -11,12 +11,15 @@ use super::settings::{SettingId, Settings};
 use super::stream::{FlowControlWindow, Stream, StreamId};
 
 const INITIAL_CONNECTION_WINDOW: u32 = 65_535;
+const STREAM_WINDOW_UPDATE_THRESHOLD_DIVISOR: i32 = 2;
 
 pub struct ConnectionState {
     local_settings: Settings,
     peer_settings: Settings,
     streams: BTreeMap<StreamId, Stream>,
+    closed_streams: BTreeSet<StreamId>,
     connection_window: FlowControlWindow,
+    inbound_connection_window: FlowControlWindow,
     pending_outbound: VecDeque<Frame>,
     header_encoder: HeaderBlockEncoder,
     header_decoder: HeaderBlockDecoder,
@@ -33,7 +36,9 @@ impl ConnectionState {
             local_settings,
             peer_settings: Settings::default(),
             streams: BTreeMap::new(),
+            closed_streams: BTreeSet::new(),
             connection_window: FlowControlWindow::new(INITIAL_CONNECTION_WINDOW)?,
+            inbound_connection_window: FlowControlWindow::new(INITIAL_CONNECTION_WINDOW)?,
             pending_outbound: VecDeque::new(),
             header_encoder: HeaderBlockEncoder::new(),
             header_decoder,
@@ -56,6 +61,10 @@ impl ConnectionState {
 
     pub fn pending_outbound_len(&self) -> usize {
         self.pending_outbound.len()
+    }
+
+    pub fn active_stream_count(&self) -> usize {
+        self.streams.len()
     }
 
     pub fn receive_preface(&mut self, preface: &[u8]) -> Result<(), Error> {
@@ -104,6 +113,9 @@ impl ConnectionState {
     }
 
     pub fn open_stream(&mut self, id: StreamId) -> Result<&mut Stream, Error> {
+        if self.closed_streams.contains(&id) {
+            return Err(Error::Protocol("stream id was already closed"));
+        }
         if !self.streams.contains_key(&id) {
             let stream = Stream::new(
                 id,
@@ -113,6 +125,34 @@ impl ConnectionState {
             self.streams.insert(id, stream);
         }
         Ok(self.streams.get_mut(&id).expect("stream was just inserted"))
+    }
+
+    pub fn open_inbound_stream(&mut self, id: StreamId) -> Result<&mut Stream, Error> {
+        if !self.streams.contains_key(&id)
+            && self.streams.len() >= self.local_settings.max_concurrent_streams as usize
+        {
+            return Err(Error::Protocol("HTTP/2 max concurrent streams exceeded"));
+        }
+        self.open_stream(id)
+    }
+
+    pub fn open_outbound_stream(&mut self, id: StreamId) -> Result<&mut Stream, Error> {
+        if !self.streams.contains_key(&id)
+            && self.streams.len() >= self.peer_settings.max_concurrent_streams as usize
+        {
+            return Err(Error::Protocol(
+                "peer HTTP/2 max concurrent streams exceeded",
+            ));
+        }
+        self.open_stream(id)
+    }
+
+    pub fn remove_stream(&mut self, id: StreamId) -> Option<Stream> {
+        let stream = self.streams.remove(&id);
+        if stream.is_some() {
+            self.closed_streams.insert(id);
+        }
+        stream
     }
 
     pub fn stream(&self, id: StreamId) -> Option<&Stream> {
@@ -148,7 +188,27 @@ impl ConnectionState {
         stream.consume_outbound_window(amount)
     }
 
-    pub fn queue_window_update(&mut self, stream_id: StreamId, amount: usize) -> Result<(), Error> {
+    pub fn queue_connection_window_update(&mut self, amount: usize) -> Result<(), Error> {
+        if amount == 0 {
+            return Ok(());
+        }
+        let increment = u32::try_from(amount)
+            .map_err(|_| Error::Protocol("WINDOW_UPDATE increment too large"))?;
+        self.inbound_connection_window.increase(increment)?;
+        self.pending_outbound
+            .push_back(Frame::window_update(0, increment));
+        Ok(())
+    }
+
+    pub fn consume_inbound_connection_window(&mut self, amount: usize) -> Result<(), Error> {
+        self.inbound_connection_window.consume(amount)
+    }
+
+    pub fn queue_stream_window_update(
+        &mut self,
+        stream_id: StreamId,
+        amount: usize,
+    ) -> Result<(), Error> {
         if amount == 0 {
             return Ok(());
         }
@@ -159,10 +219,35 @@ impl ConnectionState {
             .ok_or(Error::Protocol("WINDOW_UPDATE for unknown stream"))?
             .increase_inbound_window(increment)?;
         self.pending_outbound
-            .push_back(Frame::window_update(0, increment));
-        self.pending_outbound
             .push_back(Frame::window_update(stream_id.get(), increment));
         Ok(())
+    }
+
+    pub fn queue_stream_window_update_to_target(
+        &mut self,
+        stream_id: StreamId,
+    ) -> Result<bool, Error> {
+        let target = self.local_settings.initial_window_size;
+        if target == 0 {
+            return Ok(false);
+        }
+        let threshold = (target as i32) / STREAM_WINDOW_UPDATE_THRESHOLD_DIVISOR;
+        let stream = self
+            .streams
+            .get_mut(&stream_id)
+            .ok_or(Error::Protocol("WINDOW_UPDATE for unknown stream"))?;
+        let available = stream.inbound_window().available();
+        if available > threshold {
+            return Ok(false);
+        }
+        let increment = target.saturating_sub(available.max(0) as u32);
+        if increment == 0 {
+            return Ok(false);
+        }
+        stream.increase_inbound_window(increment)?;
+        self.pending_outbound
+            .push_back(Frame::window_update(stream_id.get(), increment));
+        Ok(true)
     }
 
     pub fn receive_settings(&mut self, frame: &Frame) -> Result<(), Error> {
@@ -209,10 +294,11 @@ impl ConnectionState {
             self.connection_window.increase(increment)
         } else {
             let stream_id = StreamId::new(frame.stream_id)?;
-            self.streams
-                .get_mut(&stream_id)
-                .ok_or(Error::Protocol("WINDOW_UPDATE for unknown stream"))?
-                .increase_outbound_window(increment)
+            match self.streams.get_mut(&stream_id) {
+                Some(stream) => stream.increase_outbound_window(increment),
+                None if self.closed_streams.contains(&stream_id) => Ok(()),
+                None => Err(Error::Protocol("WINDOW_UPDATE for unknown stream")),
+            }
         }
     }
 

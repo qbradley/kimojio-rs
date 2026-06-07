@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use bytes::BytesMut;
-
 use crate::{BodyLimits, Error};
 
 use super::hpack::Header;
@@ -103,7 +101,7 @@ pub struct Stream {
     state: StreamState,
     inbound_window: FlowControlWindow,
     outbound_window: FlowControlWindow,
-    body: BytesMut,
+    received_body_len: usize,
     trailers: Option<Vec<Header>>,
     awaiting_continuation: bool,
 }
@@ -119,7 +117,7 @@ impl Stream {
             state: StreamState::Idle,
             inbound_window: FlowControlWindow::new(inbound_initial_window)?,
             outbound_window: FlowControlWindow::new(outbound_initial_window)?,
-            body: BytesMut::new(),
+            received_body_len: 0,
             trailers: None,
             awaiting_continuation: false,
         })
@@ -157,8 +155,8 @@ impl Stream {
         self.outbound_window.adjust(delta)
     }
 
-    pub fn body(&self) -> &[u8] {
-        &self.body
+    pub fn received_body_len(&self) -> usize {
+        self.received_body_len
     }
 
     pub fn trailers(&self) -> Option<&[Header]> {
@@ -235,8 +233,9 @@ impl Stream {
             ));
         }
         self.inbound_window.consume(data.len())?;
-        limits.check_body_len(self.body.len().saturating_add(data.len()))?;
-        self.body.extend_from_slice(data);
+        let new_len = self.received_body_len.saturating_add(data.len());
+        limits.check_body_len(new_len)?;
+        self.received_body_len = new_len;
         if end_stream {
             self.close_remote_side();
         }
@@ -304,7 +303,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(stream.state(), StreamState::HalfClosedRemote);
-        assert_eq!(stream.body(), b"hello");
+        assert_eq!(stream.received_body_len(), b"hello".len());
     }
 
     #[test]
@@ -362,7 +361,7 @@ mod tests {
         stream
             .receive_data(b"ok", false, BodyLimits::new(1024))
             .unwrap();
-        assert_eq!(stream.body(), b"ok");
+        assert_eq!(stream.received_body_len(), b"ok".len());
     }
 
     #[test]

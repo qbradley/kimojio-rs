@@ -56,9 +56,14 @@ impl TlsContext {
         cx: &RuntimeContext<'_>,
         bufsize: usize,
         socket: OwnedFd,
+        server_name: &str,
     ) -> Result<TlsStream, Errno> {
         let ssl = self.ssl_ctx.client(bufsize).map_err(as_io_error)?;
         let mut stream = TlsStream::new(ssl, socket);
+        stream
+            .ssl_mut()
+            .set_hostname(server_name)
+            .map_err(|_| Errno::INVAL)?;
         stream.client_side_handshake(cx)?;
         Ok(stream)
     }
@@ -86,6 +91,13 @@ impl TlsStream {
         unsafe { openssl::ssl::SslRef::from_ptr(raw_ssl as *mut _) }
     }
 
+    /// Gets the mutable OpenSSL `SslRef` for pre-handshake configuration.
+    pub fn ssl_mut(&mut self) -> &mut openssl::ssl::SslRef {
+        let raw_ssl = self.ssl.get_ssl_raw();
+        // SAFETY: `raw_ssl` is uniquely borrowed through `&mut self`.
+        unsafe { openssl::ssl::SslRef::from_ptr_mut(raw_ssl as *mut _) }
+    }
+
     /// Performs the client side of the TLS handshake.
     pub fn client_side_handshake(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
         loop {
@@ -94,7 +106,7 @@ impl TlsStream {
                 Response::Fail(e) => return Err(self.handle_tls_error(e)),
                 Response::WantRead => self.fill_tls_read(cx)?,
                 Response::WantWrite => self.flush_tls_write(cx)?,
-                Response::Eof => return Ok(()),
+                Response::Eof => return Err(Errno::PROTO),
             }
         }
     }
@@ -342,7 +354,7 @@ mod tests {
 
                 let client = scope.spawn(move |cx| {
                     let mut tls = client_ctx
-                        .client(cx, TLS_BUFFER_SIZE, client_fd)
+                        .client(cx, TLS_BUFFER_SIZE, client_fd, "localhost")
                         .expect("client TLS handshake failed");
                     tls.write(cx, message).expect("client TLS write failed");
 
@@ -413,7 +425,7 @@ mod tests {
 
                 let client = scope.spawn(move |cx| {
                     let mut tls = client_ctx
-                        .client(cx, TLS_BUFFER_SIZE, client_fd)
+                        .client(cx, TLS_BUFFER_SIZE, client_fd, "localhost")
                         .expect("client TLS handshake failed");
                     tls.write(cx, &header)
                         .expect("client TLS header write failed");

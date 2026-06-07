@@ -42,7 +42,12 @@ pub enum Error {
         actual: usize,
     },
     Eof,
-    PeerReset,
+    PeerReset {
+        stream_id: Option<u32>,
+        last_stream_id: Option<u32>,
+        error_code: u32,
+        debug_data: Vec<u8>,
+    },
 }
 
 impl Error {
@@ -62,6 +67,24 @@ impl Error {
         }
     }
 
+    pub fn stream_reset(stream_id: u32, error_code: u32) -> Self {
+        Self::PeerReset {
+            stream_id: Some(stream_id),
+            last_stream_id: None,
+            error_code,
+            debug_data: Vec::new(),
+        }
+    }
+
+    pub fn goaway(last_stream_id: u32, error_code: u32, debug_data: Vec<u8>) -> Self {
+        Self::PeerReset {
+            stream_id: None,
+            last_stream_id: Some(last_stream_id),
+            error_code,
+            debug_data,
+        }
+    }
+
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::Io(_) => ErrorKind::Io,
@@ -71,7 +94,7 @@ impl Error {
             Self::Unsupported(_) => ErrorKind::Unsupported,
             Self::SizeLimit { .. } => ErrorKind::SizeLimit,
             Self::Eof => ErrorKind::Eof,
-            Self::PeerReset => ErrorKind::PeerReset,
+            Self::PeerReset { .. } => ErrorKind::PeerReset,
         }
     }
 }
@@ -99,7 +122,25 @@ impl fmt::Display for Error {
                 "HTTP {kind:?} size limit exceeded: limit {limit}, actual {actual}"
             ),
             Self::Eof => f.write_str("HTTP transport reached EOF"),
-            Self::PeerReset => f.write_str("HTTP peer reset the connection"),
+            Self::PeerReset {
+                stream_id,
+                last_stream_id,
+                error_code,
+                debug_data,
+            } => {
+                write!(f, "HTTP peer reset")?;
+                if let Some(stream_id) = stream_id {
+                    write!(f, " stream {stream_id}")?;
+                }
+                if let Some(last_stream_id) = last_stream_id {
+                    write!(f, " after stream {last_stream_id}")?;
+                }
+                write!(f, " with error code {error_code}")?;
+                if !debug_data.is_empty() {
+                    write!(f, " and {} bytes of debug data", debug_data.len())?;
+                }
+                Ok(())
+            }
         }
     }
 }

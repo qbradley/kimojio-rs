@@ -131,9 +131,13 @@ fn validate_content_type(response: &Response<Body>) -> Result<(), Error> {
         .headers()
         .get(CONTENT_TYPE)
         .ok_or(Error::Protocol("missing gRPC content-type"))?;
-    if value.as_bytes().starts_with(b"application/grpc") {
+    if is_grpc_content_type(value.as_bytes()) {
         Ok(())
     } else {
         Err(Error::Protocol("invalid gRPC content-type"))
     }
+}
+
+fn is_grpc_content_type(value: &[u8]) -> bool {
+    value == b"application/grpc" || value.starts_with(b"application/grpc+")
 }

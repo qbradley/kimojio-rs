@@ -49,6 +49,7 @@ fn stackful_http1_client_and_server_exchange_over_tls() {
                     &client_ctx,
                     support::TLS_BUFFER_SIZE,
                     client_fd,
+                    "localhost",
                     Some(HttpProtocol::Http1),
                 )
                 .unwrap();

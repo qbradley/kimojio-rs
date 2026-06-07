@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use bytes::Bytes;
 use http::{
-    Request, Response, StatusCode,
+    Method, Request, Response, StatusCode,
     header::{CONTENT_TYPE, TE},
 };
 use kimojio_stack::RuntimeContext;
@@ -165,11 +165,17 @@ where
 }
 
 fn validate_request(request: &Request<Body>) -> Result<(), Status> {
+    if request.method() != Method::POST {
+        return Err(Status::new(
+            GrpcStatusCode::InvalidArgument,
+            "invalid method",
+        ));
+    }
     let content_type = request
         .headers()
         .get(CONTENT_TYPE)
         .ok_or_else(|| Status::new(GrpcStatusCode::InvalidArgument, "missing content-type"))?;
-    if !content_type.as_bytes().starts_with(b"application/grpc") {
+    if !is_grpc_content_type(content_type.as_bytes()) {
         return Err(Status::new(
             GrpcStatusCode::InvalidArgument,
             "invalid content-type",
@@ -183,6 +189,10 @@ fn validate_request(request: &Request<Body>) -> Result<(), Status> {
         return Err(Status::new(GrpcStatusCode::InvalidArgument, "invalid te"));
     }
     Ok(())
+}
+
+fn is_grpc_content_type(value: &[u8]) -> bool {
+    value == b"application/grpc" || value.starts_with(b"application/grpc+")
 }
 
 fn write_reply(
