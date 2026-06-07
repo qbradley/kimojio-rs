@@ -3,6 +3,17 @@
 
 use std::fmt;
 
+use base64::{Engine, engine::general_purpose::STANDARD};
+use bytes::Bytes;
+use http::{HeaderName, HeaderValue};
+use kimojio_stack_http::Trailers;
+
+use crate::Error;
+
+pub const GRPC_STATUS: HeaderName = HeaderName::from_static("grpc-status");
+pub const GRPC_MESSAGE: HeaderName = HeaderName::from_static("grpc-message");
+pub const GRPC_STATUS_DETAILS_BIN: HeaderName = HeaderName::from_static("grpc-status-details-bin");
+
 /// gRPC status code values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -60,6 +71,7 @@ impl StatusCode {
 pub struct Status {
     code: StatusCode,
     message: String,
+    details: Bytes,
 }
 
 impl Status {
@@ -67,6 +79,15 @@ impl Status {
         Self {
             code,
             message: message.into(),
+            details: Bytes::new(),
+        }
+    }
+
+    pub fn with_details(code: StatusCode, message: impl Into<String>, details: Bytes) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            details,
         }
     }
 
@@ -81,6 +102,72 @@ impl Status {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    pub fn details(&self) -> &[u8] {
+        &self.details
+    }
+
+    pub fn to_trailers(&self) -> Result<Trailers, Error> {
+        let mut trailers = Trailers::new();
+        trailers.insert(
+            GRPC_STATUS,
+            HeaderValue::from_str(&self.code.as_grpc_code().to_string())
+                .map_err(|_| Error::Protocol("invalid grpc-status"))?,
+        );
+        if !self.message.is_empty() {
+            trailers.insert(
+                GRPC_MESSAGE,
+                HeaderValue::from_str(&encode_grpc_message(&self.message))
+                    .map_err(|_| Error::Protocol("invalid grpc-message"))?,
+            );
+        }
+        if !self.details.is_empty() {
+            let details = STANDARD.encode(&self.details);
+            trailers.insert(
+                GRPC_STATUS_DETAILS_BIN,
+                HeaderValue::from_str(&details)
+                    .map_err(|_| Error::Protocol("invalid grpc-status-details-bin"))?,
+            );
+        }
+        Ok(trailers)
+    }
+
+    pub fn from_trailers(trailers: &Trailers) -> Result<Self, Error> {
+        let code = trailers
+            .get(&GRPC_STATUS)
+            .ok_or(Error::Protocol("missing grpc-status"))?
+            .to_str()
+            .map_err(|_| Error::Protocol("grpc-status is not ASCII"))?
+            .parse::<u8>()
+            .map_err(|_| Error::Protocol("invalid grpc-status"))?;
+        let code =
+            StatusCode::from_grpc_code(code).ok_or(Error::Protocol("unknown grpc-status"))?;
+        let message = trailers
+            .get(&GRPC_MESSAGE)
+            .map(|value| {
+                value
+                    .to_str()
+                    .map_err(|_| Error::Protocol("grpc-message is not ASCII"))
+                    .and_then(decode_grpc_message)
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let details = trailers
+            .get(&GRPC_STATUS_DETAILS_BIN)
+            .map(|value| {
+                STANDARD
+                    .decode(value.as_bytes())
+                    .map(Bytes::from)
+                    .map_err(|_| Error::Protocol("invalid grpc-status-details-bin"))
+            })
+            .transpose()?
+            .unwrap_or_default();
+        Ok(Self {
+            code,
+            message,
+            details,
+        })
+    }
 }
 
 impl fmt::Display for Status {
@@ -91,5 +178,53 @@ impl fmt::Display for Status {
             self.code.as_grpc_code(),
             self.message
         )
+    }
+}
+
+fn encode_grpc_message(message: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    let mut encoded = String::with_capacity(message.len());
+    for byte in message.bytes() {
+        if (0x20..=0x7e).contains(&byte) && byte != b'%' {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[(byte >> 4) as usize]));
+            encoded.push(char::from(HEX[(byte & 0x0f) as usize]));
+        }
+    }
+    encoded
+}
+
+fn decode_grpc_message(message: &str) -> Result<String, Error> {
+    let bytes = message.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let Some(hex) = bytes.get(index + 1..index + 3) else {
+                return Err(Error::Protocol("invalid grpc-message percent encoding"));
+            };
+            let high = hex_value(hex[0])
+                .ok_or(Error::Protocol("invalid grpc-message percent encoding"))?;
+            let low = hex_value(hex[1])
+                .ok_or(Error::Protocol("invalid grpc-message percent encoding"))?;
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).map_err(|_| Error::Protocol("grpc-message is not UTF-8"))
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }

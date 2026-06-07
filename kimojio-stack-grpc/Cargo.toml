@@ -9,8 +9,10 @@ readme.workspace = true
 description = "gRPC client and server foundations for kimojio-stack"
 
 [dependencies]
+base64.workspace = true
 bytes.workspace = true
 http.workspace = true
+kimojio-stack.workspace = true
 kimojio-stack-http.workspace = true
 prost.workspace = true
 
@@ -19,5 +21,6 @@ criterion.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "server", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["client", "server", "tokio", "http1", "http2"] }
+rustix = { workspace = true, features = ["net"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 tonic = { workspace = true, features = ["transport"] }

@@ -853,14 +853,17 @@ dependencies = [
 name = "kimojio-stack-grpc"
 version = "0.16.5"
 dependencies = [
+ "base64",
  "bytes",
  "criterion",
  "http",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "kimojio-stack",
  "kimojio-stack-http",
  "prost",
+ "rustix",
  "tokio",
  "tonic",
 ]

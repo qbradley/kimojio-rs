@@ -24,6 +24,7 @@ readme = "README.md"
 
 [workspace.dependencies]
 bytes = "1"
+base64 = "0.22"
 cc = "1"
 criterion = { version = "0.8", default-features = false }
 corosensei = "0.3.4"

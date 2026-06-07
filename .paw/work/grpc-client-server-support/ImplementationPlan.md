@@ -220,14 +220,14 @@ The architecture keeps public crates independent of tokio and other async runtim
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `cargo fmt --check`
-- [ ] `cargo test -p kimojio-stack-grpc`
-- [ ] `cargo clippy -p kimojio-stack-grpc --all-targets --all-features -- -D warnings`
-- [ ] `cargo tree -p kimojio-stack-grpc -e normal` shows tokio/hyper/tonic are absent from normal dependencies.
+- [x] `cargo fmt --check`
+- [x] `cargo test -p kimojio-stack-grpc`
+- [x] `cargo clippy -p kimojio-stack-grpc --all-targets --all-features -- -D warnings`
+- [x] `cargo tree -p kimojio-stack-grpc -e normal` shows tokio/hyper/tonic are absent from normal dependencies.
 
 #### Manual Verification:
-- [ ] Public gRPC APIs can make unary calls and register unary handlers without generated stubs, satisfying SC-009 (`.paw/work/grpc-client-server-support/Spec.md:149-150`).
-- [ ] API naming and modules make future streaming extension points visible without exposing streaming call shapes in this phase.
+- [x] Public gRPC APIs can make unary calls and register unary handlers without generated stubs, satisfying SC-009 (`.paw/work/grpc-client-server-support/Spec.md:149-150`).
+- [x] API naming and modules make future streaming extension points visible without exposing streaming call shapes in this phase.
 
 ---
 
