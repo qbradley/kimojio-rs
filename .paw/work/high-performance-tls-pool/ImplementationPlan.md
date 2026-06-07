@@ -42,7 +42,7 @@ The approach is intentionally separate from existing kimojio runtime TLS wrapper
 - [x] **Phase 2: Pool Executor and Callback Operations** - Implement worker lifecycle, operation submission, callback completion, same-stream serialization, and statistics.
 - [x] **Phase 3: TLS Handshake and RPC Tests** - Implement client/server stream construction and correctness tests for RPC-shaped TLS exchange.
 - [x] **Phase 4: Adaptive Scheduling and Benchmarks** - Add adaptive placement bookkeeping plus Criterion RPC write benchmarks for single-pair and three-pair scenarios.
-- [ ] **Phase 5: Documentation** - Add workflow Docs.md and project documentation for the new crate and benchmark usage.
+- [x] **Phase 5: Documentation** - Add workflow Docs.md and project documentation for the new crate and benchmark usage.
 
 ## Phase Dependencies
 
