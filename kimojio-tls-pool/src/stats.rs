@@ -12,6 +12,8 @@ pub struct PoolStats {
     queued: AtomicU64,
     completed: AtomicU64,
     failed: AtomicU64,
+    ready_spins: AtomicU64,
+    idle_transitions: AtomicU64,
     executors: Vec<ExecutorStats>,
 }
 
@@ -25,6 +27,8 @@ impl PoolStats {
             queued: AtomicU64::new(0),
             completed: AtomicU64::new(0),
             failed: AtomicU64::new(0),
+            ready_spins: AtomicU64::new(0),
+            idle_transitions: AtomicU64::new(0),
             executors: (0..executor_count).map(ExecutorStats::new).collect(),
         }
     }
@@ -48,9 +52,11 @@ impl PoolStats {
     }
 
     /// Records queueing for `executor`.
-    pub fn record_queued(&self, executor: usize) {
+    pub fn record_queued(&self, executor: Option<usize>) {
         self.queued.fetch_add(1, Ordering::Relaxed);
-        if let Some(stats) = self.executors.get(executor) {
+        if let Some(executor) = executor
+            && let Some(stats) = self.executors.get(executor)
+        {
             stats.queued.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -75,6 +81,22 @@ impl PoolStats {
         }
     }
 
+    /// Records that an executor stayed ready and checked for work.
+    pub fn record_ready_spin(&self, executor: usize) {
+        self.ready_spins.fetch_add(1, Ordering::Relaxed);
+        if let Some(stats) = self.executors.get(executor) {
+            stats.ready_spins.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Records that an executor transitioned to idle waiting.
+    pub fn record_idle_transition(&self, executor: usize) {
+        self.idle_transitions.fetch_add(1, Ordering::Relaxed);
+        if let Some(stats) = self.executors.get(executor) {
+            stats.idle_transitions.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     /// Returns a point-in-time statistics snapshot.
     pub fn snapshot(&self) -> PoolStatsSnapshot {
         PoolStatsSnapshot {
@@ -84,6 +106,8 @@ impl PoolStats {
             queued: self.queued.load(Ordering::Relaxed),
             completed: self.completed.load(Ordering::Relaxed),
             failed: self.failed.load(Ordering::Relaxed),
+            ready_spins: self.ready_spins.load(Ordering::Relaxed),
+            idle_transitions: self.idle_transitions.load(Ordering::Relaxed),
             executors: self.executors.iter().map(ExecutorStats::snapshot).collect(),
         }
     }
@@ -102,6 +126,8 @@ struct ExecutorStats {
     queued: AtomicU64,
     completed: AtomicU64,
     failed: AtomicU64,
+    ready_spins: AtomicU64,
+    idle_transitions: AtomicU64,
 }
 
 impl ExecutorStats {
@@ -112,6 +138,8 @@ impl ExecutorStats {
             queued: AtomicU64::new(0),
             completed: AtomicU64::new(0),
             failed: AtomicU64::new(0),
+            ready_spins: AtomicU64::new(0),
+            idle_transitions: AtomicU64::new(0),
         }
     }
 
@@ -122,6 +150,8 @@ impl ExecutorStats {
             queued: self.queued.load(Ordering::Relaxed),
             completed: self.completed.load(Ordering::Relaxed),
             failed: self.failed.load(Ordering::Relaxed),
+            ready_spins: self.ready_spins.load(Ordering::Relaxed),
+            idle_transitions: self.idle_transitions.load(Ordering::Relaxed),
         }
     }
 }
@@ -141,6 +171,10 @@ pub struct PoolStatsSnapshot {
     pub completed: u64,
     /// Operations completed with failure.
     pub failed: u64,
+    /// Ready-spin checks performed by executors.
+    pub ready_spins: u64,
+    /// Executor transitions into idle waiting.
+    pub idle_transitions: u64,
     /// Per-executor statistics.
     pub executors: Vec<ExecutorStatsSnapshot>,
 }
@@ -158,6 +192,10 @@ pub struct ExecutorStatsSnapshot {
     pub completed: u64,
     /// Operations completed with failure on this executor.
     pub failed: u64,
+    /// Ready-spin checks performed by this executor.
+    pub ready_spins: u64,
+    /// Transitions into idle waiting by this executor.
+    pub idle_transitions: u64,
 }
 
 #[cfg(test)]
@@ -183,7 +221,7 @@ mod tests {
         stats.record_submitted();
         stats.record_immediate();
         stats.record_background_routed(1);
-        stats.record_queued(1);
+        stats.record_queued(Some(1));
         stats.record_completed(Some(1));
         stats.record_failed(Some(1));
 
@@ -211,7 +249,7 @@ mod tests {
                 for _ in 0..100 {
                     stats.record_submitted();
                     stats.record_background_routed(0);
-                    stats.record_queued(0);
+                    stats.record_queued(Some(0));
                     stats.record_completed(Some(0));
                 }
             }));

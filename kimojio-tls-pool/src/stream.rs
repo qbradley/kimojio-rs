@@ -1,0 +1,291 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
+use crate::operation::{self, OperationFn};
+use crate::pool::PoolInner;
+use crate::{OperationError, OperationResult, PoolStatsSnapshot};
+
+/// Callback invoked when a submitted TLS operation completes.
+pub type CompletionCallback<T> = Box<dyn FnOnce(OperationResult<T>) + Send + 'static>;
+
+type StreamJob = Box<dyn FnOnce(Arc<StreamState>) + Send + 'static>;
+
+/// User-facing TLS stream handle created by a pool.
+#[derive(Clone)]
+pub struct TlsStream {
+    state: Arc<StreamState>,
+}
+
+impl TlsStream {
+    pub(crate) fn new(pool: Arc<PoolInner>) -> Self {
+        Self {
+            state: Arc::new(StreamState {
+                pool,
+                queue: Mutex::new(StreamQueue::default()),
+            }),
+        }
+    }
+
+    /// Submits a runtime-independent operation for this stream.
+    ///
+    /// Later phases wire this low-level operation path to TLS reads and writes.
+    pub fn submit_operation<T, F>(
+        &self,
+        operation_size: usize,
+        operation: F,
+        callback: CompletionCallback<T>,
+    ) -> OperationResult<()>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> OperationResult<T> + Send + 'static,
+    {
+        self.state.submit(Box::new(move |state| {
+            start_operation(state, operation_size, Box::new(operation), callback);
+        }))
+    }
+
+    /// Returns a snapshot of the parent pool statistics.
+    pub fn stats(&self) -> PoolStatsSnapshot {
+        self.state.pool.stats.snapshot()
+    }
+}
+
+pub(crate) struct StreamState {
+    pool: Arc<PoolInner>,
+    queue: Mutex<StreamQueue>,
+}
+
+impl StreamState {
+    fn submit(self: &Arc<Self>, job: StreamJob) -> OperationResult<()> {
+        if self.pool_is_shutdown() {
+            return Err(OperationError::Shutdown);
+        }
+
+        self.pool.stats.record_submitted();
+        let start = {
+            let mut queue = self.queue.lock().expect("stream queue poisoned");
+            if queue.in_flight {
+                queue.pending.push_back(job);
+                self.pool.stats.record_queued(None);
+                None
+            } else {
+                queue.in_flight = true;
+                Some(job)
+            }
+        };
+
+        if let Some(job) = start {
+            job(Arc::clone(self));
+        }
+        Ok(())
+    }
+
+    fn finish(self: &Arc<Self>) {
+        let next = {
+            let mut queue = self.queue.lock().expect("stream queue poisoned");
+            if let Some(job) = queue.pending.pop_front() {
+                Some(job)
+            } else {
+                queue.in_flight = false;
+                None
+            }
+        };
+
+        if let Some(job) = next {
+            job(Arc::clone(self));
+        }
+    }
+
+    fn pool_is_shutdown(&self) -> bool {
+        self.pool.is_shutdown()
+    }
+}
+
+#[derive(Default)]
+struct StreamQueue {
+    in_flight: bool,
+    pending: VecDeque<StreamJob>,
+}
+
+fn start_operation<T>(
+    state: Arc<StreamState>,
+    operation_size: usize,
+    operation: OperationFn<T>,
+    callback: CompletionCallback<T>,
+) where
+    T: Send + 'static,
+{
+    match state.pool.choose_placement(operation_size) {
+        crate::OperationPlacement::Immediate => {
+            state.pool.stats.record_immediate();
+            let success = operation::complete(operation, callback);
+            record_completion(&state, None, success);
+            state.finish();
+        }
+        crate::OperationPlacement::Background { executor } => {
+            state.pool.stats.record_background_routed(executor);
+            state.pool.stats.record_queued(Some(executor));
+            let pool = Arc::clone(&state.pool);
+            let job_state = Arc::clone(&state);
+            let callback = Arc::new(Mutex::new(Some(callback)));
+            let send_error_callback = Arc::clone(&callback);
+            let job = Box::new(move || {
+                let callback = callback
+                    .lock()
+                    .expect("operation callback mutex poisoned")
+                    .take()
+                    .expect("operation callback missing");
+                let success = operation::complete(operation, callback);
+                record_completion(&job_state, Some(executor), success);
+                job_state.finish();
+            });
+
+            if let Err(error) = pool.send_to_executor(executor, operation_size, job) {
+                state.pool.stats.record_failed(None);
+                if let Some(callback) = send_error_callback
+                    .lock()
+                    .expect("operation callback mutex poisoned")
+                    .take()
+                {
+                    callback(Err(error));
+                }
+                state.finish();
+            }
+        }
+    }
+}
+
+fn record_completion(state: &StreamState, executor: Option<usize>, success: bool) {
+    if success {
+        state.pool.stats.record_completed(executor);
+    } else {
+        state.pool.stats.record_failed(executor);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier, mpsc};
+    use std::thread;
+    use std::time::Duration;
+
+    use super::*;
+    use crate::{PlacementMode, PoolConfig, TlsPool};
+
+    #[test]
+    fn callback_is_invoked_once_for_success() {
+        let pool = TlsPool::default();
+        let stream = pool.stream();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let callback_calls = Arc::clone(&calls);
+        let (sender, receiver) = mpsc::channel();
+
+        stream
+            .submit_operation(
+                1,
+                || Ok(7),
+                Box::new(move |result| {
+                    callback_calls.fetch_add(1, Ordering::SeqCst);
+                    sender.send(result.unwrap()).unwrap();
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(receiver.recv().unwrap(), 7);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn callback_is_invoked_once_for_failure() {
+        let pool = TlsPool::default();
+        let stream = pool.stream();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let callback_calls = Arc::clone(&calls);
+        let (sender, receiver) = mpsc::channel();
+
+        stream
+            .submit_operation::<(), _>(
+                1,
+                || Err(OperationError::Busy),
+                Box::new(move |result| {
+                    callback_calls.fetch_add(1, Ordering::SeqCst);
+                    sender
+                        .send(matches!(result, Err(OperationError::Busy)))
+                        .unwrap();
+                }),
+            )
+            .unwrap();
+
+        assert!(receiver.recv().unwrap());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(pool.stats().failed, 1);
+    }
+
+    #[test]
+    fn same_stream_operations_are_serialized() {
+        let pool =
+            TlsPool::new(PoolConfig::new(2).with_placement_mode(PlacementMode::BackgroundOnly))
+                .unwrap();
+        let stream = pool.stream();
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let first_started = Arc::new(Barrier::new(2));
+        let release_first = Arc::new(Barrier::new(2));
+        let (sender, receiver) = mpsc::channel();
+
+        let active_first = Arc::clone(&active);
+        let max_first = Arc::clone(&max_active);
+        let first_started_job = Arc::clone(&first_started);
+        let release_first_job = Arc::clone(&release_first);
+        let sender_first = sender.clone();
+        stream
+            .submit_operation(
+                32 * 1024,
+                move || {
+                    let now = active_first.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_first.fetch_max(now, Ordering::SeqCst);
+                    first_started_job.wait();
+                    release_first_job.wait();
+                    active_first.fetch_sub(1, Ordering::SeqCst);
+                    Ok(1)
+                },
+                Box::new(move |result| {
+                    sender_first.send(result.unwrap()).unwrap();
+                }),
+            )
+            .unwrap();
+
+        first_started.wait();
+
+        let active_second = Arc::clone(&active);
+        let max_second = Arc::clone(&max_active);
+        let sender_second = sender;
+        stream
+            .submit_operation(
+                32 * 1024,
+                move || {
+                    let now = active_second.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_second.fetch_max(now, Ordering::SeqCst);
+                    active_second.fetch_sub(1, Ordering::SeqCst);
+                    Ok(2)
+                },
+                Box::new(move |result| {
+                    sender_second.send(result.unwrap()).unwrap();
+                }),
+            )
+            .unwrap();
+
+        thread::sleep(Duration::from_millis(10));
+        assert_eq!(max_active.load(Ordering::SeqCst), 1);
+
+        release_first.wait();
+        assert_eq!(receiver.recv().unwrap(), 1);
+        assert_eq!(receiver.recv().unwrap(), 2);
+        assert_eq!(max_active.load(Ordering::SeqCst), 1);
+        assert_eq!(pool.stats().queued, 3);
+    }
+}
