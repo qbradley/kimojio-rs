@@ -10,3 +10,6 @@ description = "Multithreaded worker runtime for kimojio-stack"
 
 [dependencies]
 kimojio-stack.workspace = true
+
+[dev-dependencies]
+rustix = { workspace = true, features = ["pipe"] }

@@ -803,6 +803,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use rustix::pipe::pipe;
+
     use super::{BuildError, JoinError, MultiRuntime, SpawnError, TaskPlacement};
 
     #[test]
@@ -878,6 +880,41 @@ mod tests {
         let metrics = runtime.metrics();
         assert_eq!(metrics.stealable_submitted, 8);
         assert_eq!(metrics.stealable_completed, 8);
+    }
+
+    #[test]
+    fn pinned_and_stealable_workers_interoperate_with_pipe_io() {
+        let runtime = MultiRuntime::new(1, 1).unwrap();
+        let (read_fd, write_fd) = pipe().unwrap();
+
+        let reader = runtime
+            .spawn_stealable(move |cx| {
+                let mut buffer = [0_u8; 5];
+                let read = cx.read(&read_fd, &mut buffer).unwrap();
+                assert_eq!(read, buffer.len());
+                cx.close(read_fd).unwrap();
+                (worker_thread_name(cx), buffer)
+            })
+            .unwrap();
+        let writer = runtime
+            .spawn_pinned_index(0, move |cx| {
+                let written = cx.write(&write_fd, b"hello").unwrap();
+                assert_eq!(written, 5);
+                cx.close(write_fd).unwrap();
+                worker_thread_name(cx)
+            })
+            .unwrap();
+
+        assert_eq!(writer.join().unwrap(), "kimojio-stack-pinned-0");
+        let (reader_name, bytes) = reader.join().unwrap();
+        assert!(reader_name.starts_with("kimojio-stack-stealable-"));
+        assert_eq!(&bytes, b"hello");
+
+        let metrics = runtime.metrics();
+        assert_eq!(metrics.pinned_submitted, 1);
+        assert_eq!(metrics.pinned_completed, 1);
+        assert_eq!(metrics.stealable_submitted, 1);
+        assert_eq!(metrics.stealable_completed, 1);
     }
 
     #[test]
