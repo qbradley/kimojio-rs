@@ -3,6 +3,8 @@
 
 use std::{
     hint::black_box,
+    mem::size_of,
+    thread,
     time::{Duration, Instant},
 };
 
@@ -20,6 +22,8 @@ use openssl::{
 use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 
 const TLS_BUFFER_SIZE: usize = 16 * 1024;
+const RPC_HEADER_LEN: usize = 64;
+const RPC_RESPONSE_LEN: usize = 64;
 
 fn run_stackful(f: impl FnOnce(&RuntimeContext<'_>) -> Duration) -> Duration {
     let mut runtime = Runtime::new();
@@ -49,20 +53,24 @@ fn make_cert() -> (X509, PKey<Private>) {
 }
 
 fn make_openssl_contexts() -> (SslContext, SslContext) {
-    let (cert, key) = make_cert();
+    (make_openssl_server_context(), make_openssl_client_context())
+}
 
+fn make_openssl_server_context() -> SslContext {
+    let (cert, key) = make_cert();
     let mut acceptor = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).unwrap();
     acceptor.set_private_key(&key).unwrap();
     acceptor.set_certificate(&cert).unwrap();
     acceptor.check_private_key().unwrap();
 
+    acceptor.build().into_context()
+}
+
+fn make_openssl_client_context() -> SslContext {
     let mut connector = SslConnector::builder(SslMethod::tls()).unwrap();
     connector.set_verify(SslVerifyMode::NONE);
 
-    (
-        acceptor.build().into_context(),
-        connector.build().into_context(),
-    )
+    connector.build().into_context()
 }
 
 fn make_memory_bio_contexts() -> (kimojio_stack_tls::TlsContext, kimojio_stack_tls::TlsContext) {
@@ -71,6 +79,14 @@ fn make_memory_bio_contexts() -> (kimojio_stack_tls::TlsContext, kimojio_stack_t
         kimojio_stack_tls::TlsContext::from_openssl(server),
         kimojio_stack_tls::TlsContext::from_openssl(client),
     )
+}
+
+fn make_memory_bio_server_context() -> kimojio_stack_tls::TlsContext {
+    kimojio_stack_tls::TlsContext::from_openssl(make_openssl_server_context())
+}
+
+fn make_memory_bio_client_context() -> kimojio_stack_tls::TlsContext {
+    kimojio_stack_tls::TlsContext::from_openssl(make_openssl_client_context())
 }
 
 fn make_direct_bio_contexts() -> (
@@ -82,6 +98,26 @@ fn make_direct_bio_contexts() -> (
         kimojio_stack_tls2::TlsContext::from_openssl(server),
         kimojio_stack_tls2::TlsContext::from_openssl(client),
     )
+}
+
+fn make_direct_bio_server_context() -> kimojio_stack_tls2::TlsContext {
+    kimojio_stack_tls2::TlsContext::from_openssl(make_openssl_server_context())
+}
+
+fn make_direct_bio_client_context() -> kimojio_stack_tls2::TlsContext {
+    kimojio_stack_tls2::TlsContext::from_openssl(make_openssl_client_context())
+}
+
+fn make_rpc_header(body_len: usize) -> [u8; RPC_HEADER_LEN] {
+    let mut header = [0xa5; RPC_HEADER_LEN];
+    header[..size_of::<u64>()].copy_from_slice(&(body_len as u64).to_le_bytes());
+    header
+}
+
+fn rpc_body_len(header: &[u8; RPC_HEADER_LEN]) -> usize {
+    let mut len = [0_u8; size_of::<u64>()];
+    len.copy_from_slice(&header[..size_of::<u64>()]);
+    u64::from_le_bytes(len) as usize
 }
 
 fn bench_memory_bio_echo(iters: u64, message_len: usize) -> Duration {
@@ -139,6 +175,81 @@ fn bench_memory_bio_echo(iters: u64, message_len: usize) -> Duration {
     })
 }
 
+fn bench_memory_bio_rpc_write(iters: u64, body_len: usize) -> Duration {
+    let header = make_rpc_header(body_len);
+    let body = vec![0x5a; body_len];
+    let response = [0x7b; RPC_RESPONSE_LEN];
+
+    let (client_fd, server_fd) = socketpair(
+        AddressFamily::UNIX,
+        SocketType::STREAM,
+        SocketFlags::empty(),
+        None,
+    )
+    .unwrap();
+
+    let server = thread::spawn(move || {
+        let server_ctx = make_memory_bio_server_context();
+        let mut runtime = Runtime::new();
+        runtime.block_on(|cx| {
+            let mut tls = server_ctx
+                .server(cx, TLS_BUFFER_SIZE, server_fd)
+                .expect("memory BIO server handshake failed");
+            let mut header = [0_u8; RPC_HEADER_LEN];
+            let mut body = vec![0_u8; body_len];
+            for _ in 0..iters {
+                let amount = tls
+                    .read_exact_or_eof(cx, &mut header)
+                    .expect("memory BIO server header read failed");
+                assert_eq!(amount, RPC_HEADER_LEN);
+
+                let request_len = rpc_body_len(&header);
+                assert_eq!(request_len, body_len);
+                let amount = tls
+                    .read_exact_or_eof(cx, &mut body[..request_len])
+                    .expect("memory BIO server body read failed");
+                assert_eq!(amount, request_len);
+                black_box(body[0]);
+
+                tls.write(cx, &response)
+                    .expect("memory BIO server response write failed");
+            }
+            tls.shutdown(cx).expect("memory BIO server shutdown failed");
+            tls.close(cx).expect("memory BIO server close failed");
+        });
+    });
+
+    let client_ctx = make_memory_bio_client_context();
+    let elapsed = run_stackful(|cx| {
+        let mut tls = client_ctx
+            .client(cx, TLS_BUFFER_SIZE, client_fd)
+            .expect("memory BIO client handshake failed");
+        let mut response = [0_u8; RPC_RESPONSE_LEN];
+
+        let start = Instant::now();
+        for _ in 0..iters {
+            tls.write(cx, &header)
+                .expect("memory BIO client header write failed");
+            tls.write(cx, &body)
+                .expect("memory BIO client body write failed");
+
+            let amount = tls
+                .read_exact_or_eof(cx, &mut response)
+                .expect("memory BIO client response read failed");
+            assert_eq!(amount, RPC_RESPONSE_LEN);
+            black_box(response[0]);
+        }
+        let elapsed = start.elapsed();
+
+        tls.shutdown(cx).expect("memory BIO client shutdown failed");
+        tls.close(cx).expect("memory BIO client close failed");
+        elapsed
+    });
+
+    server.join().expect("memory BIO server thread panicked");
+    elapsed
+}
+
 fn bench_direct_bio_echo(iters: u64, message_len: usize) -> Duration {
     let (server_ctx, client_ctx) = make_direct_bio_contexts();
     let message = vec![0x5a; message_len];
@@ -192,6 +303,82 @@ fn bench_direct_bio_echo(iters: u64, message_len: usize) -> Duration {
             elapsed
         })
     })
+}
+
+fn bench_direct_bio_rpc_write(iters: u64, body_len: usize) -> Duration {
+    let header = make_rpc_header(body_len);
+    let body = vec![0x5a; body_len];
+    let response = [0x7b; RPC_RESPONSE_LEN];
+
+    let (client_fd, server_fd) = socketpair(
+        AddressFamily::UNIX,
+        SocketType::STREAM,
+        SocketFlags::empty(),
+        None,
+    )
+    .unwrap();
+
+    let server = thread::spawn(move || {
+        let server_ctx = make_direct_bio_server_context();
+        let mut runtime = Runtime::new();
+        runtime.block_on(|cx| {
+            let mut tls = server_ctx
+                .server(cx, server_fd)
+                .expect("direct BIO server handshake failed");
+            let mut header = [0_u8; RPC_HEADER_LEN];
+            let mut body = vec![0_u8; body_len];
+            for _ in 0..iters {
+                let amount = tls
+                    .read_exact_or_eof(&mut header)
+                    .expect("direct BIO server header read failed");
+                assert_eq!(amount, RPC_HEADER_LEN);
+
+                let request_len = rpc_body_len(&header);
+                assert_eq!(request_len, body_len);
+                let amount = tls
+                    .read_exact_or_eof(&mut body[..request_len])
+                    .expect("direct BIO server body read failed");
+                assert_eq!(amount, request_len);
+                black_box(body[0]);
+
+                tls.write_all(&response)
+                    .expect("direct BIO server response write failed");
+            }
+            tls.shutdown().expect("direct BIO server shutdown failed");
+            tls.close().expect("direct BIO server close failed");
+        });
+    });
+
+    let client_ctx = make_direct_bio_client_context();
+    let elapsed = run_stackful(|cx| {
+        let mut tls = client_ctx
+            .client(cx, client_fd)
+            .expect("direct BIO client handshake failed");
+        let mut response = [0_u8; RPC_RESPONSE_LEN];
+
+        let start = Instant::now();
+        for _ in 0..iters {
+            tls.write_corked(|tls| {
+                tls.write_buffered(&header)?;
+                tls.write_all(&body)
+            })
+            .expect("direct BIO client request write failed");
+
+            let amount = tls
+                .read_exact_or_eof(&mut response)
+                .expect("direct BIO client response read failed");
+            assert_eq!(amount, RPC_RESPONSE_LEN);
+            black_box(response[0]);
+        }
+        let elapsed = start.elapsed();
+
+        tls.shutdown().expect("direct BIO client shutdown failed");
+        tls.close().expect("direct BIO client close failed");
+        elapsed
+    });
+
+    server.join().expect("direct BIO server thread panicked");
+    elapsed
 }
 
 fn bench_direct_bio_fragments(iters: u64, body_len: usize, corked: bool) -> Duration {
@@ -285,6 +472,16 @@ fn benchmark(c: &mut Criterion) {
 
         c.bench_function(&format!("tls/direct_bio_echo_{message_len}b"), |b| {
             b.iter_custom(|iters| bench_direct_bio_echo(iters, message_len));
+        });
+    }
+
+    for body_len in [8 * 1024, 16 * 1024, 24 * 1024, 23 * 1024] {
+        c.bench_function(&format!("tls/memory_bio_rpc_write_body_{body_len}b"), |b| {
+            b.iter_custom(|iters| bench_memory_bio_rpc_write(iters, body_len));
+        });
+
+        c.bench_function(&format!("tls/direct_bio_rpc_write_body_{body_len}b"), |b| {
+            b.iter_custom(|iters| bench_direct_bio_rpc_write(iters, body_len));
         });
     }
 
