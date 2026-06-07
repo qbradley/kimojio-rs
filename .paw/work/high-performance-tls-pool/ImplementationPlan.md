@@ -38,7 +38,7 @@ The approach is intentionally separate from existing kimojio runtime TLS wrapper
 
 ## Phase Status
 
-- [ ] **Phase 1: Crate Skeleton and Public Types** - Add the runtime-independent crate, API surface, configuration, and basic documentation comments.
+- [x] **Phase 1: Crate Skeleton and Public Types** - Add the runtime-independent crate, API surface, configuration, and basic documentation comments.
 - [ ] **Phase 2: Pool Executor and Callback Operations** - Implement worker lifecycle, operation submission, callback completion, same-stream serialization, and statistics.
 - [ ] **Phase 3: TLS Handshake and RPC Tests** - Implement client/server stream construction and correctness tests for RPC-shaped TLS exchange.
 - [ ] **Phase 4: Adaptive Scheduling and Benchmarks** - Add adaptive placement bookkeeping plus Criterion RPC write benchmarks for single-pair and three-pair scenarios.

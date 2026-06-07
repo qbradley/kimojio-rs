@@ -4,6 +4,7 @@ members = [
     "kimojio",
     "kimojio-macros",
     "kimojio-tls",
+    "kimojio-tls-pool",
     "perf",
     "examples",
 ]
@@ -28,6 +29,7 @@ intrusive-collections = "0.10"
 kimojio = { path = "kimojio", version = "0.16.4" }
 kimojio-macros = { path = "kimojio-macros", version = "0.16.4" }
 kimojio-tls = { path = "kimojio-tls", version = "0.16.4" }
+kimojio-tls-pool = { path = "kimojio-tls-pool", version = "0.16.4" }
 libc = "0.2"
 openssl = "0.10"
 pin-project-lite = "0.2"
