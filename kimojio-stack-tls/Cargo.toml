@@ -13,5 +13,5 @@ foreign-types-shared.workspace = true
 kimojio-stack.workspace = true
 kimojio-tls.workspace = true
 openssl.workspace = true
-rustix = { workspace = true, features = ["net"] }
+rustix = { workspace = true, features = ["net", "thread"] }
 rustix-uring.workspace = true

@@ -10,13 +10,31 @@
 //! buffer, and the runtime drains it with `RuntimeContext::write`. That keeps the
 //! OS-thread nonblocking without adding an intermediate copy between the socket
 //! and OpenSSL's encrypted buffers.
+//!
+//! See `docs/OFFLOAD.md` for the experimental TLS CPU offload design.
 
-use std::{ffi::c_void, mem};
+use std::{
+    ffi::c_void,
+    mem,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, Ordering},
+        mpsc,
+    },
+    thread,
+};
 
 use foreign_types_shared::{ForeignType, ForeignTypeRef};
-use kimojio_stack::{Errno, RuntimeContext};
+use kimojio_stack::{Errno, FutexWaitFlags, RuntimeContext};
 use kimojio_tls::{Response, TlsServer, TlsServerContext, TlsServerError};
-use rustix::{fd::OwnedFd, net::Shutdown};
+use rustix::{
+    fd::OwnedFd,
+    net::Shutdown,
+    thread::futex::{self, Flags as FutexFlags},
+};
+
+const OFFLOAD_PENDING: u32 = 0;
+const OFFLOAD_DONE: u32 = 1;
 
 /// A TLS context backed by an OpenSSL `SSL_CTX`.
 ///
@@ -50,6 +68,20 @@ impl TlsContext {
         Ok(stream)
     }
 
+    /// Performs a server-side TLS handshake and enables CPU offload for data I/O.
+    pub fn server_with_offload(
+        &self,
+        cx: &RuntimeContext<'_>,
+        bufsize: usize,
+        socket: OwnedFd,
+        offload: TlsOffloadConfig,
+    ) -> Result<TlsStream, Errno> {
+        let ssl = self.ssl_ctx.server(bufsize).map_err(as_io_error)?;
+        let mut stream = TlsStream::with_offload(ssl, socket, offload);
+        stream.server_side_handshake(cx)?;
+        Ok(stream)
+    }
+
     /// Performs a client-side TLS handshake over `socket`.
     pub fn client(
         &self,
@@ -62,26 +94,197 @@ impl TlsContext {
         stream.client_side_handshake(cx)?;
         Ok(stream)
     }
+
+    /// Performs a client-side TLS handshake and enables CPU offload for data I/O.
+    pub fn client_with_offload(
+        &self,
+        cx: &RuntimeContext<'_>,
+        bufsize: usize,
+        socket: OwnedFd,
+        offload: TlsOffloadConfig,
+    ) -> Result<TlsStream, Errno> {
+        let ssl = self.ssl_ctx.client(bufsize).map_err(as_io_error)?;
+        let mut stream = TlsStream::with_offload(ssl, socket, offload);
+        stream.client_side_handshake(cx)?;
+        Ok(stream)
+    }
+}
+
+/// Pool used by TLS streams to run large OpenSSL read/write calls off-thread.
+#[derive(Clone)]
+pub struct TlsOffloadPool {
+    inner: Arc<TlsOffloadPoolInner>,
+}
+
+impl TlsOffloadPool {
+    /// Starts `worker_count` offload worker threads.
+    pub fn new(worker_count: usize) -> std::io::Result<Self> {
+        if worker_count == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "TLS offload pool must have at least one worker",
+            ));
+        }
+
+        let (sender, receiver) = mpsc::channel();
+        let receiver = Arc::new(Mutex::new(receiver));
+        let mut workers = Vec::with_capacity(worker_count);
+
+        for worker in 0..worker_count {
+            let receiver = Arc::clone(&receiver);
+            match thread::Builder::new()
+                .name(format!("kimojio-tls-offload-{worker}"))
+                .spawn(move || run_offload_worker(receiver))
+            {
+                Ok(handle) => workers.push(handle),
+                Err(error) => {
+                    for _ in 0..workers.len() {
+                        let _ = sender.send(OffloadJob::Shutdown);
+                    }
+                    for worker in workers {
+                        let _ = worker.join();
+                    }
+                    return Err(error);
+                }
+            }
+        }
+
+        Ok(Self {
+            inner: Arc::new(TlsOffloadPoolInner {
+                sender,
+                worker_count,
+                workers: Mutex::new(workers),
+            }),
+        })
+    }
+}
+
+struct TlsOffloadPoolInner {
+    sender: mpsc::Sender<OffloadJob>,
+    worker_count: usize,
+    workers: Mutex<Vec<thread::JoinHandle<()>>>,
+}
+
+impl Drop for TlsOffloadPoolInner {
+    fn drop(&mut self) {
+        for _ in 0..self.worker_count {
+            let _ = self.sender.send(OffloadJob::Shutdown);
+        }
+
+        let mut workers = self
+            .workers
+            .lock()
+            .expect("TLS offload worker mutex poisoned");
+        for worker in workers.drain(..) {
+            let _ = worker.join();
+        }
+    }
+}
+
+/// Configuration for TLS CPU offload.
+#[derive(Clone)]
+pub struct TlsOffloadConfig {
+    pool: TlsOffloadPool,
+    min_read_size: usize,
+    min_write_size: usize,
+}
+
+impl TlsOffloadConfig {
+    /// Creates a config with offload disabled until thresholds are set.
+    pub fn new(pool: TlsOffloadPool) -> Self {
+        Self {
+            pool,
+            min_read_size: usize::MAX,
+            min_write_size: usize::MAX,
+        }
+    }
+
+    /// Creates a config that offloads every non-empty TLS data read and write.
+    pub fn always(pool: TlsOffloadPool) -> Self {
+        Self {
+            pool,
+            min_read_size: 1,
+            min_write_size: 1,
+        }
+    }
+
+    /// Sets the minimum caller buffer length for read/decrypt offload.
+    pub fn with_read_threshold(mut self, min_read_size: usize) -> Self {
+        self.min_read_size = min_read_size;
+        self
+    }
+
+    /// Sets the minimum plaintext length for write/encrypt offload.
+    pub fn with_write_threshold(mut self, min_write_size: usize) -> Self {
+        self.min_write_size = min_write_size;
+        self
+    }
+}
+
+/// Counts how a [`TlsStream`] drove TLS data operations.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TlsOffloadStats {
+    /// Number of TLS read/decrypt calls executed on the stack runtime thread.
+    pub inline_reads: usize,
+    /// Number of TLS write/encrypt calls executed on the stack runtime thread.
+    pub inline_writes: usize,
+    /// Number of TLS read/decrypt calls executed by the offload pool.
+    pub offloaded_reads: usize,
+    /// Number of TLS write/encrypt calls executed by the offload pool.
+    pub offloaded_writes: usize,
 }
 
 /// A TLS stream driven by `kimojio-stack` I/O.
 pub struct TlsStream {
-    ssl: TlsServer,
+    ssl: Option<TlsServer>,
     socket: Option<OwnedFd>,
+    offload: Option<TlsOffloadConfig>,
+    offload_stats: TlsOffloadStats,
 }
 
 impl TlsStream {
     /// Creates a TLS stream from an initialized TLS handle and connected socket.
     pub fn new(ssl: TlsServer, socket: OwnedFd) -> Self {
         Self {
-            ssl,
+            ssl: Some(ssl),
             socket: Some(socket),
+            offload: None,
+            offload_stats: TlsOffloadStats::default(),
         }
+    }
+
+    /// Creates a TLS stream with CPU offload enabled for data I/O.
+    pub fn with_offload(ssl: TlsServer, socket: OwnedFd, offload: TlsOffloadConfig) -> Self {
+        Self {
+            ssl: Some(ssl),
+            socket: Some(socket),
+            offload: Some(offload),
+            offload_stats: TlsOffloadStats::default(),
+        }
+    }
+
+    /// Enables or replaces CPU offload for data I/O.
+    pub fn set_offload(&mut self, offload: TlsOffloadConfig) {
+        self.offload = Some(offload);
+    }
+
+    /// Disables CPU offload for data I/O.
+    pub fn clear_offload(&mut self) {
+        self.offload = None;
+    }
+
+    /// Returns counters for inline and offloaded TLS data operations.
+    pub fn offload_stats(&self) -> TlsOffloadStats {
+        self.offload_stats
     }
 
     /// Gets the OpenSSL `SslRef` for inspection.
     pub fn ssl(&self) -> &openssl::ssl::SslRef {
-        let raw_ssl = self.ssl.get_ssl_raw();
+        let raw_ssl = self
+            .ssl
+            .as_ref()
+            .expect("TLS handle is temporarily offloaded")
+            .get_ssl_raw();
         // SAFETY: `raw_ssl` is owned by `self.ssl` and remains valid for `self`.
         unsafe { openssl::ssl::SslRef::from_ptr(raw_ssl as *mut _) }
     }
@@ -89,7 +292,7 @@ impl TlsStream {
     /// Performs the client side of the TLS handshake.
     pub fn client_side_handshake(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
         loop {
-            match self.ssl.client_side_handshake() {
+            match self.ssl_mut()?.client_side_handshake() {
                 Response::Success(_) => return self.flush_tls_write(cx),
                 Response::Fail(e) => return Err(self.handle_tls_error(e)),
                 Response::WantRead => self.fill_tls_read(cx)?,
@@ -102,7 +305,7 @@ impl TlsStream {
     /// Performs the server side of the TLS handshake.
     pub fn server_side_handshake(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
         loop {
-            match self.ssl.server_side_handshake() {
+            match self.ssl_mut()?.server_side_handshake() {
                 Response::Success(_) => return self.flush_tls_write(cx),
                 Response::Fail(e) => return Err(self.handle_tls_error(e)),
                 Response::WantRead => self.fill_tls_read(cx)?,
@@ -117,7 +320,7 @@ impl TlsStream {
     /// Returns `Ok(0)` after a clean TLS EOF.
     pub fn read(&mut self, cx: &RuntimeContext<'_>, buf: &mut [u8]) -> Result<usize, Errno> {
         loop {
-            match self.ssl.read(buf) {
+            match self.read_tls(cx, buf)? {
                 Response::Success(amount) => return Ok(amount),
                 Response::Fail(e) => return Err(self.handle_tls_error(e)),
                 Response::WantRead => self.fill_tls_read(cx)?,
@@ -148,7 +351,7 @@ impl TlsStream {
     pub fn write(&mut self, cx: &RuntimeContext<'_>, mut buf: &[u8]) -> Result<usize, Errno> {
         let requested = buf.len();
         while !buf.is_empty() {
-            match self.ssl.write(buf) {
+            match self.write_tls(cx, buf)? {
                 Response::Success(amount) => {
                     if amount == 0 {
                         return Err(Errno::PIPE);
@@ -168,7 +371,7 @@ impl TlsStream {
     /// Sends TLS close-notify if possible.
     pub fn shutdown(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
         loop {
-            match self.ssl.shutdown() {
+            match self.ssl_mut()?.shutdown() {
                 Response::Success(_) | Response::Eof => return Ok(()),
                 Response::Fail(e) => return Err(self.handle_tls_error(e)),
                 Response::WantRead => {
@@ -195,20 +398,22 @@ impl TlsStream {
 
     fn fill_tls_read(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
         let socket = self.socket.as_ref().ok_or(Errno::PIPE)?;
-        if let Some(buffer) = self.ssl.get_push_buffer() {
+        let ssl = self.ssl.as_mut().ok_or(Errno::PIPE)?;
+        if let Some(buffer) = ssl.get_push_buffer() {
             let amount = cx.read(socket, buffer)?;
             if amount == 0 {
                 return Err(Errno::PIPE);
             }
-            self.ssl.use_push_buffer(amount);
+            ssl.use_push_buffer(amount);
         }
         Ok(())
     }
 
     fn flush_tls_write(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
         let socket = self.socket.as_ref().ok_or(Errno::PIPE)?;
+        let ssl = self.ssl.as_mut().ok_or(Errno::PIPE)?;
         loop {
-            let amount = match self.ssl.get_pull_buffer() {
+            let amount = match ssl.get_pull_buffer() {
                 Some(buffer) => {
                     let amount = cx.write(socket, buffer)?;
                     if amount == 0 {
@@ -218,8 +423,121 @@ impl TlsStream {
                 }
                 None => return Ok(()),
             };
-            self.ssl.use_pull_buffer(amount);
+            ssl.use_pull_buffer(amount);
         }
+    }
+
+    fn read_tls(&mut self, cx: &RuntimeContext<'_>, buf: &mut [u8]) -> Result<Response, Errno> {
+        if self.should_offload_read(buf.len()) {
+            self.offload_read(cx, buf)
+        } else {
+            self.offload_stats.inline_reads += 1;
+            Ok(self.ssl_mut()?.read(buf))
+        }
+    }
+
+    fn write_tls(&mut self, cx: &RuntimeContext<'_>, buf: &[u8]) -> Result<Response, Errno> {
+        if self.should_offload_write(buf.len()) {
+            self.offload_write(cx, buf)
+        } else {
+            self.offload_stats.inline_writes += 1;
+            Ok(self.ssl_mut()?.write(buf))
+        }
+    }
+
+    fn should_offload_read(&self, len: usize) -> bool {
+        len != 0
+            && self
+                .offload
+                .as_ref()
+                .is_some_and(|offload| len >= offload.min_read_size)
+    }
+
+    fn should_offload_write(&self, len: usize) -> bool {
+        len != 0
+            && self
+                .offload
+                .as_ref()
+                .is_some_and(|offload| len >= offload.min_write_size)
+    }
+
+    fn offload_read(&mut self, cx: &RuntimeContext<'_>, buf: &mut [u8]) -> Result<Response, Errno> {
+        let sender = self
+            .offload
+            .as_ref()
+            .ok_or(Errno::PIPE)?
+            .pool
+            .inner
+            .sender
+            .clone();
+        let ssl = self.take_ssl()?;
+        let completion = Arc::new(OffloadState::new());
+        let job = OffloadJob::Read {
+            ssl,
+            len: buf.len(),
+            completion: Arc::clone(&completion),
+        };
+
+        if let Err(error) = sender.send(job) {
+            if let OffloadJob::Read { ssl, .. } = error.0 {
+                self.restore_ssl(ssl);
+            }
+            return Err(Errno::PIPE);
+        }
+
+        let result = completion.wait(cx);
+        self.restore_ssl(result.ssl);
+        self.offload_stats.offloaded_reads += 1;
+
+        if let Response::Success(amount) = result.response {
+            buf[..amount].copy_from_slice(&result.plaintext[..amount]);
+            Ok(Response::Success(amount))
+        } else {
+            Ok(result.response)
+        }
+    }
+
+    fn offload_write(&mut self, cx: &RuntimeContext<'_>, buf: &[u8]) -> Result<Response, Errno> {
+        let sender = self
+            .offload
+            .as_ref()
+            .ok_or(Errno::PIPE)?
+            .pool
+            .inner
+            .sender
+            .clone();
+        let ssl = self.take_ssl()?;
+        let completion = Arc::new(OffloadState::new());
+        let job = OffloadJob::Write {
+            ssl,
+            plaintext: buf.to_vec(),
+            completion: Arc::clone(&completion),
+        };
+
+        if let Err(error) = sender.send(job) {
+            if let OffloadJob::Write { ssl, .. } = error.0 {
+                self.restore_ssl(ssl);
+            }
+            return Err(Errno::PIPE);
+        }
+
+        let result = completion.wait(cx);
+        self.restore_ssl(result.ssl);
+        self.offload_stats.offloaded_writes += 1;
+        Ok(result.response)
+    }
+
+    fn ssl_mut(&mut self) -> Result<&mut TlsServer, Errno> {
+        self.ssl.as_mut().ok_or(Errno::PIPE)
+    }
+
+    fn take_ssl(&mut self) -> Result<TlsServer, Errno> {
+        self.ssl.take().ok_or(Errno::PIPE)
+    }
+
+    fn restore_ssl(&mut self, ssl: TlsServer) {
+        debug_assert!(self.ssl.is_none());
+        self.ssl = Some(ssl);
     }
 
     fn handle_tls_error(&self, error: TlsServerError) -> Errno {
@@ -227,6 +545,120 @@ impl TlsStream {
             as_io_error(error)
         } else {
             Errno::PIPE
+        }
+    }
+}
+
+enum OffloadJob {
+    Read {
+        ssl: TlsServer,
+        len: usize,
+        completion: Arc<OffloadState<ReadOffloadResult>>,
+    },
+    Write {
+        ssl: TlsServer,
+        plaintext: Vec<u8>,
+        completion: Arc<OffloadState<WriteOffloadResult>>,
+    },
+    Shutdown,
+}
+
+struct ReadOffloadResult {
+    ssl: TlsServer,
+    response: Response,
+    plaintext: Vec<u8>,
+}
+
+struct WriteOffloadResult {
+    ssl: TlsServer,
+    response: Response,
+}
+
+struct OffloadState<T> {
+    futex: AtomicU32,
+    result: Mutex<Option<T>>,
+}
+
+impl<T> OffloadState<T> {
+    fn new() -> Self {
+        Self {
+            futex: AtomicU32::new(OFFLOAD_PENDING),
+            result: Mutex::new(None),
+        }
+    }
+
+    fn complete(&self, result: T) {
+        *self
+            .result
+            .lock()
+            .expect("TLS offload result mutex poisoned") = Some(result);
+        self.futex.store(OFFLOAD_DONE, Ordering::Release);
+        let _ = futex::wake(&self.futex, FutexFlags::PRIVATE, 1);
+    }
+
+    fn wait(&self, cx: &RuntimeContext<'_>) -> T {
+        if cx.supports_io_uring_opcode(rustix_uring::opcode::FutexWait::CODE) {
+            while self.futex.load(Ordering::Acquire) == OFFLOAD_PENDING {
+                match cx.futex_wait(
+                    &self.futex,
+                    OFFLOAD_PENDING.into(),
+                    u64::from(u32::MAX),
+                    FutexWaitFlags::SIZE_U32 | FutexWaitFlags::PRIVATE,
+                ) {
+                    Ok(()) | Err(Errno::AGAIN) | Err(Errno::INTR) => {}
+                    Err(_) => self.yield_until_ready(cx),
+                }
+            }
+        } else {
+            self.yield_until_ready(cx);
+        }
+
+        self.result
+            .lock()
+            .expect("TLS offload result mutex poisoned")
+            .take()
+            .expect("TLS offload worker completed without a result")
+    }
+
+    fn yield_until_ready(&self, cx: &RuntimeContext<'_>) {
+        while self.futex.load(Ordering::Acquire) == OFFLOAD_PENDING {
+            cx.yield_now();
+        }
+    }
+}
+
+fn run_offload_worker(receiver: Arc<Mutex<mpsc::Receiver<OffloadJob>>>) {
+    loop {
+        let job = {
+            let receiver = receiver
+                .lock()
+                .expect("TLS offload receiver mutex poisoned");
+            receiver.recv()
+        };
+
+        match job {
+            Ok(OffloadJob::Read {
+                mut ssl,
+                len,
+                completion,
+            }) => {
+                let mut plaintext = vec![0_u8; len];
+                let response = ssl.read(&mut plaintext);
+                completion.complete(ReadOffloadResult {
+                    ssl,
+                    response,
+                    plaintext,
+                });
+            }
+            Ok(OffloadJob::Write {
+                mut ssl,
+                plaintext,
+                completion,
+            }) => {
+                let response = ssl.write(&plaintext);
+                completion.complete(WriteOffloadResult { ssl, response });
+            }
+            Ok(OffloadJob::Shutdown) | Err(_) => return,
         }
     }
 }
@@ -432,6 +864,153 @@ mod tests {
                 server.join(cx).unwrap();
                 let received = client.join(cx).unwrap();
                 assert_eq!(received, response);
+            });
+        });
+    }
+
+    #[test]
+    fn tls_offload_always_round_trips_large_body() {
+        let (server_ctx, client_ctx) = make_contexts();
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+
+        let pool = TlsOffloadPool::new(2).unwrap();
+        let server_offload = TlsOffloadConfig::always(pool.clone());
+        let client_offload = TlsOffloadConfig::always(pool);
+        let body = vec![0x42; 32 * 1024];
+        let expected = body.clone();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut tls = server_ctx
+                        .server_with_offload(cx, TLS_BUFFER_SIZE, server_fd, server_offload)
+                        .expect("server TLS handshake failed");
+                    let mut received = vec![0_u8; expected.len()];
+                    let amount = tls
+                        .read_exact_or_eof(cx, &mut received)
+                        .expect("server TLS body read failed");
+                    assert_eq!(amount, expected.len());
+                    assert_eq!(received, expected);
+
+                    tls.write(cx, &received)
+                        .expect("server TLS echo write failed");
+                    tls.shutdown(cx).expect("server TLS shutdown failed");
+                    let stats = tls.offload_stats();
+                    tls.close(cx).expect("server TLS close failed");
+                    stats
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut tls = client_ctx
+                        .client_with_offload(cx, TLS_BUFFER_SIZE, client_fd, client_offload)
+                        .expect("client TLS handshake failed");
+                    tls.write(cx, &body).expect("client TLS body write failed");
+
+                    let mut echoed = vec![0_u8; body.len()];
+                    let amount = tls
+                        .read_exact_or_eof(cx, &mut echoed)
+                        .expect("client TLS echo read failed");
+                    assert_eq!(amount, body.len());
+                    assert_eq!(echoed, body);
+
+                    tls.shutdown(cx).expect("client TLS shutdown failed");
+                    let stats = tls.offload_stats();
+                    tls.close(cx).expect("client TLS close failed");
+                    stats
+                });
+
+                let server_stats = server.join(cx).unwrap();
+                let client_stats = client.join(cx).unwrap();
+
+                assert!(server_stats.offloaded_reads > 0);
+                assert!(server_stats.offloaded_writes > 0);
+                assert!(client_stats.offloaded_reads > 0);
+                assert!(client_stats.offloaded_writes > 0);
+            });
+        });
+    }
+
+    #[test]
+    fn tls_offload_threshold_keeps_small_io_inline() {
+        let (server_ctx, client_ctx) = make_contexts();
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+
+        let pool = TlsOffloadPool::new(1).unwrap();
+        let body = vec![0x24; 1024];
+        let threshold = body.len() + 1;
+        let server_offload = TlsOffloadConfig::new(pool.clone())
+            .with_read_threshold(threshold)
+            .with_write_threshold(threshold);
+        let client_offload = TlsOffloadConfig::new(pool)
+            .with_read_threshold(threshold)
+            .with_write_threshold(threshold);
+        let expected = body.clone();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut tls = server_ctx
+                        .server_with_offload(cx, TLS_BUFFER_SIZE, server_fd, server_offload)
+                        .expect("server TLS handshake failed");
+                    let mut received = vec![0_u8; expected.len()];
+                    let amount = tls
+                        .read_exact_or_eof(cx, &mut received)
+                        .expect("server TLS body read failed");
+                    assert_eq!(amount, expected.len());
+                    assert_eq!(received, expected);
+
+                    tls.write(cx, &received)
+                        .expect("server TLS echo write failed");
+                    tls.shutdown(cx).expect("server TLS shutdown failed");
+                    let stats = tls.offload_stats();
+                    tls.close(cx).expect("server TLS close failed");
+                    stats
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut tls = client_ctx
+                        .client_with_offload(cx, TLS_BUFFER_SIZE, client_fd, client_offload)
+                        .expect("client TLS handshake failed");
+                    tls.write(cx, &body).expect("client TLS body write failed");
+
+                    let mut echoed = vec![0_u8; body.len()];
+                    let amount = tls
+                        .read_exact_or_eof(cx, &mut echoed)
+                        .expect("client TLS echo read failed");
+                    assert_eq!(amount, body.len());
+                    assert_eq!(echoed, body);
+
+                    tls.shutdown(cx).expect("client TLS shutdown failed");
+                    let stats = tls.offload_stats();
+                    tls.close(cx).expect("client TLS close failed");
+                    stats
+                });
+
+                let server_stats = server.join(cx).unwrap();
+                let client_stats = client.join(cx).unwrap();
+
+                assert_eq!(server_stats.offloaded_reads, 0);
+                assert_eq!(server_stats.offloaded_writes, 0);
+                assert_eq!(client_stats.offloaded_reads, 0);
+                assert_eq!(client_stats.offloaded_writes, 0);
+                assert!(server_stats.inline_reads > 0);
+                assert!(server_stats.inline_writes > 0);
+                assert!(client_stats.inline_reads > 0);
+                assert!(client_stats.inline_writes > 0);
             });
         });
     }
