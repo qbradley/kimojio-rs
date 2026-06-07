@@ -7,3 +7,7 @@
 - cancelation behavior (cancel I/O when scope exits)
 - need tokio/thread interop capabilities (e.g. channels)
 - A clever way to offload TLS encryption but that doesn't add too much latency in the common cases. For example, the client scenario where we need to send 32kb on three or four different TLS streams from one client thread. Or the multi-tenant server when we are reading from many many clients but the heavy throughput might be mostly on one runtime thread and we would rather not load balance because most activity is I/O bound.
+- Make sure TLS implements Waitable
+- Make sure TLS can support registered buffers and fds
+- Investigate FreeBSD kTLS CPU approach to spread load across CPUs
+- Non-io_uring thread-pool based TLS library
