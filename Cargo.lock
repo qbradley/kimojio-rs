@@ -641,10 +641,22 @@ dependencies = [
 
 [[package]]
 name = "kimojio-stack"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "corosensei",
  "criterion",
+ "rustix",
+ "rustix-uring",
+]
+
+[[package]]
+name = "kimojio-stack-tls"
+version = "0.16.5"
+dependencies = [
+ "foreign-types-shared",
+ "kimojio-stack",
+ "kimojio-tls",
+ "openssl",
  "rustix",
  "rustix-uring",
 ]
