@@ -1,9 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 use std::ffi::{CStr, c_char, c_ulonglong, c_void};
+use std::mem;
 use std::num::NonZeroU64;
 use std::ptr::null_mut;
 
+use foreign_types_shared::{ForeignType, ForeignTypeRef};
+use openssl::ssl::{Ssl, SslContextRef};
 use rustix_uring::Errno;
 
 #[repr(C)]
@@ -144,8 +147,8 @@ unsafe extern "C" {
     fn tls_handle_dup(tls: *mut RawTlsServer, server: &mut *mut RawTlsServer) -> RawError;
     fn tls_handle_ctx_close(tls_ctx: *mut RawTlsServerContext);
 
-    fn tls_handle_create(
-        server_ctx: *mut RawTlsServerContext,
+    fn tls_handle_create_with_ssl(
+        ssl: *mut c_void,
         bufsize: usize,
         is_server: bool,
         server: &mut *mut RawTlsServer,
@@ -263,32 +266,36 @@ fn get_ssl_error() -> Vec<u64> {
 
 impl TlsServerContext {
     pub fn server(&self, bufsize: usize) -> Result<TlsServer, TlsServerError> {
+        self.create(bufsize, true)
+    }
+
+    pub fn client(&self, bufsize: usize) -> Result<TlsServer, TlsServerError> {
+        self.create(bufsize, false)
+    }
+
+    fn create(&self, bufsize: usize, is_server: bool) -> Result<TlsServer, TlsServerError> {
+        let ctx = unsafe { SslContextRef::from_ptr(self.ctx.cast()) };
+        let ssl = Ssl::new(ctx).map_err(Self::error_stack_to_tls_error)?;
+        let raw_ssl = ssl.as_ptr().cast();
         let mut server: *mut RawTlsServer = null_mut();
-        let result =
-            get_response(unsafe { tls_handle_create(self.ctx, bufsize, true, &mut server) });
+        let result = get_response(unsafe {
+            tls_handle_create_with_ssl(raw_ssl, bufsize, is_server, &mut server)
+        });
         match result {
-            Response::Success(_) => (),
+            Response::Success(_) => mem::forget(ssl),
             Response::Fail(e) => return Err(e),
             _ => panic!("Unexpected response"),
         }
         Ok(TlsServer { server })
     }
 
-    pub fn client(&self, bufsize: usize) -> Result<TlsServer, TlsServerError> {
-        let mut client: *mut RawTlsServer = null_mut();
-        let result =
-            get_response(unsafe { tls_handle_create(self.ctx, bufsize, false, &mut client) });
-        match result {
-            Response::Success(_) => (),
-            Response::Fail(e) => return Err(e),
-            _ => panic!("Unexpected response"),
-        }
-        Ok(TlsServer { server: client })
-    }
-
     /// Get the minimum TLS protocol version for this context
     pub fn get_min_proto_version(&self) -> i32 {
         unsafe { tls_get_min_proto_version(self.ctx) }
+    }
+
+    fn error_stack_to_tls_error(error: openssl::error::ErrorStack) -> TlsServerError {
+        TlsServerError::TlsError(error.errors().iter().map(|error| error.code()).collect())
     }
 
     /// From the raw *mut SSL_CTX pointer.

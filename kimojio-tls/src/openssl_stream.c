@@ -156,9 +156,14 @@ static Response handle_io_failure(SSL *ssl, int result)
     }
 }
 
-Response tls_handle_create(SSL_CTX *ctx, size_t bufsize, bool is_server, TlsHandle **result)
+Response tls_handle_create_with_ssl(SSL *ssl, size_t bufsize, bool is_server, TlsHandle **result)
 {
     int res;
+
+    if (!ssl)
+    {
+        return ssl_stack_error();
+    }
 
     // This attribute is scoped cleanup to allow safe early return.
     //  will be called on server at any exit.
@@ -169,18 +174,13 @@ Response tls_handle_create(SSL_CTX *ctx, size_t bufsize, bool is_server, TlsHand
     }
     memset(handle, 0, sizeof(TlsHandle));
 
-    handle->ssl = SSL_new(ctx);
-    if (!handle->ssl)
-    {
-        return ssl_stack_error();
-    }
-
     res = BIO_new_bio_pair(&handle->server, bufsize, &handle->server_io, bufsize);
     if (res != 1)
     {
         return ssl_stack_error();
     }
 
+    handle->ssl = ssl;
     if (is_server)
     {
         SSL_set_accept_state(handle->ssl);

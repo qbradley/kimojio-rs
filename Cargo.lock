@@ -946,6 +946,8 @@ name = "kimojio-tls"
 version = "0.16.5"
 dependencies = [
  "cc",
+ "foreign-types-shared",
+ "openssl",
  "rustix-uring",
 ]
 
