@@ -26,12 +26,17 @@ that need explicit scheduling and predictable latency:
 - `kimojio-stack-http` provides HTTP/1.1 and HTTP/2 client/server foundations.
 - `kimojio-stack-grpc` provides unary gRPC client/server foundations over the
   HTTP/2 transport.
+- `kimojio-stack-opentelemetry` provides low-level OpenTelemetry Protocol logs
+  and metrics export over the stackful gRPC transport.
 
 See the [Stackful HTTP and gRPC Guide][stack-http-grpc-guide] for supported
 protocol features, transport setup, interoperability guarantees, and current
 benchmark observations.
+See the [Stack OpenTelemetry Guide][stack-opentelemetry-guide] for supported
+telemetry signals, export behavior, and receiver interoperability testing.
 
 [stack-http-grpc-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-http-grpc.md
+[stack-opentelemetry-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-opentelemetry.md
 
 ## Getting Started
 

@@ -6,6 +6,7 @@ members = [
     "kimojio-stack",
     "kimojio-stack-grpc",
     "kimojio-stack-http",
+    "kimojio-stack-opentelemetry",
     "kimojio-stack-tls",
     "kimojio-tls",
     "perf",
@@ -45,16 +46,19 @@ kimojio-macros = { path = "kimojio-macros", version = "0.16.5" }
 kimojio-tls = { path = "kimojio-tls", version = "0.16.5" }
 kimojio-stack-grpc = { path = "kimojio-stack-grpc", version = "0.16.4" }
 kimojio-stack-http = { path = "kimojio-stack-http", version = "0.16.4" }
+kimojio-stack-opentelemetry = { path = "kimojio-stack-opentelemetry", version = "0.16.4" }
 kimojio-stack = { path = "kimojio-stack", version = "0.16.4" }
 kimojio-stack-tls = { path = "kimojio-stack-tls", version = "0.16.4" }
 kimojio-tls = { path = "kimojio-tls", version = "0.16.5" }
 libc = "0.2"
 mimalloc = "0.1"
 openssl = "0.10"
+opentelemetry-proto = { version = "0.32", default-features = false }
 pin-project-lite = "0.2"
 prost = "0.14"
 rcgen = { version = "0.14", features = ["x509-parser"] }
 roaring = "0.11"
+serde_json = "1"
 rustix = { version = "1", features = [
     "io_uring",
     "mount",

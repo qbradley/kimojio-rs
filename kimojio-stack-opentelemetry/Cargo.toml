@@ -1,0 +1,29 @@
+[package]
+name = "kimojio-stack-opentelemetry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "Low-level OpenTelemetry Protocol export for kimojio-stack"
+
+[features]
+default = []
+tls = ["dep:kimojio-stack-tls", "kimojio-stack-http/tls"]
+
+[dependencies]
+bytes.workspace = true
+kimojio-stack.workspace = true
+kimojio-stack-grpc.workspace = true
+kimojio-stack-http = { path = "../kimojio-stack-http", version = "0.16.4", default-features = false }
+kimojio-stack-tls = { workspace = true, optional = true }
+prost.workspace = true
+
+[dev-dependencies]
+kimojio-stack-http = { path = "../kimojio-stack-http", version = "0.16.4", features = ["tls"] }
+opentelemetry-proto = { workspace = true, default-features = false, features = ["gen-tonic-messages", "logs", "metrics"] }
+openssl.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+rustix = { workspace = true, features = ["net"] }
