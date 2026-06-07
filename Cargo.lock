@@ -650,6 +650,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kimojio-stack-multithread"
+version = "0.16.4"
+dependencies = [
+ "kimojio-stack",
+]
+
+[[package]]
 name = "kimojio-stack-tls"
 version = "0.16.4"
 dependencies = [
