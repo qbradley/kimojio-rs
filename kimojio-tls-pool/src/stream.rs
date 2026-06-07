@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use crate::operation::{self, OperationFn};
+use crate::operation::{self, OperationKind, OperationWork};
 use crate::pool::PoolInner;
 use crate::{OperationError, OperationResult, PoolStatsSnapshot};
 
@@ -42,14 +42,62 @@ impl TlsStream {
         T: Send + 'static,
         F: FnOnce() -> OperationResult<T> + Send + 'static,
     {
-        self.state.submit(Box::new(move |state| {
-            start_operation(state, operation_size, Box::new(operation), callback);
-        }))
+        self.submit_work(OperationWork::new(
+            OperationKind::Generic,
+            operation_size,
+            Box::new(operation),
+            callback,
+        ))
+    }
+
+    /// Submits a read work item for this stream.
+    pub fn submit_read<F>(
+        &self,
+        buffer_len: usize,
+        read: F,
+        callback: CompletionCallback<Vec<u8>>,
+    ) -> OperationResult<()>
+    where
+        F: FnOnce() -> OperationResult<Vec<u8>> + Send + 'static,
+    {
+        self.submit_work(OperationWork::new(
+            OperationKind::Read,
+            buffer_len,
+            Box::new(read),
+            callback,
+        ))
+    }
+
+    /// Submits a write work item for this stream.
+    pub fn submit_write<F>(
+        &self,
+        byte_len: usize,
+        write: F,
+        callback: CompletionCallback<usize>,
+    ) -> OperationResult<()>
+    where
+        F: FnOnce() -> OperationResult<usize> + Send + 'static,
+    {
+        self.submit_work(OperationWork::new(
+            OperationKind::Write,
+            byte_len,
+            Box::new(write),
+            callback,
+        ))
     }
 
     /// Returns a snapshot of the parent pool statistics.
     pub fn stats(&self) -> PoolStatsSnapshot {
         self.state.pool.stats.snapshot()
+    }
+
+    fn submit_work<T>(&self, work: OperationWork<T>) -> OperationResult<()>
+    where
+        T: Send + 'static,
+    {
+        self.state.submit(Box::new(move |state| {
+            start_operation(state, work);
+        }))
     }
 }
 
@@ -110,14 +158,14 @@ struct StreamQueue {
     pending: VecDeque<StreamJob>,
 }
 
-fn start_operation<T>(
-    state: Arc<StreamState>,
-    operation_size: usize,
-    operation: OperationFn<T>,
-    callback: CompletionCallback<T>,
-) where
+fn start_operation<T>(state: Arc<StreamState>, work: OperationWork<T>)
+where
     T: Send + 'static,
 {
+    let operation_size = work.size();
+    let _kind = work.kind();
+    let (operation, callback) = work.into_parts();
+
     match state.pool.choose_placement(operation_size) {
         crate::OperationPlacement::Immediate => {
             state.pool.stats.record_immediate();
@@ -223,6 +271,37 @@ mod tests {
         assert!(receiver.recv().unwrap());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(pool.stats().failed, 1);
+    }
+
+    #[test]
+    fn read_and_write_entry_points_submit_typed_work() {
+        let pool = TlsPool::default();
+        let stream = pool.stream();
+        let (sender, receiver) = mpsc::channel();
+        let write_sender = sender.clone();
+
+        stream
+            .submit_read(
+                4,
+                || Ok(vec![1, 2, 3, 4]),
+                Box::new(move |result| {
+                    sender.send(result.unwrap().len()).unwrap();
+                }),
+            )
+            .unwrap();
+        stream
+            .submit_write(
+                4,
+                || Ok(4),
+                Box::new(move |result| {
+                    write_sender.send(result.unwrap()).unwrap();
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(receiver.recv().unwrap(), 4);
+        assert_eq!(receiver.recv().unwrap(), 4);
+        assert_eq!(pool.stats().submitted, 2);
     }
 
     #[test]
