@@ -14,7 +14,7 @@ The crate is split into small modules:
 
 - `config`: pool configuration, placement modes, size thresholds, and ready/idle executor behavior.
 - `pool`: pool construction, executor threads, shutdown, executor selection, and shared pool statistics.
-- `stream`: per-stream operation queueing, same-stream serialization, read/write submission, callbacks, and stream-local overlap statistics.
+- `stream`: per-stream operation queueing, same-stream serialization, read/write submission, readiness handoff, callbacks, and stream-local overlap statistics.
 - `operation`: operation kind and placement types.
 - `policy`: adaptive placement decisions based on operation size and executor load snapshots.
 - `stats`: thread-safe pool and executor counters.
@@ -22,13 +22,17 @@ The crate is split into small modules:
 
 Each stream serializes its own operations. Adaptive routing may move a stream between executors over time, but the stream queue allows only one active operation for that stream at once. This preserves the OpenSSL requirement that a TLS stream not be mutably accessed concurrently.
 
+Read operations are readiness-gated before TLS progress is attempted. The pool sets accepted TLS transports to nonblocking mode, registers pending reads with a pool-owned readiness reactor, and only resumes TLS read progress when the underlying fd is readable. This prevents eventual-response reads from occupying all executor threads while they wait for peer traffic.
+
 ### Design Decisions
 
 The core crate uses the Rust OpenSSL crate directly and does not reuse the existing kimojio runtime TLS wrappers. This keeps the pool usable from normal threads and leaves runtime-specific adapters for future layers.
 
 Callbacks execute where the operation runs. Immediate operations call back on the submitting thread. Background operations call back on the selected executor thread. Callback and operation panics are contained so stream/executor cleanup still runs; panic results are surfaced as operation failures where a callback can still be invoked.
 
-The adaptive policy starts intentionally simple. Small writes prefer immediate execution, near-maximum writes are eligible for background execution, and medium writes can route to an executor when the chosen executor's estimated queue cost is lower than the operation cost. Reads route to background execution in adaptive mode because readiness is not known to the pool and blocking reads can otherwise stall the caller thread.
+The adaptive policy starts intentionally simple. Small writes prefer immediate execution, near-maximum writes are eligible for background execution, and medium writes can route to an executor when the chosen executor's estimated queue cost is lower than the operation cost. Reads are readiness-driven rather than pure size-driven because readiness dominates read latency and blocking reads can otherwise starve the pool.
+
+The current callback API necessarily type-erases callbacks that may execute on another thread. Read/write operations also pass through an internal job queue, which still uses boxed jobs for heterogeneous work. The main alternative is an enum-only operation queue with fixed read/write variants and a separate typed completion channel API. That would reduce allocations on the hot path but would trade away arbitrary user callbacks, or require callbacks to be represented as a small fixed set of completion targets.
 
 ### Integration Points
 
@@ -107,11 +111,12 @@ The benchmark covers single client/server, three-pair per-connection-pool, and t
 - Same-stream operations are serialized even when submitted from multiple threads.
 - Operation callbacks are expected exactly once on success or error.
 - Operation-level I/O errors are surfaced through callback results.
+- Pending reads do not consume executor threads while waiting for socket readability.
 - Pool shutdown rejects new background work explicitly and accepted queued work completes or receives an explicit shutdown result.
 - Panicking operations or callbacks do not leave stream activity counters wedged or executor load inflated.
 
 ## Limitations and Future Work
 
-The current implementation uses blocking OpenSSL streams and does not include non-blocking socket readiness integration. It does not integrate with tokio, kimojio, kimojio-stack, kernel TLS, or hardware TLS offload.
+The current implementation uses OpenSSL over nonblocking fds and a pool-owned readiness reactor for read readiness. It does not integrate with tokio, kimojio, kimojio-stack, kernel TLS, or hardware TLS offload.
 
-Adaptive placement is intentionally simple and should be tuned using the provided statistics and benchmarks. Future work can add runtime adapters, richer load models, bounded queues, cancellation, and non-blocking readiness support.
+Adaptive placement is intentionally simple and should be tuned using the provided statistics and benchmarks. Future work can add runtime adapters, richer load models, bounded queues, cancellation, multi-fd readiness backends, and lower-allocation completion APIs.

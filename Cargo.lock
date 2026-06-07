@@ -641,6 +641,7 @@ dependencies = [
  "criterion",
  "openssl",
  "rcgen",
+ "rustix",
  "tempfile",
 ]
 

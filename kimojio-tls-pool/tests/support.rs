@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::io::{Read, Write};
+use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -73,6 +74,22 @@ pub fn stream_pair(client_config: PoolConfig, server_config: PoolConfig) -> (Tls
     (client, server)
 }
 
+pub fn stream_pair_with_pools(
+    client_pool: &TlsPool,
+    server_pool: &TlsPool,
+) -> (TlsStream, TlsStream) {
+    let (acceptor, connector) = tls_contexts();
+    let (client_io, server_io) = UnixStream::pair().unwrap();
+    let server_pool = server_pool.clone();
+    let server_thread = thread::spawn(move || server_pool.server(&acceptor, server_io).unwrap());
+
+    let client = client_pool
+        .client(&connector, "localhost", client_io)
+        .unwrap();
+    let server = server_thread.join().unwrap();
+    (client, server)
+}
+
 pub fn controlled_stream_pair(
     client_config: PoolConfig,
     server_config: PoolConfig,
@@ -136,6 +153,12 @@ impl Write for ControlledStream {
             return Err(std::io::Error::other("controlled flush failure"));
         }
         self.inner.flush()
+    }
+}
+
+impl AsFd for ControlledStream {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.inner.as_fd()
     }
 }
 

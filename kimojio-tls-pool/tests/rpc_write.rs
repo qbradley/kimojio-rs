@@ -1,11 +1,14 @@
 mod support;
 
+use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
-use kimojio_tls_pool::{PlacementMode, PoolConfig};
+use kimojio_tls_pool::{PlacementMode, PoolConfig, TlsPool};
 use support::{
     RPC_HEADER_LEN, RPC_RESPONSE_LEN, background_config, controlled_stream_pair, immediate_config,
-    make_rpc_header, read_exact_blocking, rpc_body_len, stream_pair, write_blocking,
+    make_rpc_header, read_exact_blocking, rpc_body_len, stream_pair, stream_pair_with_pools,
+    write_blocking,
 };
 
 #[test]
@@ -62,6 +65,38 @@ fn operation_error_is_reported_after_peer_drop() {
     client_fail.store(true, std::sync::atomic::Ordering::Release);
 
     assert!(write_blocking(&client, b"fail").is_err());
+}
+
+#[test]
+fn pending_read_does_not_occupy_only_client_executor() {
+    let client_pool = TlsPool::new(background_config(1)).unwrap();
+    let server_pool = TlsPool::new(background_config(1)).unwrap();
+    let (waiting_client, waiting_server) = stream_pair_with_pools(&client_pool, &server_pool);
+    let (active_client, active_server) = stream_pair_with_pools(&client_pool, &server_pool);
+    let (read_sender, read_receiver) = mpsc::channel();
+
+    waiting_client
+        .read(
+            2,
+            Box::new(move |result| {
+                read_sender.send(result.unwrap()).unwrap();
+            }),
+        )
+        .unwrap();
+
+    let active_server_thread = thread::spawn(move || {
+        let received = read_exact_blocking(&active_server, 2).unwrap();
+        assert_eq!(received, b"ok");
+    });
+
+    assert_eq!(write_blocking(&active_client, b"ok").unwrap(), 2);
+    active_server_thread.join().unwrap();
+
+    assert_eq!(write_blocking(&waiting_server, b"go").unwrap(), 2);
+    assert_eq!(
+        read_receiver.recv_timeout(Duration::from_secs(5)).unwrap(),
+        b"go"
+    );
 }
 
 fn run_single_pair_rpc(client_config: PoolConfig, server_config: PoolConfig, body_len: usize) {

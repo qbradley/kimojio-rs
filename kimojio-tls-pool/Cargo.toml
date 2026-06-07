@@ -10,6 +10,7 @@ description = "Runtime-independent OpenSSL TLS pool"
 
 [dependencies]
 openssl.workspace = true
+rustix = { workspace = true, features = ["event", "fs"] }
 
 [dev-dependencies]
 criterion.workspace = true

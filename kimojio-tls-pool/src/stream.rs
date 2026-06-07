@@ -1,13 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use openssl::ssl::ErrorCode;
+use rustix::event::{PollFd, PollFlags, poll};
 use std::collections::VecDeque;
-use std::io::{Read, Write};
+use std::os::fd::BorrowedFd;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::operation::{self, CompletionStatus, OperationKind, OperationWork};
-use crate::pool::PoolInner;
+use crate::pool::{PoolInner, ReadinessInterest};
 use crate::tls::BoxedTlsStream;
 use crate::{OperationError, OperationResult, PoolStatsSnapshot};
 
@@ -87,8 +89,9 @@ impl TlsStream {
     where
         F: FnOnce() -> OperationResult<Vec<u8>> + Send + 'static,
     {
+        let fd = self.state.raw_fd()?;
         self.submit_work(OperationWork::new(
-            OperationKind::Read,
+            OperationKind::Read { fd },
             buffer_len,
             Box::new(read),
             callback,
@@ -101,6 +104,14 @@ impl TlsStream {
         buffer_len: usize,
         callback: CompletionCallback<Vec<u8>>,
     ) -> OperationResult<()> {
+        let max = self.state.pool.config().max_read_len();
+        if buffer_len > max {
+            callback(Err(OperationError::ReadTooLarge {
+                requested: buffer_len,
+                max,
+            }));
+            return Ok(());
+        }
         let state = Arc::clone(&self.state);
         self.submit_read(buffer_len, move || state.read_tls(buffer_len), callback)
     }
@@ -115,8 +126,9 @@ impl TlsStream {
     where
         F: FnOnce() -> OperationResult<usize> + Send + 'static,
     {
+        let fd = self.state.raw_fd()?;
         self.submit_work(OperationWork::new(
-            OperationKind::Write,
+            OperationKind::Write { fd },
             byte_len,
             Box::new(write),
             callback,
@@ -229,23 +241,61 @@ impl StreamState {
         }
         let mut guard = self.tls.lock().map_err(|_| OperationError::StatePoisoned)?;
         let tls = guard.as_mut().ok_or(OperationError::Shutdown)?;
+        crate::tls::set_nonblocking_stream(tls)?;
         let mut buffer = vec![0_u8; buffer_len];
         if buffer_len == 0 {
             return Ok(buffer);
         }
 
-        let amount = crate::tls::map_io(tls.read(&mut buffer))?;
-        buffer.truncate(amount);
-        Ok(buffer)
+        loop {
+            match tls.ssl_read(&mut buffer) {
+                Ok(amount) => {
+                    buffer.truncate(amount);
+                    return Ok(buffer);
+                }
+                Err(error) => {
+                    if let Some(interest) = ssl_wait_interest(&error) {
+                        wait_for_fd(crate::tls::raw_fd(tls), interest)?;
+                    } else {
+                        return map_ssl_error(error);
+                    }
+                }
+            }
+        }
     }
 
     fn write_tls(&self, bytes: Vec<u8>) -> OperationResult<usize> {
         let byte_len = bytes.len();
         let mut guard = self.tls.lock().map_err(|_| OperationError::StatePoisoned)?;
         let tls = guard.as_mut().ok_or(OperationError::Shutdown)?;
-        crate::tls::map_io(tls.write_all(&bytes))?;
-        crate::tls::map_io(tls.flush())?;
+        crate::tls::set_blocking_stream(tls)?;
+
+        let mut written = 0;
+        while written < byte_len {
+            match tls.ssl_write(&bytes[written..]) {
+                Ok(0) => {
+                    return Err(OperationError::Io(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "TLS write returned zero bytes",
+                    )));
+                }
+                Ok(amount) => written += amount,
+                Err(error) => {
+                    if let Some(interest) = ssl_wait_interest(&error) {
+                        wait_for_fd(crate::tls::raw_fd(tls), interest)?;
+                    } else {
+                        return map_ssl_error(error);
+                    }
+                }
+            }
+        }
         Ok(byte_len)
+    }
+
+    fn raw_fd(&self) -> OperationResult<std::os::fd::RawFd> {
+        let guard = self.tls.lock().map_err(|_| OperationError::StatePoisoned)?;
+        let tls = guard.as_ref().ok_or(OperationError::Shutdown)?;
+        Ok(crate::tls::raw_fd(tls))
     }
 }
 
@@ -312,6 +362,30 @@ where
     let kind = work.kind();
     let (operation, callback) = work.into_parts();
 
+    match kind {
+        OperationKind::Read { fd } => {
+            schedule_after_readiness(state, fd, ReadinessInterest::Read, operation, callback)
+        }
+        OperationKind::Write { .. } => {
+            start_generic_operation(state, operation_size, kind, operation, callback)
+        }
+        #[cfg(test)]
+        OperationKind::Generic => {
+            start_generic_operation(state, operation_size, kind, operation, callback)
+        }
+    }
+}
+
+fn start_generic_operation<T>(
+    state: Arc<StreamState>,
+    operation_size: usize,
+    kind: OperationKind,
+    operation: crate::operation::OperationFn<T>,
+    callback: CompletionCallback<T>,
+) -> DispatchResult
+where
+    T: Send + 'static,
+{
     match state.pool.choose_placement(kind, operation_size) {
         crate::OperationPlacement::Immediate => {
             state.pool.stats.record_immediate();
@@ -356,6 +430,84 @@ where
             }
         }
     }
+}
+
+fn schedule_after_readiness<T>(
+    state: Arc<StreamState>,
+    fd: std::os::fd::RawFd,
+    interest: ReadinessInterest,
+    operation: crate::operation::OperationFn<T>,
+    callback: CompletionCallback<T>,
+) -> DispatchResult
+where
+    T: Send + 'static,
+{
+    let pool = Arc::clone(&state.pool);
+    let job_state = Arc::clone(&state);
+    let callback = Arc::new(Mutex::new(Some(callback)));
+    let readiness_error_callback = Arc::clone(&callback);
+    let job = Box::new(move || {
+        job_state.stats.record_started();
+        let callback = callback
+            .lock()
+            .expect("operation callback mutex poisoned")
+            .take()
+            .expect("operation callback missing");
+        let status = operation::complete(operation, callback);
+        job_state.stats.record_finished();
+        record_completion(&job_state, None, status);
+        job_state.finish();
+    });
+
+    if let Err(error) = pool.run_when_ready(fd, interest, job) {
+        state.pool.stats.record_failed(None);
+        if let Some(callback) = readiness_error_callback
+            .lock()
+            .expect("operation callback mutex poisoned")
+            .take()
+        {
+            callback(Err(error));
+        }
+        DispatchResult::Completed
+    } else {
+        DispatchResult::Pending
+    }
+}
+
+fn map_ssl_error<T>(error: openssl::ssl::Error) -> OperationResult<T> {
+    match error.code() {
+        ErrorCode::WANT_READ | ErrorCode::WANT_WRITE => Err(OperationError::Io(
+            std::io::Error::from(std::io::ErrorKind::WouldBlock),
+        )),
+        ErrorCode::SYSCALL => match error.into_io_error() {
+            Ok(error) => Err(OperationError::Io(error)),
+            Err(error) => Err(OperationError::Handshake(error.to_string())),
+        },
+        ErrorCode::SSL => Err(OperationError::Handshake(error.to_string())),
+        _ => Err(OperationError::Handshake(error.to_string())),
+    }
+}
+
+fn ssl_wait_interest(error: &openssl::ssl::Error) -> Option<ReadinessInterest> {
+    match error.code() {
+        ErrorCode::WANT_READ => Some(ReadinessInterest::Read),
+        ErrorCode::WANT_WRITE => Some(ReadinessInterest::Write),
+        _ => None,
+    }
+}
+
+fn wait_for_fd(fd: std::os::fd::RawFd, interest: ReadinessInterest) -> OperationResult<()> {
+    let flags = match interest {
+        ReadinessInterest::Read => PollFlags::IN,
+        ReadinessInterest::Write => PollFlags::OUT,
+    };
+    // SAFETY: callers only pass fds owned by the stream being operated on, and
+    // the borrow is limited to this poll call.
+    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+    let mut fds = [PollFd::from_borrowed_fd(borrowed, flags)];
+    poll(&mut fds, None).map(|_| ()).map_err(|error| {
+        OperationError::Io(std::io::Error::from_raw_os_error(error.raw_os_error()))
+    })
 }
 
 fn record_completion(state: &StreamState, executor: Option<usize>, status: CompletionStatus) {
@@ -424,37 +576,6 @@ mod tests {
         assert!(receiver.recv().unwrap());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(pool.stats().failed, 1);
-    }
-
-    #[test]
-    fn read_and_write_entry_points_submit_typed_work() {
-        let pool = TlsPool::default();
-        let stream = pool.stream();
-        let (sender, receiver) = mpsc::channel();
-        let write_sender = sender.clone();
-
-        stream
-            .submit_read(
-                4,
-                || Ok(vec![1, 2, 3, 4]),
-                Box::new(move |result| {
-                    sender.send(result.unwrap().len()).unwrap();
-                }),
-            )
-            .unwrap();
-        stream
-            .submit_write(
-                4,
-                || Ok(4),
-                Box::new(move |result| {
-                    write_sender.send(result.unwrap()).unwrap();
-                }),
-            )
-            .unwrap();
-
-        assert_eq!(receiver.recv().unwrap(), 4);
-        assert_eq!(receiver.recv().unwrap(), 4);
-        assert_eq!(pool.stats().submitted, 2);
     }
 
     #[test]

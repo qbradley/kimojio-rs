@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::os::fd::RawFd;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::{OperationError, OperationResult};
@@ -9,9 +10,9 @@ use crate::{OperationError, OperationResult};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OperationKind {
     /// Read/decrypt operation.
-    Read,
+    Read { fd: RawFd },
     /// Write/encrypt operation.
-    Write,
+    Write { fd: RawFd },
     /// Internal operation used by tests and future adapters.
     #[cfg(test)]
     Generic,

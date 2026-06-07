@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::os::fd::{BorrowedFd, RawFd};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -8,6 +9,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use openssl::ssl::{SslAcceptor, SslConnector};
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
 use crate::{
     IdleBehavior, OperationError, OperationPlacement, PoolConfig, PoolConfigError, PoolStats,
@@ -19,6 +21,22 @@ type Job = Box<dyn FnOnce() + Send + 'static>;
 enum WorkerMessage {
     Run(Job),
     Shutdown,
+}
+
+enum ReadinessMessage {
+    Wait(ReadinessWait),
+    Shutdown,
+}
+
+pub(crate) enum ReadinessInterest {
+    Read,
+    Write,
+}
+
+struct ReadinessWait {
+    fd: RawFd,
+    interest: ReadinessInterest,
+    ready: Box<dyn FnOnce() + Send + 'static>,
 }
 
 /// User-facing pool that owns TLS operation placement policy and shared stats.
@@ -50,7 +68,7 @@ impl TlsPool {
         stream: S,
     ) -> Result<TlsStream, TlsPoolError>
     where
-        S: std::io::Read + std::io::Write + Send + 'static,
+        S: std::io::Read + std::io::Write + std::os::fd::AsFd + Send + 'static,
     {
         let tls = crate::tls::connect(connector, domain, stream)?;
         Ok(TlsStream::from_tls(Arc::clone(&self.inner), tls))
@@ -59,7 +77,7 @@ impl TlsPool {
     /// Creates a server TLS stream over a connected transport.
     pub fn server<S>(&self, acceptor: &SslAcceptor, stream: S) -> Result<TlsStream, TlsPoolError>
     where
-        S: std::io::Read + std::io::Write + Send + 'static,
+        S: std::io::Read + std::io::Write + std::os::fd::AsFd + Send + 'static,
     {
         let tls = crate::tls::accept(acceptor, stream)?;
         Ok(TlsStream::from_tls(Arc::clone(&self.inner), tls))
@@ -91,6 +109,9 @@ pub(crate) struct PoolInner {
     config: PoolConfig,
     pub(crate) stats: Arc<PoolStats>,
     workers: Vec<WorkerHandle>,
+    readiness_sender: mpsc::Sender<ReadinessMessage>,
+    readiness_handle: Mutex<Option<JoinHandle<()>>>,
+    readiness_thread_id: thread::ThreadId,
     executor_loads: Vec<AtomicU64>,
     next_executor: AtomicUsize,
     shutdown: AtomicBool,
@@ -128,10 +149,20 @@ impl PoolInner {
                 });
             }
 
+            let (readiness_sender, readiness_receiver) = mpsc::channel();
+            let readiness_handle = thread::Builder::new()
+                .name("kimojio-tls-pool-readiness".to_string())
+                .spawn(move || readiness_loop(readiness_receiver))
+                .expect("failed to spawn TLS pool readiness thread");
+            let readiness_thread_id = readiness_handle.thread().id();
+
             Self {
                 config,
                 stats,
                 workers,
+                readiness_sender,
+                readiness_handle: Mutex::new(Some(readiness_handle)),
+                readiness_thread_id,
                 executor_loads: (0..executor_count).map(|_| AtomicU64::new(0)).collect(),
                 next_executor: AtomicUsize::new(0),
                 shutdown: AtomicBool::new(false),
@@ -203,6 +234,24 @@ impl PoolInner {
             })
     }
 
+    pub(crate) fn run_when_ready(
+        &self,
+        fd: RawFd,
+        interest: ReadinessInterest,
+        job: Job,
+    ) -> Result<(), OperationError> {
+        if self.shutdown.load(Ordering::Acquire) {
+            return Err(OperationError::Shutdown);
+        }
+        self.readiness_sender
+            .send(ReadinessMessage::Wait(ReadinessWait {
+                fd,
+                interest,
+                ready: job,
+            }))
+            .map_err(|_| OperationError::Shutdown)
+    }
+
     pub(crate) fn is_shutdown(&self) -> bool {
         self.shutdown.load(Ordering::Acquire)
     }
@@ -223,6 +272,7 @@ impl PoolInner {
         for worker in &self.workers {
             let _ = worker.sender.send(WorkerMessage::Shutdown);
         }
+        let _ = self.readiness_sender.send(ReadinessMessage::Shutdown);
     }
 
     #[cfg(test)]
@@ -248,6 +298,15 @@ impl Drop for PoolInner {
             {
                 let _ = handle.join();
             }
+        }
+        if self.readiness_thread_id != current
+            && let Some(handle) = self
+                .readiness_handle
+                .lock()
+                .expect("readiness handle poisoned")
+                .take()
+        {
+            let _ = handle.join();
         }
     }
 }
@@ -352,6 +411,58 @@ fn handle_worker_message(message: WorkerMessage) -> bool {
     }
 }
 
+fn readiness_loop(receiver: mpsc::Receiver<ReadinessMessage>) {
+    let mut waits = Vec::new();
+    loop {
+        while let Ok(message) = receiver.try_recv() {
+            match message {
+                ReadinessMessage::Wait(wait) => waits.push(wait),
+                ReadinessMessage::Shutdown => return,
+            }
+        }
+
+        if waits.is_empty() {
+            match receiver.recv() {
+                Ok(ReadinessMessage::Wait(wait)) => waits.push(wait),
+                Ok(ReadinessMessage::Shutdown) | Err(_) => return,
+            }
+            continue;
+        }
+
+        let mut fds = waits
+            .iter()
+            .map(|wait| {
+                let flags = match wait.interest {
+                    ReadinessInterest::Read => PollFlags::IN,
+                    ReadinessInterest::Write => PollFlags::OUT,
+                };
+                // SAFETY: the fd is owned by the TLS stream held alive by the
+                // readiness callback. The borrow only lives for this poll call.
+                let fd = unsafe { BorrowedFd::borrow_raw(wait.fd) };
+                PollFd::from_borrowed_fd(fd, flags)
+            })
+            .collect::<Vec<_>>();
+
+        let timeout = Timespec {
+            tv_sec: 0,
+            tv_nsec: 1_000_000,
+        };
+        let _ = poll(&mut fds, Some(&timeout));
+
+        let mut index = waits.len();
+        while index != 0 {
+            index -= 1;
+            let ready = fds[index].revents();
+            if ready.intersects(
+                PollFlags::IN | PollFlags::OUT | PollFlags::ERR | PollFlags::HUP | PollFlags::NVAL,
+            ) {
+                let wait = waits.swap_remove(index);
+                (wait.ready)();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;
@@ -422,7 +533,8 @@ mod tests {
         pool.inner.add_executor_load_for_test(0, 100);
 
         assert_eq!(
-            pool.inner.choose_placement(OperationKind::Write, 1),
+            pool.inner
+                .choose_placement(OperationKind::Write { fd: 0 }, 1),
             OperationPlacement::Background { executor: 1 }
         );
     }
@@ -485,11 +597,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            pool.inner.choose_placement(OperationKind::Write, 4),
+            pool.inner
+                .choose_placement(OperationKind::Write { fd: 0 }, 4),
             OperationPlacement::Immediate
         );
         assert_eq!(
-            pool.inner.choose_placement(OperationKind::Write, 8),
+            pool.inner
+                .choose_placement(OperationKind::Write { fd: 0 }, 8),
             OperationPlacement::Background { executor: 0 }
         );
     }

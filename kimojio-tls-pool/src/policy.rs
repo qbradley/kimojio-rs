@@ -54,7 +54,7 @@ fn choose_adaptive(
     executor_loads: &[u64],
     round_robin_start: usize,
 ) -> OperationPlacement {
-    if kind == OperationKind::Read {
+    if matches!(kind, OperationKind::Read { .. }) {
         return OperationPlacement::Background {
             executor: select_executor(executor_loads, round_robin_start),
         };
@@ -88,7 +88,7 @@ mod tests {
         assert_eq!(
             choose_placement(
                 &config,
-                OperationKind::Write,
+                OperationKind::Write { fd: 0 },
                 config.thresholds().small_max(),
                 &[0, 0],
                 0
@@ -101,7 +101,13 @@ mod tests {
     fn near_maximum_adaptive_operations_are_background_eligible() {
         let config = PoolConfig::default();
         assert_eq!(
-            choose_placement(&config, OperationKind::Write, 32 * 1024, &[0, 0], 0),
+            choose_placement(
+                &config,
+                OperationKind::Write { fd: 0 },
+                32 * 1024,
+                &[0, 0],
+                0
+            ),
             OperationPlacement::Background { executor: 0 }
         );
     }
@@ -118,7 +124,7 @@ mod tests {
             .with_placement_mode(PlacementMode::Adaptive)
             .with_thresholds(SizeThresholds::new(4 * 1024, 24 * 1024));
         assert_eq!(
-            choose_placement(&config, OperationKind::Write, 1024, &[0, 0], 0),
+            choose_placement(&config, OperationKind::Write { fd: 0 }, 1024, &[0, 0], 0),
             OperationPlacement::Immediate
         );
     }
@@ -129,7 +135,13 @@ mod tests {
             .with_placement_mode(PlacementMode::Adaptive)
             .with_thresholds(SizeThresholds::new(4 * 1024, 24 * 1024));
         assert_eq!(
-            choose_placement(&config, OperationKind::Write, 8 * 1024, &[0, 100_000], 0),
+            choose_placement(
+                &config,
+                OperationKind::Write { fd: 0 },
+                8 * 1024,
+                &[0, 100_000],
+                0
+            ),
             OperationPlacement::Background { executor: 0 }
         );
     }
@@ -142,7 +154,7 @@ mod tests {
         assert_eq!(
             choose_placement(
                 &config,
-                OperationKind::Write,
+                OperationKind::Write { fd: 0 },
                 8 * 1024,
                 &[100_000, 100_000],
                 0
@@ -155,7 +167,7 @@ mod tests {
     fn adaptive_reads_choose_background() {
         let config = PoolConfig::default();
         assert_eq!(
-            choose_placement(&config, OperationKind::Read, 64, &[0, 0], 0),
+            choose_placement(&config, OperationKind::Read { fd: 0 }, 64, &[0, 0], 0),
             OperationPlacement::Background { executor: 0 }
         );
     }

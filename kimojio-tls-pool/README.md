@@ -14,6 +14,8 @@ Operations submitted to the same stream are serialized, so OpenSSL stream state 
 
 Reads reject buffers larger than the configured maximum read length. The default maximum is 32 KiB.
 
+Reads are readiness-gated before TLS progress is attempted, so a read waiting for a future peer response does not occupy a pool executor thread. This avoids starving the pool with response-waiting reads.
+
 ## Placement modes
 
 - `ImmediateOnly`: run operations on the submitting thread.
@@ -25,6 +27,8 @@ Reads reject buffers larger than the configured maximum read length. The default
 Pool statistics report submitted, immediate, background-routed, queued, completed, failed, ready-spin, and idle-transition counts. Stream statistics report submitted, queued, active, and maximum active operations for same-stream serialization checks.
 
 The aggregate queued count includes both same-stream queueing and executor queueing; separate counters expose each source.
+
+Callbacks are type-erased because they may execute on a different thread from the submitter. Future APIs may add lower-allocation completion targets for workloads that can use channels or fixed completion handles instead of arbitrary callbacks.
 
 ## Benchmarks
 
@@ -42,4 +46,4 @@ The benchmark covers single-pair, three-pair per-connection-pool, and three-pair
 
 ## Limitations
 
-The crate currently uses blocking OpenSSL streams and does not provide non-blocking socket readiness, tokio, kimojio runtime, kernel TLS, or hardware TLS offload integration.
+The crate currently does not provide tokio, kimojio runtime, kernel TLS, or hardware TLS offload integration.
