@@ -13,7 +13,8 @@
 //! creates the scheduler, builds a root [`RuntimeContext`], runs the supplied
 //! closure, and returns that closure's value. The closure receives the
 //! [`RuntimeContext`] as the capability object for all runtime services: scoped
-//! spawning, cooperative yielding, io_uring operations, and I/O result joining.
+//! spawning, cooperative yielding, stack dumping, io_uring operations, and I/O
+//! result joining.
 //!
 //! Stackful work is created with [`RuntimeContext::scope`] and [`Scope::spawn`].
 //! This mirrors `std::thread::scope`: spawned coroutines may borrow from the
@@ -238,6 +239,76 @@ type PanicPayload = Box<dyn Any + Send + 'static>;
 type KernelIoResult = Result<u32, Errno>;
 type IoUring = rustix_uring::IoUring<Sqe, Cqe>;
 
+/// Captured stack information for live stackful coroutines.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StackDump {
+    tasks: Vec<TaskStackDump>,
+}
+
+impl StackDump {
+    /// Returns one entry per live stackful coroutine known to the scheduler.
+    pub fn tasks(&self) -> &[TaskStackDump] {
+        &self.tasks
+    }
+
+    /// Returns `true` if no live stackful coroutine was present.
+    pub fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+}
+
+/// Captured stack information for a single stackful coroutine.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskStackDump {
+    task_id: usize,
+    state: TaskStackState,
+    backtrace: Option<String>,
+}
+
+impl TaskStackDump {
+    fn not_started(task_id: TaskId) -> Self {
+        Self {
+            task_id,
+            state: TaskStackState::NotStarted,
+            backtrace: None,
+        }
+    }
+
+    fn suspended(task_id: TaskId) -> Self {
+        Self {
+            task_id,
+            state: TaskStackState::Suspended,
+            backtrace: Some(std::backtrace::Backtrace::force_capture().to_string()),
+        }
+    }
+
+    /// Returns the runtime-local task id.
+    pub fn task_id(&self) -> usize {
+        self.task_id
+    }
+
+    /// Returns the observed coroutine state.
+    pub fn state(&self) -> TaskStackState {
+        self.state
+    }
+
+    /// Returns the captured backtrace, if this task had started and was suspended.
+    pub fn backtrace(&self) -> Option<&str> {
+        self.backtrace.as_deref()
+    }
+}
+
+/// State of a stackful coroutine observed by [`RuntimeContext::dump_stacks`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TaskStackState {
+    /// The coroutine exists but has not been resumed yet, so there is no stackful
+    /// call chain to capture.
+    NotStarted,
+    /// The coroutine is suspended at a yield or park point and supplied a
+    /// backtrace from its own stack.
+    Suspended,
+}
+
 /// Operation for [`RuntimeContext::epoll_ctl`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EpollCtlOp {
@@ -427,10 +498,27 @@ impl RuntimeContext<'_> {
             CurrentTask::Root => {
                 drive_scheduler(&self.core);
             }
-            CurrentTask::Coroutine { yielder, .. } => {
-                yielder.suspend(Suspend::Ready);
+            CurrentTask::Coroutine { id, yielder } => {
+                suspend_task(id, yielder, Suspend::Ready);
             }
         }
+    }
+
+    /// Captures stack traces for live stackful coroutines.
+    ///
+    /// This must be called from the root context. Started coroutines are resumed
+    /// with an inspection command that captures a [`std::backtrace::Backtrace`]
+    /// on the coroutine stack and then immediately suspends again without
+    /// advancing normal user work. Coroutines that have not started yet are
+    /// reported as [`TaskStackState::NotStarted`] because they do not have a
+    /// stackful call chain to inspect.
+    pub fn dump_stacks(&self) -> StackDump {
+        assert!(
+            matches!(self.current, CurrentTask::Root),
+            "dump_stacks must be called from the root RuntimeContext"
+        );
+
+        self.core.borrow_mut().dump_stacks()
     }
 
     /// Submits an io_uring no-op and waits for its completion.
@@ -1658,8 +1746,8 @@ impl RuntimeContext<'_> {
                     "kimojio-stack runtime deadlocked: no runnable stackful coroutines"
                 );
             }
-            CurrentTask::Coroutine { yielder, .. } => {
-                yielder.suspend(Suspend::Parked);
+            CurrentTask::Coroutine { id, yielder } => {
+                suspend_task(id, yielder, Suspend::Parked);
             }
         }
     }
@@ -1686,7 +1774,7 @@ enum CurrentTask<'cx> {
     Root,
     Coroutine {
         id: TaskId,
-        yielder: &'cx Yielder<(), Suspend>,
+        yielder: &'cx Yielder<ResumeAction, Suspend>,
     },
 }
 
@@ -1720,17 +1808,18 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
         let stack = DefaultStack::new(self.stack_size)
             .expect("failed to allocate stackful coroutine stack");
 
-        let coroutine = unsafe {
+        let coroutine: Coroutine<ResumeAction, Suspend, ()> = unsafe {
             // SAFETY: spawned closures and their return slots are bounded by the
             // public scope lifetime. `RuntimeContext::scope` waits for every task
             // counted in `ScopeState` before returning, and `JoinHandle` cannot
             // escape the scope that created it.
-            Coroutine::with_stack_unchecked(stack, move |yielder, ()| {
+            Coroutine::with_stack_unchecked(stack, move |yielder, action| {
                 let cx = RuntimeContext {
                     core: Rc::clone(&core),
                     stack_size,
                     current: CurrentTask::Coroutine { id, yielder },
                 };
+                handle_resume_action(id, yielder, Suspend::Ready, action);
 
                 let result = panic::catch_unwind(AssertUnwindSafe(|| f(&cx)))
                     .map_err(JoinError::from_payload);
@@ -2651,7 +2740,12 @@ enum Suspend {
 }
 
 struct Task {
-    coroutine: Coroutine<(), Suspend, ()>,
+    coroutine: Coroutine<ResumeAction, Suspend, ()>,
+}
+
+enum ResumeAction {
+    Run,
+    CaptureStack(Rc<RefCell<Vec<TaskStackDump>>>),
 }
 
 struct Scheduler {
@@ -2738,6 +2832,35 @@ impl Scheduler {
 
     fn is_empty(&self) -> bool {
         self.tasks.iter().all(Option::is_none)
+    }
+
+    fn dump_stacks(&mut self) -> StackDump {
+        let captures = Rc::new(RefCell::new(Vec::new()));
+        let mut dump = StackDump::default();
+
+        for id in 0..self.tasks.len() {
+            let Some(mut task) = self.tasks[id].take() else {
+                continue;
+            };
+
+            if task.coroutine.started() {
+                let result = task
+                    .coroutine
+                    .resume(ResumeAction::CaptureStack(Rc::clone(&captures)));
+                match result {
+                    CoroutineResult::Yield(_) => {
+                        dump.tasks.extend(captures.borrow_mut().drain(..));
+                        self.tasks[id] = Some(task);
+                    }
+                    CoroutineResult::Return(()) => {}
+                }
+            } else {
+                dump.tasks.push(TaskStackDump::not_started(id));
+                self.tasks[id] = Some(task);
+            }
+        }
+
+        dump
     }
 
     fn acquire_io_state(&mut self) -> Rc<IoState> {
@@ -2896,7 +3019,7 @@ fn run_one(core: &Rc<RefCell<Scheduler>>) -> bool {
         return false;
     };
 
-    let result = task.coroutine.resume(());
+    let result = task.coroutine.resume(ResumeAction::Run);
     let mut scheduler = core.borrow_mut();
     match result {
         CoroutineResult::Yield(Suspend::Ready) => {
@@ -2910,6 +3033,28 @@ fn run_one(core: &Rc<RefCell<Scheduler>>) -> bool {
     }
 
     true
+}
+
+fn suspend_task(id: TaskId, yielder: &Yielder<ResumeAction, Suspend>, suspend: Suspend) {
+    let action = yielder.suspend(suspend);
+    handle_resume_action(id, yielder, suspend, action);
+}
+
+fn handle_resume_action(
+    id: TaskId,
+    yielder: &Yielder<ResumeAction, Suspend>,
+    suspend: Suspend,
+    mut action: ResumeAction,
+) {
+    loop {
+        match action {
+            ResumeAction::Run => return,
+            ResumeAction::CaptureStack(captures) => {
+                captures.borrow_mut().push(TaskStackDump::suspended(id));
+                action = yielder.suspend(suspend);
+            }
+        }
+    }
 }
 
 fn run_completed_io(core: &Rc<RefCell<Scheduler>>, wait: bool) -> bool {
@@ -3092,7 +3237,8 @@ mod tests {
         AddressFamily, AtFlags, EpollCtlOp, EpollEvent, EpollEventData, EpollEventFlags,
         FallocateFlags, FileAdvice, FutexWaitFlags, IoJoinError, IoVec, MemoryAdvice, Mode, MsgHdr,
         OFlags, RecvFlags, RenameFlags, ResolveFlags, Runtime, RuntimeContext, SendFlags, Shutdown,
-        SocketType, StatxFlags, UringSpliceFlags, Waitable, allocation_tracking, ipproto, once,
+        SocketType, StatxFlags, TaskStackState, UringSpliceFlags, Waitable, allocation_tracking,
+        ipproto, once,
     };
     use rustix::event::{PollFlags, epoll};
     use rustix::fd::AsFd;
@@ -3213,6 +3359,53 @@ mod tests {
         });
 
         assert_eq!(output, 42);
+    }
+
+    #[test]
+    fn dump_stacks_reports_not_started_stackful_tasks() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let handle = scope.spawn(|_| 42);
+                let dump = cx.dump_stacks();
+
+                assert_eq!(dump.tasks().len(), 1);
+                let task = &dump.tasks()[0];
+                assert_eq!(task.state(), TaskStackState::NotStarted);
+                assert_eq!(task.backtrace(), None);
+                assert_eq!(handle.join(cx).unwrap(), 42);
+            });
+        });
+    }
+
+    #[test]
+    fn dump_stacks_captures_suspended_stackful_task() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let handle = scope.spawn(|cx| {
+                    stack_dump_test_leaf(cx);
+                    42
+                });
+
+                cx.yield_now();
+                let dump = cx.dump_stacks();
+
+                assert_eq!(dump.tasks().len(), 1);
+                let task = &dump.tasks()[0];
+                assert_eq!(task.state(), TaskStackState::Suspended);
+                let backtrace = task.backtrace().expect("missing suspended task backtrace");
+                assert!(!backtrace.trim().is_empty());
+                assert_eq!(handle.join(cx).unwrap(), 42);
+            });
+        });
+    }
+
+    #[inline(never)]
+    fn stack_dump_test_leaf(cx: &RuntimeContext<'_>) {
+        cx.yield_now();
     }
 
     #[test]
