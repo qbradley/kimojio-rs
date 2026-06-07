@@ -99,6 +99,19 @@ fn pending_read_does_not_occupy_only_client_executor() {
     );
 }
 
+#[test]
+fn buffered_plaintext_read_does_not_wait_for_new_socket_readiness() {
+    let (client, server) = stream_pair(immediate_config(), immediate_config());
+    let payload = vec![0x33; 64];
+    write_blocking(&server, &payload).unwrap();
+
+    let first = support::read_once_blocking(&client, 1).unwrap();
+    assert_eq!(first, vec![0x33]);
+
+    let rest = support::read_once_blocking(&client, 63).unwrap();
+    assert_eq!(rest, vec![0x33; 63]);
+}
+
 fn run_single_pair_rpc(client_config: PoolConfig, server_config: PoolConfig, body_len: usize) {
     let (client, server) = stream_pair(client_config, server_config);
     let server_thread = thread::spawn(move || server_rpc(server, body_len));

@@ -102,7 +102,7 @@ impl TlsStream {
         let fd = state.raw_fd()?;
         let callback = Arc::new(Mutex::new(Some(callback)));
         state.submit(Box::new(move |state| {
-            schedule_read_after_readiness(state, fd, buffer_len, callback)
+            attempt_read_initial(state, fd, buffer_len, callback)
         }))
     }
 
@@ -546,6 +546,38 @@ fn schedule_read_after_readiness(
         DispatchResult::Completed
     } else {
         DispatchResult::Pending
+    }
+}
+
+fn attempt_read_initial(
+    state: Arc<StreamState>,
+    fd: std::os::fd::RawFd,
+    buffer_len: usize,
+    callback: Arc<Mutex<Option<CompletionCallback<Vec<u8>>>>>,
+) -> DispatchResult {
+    state.pool.stats.record_immediate();
+    state.stats.record_started();
+    match state.read_tls_once(buffer_len) {
+        TlsAttempt::Ready(result) => {
+            state.stats.record_finished();
+            let status = if let Some(callback) = callback
+                .lock()
+                .expect("read callback mutex poisoned")
+                .take()
+            {
+                deliver_result(result, callback)
+            } else if result.is_ok() {
+                CompletionStatus::Succeeded
+            } else {
+                CompletionStatus::Failed
+            };
+            record_completion(&state, None, status);
+            DispatchResult::Completed
+        }
+        TlsAttempt::WouldBlock(_interest) => {
+            state.stats.record_finished();
+            schedule_read_after_readiness(state, fd, buffer_len, callback)
+        }
     }
 }
 
