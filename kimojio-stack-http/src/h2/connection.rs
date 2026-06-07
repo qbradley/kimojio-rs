@@ -119,6 +119,52 @@ impl ConnectionState {
         self.streams.get(&id)
     }
 
+    pub fn stream_mut(&mut self, id: StreamId) -> Option<&mut Stream> {
+        self.streams.get_mut(&id)
+    }
+
+    pub fn outbound_capacity(&self, stream_id: StreamId) -> Result<usize, Error> {
+        let stream = self
+            .streams
+            .get(&stream_id)
+            .ok_or(Error::Protocol("unknown stream"))?;
+        let available = self
+            .connection_window
+            .available()
+            .min(stream.outbound_window().available());
+        Ok(available.max(0) as usize)
+    }
+
+    pub fn consume_outbound_window(
+        &mut self,
+        stream_id: StreamId,
+        amount: usize,
+    ) -> Result<(), Error> {
+        let stream = self
+            .streams
+            .get_mut(&stream_id)
+            .ok_or(Error::Protocol("unknown stream"))?;
+        self.connection_window.consume(amount)?;
+        stream.consume_outbound_window(amount)
+    }
+
+    pub fn queue_window_update(&mut self, stream_id: StreamId, amount: usize) -> Result<(), Error> {
+        if amount == 0 {
+            return Ok(());
+        }
+        let increment = u32::try_from(amount)
+            .map_err(|_| Error::Protocol("WINDOW_UPDATE increment too large"))?;
+        self.streams
+            .get_mut(&stream_id)
+            .ok_or(Error::Protocol("WINDOW_UPDATE for unknown stream"))?
+            .increase_inbound_window(increment)?;
+        self.pending_outbound
+            .push_back(Frame::window_update(0, increment));
+        self.pending_outbound
+            .push_back(Frame::window_update(stream_id.get(), increment));
+        Ok(())
+    }
+
     pub fn receive_settings(&mut self, frame: &Frame) -> Result<(), Error> {
         self.track_inbound_frame(frame)?;
         let FramePayload::Settings(settings) = &frame.payload else {

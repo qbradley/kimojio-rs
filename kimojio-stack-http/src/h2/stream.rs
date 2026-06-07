@@ -141,8 +141,16 @@ impl Stream {
         self.outbound_window
     }
 
+    pub fn increase_inbound_window(&mut self, amount: u32) -> Result<(), Error> {
+        self.inbound_window.increase(amount)
+    }
+
     pub fn increase_outbound_window(&mut self, amount: u32) -> Result<(), Error> {
         self.outbound_window.increase(amount)
+    }
+
+    pub fn consume_outbound_window(&mut self, amount: usize) -> Result<(), Error> {
+        self.outbound_window.consume(amount)
     }
 
     pub fn adjust_outbound_window(&mut self, delta: i32) -> Result<(), Error> {
@@ -181,6 +189,28 @@ impl Stream {
         Ok(())
     }
 
+    pub fn send_headers(&mut self, end_stream: bool) -> Result<(), Error> {
+        match self.state {
+            StreamState::Idle => {
+                self.state = if end_stream {
+                    StreamState::HalfClosedLocal
+                } else {
+                    StreamState::Open
+                };
+            }
+            StreamState::Open | StreamState::HalfClosedRemote if end_stream => {
+                self.close_local_side();
+            }
+            StreamState::Open | StreamState::HalfClosedRemote => {}
+            _ => {
+                return Err(Error::Protocol(
+                    "outbound HEADERS not valid for stream state",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn receive_continuation(&mut self, end_headers: bool) -> Result<(), Error> {
         if !self.awaiting_continuation {
             return Err(Error::Protocol("unexpected CONTINUATION frame"));
@@ -213,6 +243,17 @@ impl Stream {
         Ok(())
     }
 
+    pub fn send_data(&mut self, end_stream: bool) -> Result<(), Error> {
+        match self.state {
+            StreamState::Open | StreamState::HalfClosedRemote => {}
+            _ => return Err(Error::Protocol("outbound DATA not valid for stream state")),
+        }
+        if end_stream {
+            self.close_local_side();
+        }
+        Ok(())
+    }
+
     pub fn receive_trailers(&mut self, headers: Vec<Header>) -> Result<(), Error> {
         if self.awaiting_continuation {
             return Err(Error::Protocol(
@@ -237,6 +278,13 @@ impl Stream {
         self.state = match self.state {
             StreamState::HalfClosedLocal => StreamState::Closed,
             _ => StreamState::HalfClosedRemote,
+        };
+    }
+
+    fn close_local_side(&mut self) {
+        self.state = match self.state {
+            StreamState::HalfClosedRemote => StreamState::Closed,
+            _ => StreamState::HalfClosedLocal,
         };
     }
 }

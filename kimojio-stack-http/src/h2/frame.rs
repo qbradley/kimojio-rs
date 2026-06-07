@@ -150,6 +150,37 @@ impl Frame {
         }
     }
 
+    pub fn window_update(stream_id: u32, increment: u32) -> Self {
+        Self {
+            frame_type: FrameType::WindowUpdate,
+            flags: FrameFlags::EMPTY,
+            stream_id,
+            payload: FramePayload::WindowUpdate { increment },
+        }
+    }
+
+    pub fn rst_stream(stream_id: StreamId, error_code: u32) -> Self {
+        Self {
+            frame_type: FrameType::RstStream,
+            flags: FrameFlags::EMPTY,
+            stream_id: stream_id.get(),
+            payload: FramePayload::RstStream { error_code },
+        }
+    }
+
+    pub fn goaway(last_stream_id: u32, error_code: u32, debug_data: impl Into<Bytes>) -> Self {
+        Self {
+            frame_type: FrameType::Goaway,
+            flags: FrameFlags::EMPTY,
+            stream_id: 0,
+            payload: FramePayload::Goaway {
+                last_stream_id,
+                error_code,
+                debug_data: debug_data.into(),
+            },
+        }
+    }
+
     pub fn encode(&self) -> Result<Vec<u8>, Error> {
         let payload = self.encode_payload()?;
         let len = payload.len();

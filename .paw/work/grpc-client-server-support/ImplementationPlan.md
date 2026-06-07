@@ -54,7 +54,7 @@ The architecture keeps public crates independent of tokio and other async runtim
 - [x] **Phase 1: Workspace, dependencies, and transport foundation** - Add crate scaffolding, selected runtime-agnostic dependencies, shared errors/config/body types, and plaintext/TLS transport boundaries.
 - [x] **Phase 2: HTTP/1.1 client and server** - Implement bounded HTTP/1.1 request/response parsing, serialization, connection handling, and stackful tests.
 - [x] **Phase 3: HTTP/2 frame, HPACK, and state core** - Implement HTTP/2 framing, header compression adapter, settings, stream state, and flow-control primitives.
-- [ ] **Phase 4: HTTP/2 client and server request/response** - Build stackful HTTP/2 client/server connection APIs over the Phase 3 core.
+- [x] **Phase 4: HTTP/2 client and server request/response** - Build stackful HTTP/2 client/server connection APIs over the Phase 3 core.
 - [ ] **Phase 5: HTTP TLS and tokio HTTP interoperability** - Validate stackful HTTP/1.1 and HTTP/2 clients/servers against tokio-based peers, including TLS coverage.
 - [ ] **Phase 6: Unary gRPC core and local stackful tests** - Add gRPC framing, status/metadata/trailer handling, prost-compatible unary client/server APIs, and local stackful tests.
 - [ ] **Phase 7: Tokio gRPC interoperability** - Validate stackful unary gRPC clients/servers against tonic-based peers.
@@ -162,13 +162,13 @@ The architecture keeps public crates independent of tokio and other async runtim
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `cargo fmt --check`
-- [ ] `cargo test -p kimojio-stack-http h2`
-- [ ] `cargo clippy -p kimojio-stack-http --all-targets --all-features -- -D warnings`
+- [x] `cargo fmt --check`
+- [x] `cargo test -p kimojio-stack-http h2`
+- [x] `cargo clippy -p kimojio-stack-http --all-targets --all-features -- -D warnings`
 
 #### Manual Verification:
-- [ ] HTTP/2 request/response APIs preserve stream association under concurrent streams.
-- [ ] Backpressure uses bounded queues/windows and stackful parking rather than unbounded buffering or spinning.
+- [x] HTTP/2 request/response APIs preserve stream association under concurrent streams.
+- [x] Backpressure uses bounded queues/windows and stackful parking rather than unbounded buffering or spinning.
 
 ---
 
