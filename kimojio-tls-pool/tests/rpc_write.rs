@@ -4,8 +4,8 @@ use std::thread;
 
 use kimojio_tls_pool::{PlacementMode, PoolConfig};
 use support::{
-    RPC_HEADER_LEN, RPC_RESPONSE_LEN, background_config, immediate_config, make_rpc_header,
-    read_exact_blocking, rpc_body_len, stream_pair, write_blocking,
+    RPC_HEADER_LEN, RPC_RESPONSE_LEN, background_config, controlled_stream_pair, immediate_config,
+    make_rpc_header, read_exact_blocking, rpc_body_len, stream_pair, write_blocking,
 };
 
 #[test]
@@ -16,6 +16,11 @@ fn single_pair_rpc_immediate() {
 #[test]
 fn single_pair_rpc_background() {
     run_single_pair_rpc(background_config(1), background_config(1), 24 * 1024);
+}
+
+#[test]
+fn single_pair_rpc_near_maximum_background() {
+    run_single_pair_rpc(background_config(2), background_config(2), 32 * 1024);
 }
 
 #[test]
@@ -48,6 +53,15 @@ fn handshake_failure_is_reported() {
     .unwrap();
 
     assert!(pool.client(&connector, "localhost", client_io).is_err());
+}
+
+#[test]
+fn operation_error_is_reported_after_peer_drop() {
+    let (client, _server, client_fail, _server_fail) =
+        controlled_stream_pair(immediate_config(), immediate_config());
+    client_fail.store(true, std::sync::atomic::Ordering::Release);
+
+    assert!(write_blocking(&client, b"fail").is_err());
 }
 
 fn run_single_pair_rpc(client_config: PoolConfig, server_config: PoolConfig, body_len: usize) {

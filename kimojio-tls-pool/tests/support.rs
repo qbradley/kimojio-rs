@@ -1,6 +1,9 @@
 #![allow(dead_code)]
 
+use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -68,6 +71,72 @@ pub fn stream_pair(client_config: PoolConfig, server_config: PoolConfig) -> (Tls
         .unwrap();
     let server = server_thread.join().unwrap();
     (client, server)
+}
+
+pub fn controlled_stream_pair(
+    client_config: PoolConfig,
+    server_config: PoolConfig,
+) -> (TlsStream, TlsStream, Arc<AtomicBool>, Arc<AtomicBool>) {
+    let (acceptor, connector) = tls_contexts();
+    let (client_io, server_io) = UnixStream::pair().unwrap();
+    let client_fail = Arc::new(AtomicBool::new(false));
+    let server_fail = Arc::new(AtomicBool::new(false));
+    let server_fail_thread = Arc::clone(&server_fail);
+    let server_thread = thread::spawn(move || {
+        let pool = TlsPool::new(server_config).unwrap();
+        pool.server(
+            &acceptor,
+            ControlledStream {
+                inner: server_io,
+                fail: server_fail_thread,
+            },
+        )
+        .unwrap()
+    });
+
+    let client_pool = TlsPool::new(client_config).unwrap();
+    let client = client_pool
+        .client(
+            &connector,
+            "localhost",
+            ControlledStream {
+                inner: client_io,
+                fail: Arc::clone(&client_fail),
+            },
+        )
+        .unwrap();
+    let server = server_thread.join().unwrap();
+    (client, server, client_fail, server_fail)
+}
+
+struct ControlledStream {
+    inner: UnixStream,
+    fail: Arc<AtomicBool>,
+}
+
+impl Read for ControlledStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.fail.load(Ordering::Acquire) {
+            return Err(std::io::Error::other("controlled read failure"));
+        }
+        self.inner.read(buf)
+    }
+}
+
+impl Write for ControlledStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.fail.load(Ordering::Acquire) {
+            return Err(std::io::Error::other("controlled write failure"));
+        }
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.fail.load(Ordering::Acquire) {
+            return Err(std::io::Error::other("controlled flush failure"));
+        }
+        self.inner.flush()
+    }
 }
 
 pub fn immediate_config() -> PoolConfig {
