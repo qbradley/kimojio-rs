@@ -2336,7 +2336,7 @@ impl RegisteredFd {
         let state = Rc::new(RegisteredFdState {
             core: Rc::downgrade(&core),
             slot,
-            fd: RefCell::new(Some(fd)),
+            fd: Cell::new(Some(fd)),
             in_flight: Cell::new(0),
             retired: Cell::new(false),
             active: Cell::new(true),
@@ -2484,7 +2484,7 @@ trait RegisteredResource {
 struct RegisteredFdState {
     core: Weak<RefCell<Scheduler>>,
     slot: u32,
-    fd: RefCell<Option<OwnedFd>>,
+    fd: Cell<Option<OwnedFd>>,
     in_flight: Cell<usize>,
     retired: Cell<bool>,
     active: Cell<bool>,
@@ -2505,7 +2505,7 @@ impl RegisteredFdState {
         if let Some(core) = self.core.upgrade() {
             core.borrow_mut().unregister_fixed_fd(self.slot);
         }
-        self.fd.borrow_mut().take();
+        self.fd.take();
     }
 }
 
