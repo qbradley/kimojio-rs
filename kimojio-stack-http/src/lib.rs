@@ -132,10 +132,10 @@ mod allocation_tracking {
 
 #[cfg(test)]
 mod tests {
-    use std::hint::black_box;
+    use std::{hint::black_box, time::Duration};
 
     use http::{HeaderName, HeaderValue, header::CONTENT_TYPE};
-    use kimojio_stack::Runtime;
+    use kimojio_stack::{Errno, Runtime};
     use kimojio_stack_tls::TlsContext;
     use openssl::{
         asn1::Asn1Time,
@@ -269,6 +269,84 @@ mod tests {
                 server.join(cx).unwrap();
                 let received = client.join(cx).unwrap();
                 assert_eq!(&received, b"world");
+            });
+        });
+    }
+
+    #[test]
+    fn plaintext_transport_timeout_cancels_pending_read() {
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let mut transport = StackTransport::plaintext(client_fd);
+            transport.set_io_timeout(Some(Duration::from_millis(1)));
+            let mut received = [0_u8; 1];
+            let error = transport.read(cx, &mut received).unwrap_err();
+
+            assert_eq!(error, super::Error::Io(Errno::TIME));
+            transport.close(cx).unwrap();
+            cx.close(server_fd).unwrap();
+        });
+    }
+
+    #[test]
+    fn plaintext_transport_deadline_is_transport_local_across_tasks() {
+        let (timed_fd, timed_peer_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+        let (normal_fd, normal_peer_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let timed = scope.spawn(move |cx| {
+                    let mut transport = StackTransport::plaintext(timed_fd);
+                    transport.set_io_timeout(Some(Duration::from_millis(1)));
+                    let mut received = [0_u8; 1];
+
+                    assert_eq!(
+                        transport.read(cx, &mut received).unwrap_err(),
+                        super::Error::Io(Errno::TIME)
+                    );
+                    transport.close(cx).unwrap();
+                    cx.close(timed_peer_fd).unwrap();
+                });
+
+                let normal_server = scope.spawn(move |cx| {
+                    cx.sleep(Duration::from_millis(5)).unwrap();
+                    cx.write(&normal_peer_fd, b"x").unwrap();
+                    cx.close(normal_peer_fd).unwrap();
+                });
+
+                let normal_client = scope.spawn(move |cx| {
+                    let mut transport = StackTransport::plaintext(normal_fd);
+                    let mut received = [0_u8; 1];
+
+                    assert_eq!(transport.read(cx, &mut received).unwrap(), 1);
+                    transport.close(cx).unwrap();
+                    received[0]
+                });
+
+                timed.join(cx).unwrap();
+                normal_server.join(cx).unwrap();
+                assert_eq!(normal_client.join(cx).unwrap(), b'x');
             });
         });
     }

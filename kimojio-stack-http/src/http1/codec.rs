@@ -9,7 +9,7 @@ use kimojio_stack::RuntimeContext;
 
 use crate::{Body, BodyLimits, Error, HttpConfig, LimitKind, StackTransport};
 
-use super::body::{BodyKind, read_body, write_body};
+use super::body::{BodyKind, drain_body, read_body, read_body_chunks, write_body};
 
 #[derive(Debug)]
 pub struct IncomingRequest {
@@ -89,6 +89,7 @@ pub fn read_response(
     transport: &mut StackTransport,
     read_buf: &mut Vec<u8>,
     config: HttpConfig,
+    request_method: &Method,
 ) -> Result<IncomingResponse, Error> {
     let Some(head) = read_head(cx, transport, read_buf, config)? else {
         return Err(Error::Eof);
@@ -117,7 +118,7 @@ pub fn read_response(
     .map_err(|_| Error::Parse("invalid HTTP response status"))?;
     let mut header_map = headers_to_map(parsed.headers)?;
     let mut close_after_response = wants_close(version, &header_map);
-    let body_kind = response_body_kind(status, &header_map)?;
+    let body_kind = response_body_kind(request_method, status, &header_map)?;
     close_after_response |= body_kind == BodyKind::Eof;
     let body = read_body(
         cx,
@@ -138,6 +139,101 @@ pub fn read_response(
     })
 }
 
+pub fn read_response_with_body_chunks<F>(
+    cx: &RuntimeContext<'_>,
+    transport: &mut StackTransport,
+    read_buf: &mut Vec<u8>,
+    config: HttpConfig,
+    request_method: &Method,
+    on_chunk: F,
+) -> Result<IncomingResponse, Error>
+where
+    F: FnMut(bytes::Bytes) -> Result<(), Error>,
+{
+    read_response_with_body_chunks_after_headers(
+        cx,
+        transport,
+        read_buf,
+        config,
+        request_method,
+        |_| Ok(true),
+        on_chunk,
+    )
+}
+
+pub fn read_response_with_body_chunks_after_headers<H, F>(
+    cx: &RuntimeContext<'_>,
+    transport: &mut StackTransport,
+    read_buf: &mut Vec<u8>,
+    config: HttpConfig,
+    request_method: &Method,
+    mut on_headers: H,
+    mut on_chunk: F,
+) -> Result<IncomingResponse, Error>
+where
+    H: FnMut(&Response<Body>) -> Result<bool, Error>,
+    F: FnMut(bytes::Bytes) -> Result<(), Error>,
+{
+    let Some(head) = read_head(cx, transport, read_buf, config)? else {
+        return Err(Error::Eof);
+    };
+    let mut headers = vec![httparse::EMPTY_HEADER; config.max_header_count];
+    let mut parsed = httparse::Response::new(&mut headers);
+    match parsed.parse(&head) {
+        Ok(httparse::Status::Complete(_)) => {}
+        Ok(httparse::Status::Partial) => return Err(Error::Parse("partial HTTP response head")),
+        Err(httparse::Error::TooManyHeaders) => {
+            return Err(Error::size_limit(
+                LimitKind::Headers,
+                config.max_header_count,
+                config.max_header_count + 1,
+            ));
+        }
+        Err(_) => return Err(Error::Parse("invalid HTTP response head")),
+    }
+
+    let version = parse_version(parsed.version)?;
+    let status = StatusCode::from_u16(
+        parsed
+            .code
+            .ok_or(Error::Parse("missing HTTP response status"))?,
+    )
+    .map_err(|_| Error::Parse("invalid HTTP response status"))?;
+    let mut header_map = headers_to_map(parsed.headers)?;
+    let mut close_after_response = wants_close(version, &header_map);
+    let body_kind = response_body_kind(request_method, status, &header_map)?;
+    close_after_response |= body_kind == BodyKind::Eof;
+
+    let mut builder = Response::builder().status(status).version(version);
+    *builder.headers_mut().expect("response builder has headers") = std::mem::take(&mut header_map);
+    let response = builder
+        .body(Body::empty())
+        .map_err(|_| Error::Protocol("failed to build HTTP response"))?;
+    let stream_body = on_headers(&response)?;
+    if stream_body {
+        read_body_chunks(
+            cx,
+            transport,
+            read_buf,
+            body_kind,
+            BodyLimits::new(config.max_body_bytes),
+            &mut on_chunk,
+        )?;
+    } else {
+        drain_body(
+            cx,
+            transport,
+            read_buf,
+            body_kind,
+            BodyLimits::new(config.max_body_bytes),
+        )?;
+    }
+    Ok(IncomingResponse {
+        response,
+        close_after_response,
+    })
+}
+
 pub fn write_request(
     cx: &RuntimeContext<'_>,
     transport: &mut StackTransport,
@@ -146,6 +242,53 @@ pub fn write_request(
     let mut bytes = Vec::new();
     write_request_to_vec(&mut bytes, request)?;
     transport.write_all(cx, &bytes)
+}
+
+pub fn write_request_head_and_body(
+    cx: &RuntimeContext<'_>,
+    transport: &mut StackTransport,
+    request: &Request<Body>,
+) -> Result<(), Error> {
+    let mut head = Vec::new();
+    let target = request
+        .uri()
+        .path_and_query()
+        .map(|target| target.as_str())
+        .unwrap_or("/");
+    head.extend_from_slice(request.method().as_str().as_bytes());
+    head.extend_from_slice(b" ");
+    head.extend_from_slice(target.as_bytes());
+    head.extend_from_slice(b" ");
+    write_version(&mut head, request.version())?;
+    head.extend_from_slice(b"\r\n");
+    let chunked = match transfer_encoding(request.headers())? {
+        Some(BodyKind::Chunked) => true,
+        Some(_) => return Err(Error::Protocol("invalid transfer encoding body kind")),
+        None => false,
+    };
+    for (name, value) in request.headers() {
+        head.extend_from_slice(name.as_str().as_bytes());
+        head.extend_from_slice(b": ");
+        head.extend_from_slice(value.as_bytes());
+        head.extend_from_slice(b"\r\n");
+    }
+    if !request.body().is_empty() && !request.headers().contains_key(CONTENT_LENGTH) && !chunked {
+        head.extend_from_slice(b"content-length: ");
+        head.extend_from_slice(request.body().len().to_string().as_bytes());
+        head.extend_from_slice(b"\r\n");
+    }
+    head.extend_from_slice(b"\r\n");
+    transport.write_all(cx, &head)?;
+    if chunked {
+        if !request.body().is_empty() {
+            transport.write_all(cx, format!("{:x}\r\n", request.body().len()).as_bytes())?;
+            transport.write_all(cx, request.body().as_bytes())?;
+            transport.write_all(cx, b"\r\n")?;
+        }
+        transport.write_all(cx, b"0\r\n\r\n")
+    } else {
+        transport.write_all(cx, request.body().as_bytes())
+    }
 }
 
 pub fn write_request_to_vec(bytes: &mut Vec<u8>, request: &Request<Body>) -> Result<(), Error> {
@@ -304,7 +447,14 @@ fn request_body_kind(headers: &HeaderMap) -> Result<BodyKind, Error> {
     content_length(headers).map(|len| len.map_or(BodyKind::Empty, BodyKind::ContentLength))
 }
 
-fn response_body_kind(status: StatusCode, headers: &HeaderMap) -> Result<BodyKind, Error> {
+fn response_body_kind(
+    request_method: &Method,
+    status: StatusCode,
+    headers: &HeaderMap,
+) -> Result<BodyKind, Error> {
+    if request_method == Method::HEAD {
+        return Ok(BodyKind::Empty);
+    }
     if status.is_informational()
         || status == StatusCode::NO_CONTENT
         || status == StatusCode::NOT_MODIFIED

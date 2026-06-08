@@ -3,6 +3,7 @@
 
 use http::{Request, Response};
 use kimojio_stack::RuntimeContext;
+use std::time::Instant;
 
 use crate::{Body, Error, HttpConfig, StackTransport, h2, http1};
 
@@ -36,6 +37,59 @@ impl ClientConnection {
         match self {
             Self::Http1(connection) => connection.send(cx, request),
             Self::Http2(connection) => connection.send(cx, request),
+        }
+    }
+
+    pub fn set_io_deadline(&mut self, deadline: Option<Instant>) -> Option<Instant> {
+        match self {
+            Self::Http1(connection) => connection.set_io_deadline(deadline),
+            Self::Http2(connection) => connection.set_io_deadline(deadline),
+        }
+    }
+
+    pub fn send_with_body_chunks<F>(
+        &mut self,
+        cx: &RuntimeContext<'_>,
+        request: &Request<Body>,
+        on_chunk: F,
+    ) -> Result<Response<Body>, Error>
+    where
+        F: FnMut(bytes::Bytes) -> Result<(), Error>,
+    {
+        match self {
+            Self::Http1(connection) => connection.send_with_body_chunks(cx, request, on_chunk),
+            Self::Http2(connection) => {
+                let stream_id = connection.send_request(cx, request)?;
+                connection
+                    .read_response_with_body_chunks(cx, stream_id, on_chunk)
+                    .map(|response| response.response)
+            }
+        }
+    }
+
+    pub fn send_with_body_chunks_after_headers<H, F>(
+        &mut self,
+        cx: &RuntimeContext<'_>,
+        request: &Request<Body>,
+        on_headers: H,
+        on_chunk: F,
+    ) -> Result<Response<Body>, Error>
+    where
+        H: FnMut(&Response<Body>) -> Result<bool, Error>,
+        F: FnMut(bytes::Bytes) -> Result<(), Error>,
+    {
+        match self {
+            Self::Http1(connection) => {
+                connection.send_with_body_chunks_after_headers(cx, request, on_headers, on_chunk)
+            }
+            Self::Http2(connection) => {
+                let stream_id = connection.send_request(cx, request)?;
+                connection
+                    .read_response_with_body_chunks_after_headers(
+                        cx, stream_id, on_headers, on_chunk,
+                    )
+                    .map(|response| response.response)
+            }
         }
     }
 

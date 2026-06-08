@@ -32,7 +32,7 @@ mod tests {
 
     use crate::{
         Body, BodyLimits, ErrorKind, HttpConfig, StackTransport,
-        http1::{ClientConnection, ServerConnection, codec},
+        http1::{ClientConnection, ServerConnection, body as http1_body, codec},
     };
 
     fn body(bytes: &[u8]) -> Body {
@@ -51,6 +51,92 @@ mod tests {
             StackTransport::plaintext(client_fd),
             StackTransport::plaintext(server_fd),
         )
+    }
+
+    #[test]
+    fn http1_body_chunks_deliver_content_length_chunked_and_eof() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            for (wire, kind, expected) in [
+                (
+                    b"abcdef".as_slice(),
+                    http1_body::BodyKind::ContentLength(6),
+                    b"abcdef".as_slice(),
+                ),
+                (
+                    b"3\r\nabc\r\n3\r\ndef\r\n0\r\n\r\n".as_slice(),
+                    http1_body::BodyKind::Chunked,
+                    b"abcdef".as_slice(),
+                ),
+                (
+                    b"abcdef".as_slice(),
+                    http1_body::BodyKind::Eof,
+                    b"abcdef".as_slice(),
+                ),
+            ] {
+                let (mut reader, mut writer) = socket_transport_pair();
+                cx.scope(|scope| {
+                    let write = scope.spawn(move |cx| {
+                        writer.write_all(cx, wire).unwrap();
+                        writer.shutdown_write(cx).unwrap();
+                    });
+                    let mut read_buf = Vec::new();
+                    let mut output = Vec::new();
+                    http1_body::read_body_chunks(
+                        cx,
+                        &mut reader,
+                        &mut read_buf,
+                        kind,
+                        BodyLimits::new(1024),
+                        |chunk| {
+                            output.extend_from_slice(&chunk);
+                            Ok(())
+                        },
+                    )
+                    .unwrap();
+                    write.join(cx).unwrap();
+                    assert_eq!(output, expected);
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn http1_request_head_and_body_writes_payload_separately() {
+        let (mut client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let writer = scope.spawn(move |cx| {
+                    let request = Request::builder()
+                        .method("PUT")
+                        .uri("/object")
+                        .body(body(b"payload"))
+                        .unwrap();
+                    codec::write_request_head_and_body(cx, &mut client_transport, &request)
+                        .unwrap();
+                    client_transport.shutdown_write(cx).unwrap();
+                });
+
+                let mut server = ServerConnection::new(server_transport, HttpConfig::default());
+                let incoming = server
+                    .serve_one(cx, |request| {
+                        assert_eq!(request.method(), "PUT");
+                        assert_eq!(request.uri(), "/object");
+                        assert_eq!(request.body().as_bytes(), b"payload");
+                        Ok(Response::builder()
+                            .status(StatusCode::OK)
+                            .body(Body::empty())
+                            .unwrap())
+                    })
+                    .unwrap();
+                assert!(incoming);
+                server.close(cx).unwrap();
+                writer.join(cx).unwrap();
+            });
+        });
     }
 
     #[test]
@@ -92,6 +178,43 @@ mod tests {
                 let response = client.join(cx).unwrap();
                 assert_eq!(response.status(), StatusCode::OK);
                 assert_eq!(response.body().as_bytes(), b"pong");
+            });
+        });
+    }
+
+    #[test]
+    fn http1_head_response_ignores_content_length_body() {
+        let (client_transport, mut server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut request = [0_u8; 512];
+                    let amount = server_transport.read(cx, &mut request).unwrap();
+                    assert!(request[..amount].starts_with(b"HEAD /object HTTP/1.1\r\n"));
+                    server_transport
+                        .write_all(cx, b"HTTP/1.1 200 OK\r\ncontent-length: 123\r\n\r\n")
+                        .unwrap();
+                    server_transport.close(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut client = ClientConnection::new(client_transport, HttpConfig::default());
+                    let request = Request::builder()
+                        .method("HEAD")
+                        .uri("/object")
+                        .body(Body::empty())
+                        .unwrap();
+                    let response = client.send(cx, &request).unwrap();
+                    client.close(cx).unwrap();
+                    response
+                });
+
+                server.join(cx).unwrap();
+                let response = client.join(cx).unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                assert!(response.body().is_empty());
             });
         });
     }

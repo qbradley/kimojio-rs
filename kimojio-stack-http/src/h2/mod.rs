@@ -190,6 +190,60 @@ mod tests {
     }
 
     #[test]
+    fn h2_response_body_chunks_are_delivered_incrementally() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut server = ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = server.accept(cx).unwrap().unwrap();
+                    let response = Response::builder()
+                        .status(StatusCode::OK)
+                        .body(body(b"chunk-one-and-two"))
+                        .unwrap();
+                    server
+                        .send_response(cx, incoming.stream_id, &response)
+                        .unwrap();
+                    server.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut client = ClientConnection::new(client_transport, HttpConfig::default());
+                    let request = Request::builder()
+                        .method("GET")
+                        .uri("/stream")
+                        .body(Body::empty())
+                        .unwrap();
+                    let stream_id = client.send_request(cx, &request).unwrap();
+                    let mut chunks = Vec::new();
+                    let response = client
+                        .read_response_with_body_chunks(cx, stream_id, |chunk| {
+                            chunks.push(chunk);
+                            Ok(())
+                        })
+                        .unwrap();
+                    client.close(cx).unwrap();
+                    (response, chunks)
+                });
+
+                server.join(cx).unwrap();
+                let (response, chunks) = client.join(cx).unwrap();
+                assert_eq!(response.response.status(), StatusCode::OK);
+                assert!(response.response.body().is_empty());
+                assert_eq!(
+                    chunks
+                        .iter()
+                        .flat_map(|chunk| chunk.iter().copied())
+                        .collect::<Vec<_>>(),
+                    b"chunk-one-and-two"
+                );
+            });
+        });
+    }
+
+    #[test]
     fn h2_concurrent_streams_preserve_association_out_of_order() {
         let (client_transport, server_transport) = socket_transport_pair();
         let mut runtime = Runtime::new();

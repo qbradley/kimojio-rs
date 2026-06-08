@@ -28,15 +28,20 @@ that need explicit scheduling and predictable latency:
   HTTP/2 transport.
 - `kimojio-stack-opentelemetry` provides low-level OpenTelemetry Protocol logs
   and metrics export over the stackful gRPC transport.
+- `kimojio-stack-storage` provides low-level durable object-storage request
+  foundations over the stackful HTTP transport.
 
 See the [Stackful HTTP and gRPC Guide][stack-http-grpc-guide] for supported
 protocol features, transport setup, interoperability guarantees, and current
 benchmark observations.
 See the [Stack OpenTelemetry Guide][stack-opentelemetry-guide] for supported
 telemetry signals, export behavior, and receiver interoperability testing.
+See the [Stackful Storage Guide][stack-storage-guide] for supported storage
+operation families, retry behavior, and integration-test gates.
 
 [stack-http-grpc-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-http-grpc.md
 [stack-opentelemetry-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-opentelemetry.md
+[stack-storage-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-storage.md
 
 ## Getting Started
 

@@ -7,6 +7,7 @@ members = [
     "kimojio-stack-grpc",
     "kimojio-stack-http",
     "kimojio-stack-opentelemetry",
+    "kimojio-stack-storage",
     "kimojio-stack-tls",
     "kimojio-tls",
     "perf",
@@ -48,6 +49,7 @@ kimojio-stack-grpc = { path = "kimojio-stack-grpc", version = "0.16.4" }
 kimojio-stack-http = { path = "kimojio-stack-http", version = "0.16.4" }
 kimojio-stack-opentelemetry = { path = "kimojio-stack-opentelemetry", version = "0.16.4" }
 kimojio-stack = { path = "kimojio-stack", version = "0.16.4" }
+kimojio-stack-storage = { path = "kimojio-stack-storage", version = "0.16.4" }
 kimojio-stack-tls = { path = "kimojio-stack-tls", version = "0.16.4" }
 kimojio-tls = { path = "kimojio-tls", version = "0.16.5" }
 libc = "0.2"

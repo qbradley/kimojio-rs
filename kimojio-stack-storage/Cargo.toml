@@ -1,0 +1,25 @@
+[package]
+name = "kimojio-stack-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "Low-allocation durable object storage client foundations for kimojio-stack"
+
+[features]
+default = []
+tls = ["kimojio-stack-http/tls"]
+
+[dependencies]
+bytes.workspace = true
+http.workspace = true
+kimojio-stack.workspace = true
+kimojio-stack-http = { path = "../kimojio-stack-http", version = "0.16.4", default-features = false }
+serde_json.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+httpdate.workspace = true
+openssl.workspace = true

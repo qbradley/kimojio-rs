@@ -73,6 +73,31 @@ pub(super) fn write_frame(
     transport.write_all(cx, &bytes)
 }
 
+pub(super) fn write_data_frame(
+    cx: &RuntimeContext<'_>,
+    transport: &mut StackTransport,
+    stream_id: StreamId,
+    data: &[u8],
+    end_stream: bool,
+) -> Result<(), Error> {
+    if data.len() > 0x00ff_ffff {
+        return Err(Error::size_limit(LimitKind::Frame, 0x00ff_ffff, data.len()));
+    }
+    let mut header = [0_u8; super::frame::FRAME_HEADER_LEN];
+    header[0] = ((data.len() >> 16) & 0xff) as u8;
+    header[1] = ((data.len() >> 8) & 0xff) as u8;
+    header[2] = (data.len() & 0xff) as u8;
+    header[3] = FrameType::Data as u8;
+    header[4] = if end_stream {
+        FrameFlags::END_STREAM.bits()
+    } else {
+        FrameFlags::EMPTY.bits()
+    };
+    header[5..9].copy_from_slice(&(stream_id.get() & 0x7fff_ffff).to_be_bytes());
+    transport.write_all(cx, &header)?;
+    transport.write_all(cx, data)
+}
+
 pub(super) fn write_header_block(
     cx: &RuntimeContext<'_>,
     transport: &mut StackTransport,

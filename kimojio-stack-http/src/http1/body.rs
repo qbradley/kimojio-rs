@@ -29,6 +29,46 @@ pub fn read_body(
     }
 }
 
+pub fn read_body_chunks<F>(
+    cx: &RuntimeContext<'_>,
+    transport: &mut StackTransport,
+    read_buf: &mut Vec<u8>,
+    kind: BodyKind,
+    limits: BodyLimits,
+    mut on_chunk: F,
+) -> Result<(), Error>
+where
+    F: FnMut(Bytes) -> Result<(), Error>,
+{
+    match kind {
+        BodyKind::Empty => Ok(()),
+        BodyKind::ContentLength(len) => {
+            limits.check_body_len(len)?;
+            read_content_length_chunks(cx, transport, read_buf, len, &mut on_chunk)
+        }
+        BodyKind::Chunked => read_chunked_chunks(cx, transport, read_buf, limits, &mut on_chunk),
+        BodyKind::Eof => read_to_eof_chunks(cx, transport, read_buf, limits, &mut on_chunk),
+    }
+}
+
+pub fn drain_body(
+    cx: &RuntimeContext<'_>,
+    transport: &mut StackTransport,
+    read_buf: &mut Vec<u8>,
+    kind: BodyKind,
+    limits: BodyLimits,
+) -> Result<(), Error> {
+    match kind {
+        BodyKind::Empty => Ok(()),
+        BodyKind::ContentLength(len) => {
+            limits.check_body_len(len)?;
+            drain_exact(cx, transport, read_buf, len)
+        }
+        BodyKind::Chunked => drain_chunked(cx, transport, read_buf, limits),
+        BodyKind::Eof => drain_to_eof(cx, transport, read_buf, limits),
+    }
+}
+
 pub fn write_body(buf: &mut Vec<u8>, body: &Body, chunked: bool) {
     if chunked {
         if !body.is_empty() {
@@ -52,6 +92,35 @@ fn read_content_length(
     limits.check_body_len(len)?;
     let bytes = read_exact_bytes(cx, transport, read_buf, len)?;
     Body::from_bytes(bytes, limits)
+}
+
+fn read_content_length_chunks<F>(
+    cx: &RuntimeContext<'_>,
+    transport: &mut StackTransport,
+    read_buf: &mut Vec<u8>,
+    len: usize,
+    on_chunk: &mut F,
+) -> Result<(), Error>
+where
+    F: FnMut(Bytes) -> Result<(), Error>,
+{
+    let mut remaining = len;
+    if !read_buf.is_empty() {
+        let amount = read_buf.len().min(remaining);
+        on_chunk(Bytes::copy_from_slice(&read_buf[..amount]))?;
+        read_buf.drain(..amount);
+        remaining -= amount;
+    }
+    let mut buf = [0_u8; 16 * 1024];
+    while remaining != 0 {
+        let amount = transport.read(cx, &mut buf[..remaining.min(16 * 1024)])?;
+        if amount == 0 {
+            return Err(Error::Eof);
+        }
+        on_chunk(Bytes::copy_from_slice(&buf[..amount]))?;
+        remaining -= amount;
+    }
+    Ok(())
 }
 
 fn read_chunked(
@@ -85,6 +154,39 @@ fn read_chunked(
     }
 }
 
+fn read_chunked_chunks<F>(
+    cx: &RuntimeContext<'_>,
+    transport: &mut StackTransport,
+    read_buf: &mut Vec<u8>,
+    limits: BodyLimits,
+    on_chunk: &mut F,
+) -> Result<(), Error>
+where
+    F: FnMut(Bytes) -> Result<(), Error>,
+{
+    let mut total_len = 0_usize;
+    loop {
+        let line = read_line(cx, transport, read_buf, 1024)?;
+        let size = parse_chunk_size(&line)?;
+        if size == 0 {
+            loop {
+                let trailer = read_line(cx, transport, read_buf, 8 * 1024)?;
+                if trailer.is_empty() {
+                    return Ok(());
+                }
+            }
+        }
+        total_len = total_len.saturating_add(size);
+        limits.check_body_len(total_len)?;
+        let chunk = read_exact_bytes(cx, transport, read_buf, size)?;
+        on_chunk(chunk)?;
+        let crlf = read_exact_bytes(cx, transport, read_buf, 2)?;
+        if crlf.as_ref() != b"\r\n" {
+            return Err(Error::Protocol("chunk data is not followed by CRLF"));
+        }
+    }
+}
+
 fn read_to_eof(
     cx: &RuntimeContext<'_>,
     transport: &mut StackTransport,
@@ -104,6 +206,35 @@ fn read_to_eof(
             return Ok(body.finish());
         }
         body.append(&buf[..amount])?;
+    }
+}
+
+fn read_to_eof_chunks<F>(
+    cx: &RuntimeContext<'_>,
+    transport: &mut StackTransport,
+    read_buf: &mut Vec<u8>,
+    limits: BodyLimits,
+    on_chunk: &mut F,
+) -> Result<(), Error>
+where
+    F: FnMut(Bytes) -> Result<(), Error>,
+{
+    let mut total_len = 0_usize;
+    if !read_buf.is_empty() {
+        total_len += read_buf.len();
+        limits.check_body_len(total_len)?;
+        on_chunk(Bytes::copy_from_slice(read_buf))?;
+        read_buf.clear();
+    }
+    let mut buf = [0_u8; 16 * 1024];
+    loop {
+        let amount = transport.read(cx, &mut buf)?;
+        if amount == 0 {
+            return Ok(());
+        }
+        total_len = total_len.saturating_add(amount);
+        limits.check_body_len(total_len)?;
+        on_chunk(Bytes::copy_from_slice(&buf[..amount]))?;
     }
 }
 
@@ -129,6 +260,91 @@ fn read_exact_bytes(
     }
 
     Ok(Bytes::from(bytes))
+}
+
+fn drain_chunked(
+    cx: &RuntimeContext<'_>,
+    transport: &mut StackTransport,
+    read_buf: &mut Vec<u8>,
+    limits: BodyLimits,
+) -> Result<(), Error> {
+    let mut total_len = 0_usize;
+    loop {
+        let line = read_line(cx, transport, read_buf, 1024)?;
+        let size = parse_chunk_size(&line)?;
+        if size == 0 {
+            loop {
+                let trailer = read_line(cx, transport, read_buf, 8 * 1024)?;
+                if trailer.is_empty() {
+                    return Ok(());
+                }
+            }
+        }
+        total_len = total_len.saturating_add(size);
+        limits.check_body_len(total_len)?;
+        drain_exact(cx, transport, read_buf, size)?;
+        let mut crlf = [0_u8; 2];
+        read_exact_into(cx, transport, read_buf, &mut crlf)?;
+        if crlf.as_ref() != b"\r\n" {
+            return Err(Error::Protocol("chunk data is not followed by CRLF"));
+        }
+    }
+}
+
+fn drain_exact(
+    cx: &RuntimeContext<'_>,
+    transport: &mut StackTransport,
+    read_buf: &mut Vec<u8>,
+    mut len: usize,
+) -> Result<(), Error> {
+    let mut buf = [0_u8; 16 * 1024];
+    while len != 0 {
+        let amount = len.min(buf.len());
+        read_exact_into(cx, transport, read_buf, &mut buf[..amount])?;
+        len -= amount;
+    }
+    Ok(())
+}
+
+fn drain_to_eof(
+    cx: &RuntimeContext<'_>,
+    transport: &mut StackTransport,
+    read_buf: &mut Vec<u8>,
+    limits: BodyLimits,
+) -> Result<(), Error> {
+    let mut total_len = read_buf.len();
+    limits.check_body_len(total_len)?;
+    read_buf.clear();
+    let mut buf = [0_u8; 16 * 1024];
+    loop {
+        let amount = transport.read(cx, &mut buf)?;
+        if amount == 0 {
+            return Ok(());
+        }
+        total_len = total_len.saturating_add(amount);
+        limits.check_body_len(total_len)?;
+    }
+}
+
+fn read_exact_into(
+    cx: &RuntimeContext<'_>,
+    transport: &mut StackTransport,
+    read_buf: &mut Vec<u8>,
+    mut out: &mut [u8],
+) -> Result<(), Error> {
+    let buffered = read_buf.len().min(out.len());
+    out[..buffered].copy_from_slice(&read_buf[..buffered]);
+    read_buf.drain(..buffered);
+    out = &mut out[buffered..];
+
+    while !out.is_empty() {
+        let amount = transport.read(cx, out)?;
+        if amount == 0 {
+            return Err(Error::Eof);
+        }
+        out = &mut out[amount..];
+    }
+    Ok(())
 }
 
 fn read_line(

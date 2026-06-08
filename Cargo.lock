@@ -947,6 +947,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kimojio-stack-storage"
+version = "0.16.4"
+dependencies = [
+ "base64",
+ "bytes",
+ "http",
+ "httpdate",
+ "kimojio-stack",
+ "kimojio-stack-http",
+ "openssl",
+ "serde_json",
+]
+
+[[package]]
 name = "kimojio-stack-tls"
 version = "0.16.5"
 dependencies = [
