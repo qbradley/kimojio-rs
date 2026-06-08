@@ -18,6 +18,13 @@ Key characteristics:
 - Explicit control over concurrency and load balancing.
 - No locks, atomics, or other thread synchronization
 
+## TLS Pool
+
+The workspace includes `kimojio-tls-pool`, a runtime-independent OpenSSL TLS
+pool for callback-based read and write operations on regular threads. It can run
+TLS work immediately, route it to background executors, or use adaptive placement
+with observable scheduling statistics.
+
 ## Getting Started
 
 ### Prerequisites

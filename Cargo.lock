@@ -635,6 +635,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kimojio-tls-pool"
+version = "0.0.1-alpha.0"
+dependencies = [
+ "criterion",
+ "openssl",
+ "rcgen",
+ "rustix",
+ "tempfile",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
