@@ -63,16 +63,6 @@ pub(crate) fn set_nonblocking_stream(tls: &BoxedTlsStream) -> OperationResult<()
     })
 }
 
-pub(crate) fn set_blocking_stream(tls: &BoxedTlsStream) -> OperationResult<()> {
-    let stream = tls.get_ref();
-    let flags = fcntl_getfl(stream).map_err(|error| {
-        OperationError::Io(std::io::Error::from_raw_os_error(error.raw_os_error()))
-    })?;
-    fcntl_setfl(stream, flags & !OFlags::NONBLOCK).map_err(|error| {
-        OperationError::Io(std::io::Error::from_raw_os_error(error.raw_os_error()))
-    })
-}
-
 fn set_nonblocking(stream: &BoxedTransport) -> Result<(), TlsPoolError> {
     let flags = fcntl_getfl(stream).map_err(|error| {
         TlsPoolError::Operation(OperationError::Io(std::io::Error::from_raw_os_error(

@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use kimojio_tls_pool::{PlacementMode, PoolConfig, TlsPool};
+use kimojio_tls_pool::{OperationError, PlacementMode, PoolConfig, TlsPool};
 use support::{
     RPC_HEADER_LEN, RPC_RESPONSE_LEN, background_config, controlled_stream_pair, immediate_config,
     make_rpc_header, read_exact_blocking, rpc_body_len, stream_pair, stream_pair_with_pools,
@@ -65,7 +65,44 @@ fn operation_error_is_reported_after_peer_drop() {
         controlled_stream_pair(immediate_config(), immediate_config());
     client_fail.store(true, std::sync::atomic::Ordering::Release);
 
-    assert!(write_blocking(&client, b"fail").is_err());
+    let (sender, receiver) = mpsc::channel();
+    client
+        .write(
+            b"fail".to_vec(),
+            Box::new(move |result| {
+                sender.send(result).unwrap();
+            }),
+        )
+        .unwrap();
+
+    assert!(
+        receiver
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_err()
+    );
+    assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
+}
+
+#[test]
+fn oversized_read_reports_exactly_one_callback_error() {
+    let (client, _server) = stream_pair(immediate_config(), immediate_config());
+    let (sender, receiver) = mpsc::channel();
+
+    client
+        .read(
+            32 * 1024 + 1,
+            Box::new(move |result| {
+                sender.send(result).unwrap();
+            }),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        receiver.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Err(OperationError::ReadTooLarge { .. })
+    ));
+    assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
 }
 
 #[test]
@@ -98,6 +135,35 @@ fn pending_read_does_not_occupy_only_client_executor() {
         read_receiver.recv_timeout(Duration::from_secs(5)).unwrap(),
         b"go"
     );
+    let stats = client_pool.stats();
+    assert!(stats.readiness_waits >= 1);
+    assert!(stats.readiness_resumed >= 1);
+}
+
+#[test]
+fn pending_read_shutdown_reports_exactly_one_callback_error() {
+    let client_pool = TlsPool::new(background_config(1)).unwrap();
+    let server_pool = TlsPool::new(background_config(1)).unwrap();
+    let (client, _server) = stream_pair_with_pools(&client_pool, &server_pool);
+    let (sender, receiver) = mpsc::channel();
+
+    client
+        .read(
+            2,
+            Box::new(move |result| {
+                sender.send(result).unwrap();
+            }),
+        )
+        .unwrap();
+
+    client_pool.shutdown();
+
+    assert!(matches!(
+        receiver.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Err(OperationError::Shutdown)
+    ));
+    assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
+    assert_eq!(client.stream_stats().active, 0);
 }
 
 #[test]

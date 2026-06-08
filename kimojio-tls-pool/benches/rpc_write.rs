@@ -447,6 +447,22 @@ fn client_write_batch(client: &TlsStream, count: u64, body_len: usize) {
     receiver.recv().unwrap();
 }
 
+fn client_write_per_operation(client: &TlsStream, count: u64, body_len: usize) {
+    let body: Arc<[u8]> = Arc::from(vec![0x6d; body_len].into_boxed_slice());
+    for _ in 0..count {
+        let (sender, receiver) = mpsc::channel();
+        client
+            .write_shared(
+                Arc::clone(&body),
+                Box::new(move |result| {
+                    sender.send(result.unwrap()).unwrap();
+                }),
+            )
+            .unwrap();
+        assert_eq!(receiver.recv().unwrap(), body_len);
+    }
+}
+
 fn server_drain_loop(server: &TlsStream, count: u64, body_len: usize) {
     for _ in 0..count {
         let body = read_exact_blocking(server, body_len).unwrap();
@@ -471,7 +487,7 @@ fn run_write_throughput_scaling(iters: u64, executor_count: usize) -> Duration {
         let server_barrier = Arc::clone(&barrier);
         clients.push(thread::spawn(move || {
             client_barrier.wait();
-            client_write_batch(&client, count, THROUGHPUT_BODY_LEN);
+            client_write_per_operation(&client, count, THROUGHPUT_BODY_LEN);
         }));
         servers.push(thread::spawn(move || {
             server_barrier.wait();
@@ -652,23 +668,17 @@ fn print_pool_stats(label: &str, executor_count: usize, pool: &TlsPool) {
     );
 }
 
-fn print_latency_summary(label: &str, mut run_once: impl FnMut() -> Duration) {
+fn print_sample_summary(label: &str, mut run_once: impl FnMut() -> Duration) {
     let mut samples = (0..5).map(|_| run_once()).collect::<Vec<_>>();
     samples.sort_unstable();
-    let p50 = percentile(&samples, 50);
-    let p95 = percentile(&samples, 95);
-    let p99 = percentile(&samples, 99);
+    let median = samples[samples.len() / 2];
+    let high = samples[samples.len() - 1];
     println!(
-        "{label}: p50={}us p95={}us p99={}us",
-        p50.as_micros(),
-        p95.as_micros(),
-        p99.as_micros()
+        "{label}: sample_median={}us sample_high={}us samples={}",
+        median.as_micros(),
+        high.as_micros(),
+        samples.len(),
     );
-}
-
-fn percentile(samples: &[Duration], percentile: usize) -> Duration {
-    let index = ((samples.len() - 1) * percentile).div_ceil(100);
-    samples[index]
 }
 
 fn bench_rpc_write(c: &mut Criterion) {
@@ -682,7 +692,7 @@ fn bench_rpc_write(c: &mut Criterion) {
         ));
         for mode in [Mode::Immediate, Mode::Background, Mode::Adaptive] {
             let label = format!("rpc_write/single_pair/{}/{body_len}", mode.name());
-            print_latency_summary(&label, || run_single_pair(1, body_len, mode));
+            print_sample_summary(&label, || run_single_pair(1, body_len, mode));
             single.bench_with_input(
                 BenchmarkId::new(mode.name(), body_len),
                 &(body_len, mode),
@@ -704,7 +714,7 @@ fn bench_rpc_write(c: &mut Criterion) {
         ));
         for mode in [Mode::Immediate, Mode::Background, Mode::Adaptive] {
             let label = format!("rpc_write/three_pair/{}/{body_len}", mode.name());
-            print_latency_summary(&label, || run_three_pair(3, body_len, mode));
+            print_sample_summary(&label, || run_three_pair(3, body_len, mode));
             three.bench_with_input(
                 BenchmarkId::new(mode.name(), body_len),
                 &(body_len, mode),
@@ -729,7 +739,7 @@ fn bench_rpc_write(c: &mut Criterion) {
                 "rpc_write/three_pair_shared_pool/{}/{body_len}",
                 mode.name()
             );
-            print_latency_summary(&label, || run_three_pair_shared_pool(3, body_len, mode));
+            print_sample_summary(&label, || run_three_pair_shared_pool(3, body_len, mode));
             shared.bench_with_input(
                 BenchmarkId::new(mode.name(), body_len),
                 &(body_len, mode),
@@ -754,7 +764,7 @@ fn bench_throughput_scaling(c: &mut Criterion) {
 
     for executor_count in EXECUTOR_COUNTS {
         let label = format!("rpc_write/throughput_scaling/{executor_count}_executors");
-        print_latency_summary(&label, || {
+        print_sample_summary(&label, || {
             run_throughput_scaling(THROUGHPUT_CONNECTIONS as u64, executor_count)
         });
         group.bench_with_input(
@@ -782,7 +792,7 @@ fn bench_write_throughput_scaling(c: &mut Criterion) {
 
     for executor_count in EXECUTOR_COUNTS {
         let label = format!("tls_write/throughput_scaling/{executor_count}_executors");
-        print_latency_summary(&label, || {
+        print_sample_summary(&label, || {
             run_write_throughput_scaling(THROUGHPUT_CONNECTIONS as u64, executor_count)
         });
         group.bench_with_input(
@@ -813,7 +823,7 @@ fn bench_batched_write_throughput_scaling(c: &mut Criterion) {
 
     for executor_count in EXECUTOR_COUNTS {
         let label = format!("tls_write/batched_throughput_scaling/{executor_count}_executors");
-        print_latency_summary(&label, || {
+        print_sample_summary(&label, || {
             run_batched_write_throughput_scaling(THROUGHPUT_CONNECTIONS as u64, executor_count)
         });
         group.bench_with_input(
@@ -844,7 +854,7 @@ fn bench_encrypt_throughput_scaling(c: &mut Criterion) {
 
     for executor_count in EXECUTOR_COUNTS {
         let label = format!("tls_write/encrypt_throughput_scaling/{executor_count}_executors");
-        print_latency_summary(&label, || {
+        print_sample_summary(&label, || {
             run_encrypt_throughput_scaling(THROUGHPUT_CONNECTIONS as u64, executor_count)
         });
         group.bench_with_input(
@@ -875,7 +885,7 @@ fn bench_saturated_encrypt_throughput_scaling(c: &mut Criterion) {
             THROUGHPUT_BODY_LEN as u64 * SATURATED_MESSAGES_PER_EXECUTOR * executor_count as u64;
         group.throughput(Throughput::Bytes(bytes));
         let label = format!("tls_write/saturated_encrypt_scaling/{executor_count}_executors");
-        print_latency_summary(&label, || {
+        print_sample_summary(&label, || {
             run_saturated_encrypt_throughput_scaling(1, executor_count)
         });
         group.bench_with_input(
@@ -902,7 +912,7 @@ fn bench_pool_single_encrypt(c: &mut Criterion) {
     ));
 
     let executor_count = 1;
-    print_latency_summary("tls_write/single_stream_encrypt/1_executor", || {
+    print_sample_summary("tls_write/single_stream_encrypt/1_executor", || {
         run_pool_single_encrypt(THROUGHPUT_MESSAGES_PER_ITER, executor_count)
     });
     group.bench_function("1_executor", |b| {
@@ -926,7 +936,7 @@ fn bench_direct_boxed_saturated_encrypt(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(bytes));
         let label =
             format!("openssl_direct_boxed/saturated_encrypt_scaling/{thread_count}_threads");
-        print_latency_summary(&label, || {
+        print_sample_summary(&label, || {
             run_direct_boxed_saturated_encrypt(1, thread_count)
         });
         group.bench_with_input(

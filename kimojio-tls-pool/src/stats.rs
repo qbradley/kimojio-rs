@@ -12,6 +12,8 @@ pub struct PoolStats {
     queued: AtomicU64,
     stream_queued: AtomicU64,
     executor_queued: AtomicU64,
+    readiness_waits: AtomicU64,
+    readiness_resumed: AtomicU64,
     completed: AtomicU64,
     failed: AtomicU64,
     ready_spins: AtomicU64,
@@ -29,6 +31,8 @@ impl PoolStats {
             queued: AtomicU64::new(0),
             stream_queued: AtomicU64::new(0),
             executor_queued: AtomicU64::new(0),
+            readiness_waits: AtomicU64::new(0),
+            readiness_resumed: AtomicU64::new(0),
             completed: AtomicU64::new(0),
             failed: AtomicU64::new(0),
             ready_spins: AtomicU64::new(0),
@@ -67,6 +71,19 @@ impl PoolStats {
         self.executor_queued.fetch_add(1, Ordering::Relaxed);
         if let Some(stats) = self.executors.get(executor) {
             stats.queued.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Records an operation parked on socket readiness instead of occupying an executor.
+    pub fn record_readiness_wait(&self) {
+        self.readiness_waits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records readiness-resumed progress on `executor`.
+    pub fn record_readiness_resumed(&self, executor: usize) {
+        self.readiness_resumed.fetch_add(1, Ordering::Relaxed);
+        if let Some(stats) = self.executors.get(executor) {
+            stats.readiness_resumed.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -115,6 +132,8 @@ impl PoolStats {
             queued: self.queued.load(Ordering::Relaxed),
             stream_queued: self.stream_queued.load(Ordering::Relaxed),
             executor_queued: self.executor_queued.load(Ordering::Relaxed),
+            readiness_waits: self.readiness_waits.load(Ordering::Relaxed),
+            readiness_resumed: self.readiness_resumed.load(Ordering::Relaxed),
             completed: self.completed.load(Ordering::Relaxed),
             failed: self.failed.load(Ordering::Relaxed),
             ready_spins: self.ready_spins.load(Ordering::Relaxed),
@@ -137,6 +156,7 @@ struct ExecutorStats {
     queued: AtomicU64,
     completed: AtomicU64,
     failed: AtomicU64,
+    readiness_resumed: AtomicU64,
     ready_spins: AtomicU64,
     idle_transitions: AtomicU64,
 }
@@ -149,6 +169,7 @@ impl ExecutorStats {
             queued: AtomicU64::new(0),
             completed: AtomicU64::new(0),
             failed: AtomicU64::new(0),
+            readiness_resumed: AtomicU64::new(0),
             ready_spins: AtomicU64::new(0),
             idle_transitions: AtomicU64::new(0),
         }
@@ -161,6 +182,7 @@ impl ExecutorStats {
             queued: self.queued.load(Ordering::Relaxed),
             completed: self.completed.load(Ordering::Relaxed),
             failed: self.failed.load(Ordering::Relaxed),
+            readiness_resumed: self.readiness_resumed.load(Ordering::Relaxed),
             ready_spins: self.ready_spins.load(Ordering::Relaxed),
             idle_transitions: self.idle_transitions.load(Ordering::Relaxed),
         }
@@ -182,6 +204,10 @@ pub struct PoolStatsSnapshot {
     pub stream_queued: u64,
     /// Operations queued to background executors.
     pub executor_queued: u64,
+    /// Operations parked on socket readiness without occupying an executor.
+    pub readiness_waits: u64,
+    /// Readiness-resumed operation attempts executed by pool executors.
+    pub readiness_resumed: u64,
     /// Operations completed successfully.
     pub completed: u64,
     /// Operations completed with failure.
@@ -207,6 +233,8 @@ pub struct ExecutorStatsSnapshot {
     pub completed: u64,
     /// Operations completed with failure on this executor.
     pub failed: u64,
+    /// Readiness-resumed operation attempts executed by this executor.
+    pub readiness_resumed: u64,
     /// Ready-spin checks performed by this executor.
     pub ready_spins: u64,
     /// Transitions into idle waiting by this executor.
@@ -237,6 +265,8 @@ mod tests {
         stats.record_immediate();
         stats.record_background_routed(1);
         stats.record_executor_queued(1);
+        stats.record_readiness_wait();
+        stats.record_readiness_resumed(1);
         stats.record_completed(Some(1));
         stats.record_failed(Some(1));
 
@@ -247,10 +277,13 @@ mod tests {
         assert_eq!(snapshot.queued, 1);
         assert_eq!(snapshot.stream_queued, 0);
         assert_eq!(snapshot.executor_queued, 1);
+        assert_eq!(snapshot.readiness_waits, 1);
+        assert_eq!(snapshot.readiness_resumed, 1);
         assert_eq!(snapshot.completed, 1);
         assert_eq!(snapshot.failed, 1);
         assert_eq!(snapshot.executors[1].routed, 1);
         assert_eq!(snapshot.executors[1].queued, 1);
+        assert_eq!(snapshot.executors[1].readiness_resumed, 1);
         assert_eq!(snapshot.executors[1].completed, 1);
         assert_eq!(snapshot.executors[1].failed, 1);
     }

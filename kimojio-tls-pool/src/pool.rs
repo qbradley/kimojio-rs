@@ -65,7 +65,11 @@ impl TlsPool {
         TlsStream::new(Arc::clone(&self.inner))
     }
 
-    /// Creates a client TLS stream over a connected transport.
+    /// Creates a client TLS stream over a connected fd-backed transport.
+    ///
+    /// The pool sets the transport fd to nonblocking mode after handshake and
+    /// assumes exclusive control over that fd's blocking mode while the stream
+    /// is alive.
     pub fn client<S>(
         &self,
         connector: &SslConnector,
@@ -79,7 +83,11 @@ impl TlsPool {
         Ok(TlsStream::from_tls(Arc::clone(&self.inner), tls))
     }
 
-    /// Creates a server TLS stream over a connected transport.
+    /// Creates a server TLS stream over a connected fd-backed transport.
+    ///
+    /// The pool sets the transport fd to nonblocking mode after handshake and
+    /// assumes exclusive control over that fd's blocking mode while the stream
+    /// is alive.
     pub fn server<S>(&self, acceptor: &SslAcceptor, stream: S) -> Result<TlsStream, TlsPoolError>
     where
         S: std::io::Read + std::io::Write + std::os::fd::AsFd + Send + 'static,
@@ -164,11 +172,19 @@ impl PoolInner {
             }
 
             let (readiness_sender, readiness_receiver) = mpsc::channel();
-            let readiness_handle = thread::Builder::new()
+            let (readiness_handle, readiness_thread_id) = match thread::Builder::new()
                 .name("kimojio-tls-pool-readiness".to_string())
                 .spawn(move || readiness_loop(readiness_receiver, wake_reader))
-                .expect("failed to spawn TLS pool readiness thread");
-            let readiness_thread_id = readiness_handle.thread().id();
+            {
+                Ok(handle) => {
+                    let thread_id = handle.thread().id();
+                    (Some(handle), thread_id)
+                }
+                Err(error) => {
+                    spawn_error = Some(error.to_string());
+                    (None, thread::current().id())
+                }
+            };
 
             Self {
                 config,
@@ -176,7 +192,7 @@ impl PoolInner {
                 workers,
                 readiness_sender,
                 readiness_waker: Mutex::new(wake_writer),
-                readiness_handle: Mutex::new(Some(readiness_handle)),
+                readiness_handle: Mutex::new(readiness_handle),
                 readiness_thread_id,
                 executor_loads: (0..executor_count).map(|_| AtomicU64::new(0)).collect(),
                 next_executor: AtomicUsize::new(0),
@@ -258,6 +274,10 @@ impl PoolInner {
         job: Job,
         shutdown: Box<dyn FnOnce() + Send + 'static>,
     ) -> Result<(), OperationError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .expect("pool lifecycle mutex poisoned");
         if self.shutdown.load(Ordering::Acquire) {
             return Err(OperationError::Shutdown);
         }

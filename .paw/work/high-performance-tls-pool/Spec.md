@@ -121,12 +121,12 @@ Acceptance Scenarios:
 - SC-002: Callback-based read and write tests verify exactly-once completion for success and error paths. (FR-002,FR-010)
 - SC-003: Same-stream concurrent submissions preserve TLS correctness and do not access the TLS state concurrently. (FR-006)
 - SC-004: Pool statistics distinguish immediate, background-routed, queued, completed, failed, and per-executor outcomes after tests and benchmarks. (FR-005,FR-007)
-- SC-005: Benchmarks report median, p95, and p99 latency for single-pair and three-pair RPC write scenarios across small bodies of 4 KiB or less, medium bodies from 8 KiB to 16 KiB, and near-maximum bodies from 24 KiB to 32 KiB. (FR-009)
+- SC-005: Benchmarks report statistically sampled Criterion timings plus five-sample smoke summaries for single-pair and three-pair RPC write scenarios across small bodies of 4 KiB or less, medium bodies from 8 KiB to 16 KiB, and near-maximum bodies from 24 KiB to 32 KiB. (FR-009)
 - SC-006: Adaptive policy can be configured so small replies of 4 KiB or less use immediate execution while writes of 24 KiB to 32 KiB are eligible for background execution. (FR-004,FR-005)
 
 ## Assumptions
 
-- The first implementation may target synchronous TLS operations and blocking sockets while preserving API space for future non-blocking integration.
+- The implementation targets synchronous OpenSSL TLS operations over fd-backed transports while using nonblocking socket readiness to avoid executor starvation.
 - The first implementation may use configurable heuristics instead of a fully optimal scheduler, provided statistics make policy behavior observable.
 - The initial maximum benchmark body size is 32 KiB, matching the current stated workload constraint.
 - Future runtime adapters are explicitly deferred until the runtime-independent layer is stable.
@@ -144,7 +144,7 @@ In Scope:
 
 Out of Scope:
 - Specific async runtime integration.
-- Non-blocking socket readiness integration.
+- Runtime-specific socket readiness integration beyond the pool-owned readiness reactor.
 - Kernel TLS integration.
 - Hardware TLS offload.
 - Full replacement of OpenSSL internals.

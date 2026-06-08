@@ -34,7 +34,7 @@ The approach is intentionally separate from existing kimojio runtime TLS wrapper
 - No kernel TLS or hardware TLS offload.
 - No full replacement of OpenSSL internals.
 - No guarantee that adaptive scheduling is globally optimal in the first implementation.
-- No non-blocking socket readiness integration in the first implementation unless required for correctness.
+- No runtime-specific socket readiness integration beyond the pool-owned readiness reactor required for correctness.
 
 ## Phase Status
 
@@ -152,7 +152,7 @@ The approach is intentionally separate from existing kimojio runtime TLS wrapper
 - [ ] Lint/typecheck: `cargo clippy -p kimojio-tls-pool --all-targets --quiet`
 
 #### Manual Verification:
-- [ ] Benchmark output reports median, p95, and p99 latency for all required body-size bands and modes.
+- [ ] Benchmark output reports Criterion timings plus five-sample smoke summaries for all required body-size bands and modes.
 - [ ] Statistics distinguish immediate-only, background-only, and adaptive routing decisions.
 
 ---

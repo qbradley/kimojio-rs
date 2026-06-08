@@ -2,8 +2,10 @@
 // Licensed under the MIT License.
 
 use std::os::fd::RawFd;
+#[cfg(test)]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+#[cfg(test)]
 use crate::{OperationError, OperationResult};
 
 /// Kind of TLS operation submitted to a stream.
@@ -30,6 +32,7 @@ pub enum OperationPlacement {
     },
 }
 
+#[cfg(test)]
 pub(crate) type OperationFn<T> = Box<dyn FnOnce() -> OperationResult<T> + Send + 'static>;
 
 pub(crate) enum CompletionStatus {
@@ -38,6 +41,7 @@ pub(crate) enum CompletionStatus {
     Panicked,
 }
 
+#[cfg(test)]
 pub(crate) struct OperationWork<T> {
     kind: OperationKind,
     size: usize,
@@ -45,6 +49,7 @@ pub(crate) struct OperationWork<T> {
     callback: crate::CompletionCallback<T>,
 }
 
+#[cfg(test)]
 impl<T> OperationWork<T> {
     pub(crate) fn new(
         kind: OperationKind,
@@ -73,6 +78,7 @@ impl<T> OperationWork<T> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn complete<T>(
     operation: OperationFn<T>,
     callback: crate::CompletionCallback<T>,
