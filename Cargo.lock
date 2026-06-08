@@ -876,7 +876,7 @@ dependencies = [
 
 [[package]]
 name = "kimojio-stack"
-version = "0.16.5"
+version = "0.0.1-alpha.0"
 dependencies = [
  "corosensei",
  "criterion",
@@ -889,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "kimojio-stack-grpc"
-version = "0.16.5"
+version = "0.0.1-alpha.0"
 dependencies = [
  "base64",
  "bytes",
@@ -911,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "kimojio-stack-http"
-version = "0.16.5"
+version = "0.0.1-alpha.0"
 dependencies = [
  "bytes",
  "criterion",
@@ -931,7 +931,7 @@ dependencies = [
 
 [[package]]
 name = "kimojio-stack-opentelemetry"
-version = "0.16.4"
+version = "0.0.1-alpha.0"
 dependencies = [
  "bytes",
  "kimojio-stack",
@@ -948,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "kimojio-stack-storage"
-version = "0.16.4"
+version = "0.0.1-alpha.0"
 dependencies = [
  "base64",
  "bytes",
@@ -962,7 +962,7 @@ dependencies = [
 
 [[package]]
 name = "kimojio-stack-tls"
-version = "0.16.5"
+version = "0.0.1-alpha.0"
 dependencies = [
  "foreign-types-shared",
  "kimojio-stack",
