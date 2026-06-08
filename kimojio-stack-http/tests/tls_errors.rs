@@ -34,8 +34,8 @@ fn tls_handshake_failure_maps_to_tls_error_kind() {
                 transport.close(cx).unwrap();
             });
 
-            client.join(cx).unwrap();
-            assert_eq!(server.join(cx).unwrap(), ErrorKind::Tls);
+            client.join(cx);
+            assert_eq!(server.join(cx), ErrorKind::Tls);
         });
     });
 }
@@ -75,8 +75,8 @@ fn tls_certificate_verification_failure_maps_to_tls_error_kind() {
                 }
             });
 
-            assert_eq!(client.join(cx).unwrap(), ErrorKind::Tls);
-            let _ = server.join(cx).unwrap();
+            assert_eq!(client.join(cx), ErrorKind::Tls);
+            let _ = server.join(cx);
         });
     });
 }
@@ -108,8 +108,8 @@ fn tls_client_handshake_eof_maps_to_tls_error_kind() {
                 }
             });
 
-            server.join(cx).unwrap();
-            assert_eq!(client.join(cx).unwrap(), ErrorKind::Tls);
+            server.join(cx);
+            assert_eq!(client.join(cx), ErrorKind::Tls);
         });
     });
 }
@@ -142,8 +142,8 @@ fn tls_close_notify_maps_to_eof_read() {
                 amount
             });
 
-            server.join(cx).unwrap();
-            assert_eq!(client.join(cx).unwrap(), 0);
+            server.join(cx);
+            assert_eq!(client.join(cx), 0);
         });
     });
 }

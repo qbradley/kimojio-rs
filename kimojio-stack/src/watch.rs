@@ -228,8 +228,8 @@ mod tests {
                 });
                 let sender = scope.spawn(|_| tx.send(42).unwrap());
 
-                sender.join(cx).unwrap();
-                receiver.join(cx).unwrap()
+                sender.join(cx);
+                receiver.join(cx)
             })
         });
 

@@ -84,7 +84,7 @@ fn run_http1_tls(iters: u64, body_len: usize) -> Duration {
                 Some(HttpProtocol::Http1),
             )
             .unwrap();
-            let server = server.join(cx).unwrap();
+            let server = server.join(cx);
             run_http1_in_scope(cx, iters, body_len, client, server)
         })
     })
@@ -130,7 +130,7 @@ fn run_http1_in_scope(
         }
         let elapsed = start.elapsed();
         client.close(cx).unwrap();
-        server.join(cx).unwrap();
+        server.join(cx);
         elapsed
     })
 }
@@ -167,7 +167,7 @@ fn run_h2_tls(iters: u64, body_len: usize) -> Duration {
                 Some(HttpProtocol::Http2),
             )
             .unwrap();
-            let server = server.join(cx).unwrap();
+            let server = server.join(cx);
             run_h2_in_scope(cx, iters, body_len, client, server)
         })
     })
@@ -209,7 +209,7 @@ fn run_h2_in_scope(
         }
         let elapsed = start.elapsed();
         client.close(cx).unwrap();
-        server.join(cx).unwrap();
+        server.join(cx);
         elapsed
     })
 }

@@ -95,7 +95,7 @@ mod tests {
                         },
                     )
                     .unwrap();
-                    write.join(cx).unwrap();
+                    write.join(cx);
                     assert_eq!(output, expected);
                 });
             }
@@ -134,7 +134,7 @@ mod tests {
                     .unwrap();
                 assert!(incoming);
                 server.close(cx).unwrap();
-                writer.join(cx).unwrap();
+                writer.join(cx);
             });
         });
     }
@@ -174,8 +174,8 @@ mod tests {
                     response
                 });
 
-                server.join(cx).unwrap();
-                let response = client.join(cx).unwrap();
+                server.join(cx);
+                let response = client.join(cx);
                 assert_eq!(response.status(), StatusCode::OK);
                 assert_eq!(response.body().as_bytes(), b"pong");
             });
@@ -211,8 +211,8 @@ mod tests {
                     response
                 });
 
-                server.join(cx).unwrap();
-                let response = client.join(cx).unwrap();
+                server.join(cx);
+                let response = client.join(cx);
                 assert_eq!(response.status(), StatusCode::OK);
                 assert!(response.body().is_empty());
             });
@@ -254,8 +254,8 @@ mod tests {
                     response
                 });
 
-                server.join(cx).unwrap();
-                let response = client.join(cx).unwrap();
+                server.join(cx);
+                let response = client.join(cx);
                 assert_eq!(response.status(), StatusCode::OK);
                 assert_eq!(response.body().as_bytes(), b"chunked response");
             });
@@ -309,8 +309,8 @@ mod tests {
                     second_response
                 });
 
-                server.join(cx).unwrap();
-                let response = client.join(cx).unwrap();
+                server.join(cx);
+                let response = client.join(cx);
                 assert_eq!(response.body().as_bytes(), b"two");
             });
         });
@@ -354,8 +354,8 @@ mod tests {
                     response
                 });
 
-                server.join(cx).unwrap();
-                let response = client.join(cx).unwrap();
+                server.join(cx);
+                let response = client.join(cx);
                 assert_eq!(response.status(), StatusCode::OK);
                 assert_eq!(response.body().as_bytes(), b"eof-body");
             });
@@ -471,8 +471,8 @@ mod tests {
                     transport.close(cx).unwrap();
                 });
 
-                client.join(cx).unwrap();
-                server.join(cx).unwrap()
+                client.join(cx);
+                server.join(cx)
             })
         })
     }

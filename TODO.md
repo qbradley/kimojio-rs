@@ -1,3 +1,2 @@
-- panic behavior on nested threads (should they immediately propagate up?)
 - cancelation behavior (cancel I/O when scope exits)
 - Make sure TLS can support registered buffers and fds

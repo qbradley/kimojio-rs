@@ -91,7 +91,7 @@ fn protocol_limits_client_requires_status_trailers() {
                 )
                 .unwrap_err();
             client.close(cx).unwrap();
-            server.join(cx).unwrap();
+            server.join(cx);
             error
         })
     });
@@ -149,7 +149,7 @@ fn protocol_limits_streaming_client_rejects_oversized_response_message() {
             let error = stream.next(cx).unwrap_err();
             drop(stream);
             client.close(cx).unwrap();
-            server.join(cx).unwrap();
+            server.join(cx);
             error
         })
     });
@@ -199,7 +199,7 @@ fn protocol_limits_streaming_client_rejects_invalid_terminal_status() {
             let error = stream.next(cx).unwrap_err();
             drop(stream);
             client.close(cx).unwrap();
-            server.join(cx).unwrap();
+            server.join(cx);
             error
         })
     });
@@ -263,7 +263,7 @@ fn protocol_limits_server_rejects_non_post_before_handler() {
             let stream_id = client.send_request(cx, &request).unwrap();
             let response = client.read_response_with_trailers(cx, stream_id).unwrap();
             client.close(cx).unwrap();
-            server.join(cx).unwrap();
+            server.join(cx);
             Status::from_trailers(&response.trailers).unwrap()
         })
     });
@@ -301,7 +301,7 @@ fn protocol_limits_server_rejects_unsupported_grpc_content_type() {
             let stream_id = client.send_request(cx, &request).unwrap();
             let response = client.read_response_with_trailers(cx, stream_id).unwrap();
             client.close(cx).unwrap();
-            server.join(cx).unwrap();
+            server.join(cx);
             Status::from_trailers(&response.trailers).unwrap()
         })
     });
@@ -465,7 +465,7 @@ fn streaming_client_error_for_raw_data(data: Bytes) -> kimojio_stack_grpc::Error
             let error = stream.next(cx).unwrap_err();
             drop(stream);
             client.close(cx).unwrap();
-            server.join(cx).unwrap();
+            server.join(cx);
             error
         })
     })

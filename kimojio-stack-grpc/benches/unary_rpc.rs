@@ -91,7 +91,7 @@ fn run_tls(iters: u64, payload_len: usize) -> Duration {
                 Some(HttpProtocol::Http2),
             )
             .unwrap();
-            let server = server.join(cx).unwrap();
+            let server = server.join(cx);
             run_grpc_in_scope(cx, iters, payload_len, client, server)
         })
     })
@@ -152,7 +152,7 @@ fn run_grpc_in_scope(
         }
         let elapsed = start.elapsed();
         client.close(cx).unwrap();
-        server.join(cx).unwrap();
+        server.join(cx);
         elapsed
     })
 }

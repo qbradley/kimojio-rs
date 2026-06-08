@@ -31,7 +31,7 @@ fn protocol_limits_http1_rejects_oversized_headers() {
             let mut server = http1::ServerConnection::new(server_transport, config);
             let error = server.read_request(cx).unwrap_err();
             server.close(cx).unwrap();
-            client.join(cx).unwrap();
+            client.join(cx);
             error
         })
     });
@@ -72,7 +72,7 @@ fn protocol_limits_http1_rejects_oversized_body() {
             let mut server = http1::ServerConnection::new(server_transport, config);
             let error = server.read_request(cx).unwrap_err();
             server.close(cx).unwrap();
-            client.join(cx).unwrap();
+            client.join(cx);
             error
         })
     });
@@ -110,7 +110,7 @@ fn protocol_limits_h2_rejects_invalid_frame_type() {
             let mut server = h2::ServerConnection::new(server_transport, HttpConfig::default());
             let error = server.accept(cx).unwrap_err();
             server.close(cx).unwrap();
-            client.join(cx).unwrap();
+            client.join(cx);
             error
         })
     });
@@ -141,7 +141,7 @@ fn protocol_limits_h2_rejects_oversized_frame_before_payload_read() {
             let mut server = h2::ServerConnection::new(server_transport, HttpConfig::default());
             let error = server.accept(cx).unwrap_err();
             server.close(cx).unwrap();
-            client.join(cx).unwrap();
+            client.join(cx);
             error
         })
     });
@@ -191,7 +191,7 @@ fn protocol_limits_h2_rejects_encoded_header_block_over_limit() {
             let mut server = h2::ServerConnection::new(server_transport, config);
             let error = server.accept(cx).unwrap_err();
             server.close(cx).unwrap();
-            client.join(cx).unwrap();
+            client.join(cx);
             error
         })
     });
@@ -233,7 +233,7 @@ fn protocol_limits_h2_rejects_oversized_body() {
             let mut server = h2::ServerConnection::new(server_transport, config);
             let error = server.accept(cx).unwrap_err();
             server.close(cx).unwrap();
-            client.join(cx).unwrap();
+            client.join(cx);
             error
         })
     });
@@ -297,7 +297,7 @@ fn protocol_limits_h2_enforces_max_concurrent_streams() {
             );
             let error = server.accept(cx).unwrap_err();
             server.close(cx).unwrap();
-            client.join(cx).unwrap();
+            client.join(cx);
             error
         })
     });
@@ -328,7 +328,7 @@ fn protocol_limits_h2_peer_close_during_in_flight_exchange_is_explicit() {
             let stream_id = client.send_request(cx, &request).unwrap();
             let error = client.read_response(cx, stream_id).unwrap_err();
             client.close(cx).unwrap();
-            server.join(cx).unwrap();
+            server.join(cx);
             error.kind()
         })
     });
@@ -394,7 +394,7 @@ fn protocol_limits_h2_stalled_stream_window_unblocks_after_window_update() {
             let stream_id = client.send_request(cx, &request).unwrap();
             assert_eq!(stream_id.get(), 1);
             client.close(cx).unwrap();
-            server.join(cx).unwrap();
+            server.join(cx);
         });
     });
 }
@@ -431,7 +431,7 @@ fn protocol_limits_h2_repeated_end_stream_data_replenishes_connection_window() {
                 assert_eq!(response.body().as_bytes(), &[b's'; BODY_LEN]);
             }
             client.close(cx).unwrap();
-            server.join(cx).unwrap();
+            server.join(cx);
         })
     });
 }

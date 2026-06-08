@@ -81,7 +81,7 @@ fn run_tls_read(iters: u64, size: usize) -> Duration {
 
             tls.shutdown(cx).unwrap();
             tls.close(cx).unwrap();
-            server.join(cx).unwrap();
+            server.join(cx);
             elapsed
         })
     })
@@ -120,7 +120,7 @@ fn run_tls_read_async(iters: u64, size: usize) -> Duration {
 
             tls.shutdown(cx).unwrap();
             tls.close(cx).unwrap();
-            server.join(cx).unwrap();
+            server.join(cx);
             elapsed
         })
     })
@@ -161,7 +161,7 @@ fn run_tls_write(iters: u64, size: usize) -> Duration {
 
             tls.shutdown(cx).unwrap();
             tls.close(cx).unwrap();
-            server.join(cx).unwrap();
+            server.join(cx);
             elapsed
         })
     })
@@ -204,7 +204,7 @@ fn run_tls_write_async(iters: u64, size: usize) -> Duration {
 
             tls.shutdown(cx).unwrap();
             tls.close(cx).unwrap();
-            server.join(cx).unwrap();
+            server.join(cx);
             elapsed
         })
     })

@@ -1446,7 +1446,7 @@ mod tests {
                     5
                 });
 
-                sender.join(cx).unwrap()
+                sender.join(cx)
             })
         });
 
@@ -1473,7 +1473,7 @@ mod tests {
                     rx.recv(cx).unwrap()
                 });
 
-                receiver.join(cx).unwrap()
+                receiver.join(cx)
             })
         });
 
@@ -1501,7 +1501,7 @@ mod tests {
                     tx.send(cx, 2)
                 });
 
-                sender.join(cx).unwrap()
+                sender.join(cx)
             })
         });
 
@@ -1531,7 +1531,7 @@ mod tests {
                     rx.recv(cx)
                 });
 
-                receiver.join(cx).unwrap()
+                receiver.join(cx)
             })
         });
 
@@ -1549,9 +1549,9 @@ mod tests {
                 let receiver = scope.spawn(move |cx| rx.recv(cx).unwrap());
                 let other = scope.spawn(|_| 40);
 
-                assert_eq!(other.join(cx).unwrap(), 40);
+                assert_eq!(other.join(cx), 40);
                 tx.try_send(2).unwrap();
-                receiver.join(cx).unwrap()
+                receiver.join(cx)
             })
         });
 
@@ -1572,7 +1572,7 @@ mod tests {
                         rx.recv(cx).unwrap() + rx.recv(cx).unwrap()
                     });
 
-                    receiver.join(cx).unwrap()
+                    receiver.join(cx)
                 })
             })
         });
@@ -1590,7 +1590,7 @@ mod tests {
                         tx.send(cx, 22).unwrap();
                     });
 
-                    sender.join(cx).unwrap();
+                    sender.join(cx);
                 });
             });
         });
@@ -1778,7 +1778,7 @@ mod tests {
                         rx.recv(cx).unwrap()
                     });
 
-                    receiver.join(cx).unwrap()
+                    receiver.join(cx)
                 })
             })
         });
@@ -1806,7 +1806,7 @@ mod tests {
                         rx.recv(cx).unwrap()
                     });
 
-                    receiver.join(cx).unwrap()
+                    receiver.join(cx)
                 })
             })
         });
@@ -1831,7 +1831,7 @@ mod tests {
             runtime.block_on(|cx| {
                 cx.scope(|scope| {
                     let sender = scope.spawn(move |cx| tx.send(cx, 66).unwrap());
-                    sender.join(cx).unwrap();
+                    sender.join(cx);
                 });
             });
         });
@@ -1856,7 +1856,7 @@ mod tests {
             runtime.block_on(|cx| {
                 cx.scope(|scope| {
                     let sender = scope.spawn(move |cx| tx.send(cx, 2).unwrap());
-                    sender.join(cx).unwrap();
+                    sender.join(cx);
                 });
             });
         });

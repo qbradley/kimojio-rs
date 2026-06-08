@@ -123,8 +123,8 @@ fn mid_export_close_returns_explicit_error() {
                 client.export(cx, log_batch())
             });
 
-            let result = client.join(cx).unwrap();
-            closer.join(cx).unwrap();
+            let result = client.join(cx);
+            closer.join(cx);
             result
         })
     });

@@ -1301,8 +1301,8 @@ mod tests {
                     echoed
                 });
 
-                server.join(cx).unwrap();
-                let echoed = client.join(cx).unwrap();
+                server.join(cx);
+                let echoed = client.join(cx);
                 assert_eq!(echoed, message);
             });
         });
@@ -1390,8 +1390,8 @@ mod tests {
                     echoed.buffer[..echoed.bytes].to_vec()
                 });
 
-                server.join(cx).unwrap();
-                let echoed = client.join(cx).unwrap();
+                server.join(cx);
+                let echoed = client.join(cx);
                 assert_eq!(echoed, message);
             });
         });
@@ -1453,8 +1453,8 @@ mod tests {
                     tls.close(cx).expect("client TLS close failed");
                 });
 
-                let cancel_supported = server.join(cx).unwrap();
-                client.join(cx).unwrap();
+                let cancel_supported = server.join(cx);
+                client.join(cx);
                 if !cancel_supported {
                     eprintln!("skipped TLS async cancel path: io_uring async cancel unsupported");
                 }
@@ -1524,8 +1524,8 @@ mod tests {
                     received
                 });
 
-                server.join(cx).unwrap();
-                let received = client.join(cx).unwrap();
+                server.join(cx);
+                let received = client.join(cx);
                 assert_eq!(received, response);
             });
         });

@@ -315,8 +315,8 @@ mod tests {
                     received
                 });
 
-                server.join(cx).unwrap();
-                let received = client.join(cx).unwrap();
+                server.join(cx);
+                let received = client.join(cx);
                 assert_eq!(&received, b"world");
             });
         });
@@ -393,9 +393,9 @@ mod tests {
                     received[0]
                 });
 
-                timed.join(cx).unwrap();
-                normal_server.join(cx).unwrap();
-                assert_eq!(normal_client.join(cx).unwrap(), b'x');
+                timed.join(cx);
+                normal_server.join(cx);
+                assert_eq!(normal_client.join(cx), b'x');
             });
         });
     }
@@ -442,8 +442,8 @@ mod tests {
                     received
                 });
 
-                server.join(cx).unwrap();
-                let received = client.join(cx).unwrap();
+                server.join(cx);
+                let received = client.join(cx);
                 assert_eq!(&received, b"world");
             });
         });
@@ -483,7 +483,7 @@ mod tests {
                     }
                 });
                 client.close(cx).unwrap();
-                server.join(cx).unwrap();
+                server.join(cx);
                 counts
             })
         });
@@ -530,7 +530,7 @@ mod tests {
                     }
                 });
                 client.close(cx).unwrap();
-                server.join(cx).unwrap();
+                server.join(cx);
                 counts
             })
         });

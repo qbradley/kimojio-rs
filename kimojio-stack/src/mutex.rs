@@ -172,8 +172,8 @@ mod tests {
                     *guard += 10;
                 });
 
-                first.join(cx).unwrap();
-                second.join(cx).unwrap();
+                first.join(cx);
+                second.join(cx);
             });
         });
 

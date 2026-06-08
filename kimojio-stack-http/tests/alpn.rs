@@ -34,8 +34,8 @@ fn stack_tls_negotiates_h2_alpn_for_http2() {
                 selected
             });
 
-            assert_eq!(client.join(cx).unwrap(), Some(HttpProtocol::Http2));
-            assert_eq!(server.join(cx).unwrap(), Some(HttpProtocol::Http2));
+            assert_eq!(client.join(cx), Some(HttpProtocol::Http2));
+            assert_eq!(server.join(cx), Some(HttpProtocol::Http2));
         });
     });
 }

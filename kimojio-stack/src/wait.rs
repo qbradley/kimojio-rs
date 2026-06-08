@@ -197,7 +197,7 @@ mod tests {
                 *guard = 35;
                 drop(guard);
 
-                assert_eq!(unlocker.try_join().unwrap().unwrap(), 7);
+                assert_eq!(unlocker.try_join().unwrap(), 7);
             });
         });
 
@@ -223,7 +223,7 @@ mod tests {
                 cx.wait_all(&waitables, Some(Duration::from_secs(1)))
                     .unwrap();
 
-                assert_eq!(writer.try_join().unwrap().unwrap(), 5);
+                assert_eq!(writer.try_join().unwrap(), 5);
                 let read_output = read.try_get().unwrap().unwrap();
                 assert_eq!(read_output.buffer[0], 42);
             });

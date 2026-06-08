@@ -654,7 +654,7 @@ mod tests {
 
                 let result = client.export(cx, batch()).unwrap();
                 client.finish(cx).unwrap();
-                server.join(cx).unwrap();
+                server.join(cx);
 
                 assert_eq!(result.rejected_data_points(), 1);
                 assert_eq!(result.error_message(), "one rejected");
@@ -701,7 +701,7 @@ mod tests {
                 );
                 let error = client.export(cx, batch()).unwrap_err();
                 client.finish(cx).unwrap();
-                server.join(cx).unwrap();
+                server.join(cx);
                 error
             })
         });
@@ -757,9 +757,9 @@ mod tests {
                     http.shutdown_write_and_close_after_peer(cx).unwrap();
                 });
 
-                unrelated.join(cx).unwrap();
-                server.join(cx).unwrap();
-                client.join(cx).unwrap()
+                unrelated.join(cx);
+                server.join(cx);
+                client.join(cx)
             })
         });
 
@@ -819,7 +819,7 @@ mod tests {
                 });
 
                 client.finish(cx).unwrap();
-                server.join(cx).unwrap();
+                server.join(cx);
                 counts
             })
         });

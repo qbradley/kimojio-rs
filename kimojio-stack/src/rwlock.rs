@@ -252,7 +252,7 @@ mod tests {
                     *guard
                 });
 
-                reader.join(cx).unwrap() + writer.join(cx).unwrap()
+                reader.join(cx) + writer.join(cx)
             })
         });
 

@@ -64,8 +64,8 @@ fn stackful_http1_client_and_server_exchange_over_tls() {
                 response
             });
 
-            server.join(cx).unwrap();
-            let response = client.join(cx).unwrap();
+            server.join(cx);
+            let response = client.join(cx);
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(response.body().as_bytes(), b"pong");
         });

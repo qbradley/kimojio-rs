@@ -101,7 +101,7 @@ mod tests {
                 let second = scope.spawn(|cx| barrier.wait(cx).is_leader() as usize);
                 let third = scope.spawn(|cx| barrier.wait(cx).is_leader() as usize);
 
-                first.join(cx).unwrap() + second.join(cx).unwrap() + third.join(cx).unwrap()
+                first.join(cx) + second.join(cx) + third.join(cx)
             })
         });
 

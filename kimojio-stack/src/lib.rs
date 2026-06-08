@@ -25,7 +25,9 @@
 //! overrides the inherited default stack size for one coroutine. [`RuntimeContext::stack_usage`]
 //! and [`JoinHandle::join_with_stack_usage`] expose current and final stack usage
 //! so applications can tune stack sizes. [`JoinHandle::join`] retrieves the
-//! coroutine return value and propagates panics as [`JoinError`].
+//! coroutine return value. If a coroutine panic escapes the spawned closure, the
+//! panic is propagated to the parent when the handle is joined or when the scope
+//! finishes.
 //!
 //! The scheduler is deliberately flat. A coroutine that blocks on a join, scope,
 //! channel receive, or I/O operation records an internal waiter and suspends with
@@ -553,6 +555,7 @@ impl Runtime {
             core: Rc::clone(&core),
             stack_size: effective_stack_size(self.config.stack_size),
             current: CurrentTask::Root,
+            active_scopes: RefCell::new(Vec::new()),
         };
         let output = main(&cx);
 
@@ -581,6 +584,7 @@ pub struct RuntimeContext<'cx> {
     core: Rc<RefCell<Scheduler>>,
     stack_size: usize,
     current: CurrentTask<'cx>,
+    active_scopes: RefCell<Vec<Rc<ScopeState>>>,
 }
 
 impl RuntimeContext<'_> {
@@ -593,6 +597,7 @@ impl RuntimeContext<'_> {
         F: for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> T,
     {
         let state = Rc::new(ScopeState::default());
+        self.active_scopes.borrow_mut().push(Rc::clone(&state));
         let scope = Scope {
             core: Rc::clone(&self.core),
             state: Rc::clone(&state),
@@ -603,9 +608,20 @@ impl RuntimeContext<'_> {
 
         let result = panic::catch_unwind(AssertUnwindSafe(|| f(&scope)));
         self.wait_for_scope(&state);
+        let popped = self
+            .active_scopes
+            .borrow_mut()
+            .pop()
+            .expect("active scope stack underflow");
+        debug_assert!(Rc::ptr_eq(&popped, &state));
 
         match result {
-            Ok(output) => output,
+            Ok(output) => {
+                if let Some(payload) = state.take_panic_payload() {
+                    panic::resume_unwind(payload);
+                }
+                output
+            }
             Err(payload) => panic::resume_unwind(payload),
         }
     }
@@ -640,6 +656,7 @@ impl RuntimeContext<'_> {
                 suspend_task(id, yielder, stack, Suspend::Ready);
             }
         }
+        self.resume_active_scope_panic();
     }
 
     /// Captures stack traces for live stackful coroutines.
@@ -670,6 +687,7 @@ impl RuntimeContext<'_> {
         let timeout = self.submit_timeout(duration);
         let result = self.wait_for_io_state(&timeout.state);
         self.recycle_io_state(timeout.state);
+        self.resume_active_scope_panic();
 
         match result {
             Ok(_) | Err(Errno::TIME) => Ok(()),
@@ -1814,6 +1832,7 @@ impl RuntimeContext<'_> {
         self.submit_io_state(entry, Rc::clone(&state));
         let result = self.wait_for_io_state(&state);
         self.recycle_io_state(state);
+        self.resume_active_scope_panic();
         result
     }
 
@@ -1896,6 +1915,20 @@ impl RuntimeContext<'_> {
         }
     }
 
+    fn resume_active_scope_panic(&self) {
+        let payload = {
+            let scopes = self.active_scopes.borrow();
+            scopes
+                .iter()
+                .rev()
+                .find_map(|scope| scope.take_panic_payload())
+        };
+
+        if let Some(payload) = payload {
+            panic::resume_unwind(payload);
+        }
+    }
+
     #[allow(
         dead_code,
         reason = "phase 1 infrastructure consumed by cross-thread channel phases"
@@ -1963,7 +1996,9 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
         let id = self.core.borrow_mut().reserve_task();
         let state = Rc::clone(&self.state);
         let task_state = Rc::clone(&state);
-        let join = Rc::new(JoinState::new());
+        let panic_payload = Rc::new(RefCell::new(None));
+        state.register_panic_payload(Rc::clone(&panic_payload));
+        let join = Rc::new(JoinState::new(panic_payload));
         let task_join = Rc::clone(&join);
         let core = Rc::clone(&self.core);
         let stack =
@@ -1984,13 +2019,18 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                         yielder,
                         stack: stack_tracker,
                     },
+                    active_scopes: RefCell::new(Vec::new()),
                 };
 
                 let result = panic::catch_unwind(AssertUnwindSafe(|| {
                     handle_resume_action(id, yielder, stack_tracker, Suspend::Ready, action);
                     f(&cx)
                 }))
-                .map_err(JoinError::from_payload);
+                .map(TaskOutcome::Value)
+                .unwrap_or_else(|payload| {
+                    task_join.store_panic_payload(payload);
+                    TaskOutcome::Panicked
+                });
                 let stack_usage = cx
                     .stack_usage()
                     .expect("stackful coroutine missing stack usage");
@@ -2031,7 +2071,7 @@ pub struct JoinHandle<'scope, T> {
 
 impl<T> JoinHandle<'_, T> {
     /// Returns the completed stackful coroutine result if it is ready.
-    pub fn try_join(&self) -> Option<Result<T, JoinError>> {
+    pub fn try_join(&self) -> Option<T> {
         self.try_join_with_stack_usage().map(|(result, _)| result)
     }
 
@@ -2041,20 +2081,23 @@ impl<T> JoinHandle<'_, T> {
     }
 
     /// Returns the completed coroutine result and final stack usage if ready.
-    pub fn try_join_with_stack_usage(&self) -> Option<(Result<T, JoinError>, StackUsage)> {
+    pub fn try_join_with_stack_usage(&self) -> Option<(T, StackUsage)> {
         assert!(!self.taken.get(), "JoinHandle value already taken");
 
-        let result = self.state.take_result()?;
+        let outcome = self.state.take_result()?;
         let stack_usage = self
             .state
             .stack_usage()
             .expect("completed JoinHandle missing stack usage");
         self.taken.set(true);
-        Some((result, stack_usage))
+        match outcome {
+            TaskOutcome::Value(result) => Some((result, stack_usage)),
+            TaskOutcome::Panicked => self.state.resume_panic(),
+        }
     }
 
     /// Waits for the stackful coroutine to finish and returns its result.
-    pub fn join(self, cx: &RuntimeContext<'_>) -> Result<T, JoinError> {
+    pub fn join(self, cx: &RuntimeContext<'_>) -> T {
         loop {
             if let Some(result) = self.try_join() {
                 return result;
@@ -2066,10 +2109,7 @@ impl<T> JoinHandle<'_, T> {
     }
 
     /// Waits for the coroutine to finish and returns its result plus final stack usage.
-    pub fn join_with_stack_usage(
-        self,
-        cx: &RuntimeContext<'_>,
-    ) -> (Result<T, JoinError>, StackUsage) {
+    pub fn join_with_stack_usage(self, cx: &RuntimeContext<'_>) -> (T, StackUsage) {
         loop {
             if let Some(result) = self.try_join_with_stack_usage() {
                 return result;
@@ -2096,36 +2136,6 @@ impl<T> fmt::Debug for JoinHandle<'_, T> {
         f.debug_struct("JoinHandle").finish_non_exhaustive()
     }
 }
-
-/// Error returned when a stackful coroutine panics.
-pub struct JoinError {
-    payload: PanicPayload,
-}
-
-impl JoinError {
-    fn from_payload(payload: PanicPayload) -> Self {
-        Self { payload }
-    }
-
-    /// Returns the panic payload.
-    pub fn into_payload(self) -> PanicPayload {
-        self.payload
-    }
-}
-
-impl fmt::Debug for JoinError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("JoinError").finish_non_exhaustive()
-    }
-}
-
-impl fmt::Display for JoinError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("stackful coroutine panicked")
-    }
-}
-
-impl std::error::Error for JoinError {}
 
 /// An owned buffer that can receive bytes from io_uring.
 ///
@@ -2646,25 +2656,36 @@ fn write_output<B>(buffer: B, bytes: u32) -> WriteOutput<B> {
     }
 }
 
+enum TaskOutcome<T> {
+    Value(T),
+    Panicked,
+}
+
 struct JoinState<T> {
-    result: RefCell<Option<Result<T, JoinError>>>,
+    result: RefCell<Option<TaskOutcome<T>>>,
     stack_usage: Cell<Option<StackUsage>>,
     waiters: RefCell<Waiters>,
+    panic_payload: Rc<RefCell<Option<PanicPayload>>>,
 }
 
 impl<T> JoinState<T> {
-    fn new() -> Self {
+    fn new(panic_payload: Rc<RefCell<Option<PanicPayload>>>) -> Self {
         Self {
             result: RefCell::new(None),
             stack_usage: Cell::new(None),
             waiters: RefCell::new(Waiters::default()),
+            panic_payload,
         }
     }
 
-    fn complete(&self, result: Result<T, JoinError>, stack_usage: StackUsage) {
+    fn complete(&self, result: TaskOutcome<T>, stack_usage: StackUsage) {
         self.stack_usage.set(Some(stack_usage));
         *self.result.borrow_mut() = Some(result);
         self.waiters.borrow_mut().wake_all();
+    }
+
+    fn store_panic_payload(&self, payload: PanicPayload) {
+        *self.panic_payload.borrow_mut() = Some(payload);
     }
 
     fn add_waiter_from(&self, cx: &RuntimeContext<'_>) {
@@ -2681,8 +2702,17 @@ impl<T> JoinState<T> {
         self.stack_usage.get()
     }
 
-    fn take_result(&self) -> Option<Result<T, JoinError>> {
+    fn take_result(&self) -> Option<TaskOutcome<T>> {
         self.result.borrow_mut().take()
+    }
+
+    fn resume_panic(&self) -> ! {
+        let payload = self
+            .panic_payload
+            .borrow_mut()
+            .take()
+            .unwrap_or_else(|| Box::new("stackful coroutine panic payload already consumed"));
+        panic::resume_unwind(payload);
     }
 }
 
@@ -2876,9 +2906,23 @@ impl IoState {
 struct ScopeState {
     remaining: Cell<usize>,
     waiters: RefCell<Waiters>,
+    panic_payloads: RefCell<Vec<Rc<RefCell<Option<PanicPayload>>>>>,
 }
 
 impl ScopeState {
+    fn register_panic_payload(&self, payload: Rc<RefCell<Option<PanicPayload>>>) {
+        self.panic_payloads.borrow_mut().push(payload);
+    }
+
+    fn take_panic_payload(&self) -> Option<PanicPayload> {
+        for payload in self.panic_payloads.borrow().iter() {
+            if let Some(payload) = payload.borrow_mut().take() {
+                return Some(payload);
+            }
+        }
+        None
+    }
+
     fn task_finished(&self) {
         let remaining = self
             .remaining
@@ -4023,7 +4067,7 @@ mod tests {
                     42
                 });
 
-                worker.join(cx).unwrap()
+                worker.join(cx)
             })
         });
 
@@ -4046,7 +4090,7 @@ mod tests {
                     7
                 });
 
-                worker.join(cx).unwrap()
+                worker.join(cx)
             })
         });
 
@@ -4075,7 +4119,7 @@ mod tests {
                     99
                 });
 
-                worker.join(cx).unwrap()
+                worker.join(cx)
             });
 
             timeout.cancel(cx).unwrap();
@@ -4100,8 +4144,8 @@ mod tests {
                     "sent"
                 });
 
-                assert_eq!(sender.join(cx).unwrap(), "sent");
-                receiver.join(cx).unwrap()
+                assert_eq!(sender.join(cx), "sent");
+                receiver.join(cx)
             })
         });
 
@@ -4118,7 +4162,7 @@ mod tests {
                 let first = scope.spawn(|_| base + 1);
                 let second = scope.spawn(|_| 30);
 
-                first.join(cx).unwrap() + second.join(cx).unwrap()
+                first.join(cx) + second.join(cx)
             })
         });
 
@@ -4152,7 +4196,7 @@ mod tests {
                     usage.size()
                 });
 
-                (default.join(cx).unwrap(), custom.join(cx).unwrap())
+                (default.join(cx), custom.join(cx))
             })
         });
 
@@ -4180,7 +4224,7 @@ mod tests {
                 });
 
                 let (result, usage) = worker.join_with_stack_usage(cx);
-                assert_eq!(result.unwrap(), 7);
+                assert_eq!(result, 7);
                 usage
             })
         });
@@ -4211,7 +4255,7 @@ mod tests {
                     .try_join_with_stack_usage()
                     .expect("worker should have completed");
 
-                assert_eq!(result.unwrap(), DEFAULT_STACK_SIZE);
+                assert_eq!(result, DEFAULT_STACK_SIZE);
                 assert_eq!(usage, usage_from_join);
                 assert!(usage.high_water() >= 4096, "{usage:?}");
             });
@@ -4237,7 +4281,7 @@ mod tests {
                 });
                 let other = scope.spawn(|_| 40);
 
-                other.join(cx).unwrap() + yielding.join(cx).unwrap()
+                other.join(cx) + yielding.join(cx)
             })
         });
 
@@ -4259,7 +4303,7 @@ mod tests {
                 assert_eq!(task.stack_usage().size(), DEFAULT_STACK_SIZE);
                 assert_eq!(task.stack_usage().used(), 0);
                 assert_eq!(task.backtrace(), None);
-                assert_eq!(handle.join(cx).unwrap(), 42);
+                assert_eq!(handle.join(cx), 42);
             });
         });
     }
@@ -4285,7 +4329,7 @@ mod tests {
                 assert!(task.stack_usage().used() != 0);
                 let backtrace = task.backtrace().expect("missing suspended task backtrace");
                 assert!(!backtrace.trim().is_empty());
-                assert_eq!(handle.join(cx).unwrap(), 42);
+                assert_eq!(handle.join(cx), 42);
             });
         });
     }
@@ -4296,27 +4340,80 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_stackful_task_panics_are_join_errors() {
-        let mut runtime = Runtime::new();
+    fn interrupted_stackful_task_panics_propagate_to_joiner() {
+        let result = std::panic::catch_unwind(|| {
+            let mut runtime = Runtime::new();
 
-        runtime.block_on(|cx| {
-            cx.scope(|scope| {
-                let handle = scope.spawn(|cx| {
+            runtime.block_on(|cx| {
+                cx.scope(|scope| {
+                    let handle = scope.spawn(|cx| {
+                        cx.yield_now();
+                        42
+                    });
+
                     cx.yield_now();
-                    42
+                    cx.core
+                        .borrow_mut()
+                        .interrupt_started_tasks(|_| Box::new(|_| panic!("interrupted")));
+
+                    handle.join(cx);
                 });
-
-                cx.yield_now();
-                cx.core
-                    .borrow_mut()
-                    .interrupt_started_tasks(|_| Box::new(|_| panic!("interrupted")));
-
-                let error = handle.join(cx).unwrap_err();
-                let payload = error.into_payload();
-                let message = payload.downcast_ref::<&str>().copied();
-                assert_eq!(message, Some("interrupted"));
             });
         });
+
+        let payload = result.expect_err("interrupted task should panic through join");
+        let message = payload.downcast_ref::<&str>().copied();
+        assert_eq!(message, Some("interrupted"));
+    }
+
+    #[test]
+    fn unobserved_stackful_task_panic_propagates_when_parent_exits_scope_body() {
+        let result = std::panic::catch_unwind(|| {
+            let mut runtime = Runtime::new();
+
+            runtime.block_on(|cx| {
+                cx.scope(|scope| {
+                    scope.spawn(|cx| {
+                        cx.yield_now();
+                        panic!("unjoined child panic");
+                    });
+                });
+            });
+        });
+
+        let payload = result.expect_err("unjoined task panic should propagate through scope");
+        let message = payload.downcast_ref::<&str>().copied();
+        assert_eq!(message, Some("unjoined child panic"));
+    }
+
+    #[test]
+    fn unobserved_stackful_task_panic_propagates_to_parent_waiting_on_io() {
+        let result = std::panic::catch_unwind(|| {
+            let mut runtime = Runtime::new();
+
+            runtime.block_on(|cx| {
+                cx.scope(|scope| {
+                    scope.spawn(|cx| {
+                        cx.yield_now();
+                        panic!("unjoined child panic during parent io wait");
+                    });
+
+                    let mut sleeps = 0;
+                    loop {
+                        cx.sleep(Duration::from_millis(1)).unwrap();
+                        sleeps += 1;
+                        assert!(
+                            sleeps < 100,
+                            "parent loop should have observed the child panic"
+                        );
+                    }
+                });
+            });
+        });
+
+        let payload = result.expect_err("unjoined task panic should propagate while parent waits");
+        let message = payload.downcast_ref::<&str>().copied();
+        assert_eq!(message, Some("unjoined child panic during parent io wait"));
     }
 
     #[test]
@@ -4329,12 +4426,12 @@ mod tests {
                     let mut child_output = 0;
                     cx.scope(|scope| {
                         let child = scope.spawn(|_| 5);
-                        child_output = child.join(cx).unwrap();
+                        child_output = child.join(cx);
                     });
                     child_output + 1
                 });
 
-                parent.join(cx).unwrap()
+                parent.join(cx)
             })
         });
 
@@ -4383,7 +4480,7 @@ mod tests {
                     ROUNDS as usize
                 });
 
-                initiator.join(cx).unwrap() + responder.join(cx).unwrap()
+                initiator.join(cx) + responder.join(cx)
             })
         });
 
@@ -4800,8 +4897,8 @@ mod tests {
                         .unwrap()
                     });
 
-                    assert_eq!(waker.join(cx).unwrap(), 1);
-                    assert_eq!(waiter.join(cx).unwrap(), 1);
+                    assert_eq!(waker.join(cx), 1);
+                    assert_eq!(waiter.join(cx), 1);
                 });
             }
         });
@@ -4876,8 +4973,8 @@ mod tests {
                     [first.as_slice(), second.as_slice()].concat()
                 });
 
-                sender.join(cx).unwrap();
-                receiver.join(cx).unwrap()
+                sender.join(cx);
+                receiver.join(cx)
             })
         });
 
@@ -4938,8 +5035,8 @@ mod tests {
                     echoed
                 });
 
-                let echoed = client.join(cx).unwrap();
-                server.join(cx).unwrap();
+                let echoed = client.join(cx);
+                server.join(cx);
                 echoed
             })
         });
@@ -5055,8 +5152,8 @@ mod tests {
                     cx.close(pong_write).unwrap();
                 });
 
-                responder.join(cx).unwrap();
-                initiator.join(cx).unwrap()
+                responder.join(cx);
+                initiator.join(cx)
             })
         });
 
@@ -5150,8 +5247,8 @@ mod tests {
                     counts
                 });
 
-                let counts = initiator.join(cx).unwrap();
-                responder.join(cx).unwrap();
+                let counts = initiator.join(cx);
+                responder.join(cx);
                 counts
             })
         });
@@ -5225,8 +5322,8 @@ mod tests {
                     counts
                 });
 
-                let counts = initiator.join(cx).unwrap();
-                responder.join(cx).unwrap();
+                let counts = initiator.join(cx);
+                responder.join(cx);
                 counts
             })
         });

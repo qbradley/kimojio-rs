@@ -51,8 +51,9 @@ then stop paying a state-machine tax at every abstraction boundary.
 
 `RuntimeContext::scope` and `Scope::spawn` mirror `std::thread::scope`.
 Spawned coroutines may borrow from the caller, but the scope waits for every
-child before returning. `JoinHandle::join` retrieves the return value and
-propagates panics as `JoinError`.
+child before returning. `JoinHandle::join` retrieves the return value directly;
+panics that escape a child closure propagate to the parent when joined or when
+the scope finishes.
 
 That gives stackful concurrency a crucial Rust shape: it is not "fire off a
 green thread and hope the borrowed data survives." The lifetime of a coroutine

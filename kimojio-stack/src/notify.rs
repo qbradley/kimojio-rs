@@ -150,7 +150,7 @@ mod tests {
                     1
                 });
 
-                task.join(cx).unwrap() + notifier.join(cx).unwrap()
+                task.join(cx) + notifier.join(cx)
             })
         });
 

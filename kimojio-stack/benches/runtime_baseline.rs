@@ -49,7 +49,7 @@ fn bench_scheduler(c: &mut Criterion) {
                         start.elapsed()
                     });
 
-                    worker.join(cx).unwrap()
+                    worker.join(cx)
                 })
             })
         });
@@ -73,8 +73,8 @@ fn bench_scheduler(c: &mut Criterion) {
                     });
 
                     let start = Instant::now();
-                    first.join(cx).unwrap();
-                    second.join(cx).unwrap();
+                    first.join(cx);
+                    second.join(cx);
                     start.elapsed()
                 })
             })
@@ -88,7 +88,7 @@ fn bench_scheduler(c: &mut Criterion) {
                     let start = Instant::now();
                     for i in 0..iters {
                         let worker = scope.spawn(move |_| i.wrapping_add(1));
-                        black_box(worker.join(cx).unwrap());
+                        black_box(worker.join(cx));
                     }
                     start.elapsed()
                 })
@@ -180,7 +180,7 @@ fn bench_sync(c: &mut Criterion) {
                     }
                     let elapsed = start.elapsed();
 
-                    responder.join(cx).unwrap();
+                    responder.join(cx);
                     elapsed
                 })
             })
@@ -249,7 +249,7 @@ fn bench_cross_thread_channel(c: &mut Criterion) {
                             }
                         });
 
-                        responder.join(cx).unwrap();
+                        responder.join(cx);
                     });
                 });
             });
@@ -266,7 +266,7 @@ fn bench_cross_thread_channel(c: &mut Criterion) {
                         start.elapsed()
                     });
 
-                    sender.join(cx).unwrap()
+                    sender.join(cx)
                 })
             });
 
@@ -538,7 +538,7 @@ fn bench_io(c: &mut Criterion) {
 
                     cx.close(ping_write).unwrap();
                     cx.close(pong_read).unwrap();
-                    responder.join(cx).unwrap();
+                    responder.join(cx);
                     elapsed
                 })
             })

@@ -186,8 +186,8 @@ mod tests {
                 });
                 let receiver = scope.spawn(|cx| rx.recv(cx).unwrap() + rx.recv(cx).unwrap());
 
-                sender.join(cx).unwrap();
-                receiver.join(cx).unwrap()
+                sender.join(cx);
+                receiver.join(cx)
             })
         });
 

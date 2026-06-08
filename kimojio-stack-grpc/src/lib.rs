@@ -327,8 +327,8 @@ mod tests {
                     response
                 });
 
-                server.join(cx).unwrap();
-                let response = client.join(cx).unwrap();
+                server.join(cx);
+                let response = client.join(cx);
                 assert_eq!(response.message.value, "hello world");
                 assert_eq!(response.status.code(), StatusCode::Ok);
                 assert_eq!(
@@ -447,8 +447,8 @@ mod tests {
                     client.close(cx).unwrap();
                 });
 
-                server.join(cx).unwrap();
-                client.join(cx).unwrap();
+                server.join(cx);
+                client.join(cx);
             });
         });
     }
@@ -536,11 +536,8 @@ mod tests {
                     values
                 });
 
-                server.join(cx).unwrap();
-                assert_eq!(
-                    client.join(cx).unwrap(),
-                    ["split", "coalesced-a", "coalesced-b"]
-                );
+                server.join(cx);
+                assert_eq!(client.join(cx), ["split", "coalesced-a", "coalesced-b"]);
             });
         });
     }
@@ -592,8 +589,8 @@ mod tests {
                     client.close(cx).unwrap();
                 });
 
-                server.join(cx).unwrap();
-                client.join(cx).unwrap();
+                server.join(cx);
+                client.join(cx);
             });
         });
     }
@@ -656,8 +653,8 @@ mod tests {
                     error
                 });
 
-                server.join(cx).unwrap();
-                match client.join(cx).unwrap() {
+                server.join(cx);
+                match client.join(cx) {
                     Error::Status(status) => {
                         assert_eq!(status.code(), StatusCode::Unavailable);
                         assert_eq!(status.message(), "stream down");
@@ -710,8 +707,8 @@ mod tests {
                     error
                 });
 
-                server.join(cx).unwrap();
-                match client.join(cx).unwrap() {
+                server.join(cx);
+                match client.join(cx) {
                     Error::Status(status) => {
                         assert_eq!(status.code(), StatusCode::Unavailable);
                         assert_eq!(status.message(), "header-down");
@@ -786,11 +783,8 @@ mod tests {
                     client.close(cx).unwrap();
                 });
 
-                client.join(cx).unwrap();
-                assert_eq!(
-                    server.join(cx).unwrap(),
-                    kimojio_stack_http::ErrorKind::PeerReset
-                );
+                client.join(cx);
+                assert_eq!(server.join(cx), kimojio_stack_http::ErrorKind::PeerReset);
             });
         });
     }
@@ -878,11 +872,8 @@ mod tests {
                     client.close(cx).unwrap();
                 });
 
-                client.join(cx).unwrap();
-                assert_eq!(
-                    server.join(cx).unwrap(),
-                    kimojio_stack_http::ErrorKind::PeerReset
-                );
+                client.join(cx);
+                assert_eq!(server.join(cx), kimojio_stack_http::ErrorKind::PeerReset);
             });
         });
     }
@@ -942,11 +933,8 @@ mod tests {
                     client.close(cx).unwrap();
                 });
 
-                client.join(cx).unwrap();
-                assert_eq!(
-                    server.join(cx).unwrap(),
-                    kimojio_stack_http::ErrorKind::PeerReset
-                );
+                client.join(cx);
+                assert_eq!(server.join(cx), kimojio_stack_http::ErrorKind::PeerReset);
             });
         });
     }
@@ -1038,8 +1026,8 @@ mod tests {
                     client.close(cx).unwrap();
                 });
 
-                server.join(cx).unwrap();
-                client.join(cx).unwrap();
+                server.join(cx);
+                client.join(cx);
             });
         });
     }
@@ -1096,8 +1084,8 @@ mod tests {
                     error
                 });
 
-                server.join(cx).unwrap();
-                match client.join(cx).unwrap() {
+                server.join(cx);
+                match client.join(cx) {
                     Error::Status(status) => {
                         assert_eq!(status.code(), StatusCode::Unavailable);
                         assert_eq!(status.message(), "server stream down");
@@ -1160,9 +1148,9 @@ mod tests {
                     client.close(cx).unwrap();
                 });
 
-                producer.join(cx).unwrap();
-                server.join(cx).unwrap();
-                client.join(cx).unwrap();
+                producer.join(cx);
+                server.join(cx);
+                client.join(cx);
             });
         });
     }
@@ -1226,11 +1214,8 @@ mod tests {
                     client.close(cx).unwrap();
                 });
 
-                client.join(cx).unwrap();
-                assert_eq!(
-                    server.join(cx).unwrap(),
-                    kimojio_stack_http::ErrorKind::PeerReset
-                );
+                client.join(cx);
+                assert_eq!(server.join(cx), kimojio_stack_http::ErrorKind::PeerReset);
             });
         });
     }
@@ -1255,10 +1240,10 @@ mod tests {
                     read_single_value_stream(cx, second_client_transport, "second")
                 });
 
-                assert_eq!(second_client.join(cx).unwrap(), "second");
-                assert_eq!(first_client.join(cx).unwrap(), "first");
-                first_server.join(cx).unwrap();
-                second_server.join(cx).unwrap();
+                assert_eq!(second_client.join(cx), "second");
+                assert_eq!(first_client.join(cx), "first");
+                first_server.join(cx);
+                second_server.join(cx);
             });
         });
     }
@@ -1337,8 +1322,8 @@ mod tests {
                     error.kind()
                 });
 
-                server.join(cx).unwrap();
-                client.join(cx).unwrap()
+                server.join(cx);
+                client.join(cx)
             })
         });
 
@@ -1437,7 +1422,7 @@ mod tests {
                 });
 
                 client.close(cx).unwrap();
-                server.join(cx).unwrap();
+                server.join(cx);
                 counts
             })
         });
@@ -1483,8 +1468,8 @@ mod tests {
                     result
                 });
 
-                server.join(cx).unwrap();
-                client.join(cx).unwrap()
+                server.join(cx);
+                client.join(cx)
             })
         })
     }
@@ -1579,8 +1564,8 @@ mod tests {
                     status
                 });
 
-                server.join(cx).unwrap();
-                client.join(cx).unwrap()
+                server.join(cx);
+                client.join(cx)
             })
         })
     }

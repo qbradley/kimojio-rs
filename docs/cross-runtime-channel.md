@@ -39,8 +39,8 @@ runtime.block_on(|cx| {
         let sender = scope.spawn(move |cx| tx.send(cx, 42).unwrap());
         let receiver = scope.spawn(move |cx| rx.recv(cx).unwrap());
 
-        sender.join(cx).unwrap();
-        assert_eq!(receiver.join(cx).unwrap(), 42);
+        sender.join(cx);
+        assert_eq!(receiver.join(cx), 42);
     });
 });
 ```

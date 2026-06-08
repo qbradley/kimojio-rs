@@ -151,8 +151,8 @@ mod tests {
                     response
                 });
 
-                server.join(cx).unwrap();
-                let response = client.join(cx).unwrap();
+                server.join(cx);
+                let response = client.join(cx);
                 assert_eq!(response.status(), StatusCode::OK);
                 assert_eq!(response.body().as_bytes(), b"pong");
             });
@@ -203,8 +203,8 @@ mod tests {
                     response
                 });
 
-                server.join(cx).unwrap();
-                let response = client.join(cx).unwrap();
+                server.join(cx);
+                let response = client.join(cx);
                 assert_eq!(response.response.body().as_bytes(), b"reply");
                 assert_eq!(
                     response
@@ -271,8 +271,8 @@ mod tests {
                     (first, second, terminal)
                 });
 
-                server.join(cx).unwrap();
-                let (first, second, terminal) = client.join(cx).unwrap();
+                server.join(cx);
+                let (first, second, terminal) = client.join(cx);
                 assert!(matches!(first, ResponseStreamEvent::Data(data) if data == b"one"[..]));
                 assert!(matches!(second, ResponseStreamEvent::Data(data) if data == b"two"[..]));
                 assert!(matches!(terminal, ResponseStreamEvent::Trailers(trailers)
@@ -321,8 +321,8 @@ mod tests {
                     (response, chunks)
                 });
 
-                server.join(cx).unwrap();
-                let (response, chunks) = client.join(cx).unwrap();
+                server.join(cx);
+                let (response, chunks) = client.join(cx);
                 assert_eq!(response.response.status(), StatusCode::OK);
                 assert!(response.response.body().is_empty());
                 assert_eq!(
@@ -373,8 +373,8 @@ mod tests {
                     (response, terminal)
                 });
 
-                server.join(cx).unwrap();
-                let (response, terminal) = client.join(cx).unwrap();
+                server.join(cx);
+                let (response, terminal) = client.join(cx);
                 assert_eq!(response.status(), StatusCode::NO_CONTENT);
                 assert!(matches!(terminal, ResponseStreamEvent::Trailers(trailers) if trailers.is_empty()));
             });
@@ -459,9 +459,9 @@ mod tests {
                     )
                 });
 
-                server.join(cx).unwrap();
+                server.join(cx);
                 let (first_head, first_data, first_end, second_head, second_data, second_end) =
-                    client.join(cx).unwrap();
+                    client.join(cx);
                 assert_eq!(first_head.headers()["x-stream"], "first");
                 assert!(matches!(first_data, ResponseStreamEvent::Data(data) if data == b"first"[..]));
                 assert!(matches!(first_end, ResponseStreamEvent::Trailers(trailers) if trailers.is_empty()));
@@ -552,9 +552,9 @@ mod tests {
                     )
                 });
 
-                server.join(cx).unwrap();
+                server.join(cx);
                 let (first_head, first_data, first_end, second_head, second_data, second_end) =
-                    client.join(cx).unwrap();
+                    client.join(cx);
                 assert_eq!(first_head.headers()["x-stream"], "first");
                 assert!(matches!(first_data, ResponseStreamEvent::Data(data) if data == b"first"[..]));
                 assert!(matches!(first_end, ResponseStreamEvent::Trailers(trailers) if trailers.is_empty()));
@@ -618,8 +618,8 @@ mod tests {
                     client.close(cx).unwrap();
                 });
 
-                client.join(cx).unwrap();
-                assert_eq!(server.join(cx).unwrap(), ErrorKind::PeerReset);
+                client.join(cx);
+                assert_eq!(server.join(cx), ErrorKind::PeerReset);
             });
         });
     }
@@ -674,8 +674,8 @@ mod tests {
                     (first_response, second_response)
                 });
 
-                server.join(cx).unwrap();
-                let (first_response, second_response) = client.join(cx).unwrap();
+                server.join(cx);
+                let (first_response, second_response) = client.join(cx);
                 assert_eq!(first_response.body().as_bytes(), b"first");
                 assert_eq!(second_response.body().as_bytes(), b"second");
             });
@@ -723,8 +723,8 @@ mod tests {
                     response
                 });
 
-                server.join(cx).unwrap();
-                let response = client.join(cx).unwrap();
+                server.join(cx);
+                let response = client.join(cx);
                 assert_eq!(response.body().as_bytes(), b"ok");
             });
         });
@@ -765,8 +765,8 @@ mod tests {
                     response
                 });
 
-                server.join(cx).unwrap();
-                let response = client.join(cx).unwrap();
+                server.join(cx);
+                let response = client.join(cx);
                 assert_eq!(response.status(), StatusCode::OK);
                 assert_eq!(response.headers()["x-large"], large_header);
                 assert_eq!(response.body().as_bytes(), b"ok");
@@ -817,8 +817,8 @@ mod tests {
                     client_transport.close(cx).unwrap();
                 });
 
-                client.join(cx).unwrap();
-                assert_eq!(server.join(cx).unwrap(), ErrorKind::Protocol);
+                client.join(cx);
+                assert_eq!(server.join(cx), ErrorKind::Protocol);
             });
         });
     }
@@ -859,8 +859,8 @@ mod tests {
                         error.kind()
                     });
 
-                    server.join(cx).unwrap();
-                    assert_eq!(client.join(cx).unwrap(), ErrorKind::PeerReset);
+                    server.join(cx);
+                    assert_eq!(client.join(cx), ErrorKind::PeerReset);
                 });
             });
         }
@@ -901,8 +901,8 @@ mod tests {
                     response
                 });
 
-                server.join(cx).unwrap();
-                let response = client.join(cx).unwrap();
+                server.join(cx);
+                let response = client.join(cx);
                 assert_eq!(response.body().as_bytes(), b"dispatch");
             });
         });
@@ -941,8 +941,8 @@ mod tests {
                     response
                 });
 
-                server.join(cx).unwrap();
-                let response = client.join(cx).unwrap();
+                server.join(cx);
+                let response = client.join(cx);
                 assert_eq!(response.status(), StatusCode::NO_CONTENT);
             });
         });

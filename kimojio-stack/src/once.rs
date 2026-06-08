@@ -18,7 +18,7 @@
 //!     cx.scope(|scope| {
 //!         let (tx, rx) = once::channel();
 //!         scope.spawn(move |_| tx.send(42).unwrap());
-//!         scope.spawn(move |cx| rx.recv(cx).unwrap()).join(cx).unwrap()
+//!         scope.spawn(move |cx| rx.recv(cx).unwrap()).join(cx)
 //!     })
 //! });
 //!

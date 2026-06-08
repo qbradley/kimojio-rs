@@ -509,7 +509,7 @@ mod tests {
                         Ok(())
                     })
                     .unwrap();
-                server.join(cx).unwrap();
+                server.join(cx);
 
                 assert_eq!(response.status, 200);
                 let body = chunks.concat();
@@ -553,7 +553,7 @@ mod tests {
                         Ok(())
                     })
                     .unwrap();
-                server.join(cx).unwrap();
+                server.join(cx);
 
                 assert_eq!(chunks, ["abc", "def"]);
             });
@@ -604,7 +604,7 @@ mod tests {
                         Ok(())
                     })
                     .unwrap_err();
-                server.join(cx).unwrap();
+                server.join(cx);
                 (error, chunks)
             })
         });
@@ -648,7 +648,7 @@ mod tests {
                 });
 
                 let error = transport.execute(cx, &request).unwrap_err();
-                server.join(cx).unwrap();
+                server.join(cx);
                 error
             })
         });
