@@ -3,7 +3,12 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Thread-safe pool statistics.
+/// Thread-safe pool statistics accumulator.
+///
+/// Most users read statistics through [`crate::TlsPool::stats`] or
+/// [`crate::TlsStream::stats`], which return [`PoolStatsSnapshot`]. This type is
+/// public so advanced users can construct and inspect standalone counters in
+/// tests or diagnostics.
 #[derive(Debug)]
 pub struct PoolStats {
     submitted: AtomicU64,
@@ -23,6 +28,14 @@ pub struct PoolStats {
 
 impl PoolStats {
     /// Creates pool statistics for `executor_count` background executors.
+    ///
+    /// ```
+    /// use kimojio_tls_pool::PoolStats;
+    ///
+    /// let stats = PoolStats::new(2);
+    /// let snapshot = stats.snapshot();
+    /// assert_eq!(snapshot.executors.len(), 2);
+    /// ```
     pub fn new(executor_count: usize) -> Self {
         Self {
             submitted: AtomicU64::new(0),
@@ -124,6 +137,10 @@ impl PoolStats {
     }
 
     /// Returns a point-in-time statistics snapshot.
+    ///
+    /// The snapshot is internally consistent enough for diagnostics, but it is
+    /// not a synchronization primitive. Counters may change immediately after
+    /// the snapshot is taken.
     pub fn snapshot(&self) -> PoolStatsSnapshot {
         PoolStatsSnapshot {
             submitted: self.submitted.load(Ordering::Relaxed),
@@ -190,6 +207,22 @@ impl ExecutorStats {
 }
 
 /// Point-in-time pool statistics.
+///
+/// Use this to answer questions such as:
+///
+/// - Are operations going immediate or background?
+/// - Is work queueing behind same-stream serialization or executor capacity?
+/// - Are socket-blocked operations parking on readiness instead of occupying
+///   executors?
+/// - Which executors are completing work?
+///
+/// ```
+/// use kimojio_tls_pool::TlsPool;
+///
+/// let pool = TlsPool::default();
+/// let stats = pool.stats();
+/// assert_eq!(stats.submitted, stats.completed + stats.failed);
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PoolStatsSnapshot {
     /// Operations submitted to the pool.
@@ -221,6 +254,18 @@ pub struct PoolStatsSnapshot {
 }
 
 /// Point-in-time executor statistics.
+///
+/// Executor counters are indexed by `id`, which corresponds to the pool worker
+/// identifier. They help identify whether routing is spreading work across the
+/// pool or concentrating it on one executor.
+///
+/// ```
+/// use kimojio_tls_pool::TlsPool;
+///
+/// let pool = TlsPool::default();
+/// let executor = &pool.stats().executors[0];
+/// assert_eq!(executor.id, 0);
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecutorStatsSnapshot {
     /// Executor identifier.

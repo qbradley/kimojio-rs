@@ -21,6 +21,21 @@ pub(crate) enum OperationKind {
 }
 
 /// Placement chosen for a submitted operation.
+///
+/// This describes where ordinary operation work is executed. Readiness-resumed
+/// operations may start with an immediate probe and later resume on an executor;
+/// inspect [`crate::PoolStatsSnapshot::readiness_waits`] and
+/// [`crate::PoolStatsSnapshot::readiness_resumed`] to see that behavior.
+///
+/// ```
+/// use kimojio_tls_pool::OperationPlacement;
+///
+/// let placement = OperationPlacement::Background { executor: 2 };
+/// match placement {
+///     OperationPlacement::Immediate => {}
+///     OperationPlacement::Background { executor } => assert_eq!(executor, 2),
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperationPlacement {
     /// Operation ran on the submitting thread.

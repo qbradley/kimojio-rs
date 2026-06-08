@@ -18,6 +18,29 @@ use crate::{OperationError, OperationResult, PoolStatsSnapshot};
 /// Callbacks are notifications from the thread that completed the operation.
 /// They should not synchronously wait for follow-up work on the same stream,
 /// because same-stream operations remain serialized until the callback returns.
+///
+/// A common integration pattern is to forward the result to an application-owned
+/// channel or runtime wakeup:
+///
+/// ```no_run
+/// use std::sync::mpsc;
+/// use std::time::Duration;
+///
+/// use kimojio_tls_pool::{OperationResult, TlsStream};
+///
+/// # fn connected_tls_stream() -> TlsStream { unimplemented!() }
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let stream = connected_tls_stream();
+/// let (tx, rx) = mpsc::channel::<OperationResult<usize>>();
+///
+/// stream.write(b"payload".to_vec(), Box::new(move |result| {
+///     tx.send(result).unwrap();
+/// }))?;
+///
+/// assert_eq!(rx.recv_timeout(Duration::from_secs(5))??, 7);
+/// # Ok(())
+/// # }
+/// ```
 pub type CompletionCallback<T> = Box<dyn FnOnce(OperationResult<T>) + Send + 'static>;
 
 type StreamJob = Box<dyn FnOnce(Arc<StreamState>) -> DispatchResult + Send + 'static>;
@@ -141,7 +164,15 @@ impl WriteState {
     }
 }
 
-/// User-facing TLS stream handle created by a pool.
+/// User-facing TLS stream handle created by a [`crate::TlsPool`].
+///
+/// `TlsStream` is cheap to clone; each clone refers to the same TLS connection.
+/// Operations submitted through any clone share the same same-stream queue and
+/// are serialized before touching OpenSSL state. This means different streams
+/// can run concurrently, but one stream never runs two TLS operations at once.
+///
+/// Use this type as an asynchronous-by-callback handle: submit work, return to
+/// your application, and let the callback notify you when the work completes.
 #[derive(Clone)]
 pub struct TlsStream {
     state: Arc<StreamState>,
@@ -202,6 +233,33 @@ impl TlsStream {
     /// plaintext can complete without executor handoff. If OpenSSL needs socket
     /// readiness, the read is parked without occupying an executor and later
     /// resumed on a pool executor.
+    ///
+    /// The callback receives at most `buffer_len` bytes. Like `std::io::Read`,
+    /// a successful read may return fewer bytes than requested; callers that
+    /// need an exact length should resubmit reads until enough bytes have been
+    /// accumulated. Requests larger than [`PoolConfig::max_read_len`](crate::PoolConfig::max_read_len)
+    /// complete through the callback with [`OperationError::ReadTooLarge`].
+    ///
+    /// ```no_run
+    /// use std::sync::mpsc;
+    /// use std::time::Duration;
+    ///
+    /// use kimojio_tls_pool::{OperationResult, TlsStream};
+    ///
+    /// # fn connected_tls_stream() -> TlsStream { unimplemented!() }
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let stream = connected_tls_stream();
+    /// let (tx, rx) = mpsc::channel::<OperationResult<Vec<u8>>>();
+    ///
+    /// stream.read(1024, Box::new(move |result| {
+    ///     tx.send(result).unwrap();
+    /// }))?;
+    ///
+    /// let bytes = rx.recv_timeout(Duration::from_secs(5))??;
+    /// println!("read {} decrypted bytes", bytes.len());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn read(
         &self,
         buffer_len: usize,
@@ -253,6 +311,32 @@ impl TlsStream {
     /// Writes make nonblocking TLS progress. If the underlying transport would
     /// block, the operation is parked on the required readiness interest and
     /// resumed on a pool executor.
+    ///
+    /// The operation completes only after OpenSSL has accepted the full
+    /// plaintext buffer. The success value is the number of plaintext bytes
+    /// accepted, not the ciphertext length written to the socket.
+    ///
+    /// ```no_run
+    /// use std::sync::mpsc;
+    /// use std::time::Duration;
+    ///
+    /// use kimojio_tls_pool::{OperationResult, TlsStream};
+    ///
+    /// # fn connected_tls_stream() -> TlsStream { unimplemented!() }
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let stream = connected_tls_stream();
+    /// let payload = b"request body".to_vec();
+    /// let expected_len = payload.len();
+    /// let (tx, rx) = mpsc::channel::<OperationResult<usize>>();
+    ///
+    /// stream.write(payload, Box::new(move |result| {
+    ///     tx.send(result).unwrap();
+    /// }))?;
+    ///
+    /// assert_eq!(rx.recv_timeout(Duration::from_secs(5))??, expected_len);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn write(
         &self,
         bytes: Vec<u8>,
@@ -265,6 +349,31 @@ impl TlsStream {
     ///
     /// This avoids allocating or copying the payload for each submitted write
     /// when the same payload can be safely shared across operations.
+    ///
+    /// Prefer this over [`write`](Self::write) when a payload is already in an
+    /// `Arc<[u8]>`, or when many streams/tasks write the same immutable buffer.
+    ///
+    /// ```no_run
+    /// use std::sync::{Arc, mpsc};
+    /// use std::time::Duration;
+    ///
+    /// use kimojio_tls_pool::{OperationResult, TlsStream};
+    ///
+    /// # fn connected_tls_stream() -> TlsStream { unimplemented!() }
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let stream = connected_tls_stream();
+    /// let shared: Arc<[u8]> = Arc::from(vec![0x5a; 32 * 1024].into_boxed_slice());
+    /// let expected_len = shared.len();
+    /// let (tx, rx) = mpsc::channel::<OperationResult<usize>>();
+    ///
+    /// stream.write_shared(shared, Box::new(move |result| {
+    ///     tx.send(result).unwrap();
+    /// }))?;
+    ///
+    /// assert_eq!(rx.recv_timeout(Duration::from_secs(5))??, expected_len);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn write_shared(
         &self,
         bytes: Arc<[u8]>,
@@ -277,6 +386,33 @@ impl TlsStream {
     ///
     /// Batching amortizes callback and queueing overhead for high-throughput
     /// workloads while preserving same-stream serialization.
+    ///
+    /// `write_batch` is best for throughput-oriented producers that can gather
+    /// several immutable chunks before submitting. Empty chunks are ignored, and
+    /// the callback's success value is the total plaintext length of all chunks.
+    ///
+    /// ```no_run
+    /// use std::sync::{Arc, mpsc};
+    /// use std::time::Duration;
+    ///
+    /// use kimojio_tls_pool::{OperationResult, TlsStream};
+    ///
+    /// # fn connected_tls_stream() -> TlsStream { unimplemented!() }
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let stream = connected_tls_stream();
+    /// let chunk: Arc<[u8]> = Arc::from(vec![0x7b; 8 * 1024].into_boxed_slice());
+    /// let chunks = vec![Arc::clone(&chunk), Arc::clone(&chunk), Arc::clone(&chunk)];
+    /// let expected_len = chunk.len() * chunks.len();
+    /// let (tx, rx) = mpsc::channel::<OperationResult<usize>>();
+    ///
+    /// stream.write_batch(chunks, Box::new(move |result| {
+    ///     tx.send(result).unwrap();
+    /// }))?;
+    ///
+    /// assert_eq!(rx.recv_timeout(Duration::from_secs(5))??, expected_len);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn write_batch(
         &self,
         chunks: Vec<Arc<[u8]>>,
@@ -286,11 +422,27 @@ impl TlsStream {
     }
 
     /// Returns a snapshot of the parent pool statistics.
+    ///
+    /// This is equivalent to calling [`TlsPool::stats`](crate::TlsPool::stats)
+    /// on the stream's parent pool. Use [`stream_stats`](Self::stream_stats)
+    /// for per-stream queue/overlap diagnostics.
     pub fn stats(&self) -> PoolStatsSnapshot {
         self.state.pool.stats.snapshot()
     }
 
     /// Returns stream-local operation statistics.
+    ///
+    /// Stream statistics are useful for validating same-stream serialization.
+    /// `max_active` should remain `1` for normal public read/write use.
+    ///
+    /// ```no_run
+    /// use kimojio_tls_pool::TlsStream;
+    ///
+    /// # fn connected_tls_stream() -> TlsStream { unimplemented!() }
+    /// let stream = connected_tls_stream();
+    /// let stats = stream.stream_stats();
+    /// assert_eq!(stats.active, 0);
+    /// ```
     pub fn stream_stats(&self) -> StreamStatsSnapshot {
         self.state.stats.snapshot()
     }
@@ -488,6 +640,10 @@ impl StreamStats {
 }
 
 /// Point-in-time stream-local operation statistics.
+///
+/// These counters describe one TLS connection, regardless of how many
+/// [`TlsStream`] clones refer to it. They are most useful when diagnosing
+/// same-stream queueing or verifying that stream serialization is preserved.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StreamStatsSnapshot {
     /// Operations submitted to this stream.

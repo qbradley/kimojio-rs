@@ -4,23 +4,48 @@
 use std::fmt;
 use std::time::Duration;
 
-/// Default maximum read buffer length.
+/// Default maximum read buffer length accepted by [`crate::TlsStream::read`].
 pub const DEFAULT_MAX_READ_LEN: usize = 32 * 1024;
 /// Hard cap on executor count accepted by the configuration.
 pub const MAX_EXECUTORS: usize = 256;
 
-/// Pool placement behavior.
+/// Pool placement behavior for submitted TLS operations.
+///
+/// Writes follow this policy directly. Reads always perform a small
+/// nonblocking fast-path probe first so already-buffered plaintext can complete
+/// without parking. If a read or write would block on the socket, it parks on
+/// readiness and resumes on a pool executor.
+///
+/// ```
+/// use kimojio_tls_pool::{PlacementMode, PoolConfig};
+///
+/// let config = PoolConfig::new(4)
+///     .with_placement_mode(PlacementMode::Adaptive);
+/// assert_eq!(config.placement_mode(), PlacementMode::Adaptive);
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlacementMode {
-    /// Route every operation through immediate execution.
+    /// Prefer caller-thread execution for work that can complete immediately.
     ImmediateOnly,
-    /// Route every operation through a background executor.
+    /// Route normal operation work through a background executor.
     BackgroundOnly,
     /// Choose immediate or background execution using configured thresholds and load.
     Adaptive,
 }
 
 /// Message size thresholds used by adaptive placement.
+///
+/// Adaptive placement uses these thresholds as a latency-first heuristic:
+/// small writes prefer immediate execution, near-maximum writes are eligible for
+/// background execution, and medium writes use the current executor-load model.
+///
+/// ```
+/// use kimojio_tls_pool::SizeThresholds;
+///
+/// let thresholds = SizeThresholds::new(2 * 1024, 16 * 1024);
+/// assert_eq!(thresholds.small_max(), 2 * 1024);
+/// assert_eq!(thresholds.background_min(), 16 * 1024);
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SizeThresholds {
     small_max: usize,
@@ -29,6 +54,11 @@ pub struct SizeThresholds {
 
 impl SizeThresholds {
     /// Creates thresholds for adaptive placement.
+    ///
+    /// `small_max` must be less than or equal to `background_min`. The builder
+    /// does not validate immediately so configuration can be assembled
+    /// fluently; call [`PoolConfig::validate`] or construct a [`crate::TlsPool`]
+    /// to surface invalid combinations.
     pub fn new(small_max: usize, background_min: usize) -> Self {
         Self {
             small_max,
@@ -36,12 +66,12 @@ impl SizeThresholds {
         }
     }
 
-    /// Maximum size that should prefer immediate execution.
+    /// Maximum operation size that should prefer immediate execution.
     pub fn small_max(&self) -> usize {
         self.small_max
     }
 
-    /// Minimum size that is eligible for background execution.
+    /// Minimum operation size that is always eligible for background execution.
     pub fn background_min(&self) -> usize {
         self.background_min
     }
@@ -67,6 +97,19 @@ impl Default for SizeThresholds {
 }
 
 /// Controls how long executors remain ready after work drains.
+///
+/// Ready executors spin briefly before blocking on the work queue. This reduces
+/// wake-up latency for bursts at the cost of bounded CPU use. Executors beyond
+/// `ready_executors` block immediately when they have no work.
+///
+/// ```
+/// use std::time::Duration;
+/// use kimojio_tls_pool::IdleBehavior;
+///
+/// let idle = IdleBehavior::new(2, Duration::from_micros(100));
+/// assert_eq!(idle.ready_executors(), 2);
+/// assert_eq!(idle.spin_for(), Duration::from_micros(100));
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IdleBehavior {
     ready_executors: usize,
@@ -75,6 +118,8 @@ pub struct IdleBehavior {
 
 impl IdleBehavior {
     /// Creates idle behavior with a fixed ready executor count and spin duration.
+    ///
+    /// `ready_executors` must not exceed [`PoolConfig::executor_count`].
     pub fn new(ready_executors: usize, spin_for: Duration) -> Self {
         Self {
             ready_executors,
@@ -82,12 +127,12 @@ impl IdleBehavior {
         }
     }
 
-    /// Number of executors configured to remain ready.
+    /// Number of executors configured to remain ready after work drains.
     pub fn ready_executors(&self) -> usize {
         self.ready_executors
     }
 
-    /// Duration an executor may stay ready before becoming idle.
+    /// Duration a ready executor may spin before blocking for new work.
     pub fn spin_for(&self) -> Duration {
         self.spin_for
     }
@@ -103,6 +148,26 @@ impl Default for IdleBehavior {
 }
 
 /// Configuration for a TLS pool.
+///
+/// `PoolConfig` is a builder-style value. Most setters do not fail
+/// immediately; validation happens in [`PoolConfig::validate`] and
+/// [`crate::TlsPool::new`].
+///
+/// ```
+/// use std::time::Duration;
+///
+/// use kimojio_tls_pool::{
+///     IdleBehavior, PlacementMode, PoolConfig, SizeThresholds,
+/// };
+///
+/// let config = PoolConfig::new(4)
+///     .with_placement_mode(PlacementMode::Adaptive)
+///     .with_thresholds(SizeThresholds::new(4 * 1024, 24 * 1024))
+///     .with_idle_behavior(IdleBehavior::new(1, Duration::from_micros(50)))
+///     .with_max_read_len(32 * 1024);
+///
+/// config.validate().unwrap();
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PoolConfig {
     executor_count: usize,
@@ -114,6 +179,8 @@ pub struct PoolConfig {
 
 impl PoolConfig {
     /// Creates a configuration with `executor_count` background executors.
+    ///
+    /// This does not spawn threads. Threads are created by [`crate::TlsPool::new`].
     pub fn new(executor_count: usize) -> Self {
         Self {
             executor_count,
@@ -122,30 +189,51 @@ impl PoolConfig {
     }
 
     /// Sets the placement mode.
+    ///
+    /// Use [`PlacementMode::Adaptive`] for the usual latency-first policy, and
+    /// [`PlacementMode::BackgroundOnly`] when benchmarking offload overhead or
+    /// forcing work through pool executors.
     pub fn with_placement_mode(mut self, placement_mode: PlacementMode) -> Self {
         self.placement_mode = placement_mode;
         self
     }
 
     /// Sets adaptive size thresholds.
+    ///
+    /// The thresholds only affect [`PlacementMode::Adaptive`].
     pub fn with_thresholds(mut self, thresholds: SizeThresholds) -> Self {
         self.thresholds = thresholds;
         self
     }
 
     /// Sets idle behavior.
+    ///
+    /// Use this to tune the latency/CPU tradeoff for short bursts.
     pub fn with_idle_behavior(mut self, idle_behavior: IdleBehavior) -> Self {
         self.idle_behavior = idle_behavior;
         self
     }
 
     /// Sets the maximum buffer length accepted by [`crate::TlsStream::read`].
+    ///
+    /// Oversized reads do not panic; they complete through the supplied callback
+    /// with [`crate::OperationError::ReadTooLarge`].
     pub fn with_max_read_len(mut self, max_read_len: usize) -> Self {
         self.max_read_len = max_read_len;
         self
     }
 
     /// Validates configuration invariants.
+    ///
+    /// Call this if you want to reject invalid configuration before attempting
+    /// to construct a pool.
+    ///
+    /// ```
+    /// use kimojio_tls_pool::{PoolConfig, PoolConfigError};
+    ///
+    /// let config = PoolConfig::new(0);
+    /// assert_eq!(config.validate(), Err(PoolConfigError::NoExecutors));
+    /// ```
     pub fn validate(&self) -> Result<(), PoolConfigError> {
         if self.executor_count == 0 {
             return Err(PoolConfigError::NoExecutors);
@@ -165,17 +253,17 @@ impl PoolConfig {
         self.thresholds.validate()
     }
 
-    /// Number of configured executors.
+    /// Number of background executor threads that [`crate::TlsPool::new`] will spawn.
     pub fn executor_count(&self) -> usize {
         self.executor_count
     }
 
-    /// Placement mode.
+    /// Placement mode used for submitted operations.
     pub fn placement_mode(&self) -> PlacementMode {
         self.placement_mode
     }
 
-    /// Adaptive thresholds.
+    /// Adaptive thresholds used when [`PoolConfig::placement_mode`] is [`PlacementMode::Adaptive`].
     pub fn thresholds(&self) -> SizeThresholds {
         self.thresholds
     }
@@ -204,6 +292,19 @@ impl Default for PoolConfig {
 }
 
 /// Invalid pool configuration.
+///
+/// ```
+/// use std::time::Duration;
+///
+/// use kimojio_tls_pool::{IdleBehavior, PoolConfig, PoolConfigError};
+///
+/// let config = PoolConfig::new(1)
+///     .with_idle_behavior(IdleBehavior::new(2, Duration::from_micros(10)));
+/// assert!(matches!(
+///     config.validate(),
+///     Err(PoolConfigError::TooManyReadyExecutors { .. })
+/// ));
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PoolConfigError {
     /// At least one background executor is required.

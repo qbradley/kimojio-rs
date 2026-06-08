@@ -44,7 +44,21 @@ struct ReadinessWait {
     shutdown: SharedShutdownCallback,
 }
 
-/// User-facing pool that owns TLS operation placement policy and shared stats.
+/// User-facing pool that owns TLS operation placement, worker threads, readiness, and stats.
+///
+/// Cloning a `TlsPool` creates another handle to the same underlying pool; it
+/// does not create more executor threads. Drop or explicitly [`shutdown`](Self::shutdown)
+/// the last handle when no more work should be accepted.
+///
+/// ```no_run
+/// use kimojio_tls_pool::{PlacementMode, PoolConfig, TlsPool};
+///
+/// let pool = TlsPool::new(
+///     PoolConfig::new(4).with_placement_mode(PlacementMode::Adaptive),
+/// )?;
+/// assert_eq!(pool.config().executor_count(), 4);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Clone)]
 pub struct TlsPool {
     pub(crate) inner: Arc<PoolInner>,
@@ -52,6 +66,18 @@ pub struct TlsPool {
 
 impl TlsPool {
     /// Creates a pool handle from a validated configuration.
+    ///
+    /// This validates the configuration, starts executor threads, and starts the
+    /// readiness reactor. Construction fails if configuration is invalid or if
+    /// a required thread cannot be spawned.
+    ///
+    /// ```
+    /// use kimojio_tls_pool::{PoolConfig, TlsPool};
+    ///
+    /// let pool = TlsPool::new(PoolConfig::new(2))?;
+    /// assert_eq!(pool.stats().submitted, 0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn new(config: PoolConfig) -> Result<Self, PoolConfigError> {
         config.validate()?;
         Ok(Self {
@@ -69,7 +95,31 @@ impl TlsPool {
     ///
     /// The pool sets the transport fd to nonblocking mode after handshake and
     /// assumes exclusive control over that fd's blocking mode while the stream
-    /// is alive.
+    /// is alive. The OpenSSL handshake itself happens before the returned
+    /// [`TlsStream`] is available; handshake failures are returned as
+    /// [`TlsPoolError`].
+    ///
+    /// ```no_run
+    /// use std::os::unix::net::UnixStream;
+    /// use std::thread;
+    ///
+    /// use kimojio_tls_pool::{PoolConfig, TlsPool};
+    /// use openssl::ssl::{SslAcceptor, SslConnector};
+    ///
+    /// # fn tls_contexts() -> (SslAcceptor, SslConnector) { unimplemented!() }
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let (acceptor, connector) = tls_contexts();
+    /// let pool = TlsPool::new(PoolConfig::new(2))?;
+    /// let (client_io, server_io) = UnixStream::pair()?;
+    ///
+    /// let server_pool = pool.clone();
+    /// let server_thread = thread::spawn(move || server_pool.server(&acceptor, server_io));
+    /// let client = pool.client(&connector, "localhost", client_io)?;
+    /// let server = server_thread.join().unwrap()?;
+    /// # let _ = (client, server);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn client<S>(
         &self,
         connector: &SslConnector,
@@ -87,7 +137,11 @@ impl TlsPool {
     ///
     /// The pool sets the transport fd to nonblocking mode after handshake and
     /// assumes exclusive control over that fd's blocking mode while the stream
-    /// is alive.
+    /// is alive. Server handshakes must be driven concurrently with the peer's
+    /// client handshake, usually by creating the server stream on another
+    /// thread or in another runtime task.
+    ///
+    /// See [`TlsPool::client`] for a complete connected-pair example.
     pub fn server<S>(&self, acceptor: &SslAcceptor, stream: S) -> Result<TlsStream, TlsPoolError>
     where
         S: std::io::Read + std::io::Write + std::os::fd::AsFd + Send + 'static,
@@ -96,17 +150,49 @@ impl TlsPool {
         Ok(TlsStream::from_tls(Arc::clone(&self.inner), tls))
     }
 
-    /// Returns the pool configuration.
+    /// Returns the pool configuration used to construct this pool.
+    ///
+    /// ```
+    /// use kimojio_tls_pool::{PoolConfig, TlsPool};
+    ///
+    /// let pool = TlsPool::new(PoolConfig::new(3))?;
+    /// assert_eq!(pool.config().executor_count(), 3);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn config(&self) -> &PoolConfig {
         &self.inner.config
     }
 
-    /// Returns a snapshot of pool statistics.
+    /// Returns a point-in-time snapshot of pool statistics.
+    ///
+    /// Statistics are monotonic counters. They are intended for diagnostics and
+    /// policy tuning, not for synchronization.
+    ///
+    /// ```
+    /// use kimojio_tls_pool::TlsPool;
+    ///
+    /// let pool = TlsPool::default();
+    /// let stats = pool.stats();
+    /// assert_eq!(stats.submitted, 0);
+    /// ```
     pub fn stats(&self) -> PoolStatsSnapshot {
         self.inner.stats.snapshot()
     }
 
     /// Starts an orderly pool shutdown.
+    ///
+    /// Shutdown is idempotent. New submissions are rejected with
+    /// [`OperationError::Shutdown`](crate::OperationError::Shutdown). Pending
+    /// readiness waits receive shutdown callbacks. Already-running executor
+    /// jobs are allowed to finish.
+    ///
+    /// ```
+    /// use kimojio_tls_pool::TlsPool;
+    ///
+    /// let pool = TlsPool::default();
+    /// pool.shutdown();
+    /// pool.shutdown(); // safe to call more than once
+    /// ```
     pub fn shutdown(&self) {
         self.inner.shutdown();
     }
