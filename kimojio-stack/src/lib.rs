@@ -1943,10 +1943,7 @@ impl RuntimeContext<'_> {
     pub(crate) fn submit_timeout(&self, duration: Duration) -> TimeoutState {
         let state = self.acquire_io_state();
         state.set_timeout(Timespec::from(duration));
-        let entry = {
-            let timeout = state.timeout.borrow();
-            opcode::Timeout::new(timeout.as_ref().expect("timeout missing timespec")).build()
-        };
+        let entry = state.timeout_entry();
         let user_data = self.submit_io_state(entry, Rc::clone(&state));
 
         TimeoutState { state, user_data }
@@ -2884,14 +2881,7 @@ impl Timeout {
     pub fn update(&self, cx: &RuntimeContext<'_>, duration: Duration) -> Result<(), Errno> {
         let state = cx.acquire_io_state();
         state.set_timeout(Timespec::from(duration));
-        let entry = {
-            let timeout = state.timeout.borrow();
-            opcode::TimeoutUpdate::new(
-                self.user_data,
-                timeout.as_ref().expect("timeout missing timespec"),
-            )
-            .build()
-        };
+        let entry = state.timeout_update_entry(self.user_data);
 
         let user_data = cx.submit_io_state(entry, Rc::clone(&state));
         cx.wait_for_submitted_io_state(state, IoCancelKind::Async(user_data))
@@ -2990,62 +2980,99 @@ fn timeout_result(result: KernelIoResult) -> Result<(), Errno> {
 }
 
 pub(crate) struct IoState {
-    result: RefCell<Option<KernelIoResult>>,
-    waiters: RefCell<Waiters>,
-    timeout: RefCell<Option<Timespec>>,
-    registered_resources: RefCell<RegisteredResources>,
-    cancel_requested: Cell<bool>,
+    inner: RefCell<IoStateInner>,
 }
 
 impl IoState {
     fn new() -> Self {
         Self {
-            result: RefCell::new(None),
-            waiters: RefCell::new(Waiters::default()),
-            timeout: RefCell::new(None),
-            registered_resources: RefCell::new(RegisteredResources::new()),
-            cancel_requested: Cell::new(false),
+            inner: RefCell::new(IoStateInner::new()),
         }
     }
 
     fn reset_for_reuse(&self) {
-        *self.result.borrow_mut() = None;
-        self.waiters.borrow_mut().clear();
-        *self.timeout.borrow_mut() = None;
-        self.registered_resources.borrow_mut().clear();
-        self.cancel_requested.set(false);
+        self.inner.borrow_mut().reset_for_reuse();
     }
 
     fn complete(&self, result: KernelIoResult) {
-        *self.result.borrow_mut() = Some(result);
-        self.registered_resources.borrow_mut().complete_all();
-        self.waiters.borrow_mut().wake_all();
+        let mut inner = self.inner.borrow_mut();
+        inner.result = Some(result);
+        inner.registered_resources.complete_all();
+        inner.waiters.wake_all();
     }
 
     pub(crate) fn add_waiter_from(&self, cx: &RuntimeContext<'_>) {
         if let Some(waiter) = cx.waiter() {
-            self.waiters.borrow_mut().push(waiter);
+            self.inner.borrow_mut().waiters.push(waiter);
         }
     }
 
     fn is_ready(&self) -> bool {
-        self.result.borrow().is_some()
+        self.inner.borrow().result.is_some()
     }
 
     fn take_result(&self) -> Option<KernelIoResult> {
-        self.result.borrow_mut().take()
+        self.inner.borrow_mut().result.take()
     }
 
     fn set_timeout(&self, timeout: Timespec) {
-        *self.timeout.borrow_mut() = Some(timeout);
+        self.inner.borrow_mut().timeout = Some(timeout);
+    }
+
+    fn timeout_entry(&self) -> Sqe {
+        let inner = self.inner.borrow();
+        opcode::Timeout::new(inner.timeout.as_ref().expect("timeout missing timespec"))
+            .build()
+            .into()
+    }
+
+    fn timeout_update_entry(&self, user_data: io_uring_user_data) -> Sqe {
+        let inner = self.inner.borrow();
+        opcode::TimeoutUpdate::new(
+            user_data,
+            inner.timeout.as_ref().expect("timeout missing timespec"),
+        )
+        .build()
+        .into()
     }
 
     fn attach_registered_resource(&self, resource: Rc<dyn RegisteredResource>) {
-        self.registered_resources.borrow_mut().push(resource);
+        self.inner.borrow_mut().registered_resources.push(resource);
     }
 
     fn mark_cancel_requested(&self) -> bool {
-        !self.cancel_requested.replace(true)
+        let mut inner = self.inner.borrow_mut();
+        let already_requested = inner.cancel_requested;
+        inner.cancel_requested = true;
+        !already_requested
+    }
+}
+
+struct IoStateInner {
+    result: Option<KernelIoResult>,
+    waiters: Waiters,
+    timeout: Option<Timespec>,
+    registered_resources: RegisteredResources,
+    cancel_requested: bool,
+}
+
+impl IoStateInner {
+    fn new() -> Self {
+        Self {
+            result: None,
+            waiters: Waiters::default(),
+            timeout: None,
+            registered_resources: RegisteredResources::new(),
+            cancel_requested: false,
+        }
+    }
+
+    fn reset_for_reuse(&mut self) {
+        self.result = None;
+        self.waiters.clear();
+        self.timeout = None;
+        self.registered_resources.clear();
+        self.cancel_requested = false;
     }
 }
 
