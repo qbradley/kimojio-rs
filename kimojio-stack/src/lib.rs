@@ -1843,7 +1843,7 @@ impl RuntimeContext<'_> {
 
     fn wait_for_scope(&self, state: &Rc<ScopeState>) {
         let mut cancel_requested = false;
-        while state.remaining.get() != 0 {
+        while state.has_remaining_tasks() {
             if !cancel_requested && self.core.borrow().ready_len() == 0 {
                 self.cancel_scope_tasks(state);
                 cancel_requested = true;
@@ -1851,14 +1851,14 @@ impl RuntimeContext<'_> {
             }
 
             if let Some(waiter) = self.waiter() {
-                state.waiters.borrow_mut().push(waiter);
+                state.push_waiter(waiter);
             }
             self.park();
         }
     }
 
     fn cancel_scope_tasks(&self, state: &ScopeState) {
-        let task_ids = state.task_ids.borrow().clone();
+        let task_ids = state.task_ids();
         interrupt_scheduler_tasks(&self.core, task_ids, |_| {
             Box::new(|_| panic::panic_any(TaskCanceled))
         });
@@ -2133,8 +2133,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
             })
         };
 
-        state.remaining.set(state.remaining.get() + 1);
-        state.register_task(id);
+        state.task_started(id);
         self.core.borrow_mut().insert_task(
             id,
             Task {
@@ -2777,26 +2776,27 @@ enum TaskOutcome<T> {
 }
 
 struct JoinState<T> {
-    result: RefCell<Option<TaskOutcome<T>>>,
-    stack_usage: Cell<Option<StackUsage>>,
-    waiters: RefCell<Waiters>,
+    inner: RefCell<JoinStateInner<T>>,
     panic_payload: Rc<RefCell<Option<PanicPayload>>>,
 }
 
 impl<T> JoinState<T> {
     fn new(panic_payload: Rc<RefCell<Option<PanicPayload>>>) -> Self {
         Self {
-            result: RefCell::new(None),
-            stack_usage: Cell::new(None),
-            waiters: RefCell::new(Waiters::default()),
+            inner: RefCell::new(JoinStateInner {
+                result: None,
+                stack_usage: None,
+                waiters: Waiters::default(),
+            }),
             panic_payload,
         }
     }
 
     fn complete(&self, result: TaskOutcome<T>, stack_usage: StackUsage) {
-        self.stack_usage.set(Some(stack_usage));
-        *self.result.borrow_mut() = Some(result);
-        self.waiters.borrow_mut().wake_all();
+        let mut inner = self.inner.borrow_mut();
+        inner.stack_usage = Some(stack_usage);
+        inner.result = Some(result);
+        inner.waiters.wake_all();
     }
 
     fn store_panic_payload(&self, payload: PanicPayload) {
@@ -2805,20 +2805,20 @@ impl<T> JoinState<T> {
 
     fn add_waiter_from(&self, cx: &RuntimeContext<'_>) {
         if let Some(waiter) = cx.waiter() {
-            self.waiters.borrow_mut().push(waiter);
+            self.inner.borrow_mut().waiters.push(waiter);
         }
     }
 
     pub(crate) fn is_ready(&self) -> bool {
-        self.result.borrow().is_some()
+        self.inner.borrow().result.is_some()
     }
 
     fn stack_usage(&self) -> Option<StackUsage> {
-        self.stack_usage.get()
+        self.inner.borrow().stack_usage
     }
 
     fn take_result(&self) -> Option<TaskOutcome<T>> {
-        self.result.borrow_mut().take()
+        self.inner.borrow_mut().result.take()
     }
 
     fn resume_panic(&self) -> ! {
@@ -2829,6 +2829,12 @@ impl<T> JoinState<T> {
             .unwrap_or_else(|| Box::new("stackful coroutine panic payload already consumed"));
         panic::resume_unwind(payload);
     }
+}
+
+struct JoinStateInner<T> {
+    result: Option<TaskOutcome<T>>,
+    stack_usage: Option<StackUsage>,
+    waiters: Waiters,
 }
 
 pub(crate) struct TimeoutState {
@@ -3078,23 +3084,35 @@ impl IoStateInner {
 
 #[derive(Default)]
 struct ScopeState {
-    remaining: Cell<usize>,
-    waiters: RefCell<Waiters>,
-    panic_payloads: RefCell<Vec<Rc<RefCell<Option<PanicPayload>>>>>,
-    task_ids: RefCell<Vec<TaskId>>,
+    inner: RefCell<ScopeStateInner>,
 }
 
 impl ScopeState {
-    fn register_task(&self, id: TaskId) {
-        self.task_ids.borrow_mut().push(id);
+    fn register_panic_payload(&self, payload: Rc<RefCell<Option<PanicPayload>>>) {
+        self.inner.borrow_mut().panic_payloads.push(payload);
     }
 
-    fn register_panic_payload(&self, payload: Rc<RefCell<Option<PanicPayload>>>) {
-        self.panic_payloads.borrow_mut().push(payload);
+    fn task_started(&self, id: TaskId) {
+        let mut inner = self.inner.borrow_mut();
+        inner.remaining += 1;
+        inner.task_ids.push(id);
+    }
+
+    fn has_remaining_tasks(&self) -> bool {
+        self.inner.borrow().remaining != 0
+    }
+
+    fn push_waiter(&self, waiter: Waiter) {
+        self.inner.borrow_mut().waiters.push(waiter);
+    }
+
+    fn task_ids(&self) -> Vec<TaskId> {
+        self.inner.borrow().task_ids.clone()
     }
 
     fn take_panic_payload(&self) -> Option<PanicPayload> {
-        for payload in self.panic_payloads.borrow().iter() {
+        let inner = self.inner.borrow();
+        for payload in &inner.panic_payloads {
             if let Some(payload) = payload.borrow_mut().take() {
                 return Some(payload);
             }
@@ -3103,17 +3121,24 @@ impl ScopeState {
     }
 
     fn task_finished(&self) {
-        let remaining = self
+        let mut inner = self.inner.borrow_mut();
+        inner.remaining = inner
             .remaining
-            .get()
             .checked_sub(1)
             .expect("scope task count underflow");
-        self.remaining.set(remaining);
 
-        if remaining == 0 {
-            self.waiters.borrow_mut().wake_all();
+        if inner.remaining == 0 {
+            inner.waiters.wake_all();
         }
     }
+}
+
+#[derive(Default)]
+struct ScopeStateInner {
+    remaining: usize,
+    waiters: Waiters,
+    panic_payloads: Vec<Rc<RefCell<Option<PanicPayload>>>>,
+    task_ids: Vec<TaskId>,
 }
 
 #[derive(Clone)]
