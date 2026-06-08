@@ -45,10 +45,11 @@
 //! - [`RingEnterPolicy::AfterReadyTasks`] runs up to the configured number of
 //!   ready tasks, then submits and reaps without blocking.
 //!
-//! If no tasks are ready but I/O is in flight, the root scheduler enters the ring
-//! in wait mode so an I/O completion can make progress. If tasks are ready, ring
-//! entry is nonblocking so the runtime does not stall runnable coroutines behind
-//! kernel work.
+//! If no tasks are ready but I/O is in flight, [`BusyPoll`] controls whether the
+//! root scheduler enters the ring in wait mode or repeatedly checks for
+//! completions without blocking the OS thread. If tasks are ready, ring entry is
+//! nonblocking so the runtime does not stall runnable coroutines behind kernel
+//! work.
 //!
 //! Completion handling is split into two phases to avoid reentrant scheduler
 //! borrows. While the scheduler is mutably borrowed it submits SQEs, drains CQEs
@@ -180,7 +181,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use corosensei::stack::{DefaultStack, MIN_STACK_SIZE, Stack as CoroStack};
 use corosensei::{Coroutine, CoroutineResult, Yielder};
@@ -424,6 +425,8 @@ pub struct RuntimeConfig {
     pub ring_entries: u32,
     /// Policy controlling how often the scheduler enters the ring.
     pub ring_enter_policy: RingEnterPolicy,
+    /// Policy controlling whether pending I/O completions are busy-polled.
+    pub busy_poll: BusyPoll,
     /// Number of fixed-file slots to register with io_uring.
     pub registered_file_slots: u32,
     /// Number of fixed-buffer slots to register with io_uring.
@@ -436,8 +439,35 @@ impl Default for RuntimeConfig {
             stack_size: DEFAULT_STACK_SIZE,
             ring_entries: DEFAULT_RING_ENTRIES,
             ring_enter_policy: RingEnterPolicy::default(),
+            busy_poll: BusyPoll::default(),
             registered_file_slots: 0,
             registered_buffer_slots: 0,
+        }
+    }
+}
+
+/// Controls whether the scheduler busy-polls for pending I/O completions.
+///
+/// Busy polling avoids putting the OS thread to sleep while an io_uring
+/// operation is in flight, which can reduce tail latency for short operations at
+/// the cost of burning CPU. It only affects the root scheduler's behavior while
+/// I/O is pending and no stackful coroutine is ready to run.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BusyPoll {
+    /// Never busy poll; suspend the OS thread while waiting for I/O completions.
+    #[default]
+    Never,
+    /// Always busy poll while I/O is pending.
+    Always,
+    /// Busy poll until `duration` has elapsed since the runtime started.
+    Until(Duration),
+}
+
+impl From<Option<Duration>> for BusyPoll {
+    fn from(value: Option<Duration>) -> Self {
+        match value {
+            Some(duration) => Self::Until(duration),
+            None => Self::Never,
         }
     }
 }
@@ -479,6 +509,16 @@ impl Runtime {
         Self {
             config: RuntimeConfig {
                 stack_size,
+                ..RuntimeConfig::default()
+            },
+        }
+    }
+
+    /// Creates a runtime with custom busy-poll behavior.
+    pub fn with_busy_poll(busy_poll: BusyPoll) -> Self {
+        Self {
+            config: RuntimeConfig {
+                busy_poll,
                 ..RuntimeConfig::default()
             },
         }
@@ -3232,8 +3272,14 @@ struct Scheduler {
     completed_io: Vec<CompletedIo>,
     in_flight_io: usize,
     ring_enter_policy: RingEnterPolicy,
+    busy_poll: BusyPoll,
+    busy_poll_started: Instant,
     external_wake: Arc<ExternalWake>,
     external_wake_io: Option<Rc<IoState>>,
+    #[cfg(test)]
+    poll_ring_entries: usize,
+    #[cfg(test)]
+    wait_ring_entries: usize,
 }
 
 impl Scheduler {
@@ -3266,8 +3312,14 @@ impl Scheduler {
             completed_io: Vec::with_capacity(config.ring_entries as usize),
             in_flight_io: 0,
             ring_enter_policy: config.ring_enter_policy,
+            busy_poll: config.busy_poll,
+            busy_poll_started: Instant::now(),
             external_wake: Arc::new(ExternalWake::new()),
             external_wake_io: None,
+            #[cfg(test)]
+            poll_ring_entries: 0,
+            #[cfg(test)]
+            wait_ring_entries: 0,
         }
     }
 
@@ -3535,6 +3587,13 @@ impl Scheduler {
     }
 
     fn enter_ring(&mut self, want: usize) -> usize {
+        #[cfg(test)]
+        if want == 0 {
+            self.poll_ring_entries += 1;
+        } else {
+            self.wait_ring_entries += 1;
+        }
+
         let submitted = if self.should_enter(want) {
             self.submit_and_wait(want)
         } else {
@@ -3555,6 +3614,19 @@ impl Scheduler {
         }
 
         submitted
+    }
+
+    fn should_busy_poll_io(&self) -> bool {
+        match self.busy_poll {
+            BusyPoll::Never => false,
+            BusyPoll::Always => true,
+            BusyPoll::Until(duration) => self.busy_poll_started.elapsed() <= duration,
+        }
+    }
+
+    #[cfg(test)]
+    fn ring_enter_counts(&self) -> (usize, usize) {
+        (self.poll_ring_entries, self.wait_ring_entries)
     }
 }
 
@@ -3583,7 +3655,10 @@ fn drive_scheduler(core: &Rc<RefCell<Scheduler>>) -> bool {
         return run_completed_io(core, false) || ran_task;
     }
 
-    let should_wait_for_io = core.borrow().in_flight_io != 0;
+    let (should_wait_for_io, busy_poll_io) = {
+        let scheduler = core.borrow();
+        (scheduler.in_flight_io != 0, scheduler.should_busy_poll_io())
+    };
     if should_wait_for_io {
         if core.borrow().has_external_waiters_or_ready() {
             if run_completed_io(core, false) {
@@ -3602,7 +3677,7 @@ fn drive_scheduler(core: &Rc<RefCell<Scheduler>>) -> bool {
                     return true;
                 }
             }
-            run_completed_io(core, true);
+            run_completed_io(core, !busy_poll_io);
             let scheduled = {
                 let mut scheduler = core.borrow_mut();
                 scheduler.finish_external_wake_io();
@@ -3611,7 +3686,7 @@ fn drive_scheduler(core: &Rc<RefCell<Scheduler>>) -> bool {
             let completed = run_completed_io(core, false);
             scheduled || completed || core.borrow().in_flight_io != 0
         } else {
-            run_completed_io(core, true);
+            run_completed_io(core, !busy_poll_io);
             true
         }
     } else {
@@ -3857,10 +3932,10 @@ mod allocation_tracking {
 #[cfg(test)]
 mod tests {
     use super::{
-        AddressFamily, AtFlags, DEFAULT_STACK_SIZE, EpollCtlOp, EpollEvent, EpollEventData,
-        EpollEventFlags, FallocateFlags, FileAdvice, FutexWaitFlags, IoJoinError, IoVec,
-        MemoryAdvice, Mode, MsgHdr, OFlags, RecvFlags, RenameFlags, ResolveFlags, Runtime,
-        RuntimeContext, SendFlags, Shutdown, SocketType, StatxFlags, TaskStackState,
+        AddressFamily, AtFlags, BusyPoll, DEFAULT_STACK_SIZE, EpollCtlOp, EpollEvent,
+        EpollEventData, EpollEventFlags, FallocateFlags, FileAdvice, FutexWaitFlags, IoJoinError,
+        IoVec, MemoryAdvice, Mode, MsgHdr, OFlags, RecvFlags, RenameFlags, ResolveFlags, Runtime,
+        RuntimeConfig, RuntimeContext, SendFlags, Shutdown, SocketType, StatxFlags, TaskStackState,
         UringSpliceFlags, Waitable, allocation_tracking, ipproto, once,
     };
     use rustix::event::{PollFlags, epoll};
@@ -4440,6 +4515,50 @@ mod tests {
         runtime.block_on(|cx| {
             cx.nop().unwrap();
             cx.sleep(Duration::from_millis(1)).unwrap();
+        });
+    }
+
+    #[test]
+    fn busy_poll_never_waits_for_io_completion() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            busy_poll: BusyPoll::Never,
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.sleep(Duration::from_millis(1)).unwrap();
+            let (poll_entries, wait_entries) = cx.core.borrow().ring_enter_counts();
+            assert_eq!(poll_entries, 0);
+            assert!(wait_entries != 0);
+        });
+    }
+
+    #[test]
+    fn busy_poll_always_does_not_wait_for_io_completion() {
+        let mut runtime = Runtime::with_busy_poll(BusyPoll::Always);
+
+        runtime.block_on(|cx| {
+            cx.sleep(Duration::from_millis(1)).unwrap();
+            let (poll_entries, wait_entries) = cx.core.borrow().ring_enter_counts();
+            assert!(poll_entries != 0);
+            assert_eq!(wait_entries, 0);
+        });
+    }
+
+    #[test]
+    fn busy_poll_until_polls_then_waits_after_duration() {
+        let mut runtime = Runtime::with_busy_poll(BusyPoll::Until(Duration::from_millis(100)));
+
+        runtime.block_on(|cx| {
+            cx.sleep(Duration::from_millis(1)).unwrap();
+            let (poll_entries, wait_entries) = cx.core.borrow().ring_enter_counts();
+            assert!(poll_entries != 0);
+            assert_eq!(wait_entries, 0);
+
+            thread::sleep(Duration::from_millis(120));
+            cx.sleep(Duration::from_millis(1)).unwrap();
+            let (_, wait_entries) = cx.core.borrow().ring_enter_counts();
+            assert!(wait_entries != 0);
         });
     }
 
