@@ -10,13 +10,16 @@ pub mod server;
 pub mod settings;
 pub mod stream;
 
-pub use client::{ClientConnection, ResponseWithTrailers};
+pub use client::{ClientConnection, ResponseStreamEvent, ResponseWithTrailers};
 pub use connection::ConnectionState;
 pub use frame::{Frame, FrameFlags, FramePayload, FrameType};
 pub use hpack::Header;
 pub use server::{IncomingRequest, ServerConnection};
 pub use settings::{Setting, SettingId, Settings};
 pub use stream::{FlowControlWindow, Stream, StreamId, StreamState};
+
+/// HTTP/2 error code for stream cancellation.
+pub const ERROR_CODE_CANCEL: u32 = 8;
 
 /// HTTP/2 client connection preface.
 pub const CLIENT_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
@@ -56,7 +59,7 @@ mod tests {
         HeaderName, HeaderValue, Request, Response, StatusCode,
         header::{CONTENT_TYPE, TE},
     };
-    use kimojio_stack::Runtime;
+    use kimojio_stack::{Runtime, channel};
     use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 
     use crate::{
@@ -66,8 +69,8 @@ mod tests {
     };
 
     use super::{
-        ClientConnection, ConnectionState, Frame, Header, ServerConnection, Setting, SettingId,
-        Settings, StreamId, codec,
+        ClientConnection, ConnectionState, ERROR_CODE_CANCEL, Frame, Header, ResponseStreamEvent,
+        ServerConnection, Setting, SettingId, Settings, StreamId, codec,
     };
 
     fn body(bytes: &[u8]) -> Body {
@@ -190,6 +193,72 @@ mod tests {
     }
 
     #[test]
+    fn h2_incremental_response_stream_delivers_data_and_trailers() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut server = ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = server.accept(cx).unwrap().unwrap();
+                    let response = Response::builder()
+                        .status(StatusCode::OK)
+                        .header(CONTENT_TYPE, "application/octet-stream")
+                        .header("x-stream", "yes")
+                        .body(())
+                        .unwrap();
+                    server
+                        .send_response_headers(cx, incoming.stream_id, &response)
+                        .unwrap();
+                    server
+                        .send_response_data(cx, incoming.stream_id, b"one")
+                        .unwrap();
+                    server
+                        .send_response_data(cx, incoming.stream_id, b"two")
+                        .unwrap();
+                    let mut trailers = Trailers::new();
+                    trailers.insert(
+                        HeaderName::from_static("x-terminal"),
+                        HeaderValue::from_static("done"),
+                    );
+                    server
+                        .finish_response_stream(cx, incoming.stream_id, Some(&trailers))
+                        .unwrap();
+                    server.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut client = ClientConnection::new(client_transport, HttpConfig::default());
+                    let request = Request::builder()
+                        .method("POST")
+                        .uri("/stream")
+                        .body(Body::empty())
+                        .unwrap();
+                    let stream_id = client.send_request(cx, &request).unwrap();
+                    let response = client.read_response_headers(cx, stream_id).unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    assert_eq!(response.headers()["x-stream"], "yes");
+
+                    let first = client.read_response_event(cx, stream_id).unwrap();
+                    let second = client.read_response_event(cx, stream_id).unwrap();
+                    let terminal = client.read_response_event(cx, stream_id).unwrap();
+                    client.close(cx).unwrap();
+                    (first, second, terminal)
+                });
+
+                server.join(cx).unwrap();
+                let (first, second, terminal) = client.join(cx).unwrap();
+                assert!(matches!(first, ResponseStreamEvent::Data(data) if data == b"one"[..]));
+                assert!(matches!(second, ResponseStreamEvent::Data(data) if data == b"two"[..]));
+                assert!(matches!(terminal, ResponseStreamEvent::Trailers(trailers)
+                        if trailers.get(&HeaderName::from_static("x-terminal"))
+                            == Some(&HeaderValue::from_static("done"))));
+            });
+        });
+    }
+
+    #[test]
     fn h2_response_body_chunks_are_delivered_incrementally() {
         let (client_transport, server_transport) = socket_transport_pair();
         let mut runtime = Runtime::new();
@@ -243,6 +312,293 @@ mod tests {
         });
     }
 
+    #[test]
+    fn h2_response_stream_can_finish_without_trailers() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut server = ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = server.accept(cx).unwrap().unwrap();
+                    let response = Response::builder()
+                        .status(StatusCode::NO_CONTENT)
+                        .body(())
+                        .unwrap();
+                    server
+                        .send_response_headers(cx, incoming.stream_id, &response)
+                        .unwrap();
+                    server
+                        .finish_response_stream(cx, incoming.stream_id, None)
+                        .unwrap();
+                    server.close(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut client = ClientConnection::new(client_transport, HttpConfig::default());
+                    let request = Request::builder()
+                        .method("GET")
+                        .uri("/empty-stream")
+                        .body(Body::empty())
+                        .unwrap();
+                    let stream_id = client.send_request(cx, &request).unwrap();
+                    let response = client.read_response_headers(cx, stream_id).unwrap();
+                    let terminal = client.read_response_event(cx, stream_id).unwrap();
+                    client.close(cx).unwrap();
+                    (response, terminal)
+                });
+
+                server.join(cx).unwrap();
+                let (response, terminal) = client.join(cx).unwrap();
+                assert_eq!(response.status(), StatusCode::NO_CONTENT);
+                assert!(matches!(terminal, ResponseStreamEvent::Trailers(trailers) if trailers.is_empty()));
+            });
+        });
+    }
+
+    #[test]
+    fn h2_concurrent_response_streams_preserve_association_out_of_order() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut server = ServerConnection::new(server_transport, HttpConfig::default());
+                    let first = server.accept(cx).unwrap().unwrap();
+                    let second = server.accept(cx).unwrap().unwrap();
+                    assert_eq!(first.request.uri(), "/first-stream");
+                    assert_eq!(second.request.uri(), "/second-stream");
+
+                    let second_response = Response::builder()
+                        .status(StatusCode::OK)
+                        .header("x-stream", "second")
+                        .body(())
+                        .unwrap();
+                    server
+                        .send_response_headers(cx, second.stream_id, &second_response)
+                        .unwrap();
+                    server
+                        .send_response_data(cx, second.stream_id, b"second")
+                        .unwrap();
+                    server
+                        .finish_response_stream(cx, second.stream_id, None)
+                        .unwrap();
+
+                    let first_response = Response::builder()
+                        .status(StatusCode::OK)
+                        .header("x-stream", "first")
+                        .body(())
+                        .unwrap();
+                    server
+                        .send_response_headers(cx, first.stream_id, &first_response)
+                        .unwrap();
+                    server
+                        .send_response_data(cx, first.stream_id, b"first")
+                        .unwrap();
+                    server
+                        .finish_response_stream(cx, first.stream_id, None)
+                        .unwrap();
+                    server.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut client = ClientConnection::new(client_transport, HttpConfig::default());
+                    let first = Request::builder()
+                        .method("GET")
+                        .uri("/first-stream")
+                        .body(Body::empty())
+                        .unwrap();
+                    let second = Request::builder()
+                        .method("GET")
+                        .uri("/second-stream")
+                        .body(Body::empty())
+                        .unwrap();
+                    let first_id = client.send_request(cx, &first).unwrap();
+                    let second_id = client.send_request(cx, &second).unwrap();
+
+                    let second_head = client.read_response_headers(cx, second_id).unwrap();
+                    let first_head = client.read_response_headers(cx, first_id).unwrap();
+                    let second_data = client.read_response_event(cx, second_id).unwrap();
+                    let first_data = client.read_response_event(cx, first_id).unwrap();
+                    let second_end = client.read_response_event(cx, second_id).unwrap();
+                    let first_end = client.read_response_event(cx, first_id).unwrap();
+                    client.close(cx).unwrap();
+                    (
+                        first_head,
+                        first_data,
+                        first_end,
+                        second_head,
+                        second_data,
+                        second_end,
+                    )
+                });
+
+                server.join(cx).unwrap();
+                let (first_head, first_data, first_end, second_head, second_data, second_end) =
+                    client.join(cx).unwrap();
+                assert_eq!(first_head.headers()["x-stream"], "first");
+                assert!(matches!(first_data, ResponseStreamEvent::Data(data) if data == b"first"[..]));
+                assert!(matches!(first_end, ResponseStreamEvent::Trailers(trailers) if trailers.is_empty()));
+                assert_eq!(second_head.headers()["x-stream"], "second");
+                assert!(
+                    matches!(second_data, ResponseStreamEvent::Data(data) if data == b"second"[..])
+                );
+                assert!(
+                    matches!(second_end, ResponseStreamEvent::Trailers(trailers) if trailers.is_empty())
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn h2_response_stream_can_be_read_incrementally_after_completing_off_target() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut server = ServerConnection::new(server_transport, HttpConfig::default());
+                    let first = server.accept(cx).unwrap().unwrap();
+                    let second = server.accept(cx).unwrap().unwrap();
+
+                    let first_response = Response::builder()
+                        .status(StatusCode::OK)
+                        .header("x-stream", "first")
+                        .body(())
+                        .unwrap();
+                    server
+                        .send_response_headers(cx, first.stream_id, &first_response)
+                        .unwrap();
+                    server
+                        .send_response_data(cx, first.stream_id, b"first")
+                        .unwrap();
+                    server
+                        .finish_response_stream(cx, first.stream_id, None)
+                        .unwrap();
+
+                    let second_response = Response::builder()
+                        .status(StatusCode::OK)
+                        .header("x-stream", "second")
+                        .body(())
+                        .unwrap();
+                    server
+                        .send_response_headers(cx, second.stream_id, &second_response)
+                        .unwrap();
+                    server
+                        .send_response_data(cx, second.stream_id, b"second")
+                        .unwrap();
+                    server
+                        .finish_response_stream(cx, second.stream_id, None)
+                        .unwrap();
+                    server.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut client = ClientConnection::new(client_transport, HttpConfig::default());
+                    let first = Request::builder()
+                        .method("GET")
+                        .uri("/first-stream")
+                        .body(Body::empty())
+                        .unwrap();
+                    let second = Request::builder()
+                        .method("GET")
+                        .uri("/second-stream")
+                        .body(Body::empty())
+                        .unwrap();
+                    let first_id = client.send_request(cx, &first).unwrap();
+                    let second_id = client.send_request(cx, &second).unwrap();
+
+                    let second_head = client.read_response_headers(cx, second_id).unwrap();
+                    let first_head = client.read_response_headers(cx, first_id).unwrap();
+                    let first_data = client.read_response_event(cx, first_id).unwrap();
+                    let first_end = client.read_response_event(cx, first_id).unwrap();
+                    let second_data = client.read_response_event(cx, second_id).unwrap();
+                    let second_end = client.read_response_event(cx, second_id).unwrap();
+                    client.close(cx).unwrap();
+                    (
+                        first_head,
+                        first_data,
+                        first_end,
+                        second_head,
+                        second_data,
+                        second_end,
+                    )
+                });
+
+                server.join(cx).unwrap();
+                let (first_head, first_data, first_end, second_head, second_data, second_end) =
+                    client.join(cx).unwrap();
+                assert_eq!(first_head.headers()["x-stream"], "first");
+                assert!(matches!(first_data, ResponseStreamEvent::Data(data) if data == b"first"[..]));
+                assert!(matches!(first_end, ResponseStreamEvent::Trailers(trailers) if trailers.is_empty()));
+                assert_eq!(second_head.headers()["x-stream"], "second");
+                assert!(
+                    matches!(second_data, ResponseStreamEvent::Data(data) if data == b"second"[..])
+                );
+                assert!(
+                    matches!(second_end, ResponseStreamEvent::Trailers(trailers) if trailers.is_empty())
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn h2_response_stream_cancel_sends_reset_observed_by_blocked_server_send() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+        let client_settings = Settings {
+            initial_window_size: 0,
+            ..Settings::default()
+        };
+        let (headers_sent_tx, headers_sent_rx) = channel::bounded::<()>(1);
+        let (cancelled_tx, cancelled_rx) = channel::bounded::<()>(1);
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut server = ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = server.accept(cx).unwrap().unwrap();
+                    let response = Response::builder().status(StatusCode::OK).body(()).unwrap();
+                    server
+                        .send_response_headers(cx, incoming.stream_id, &response)
+                        .unwrap();
+                    headers_sent_tx.send(cx, ()).unwrap();
+                    cancelled_rx.recv(cx).unwrap();
+                    server
+                        .send_response_data(cx, incoming.stream_id, b"blocked")
+                        .unwrap_err()
+                        .kind()
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut client = ClientConnection::new_with_settings(
+                        client_transport,
+                        HttpConfig::default(),
+                        client_settings,
+                    );
+                    let request = Request::builder()
+                        .method("GET")
+                        .uri("/cancel")
+                        .body(Body::empty())
+                        .unwrap();
+                    let stream_id = client.send_request(cx, &request).unwrap();
+                    headers_sent_rx.recv(cx).unwrap();
+                    client.read_response_headers(cx, stream_id).unwrap();
+                    client
+                        .cancel_response_stream(cx, stream_id, ERROR_CODE_CANCEL)
+                        .unwrap();
+                    cancelled_tx.send(cx, ()).unwrap();
+                    client.close(cx).unwrap();
+                });
+
+                client.join(cx).unwrap();
+                assert_eq!(server.join(cx).unwrap(), ErrorKind::PeerReset);
+            });
+        });
+    }
     #[test]
     fn h2_concurrent_streams_preserve_association_out_of_order() {
         let (client_transport, server_transport) = socket_transport_pair();
@@ -456,9 +812,11 @@ mod tests {
                             ServerConnection::new(server_transport, HttpConfig::default());
                         let incoming = server.accept(cx).unwrap().unwrap();
                         if goaway {
-                            server.goaway(cx, 0, 8).unwrap();
+                            server.goaway(cx, 0, ERROR_CODE_CANCEL).unwrap();
                         } else {
-                            server.reset_stream(cx, incoming.stream_id, 8).unwrap();
+                            server
+                                .reset_stream(cx, incoming.stream_id, ERROR_CODE_CANCEL)
+                                .unwrap();
                         }
                         server.close(cx).unwrap();
                     });

@@ -1,13 +1,13 @@
 #![allow(dead_code)]
 
-use std::{convert::Infallible, sync::Arc, task::Poll};
+use std::{convert::Infallible, pin::Pin, sync::Arc, task::Poll};
 
 use http::uri::PathAndQuery;
 use prost::Message;
 use tonic::{
     Code, Request, Response, Status,
     body::Body as TonicBody,
-    codegen::{BoxFuture, Service, http},
+    codegen::{BoxFuture, Service, http, tokio_stream::Stream},
     metadata::{MetadataValue, errors::InvalidMetadataValue},
     transport::Channel,
 };
@@ -15,6 +15,7 @@ use tonic_prost::ProstCodec;
 
 pub const SERVICE_NAME: &str = "interop.TestService";
 pub const UNARY_PATH: &str = "/interop.TestService/Unary";
+pub const STREAM_PATH: &str = "/interop.TestService/Stream";
 
 #[derive(Clone, PartialEq, Message)]
 pub struct TestRequest {
@@ -68,6 +69,16 @@ impl Service<http::Request<TonicBody>> for TonicTestServer {
                     let codec = ProstCodec::<TestResponse, TestRequest>::default();
                     let mut grpc = tonic::server::Grpc::new(codec);
                     Ok(grpc.unary(TonicUnary { behavior }, request).await)
+                })
+            }
+            STREAM_PATH => {
+                let behavior = self.behavior.clone();
+                Box::pin(async move {
+                    let codec = ProstCodec::<TestResponse, TestRequest>::default();
+                    let mut grpc = tonic::server::Grpc::new(codec);
+                    Ok(grpc
+                        .server_streaming(TonicServerStreaming { behavior }, request)
+                        .await)
                 })
             }
             _ => Box::pin(async move { Ok(Status::unimplemented("unknown method").into_http()) }),
@@ -128,6 +139,71 @@ impl tonic::server::UnaryService<TestRequest> for TonicUnary {
     }
 }
 
+type TonicResponseStream = Pin<Box<dyn Stream<Item = Result<TestResponse, Status>> + Send>>;
+
+#[derive(Clone)]
+struct TonicServerStreaming {
+    behavior: Arc<TonicBehavior>,
+}
+
+impl tonic::server::ServerStreamingService<TestRequest> for TonicServerStreaming {
+    type Response = TestResponse;
+    type ResponseStream = TonicResponseStream;
+    type Future = BoxFuture<Response<Self::ResponseStream>, Status>;
+
+    fn call(&mut self, request: Request<TestRequest>) -> Self::Future {
+        let behavior = self.behavior.clone();
+        Box::pin(async move {
+            assert_eq!(request.metadata().get("x-request").unwrap(), "stackful");
+            assert_eq!(
+                request
+                    .metadata()
+                    .get_bin("trace-bin")
+                    .unwrap()
+                    .to_bytes()
+                    .unwrap()
+                    .as_ref(),
+                b"trace"
+            );
+
+            let mut response = match &*behavior {
+                TonicBehavior::Success => {
+                    let value = request.get_ref().value.clone();
+                    Response::new(Box::pin(tonic::codegen::tokio_stream::iter([
+                        Ok(TestResponse {
+                            value: format!("tonic {value} one"),
+                        }),
+                        Ok(TestResponse {
+                            value: format!("tonic {value} two"),
+                        }),
+                    ])) as TonicResponseStream)
+                }
+                TonicBehavior::Error => {
+                    let value = request.get_ref().value.clone();
+                    let mut metadata = tonic::metadata::MetadataMap::new();
+                    metadata.insert("x-error", MetadataValue::from_static("tonic"));
+                    metadata.insert_bin("error-bin", MetadataValue::from_bytes(b"details"));
+                    Response::new(Box::pin(tonic::codegen::tokio_stream::iter([
+                        Ok(TestResponse {
+                            value: format!("tonic {value} before-error"),
+                        }),
+                        Err(Status::with_details_and_metadata(
+                            Code::Unavailable,
+                            "tonic stream down",
+                            bytes::Bytes::from_static(b"stream-opaque"),
+                            metadata,
+                        )),
+                    ])) as TonicResponseStream)
+                }
+            };
+            response
+                .metadata_mut()
+                .insert("x-tonic", MetadataValue::from_static("yes"));
+            Ok(response)
+        })
+    }
+}
+
 pub async fn tonic_unary_call(
     channel: Channel,
     request: Request<TestRequest>,
@@ -139,6 +215,22 @@ pub async fn tonic_unary_call(
     grpc.unary(
         request,
         PathAndQuery::from_static(UNARY_PATH),
+        ProstCodec::<TestRequest, TestResponse>::default(),
+    )
+    .await
+}
+
+pub async fn tonic_server_streaming_call(
+    channel: Channel,
+    request: Request<TestRequest>,
+) -> Result<Response<tonic::Streaming<TestResponse>>, Status> {
+    let mut grpc = tonic::client::Grpc::new(channel);
+    grpc.ready()
+        .await
+        .map_err(|error| Status::unavailable(error.to_string()))?;
+    grpc.server_streaming(
+        request,
+        PathAndQuery::from_static(STREAM_PATH),
         ProstCodec::<TestRequest, TestResponse>::default(),
     )
     .await

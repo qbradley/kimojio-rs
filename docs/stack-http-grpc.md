@@ -14,7 +14,7 @@ runtime. Those crates are used only in tests as interoperability peers.
 | Crate | Purpose |
 |-------|---------|
 | `kimojio-stack-http` | HTTP body/limit types, plaintext/TLS transport boundary, HTTP/1.1 client/server, HTTP/2 client/server |
-| `kimojio-stack-grpc` | Unary gRPC client/server, metadata, status/trailer mapping, prost message framing |
+| `kimojio-stack-grpc` | Unary and server-streaming gRPC client/server, metadata, status/trailer mapping, prost message framing |
 
 ## Transport model
 
@@ -59,7 +59,9 @@ server push, and HTTP/1.1 pipelining are not part of the initial scope.
 
 ## gRPC usage
 
-The gRPC layer is unary-first and prost-compatible.
+The gRPC layer is unary-first and prost-compatible, with server-streaming
+support for one protobuf request followed by an ordered stream of protobuf
+responses and one terminal status.
 
 Generated client/server stubs are intentionally deferred. The initial API keeps
 method paths, metadata, message limits, and transports explicit until the
@@ -67,10 +69,11 @@ stackful transport and service model are proven without adding hidden runtime
 or allocation costs.
 
 `UnaryClient::call` and `UnaryServer::serve_one` are sequential convenience
-helpers for unary RPCs. Callers that need explicit stream lifecycle control
-should use the lower-level HTTP/2 `send_request` / `read_response_with_trailers`
-and `accept` / `send_response_with_trailers` APIs directly until dedicated
-streaming gRPC handles are introduced.
+helpers for unary RPCs. `UnaryClient::call_server_streaming` returns a
+`ServerStreamingResponse` whose `next(cx)` method yields decoded messages until
+clean EOF or a terminal `Status` error. `UnaryServer::add_server_streaming`
+registers handlers that return `ServerStreamingReply` backed by a
+`ServerStream` or bounded-channel `ReceiverStream`.
 
 Client flow:
 
@@ -90,6 +93,12 @@ Server flow:
 Handlers return `UnaryReply<Resp>` for successful responses or `Status` for
 peer-visible gRPC errors.
 
+Server-streaming handlers return `ServerStreamingReply<S>`. Each yielded
+`Ok(message)` is encoded and sent as an individual gRPC frame; `Ok(None)` sends
+`grpc-status: 0` trailers, and `Err(Status)` sends that status as the terminal
+trailers. One active streaming response is supported per `UnaryClient`; use
+independent client connections for concurrent server-streaming RPCs.
+
 Metadata is represented by `Metadata`. Use `insert_bin` and `get_bin` for
 binary `-bin` metadata. Status messages are percent-encoded on the wire, and
 binary status details use `grpc-status-details-bin`.
@@ -101,10 +110,13 @@ The implementation favors explicit limits and bounded buffering:
 - `HttpConfig` controls HTTP start-line, header, body, frame, and read-buffer
   limits.
 - `ClientConfig` and `ServerConfig` are exported from `kimojio-stack-grpc` and
-  control unary gRPC message sizes.
+  control unary and server-streaming gRPC message sizes.
 - HTTP/2 flow-control windows are tracked explicitly. Repeated terminal DATA
   frames replenish the connection receive window so long-running unary-style
   connections do not stall after the initial connection window is consumed.
+- Server-streaming producers are driven inline. Bounded channel-backed streams
+  use caller-owned capacity for backpressure; the gRPC layer does not add hidden
+  unbounded response queues or background readers.
 
 Errors are inspectable through `ErrorKind` and `LimitKind`, allowing callers and
 tests to distinguish protocol errors, peer resets, EOF, TLS failures, and size
@@ -117,7 +129,7 @@ interoperability:
 
 - HTTP/1.1 client and server against tokio/hyper peers.
 - HTTP/2 client and server against tokio/hyper peers.
-- Unary gRPC client and server against tonic peers.
+- Unary and server-streaming gRPC client and server against tonic peers.
 - gRPC over HTTP/2 TLS for the stackful client path.
 
 Tokio-based crates remain dev-dependencies for these tests and are not normal
@@ -148,9 +160,8 @@ gRPC local loops. TLS paths are benchmarked for latency/throughput instead of
 using allocation budgets because OpenSSL handshake and record-layer internals
 dominate allocator counts outside the stackful HTTP/gRPC hot-path code.
 
-## Future streaming support
+## Future streaming extensions
 
-Streaming is intentionally deferred. The current unary APIs leave room for
-future client-streaming, server-streaming, and bidirectional-streaming handles
-that reuse the existing HTTP/2 transport, metadata, status, and message-limit
-types without changing unary callers.
+Client-streaming and bidirectional-streaming are not yet implemented. The
+existing HTTP/2 transport, metadata, status, and message-limit types leave room
+for these without changing unary or server-streaming callers.

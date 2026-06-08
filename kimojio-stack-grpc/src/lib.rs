@@ -10,11 +10,13 @@ pub mod metadata;
 pub mod server;
 pub mod status;
 
-pub use client::{ClientConfig, UnaryClient, UnaryResponse};
+pub use client::{ClientConfig, ServerStreamingResponse, UnaryClient, UnaryResponse};
 pub use codec::{decode_message, encode_message};
 pub use error::{Error, ErrorKind};
 pub use metadata::Metadata;
-pub use server::{ServerConfig, UnaryReply, UnaryServer};
+pub use server::{
+    ReceiverStream, ServerConfig, ServerStream, ServerStreamingReply, UnaryReply, UnaryServer,
+};
 pub use status::{Status, StatusCode};
 
 #[cfg(test)]
@@ -127,20 +129,22 @@ mod allocation_tracking {
 mod tests {
     use std::hint::black_box;
 
-    use bytes::Bytes;
+    use bytes::{Bytes, BytesMut};
     use http::{
         HeaderName, HeaderValue, Request, Response, StatusCode as HttpStatusCode,
         header::CONTENT_TYPE,
     };
-    use kimojio_stack::Runtime;
+    use kimojio_stack::{Runtime, channel};
     use kimojio_stack_http::{Body, BodyLimits, HttpConfig, StackTransport, h2};
     use prost::Message;
     use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 
     use super::{
         Error, ErrorKind, Metadata, Status, StatusCode, UnaryClient, UnaryReply, UnaryResponse,
-        UnaryServer, allocation_tracking, client::ClientConfig, codec, decode_message,
-        encode_message, server::ServerConfig,
+        UnaryServer, allocation_tracking,
+        client::ClientConfig,
+        codec, decode_message, encode_message,
+        server::{ReceiverStream, ServerConfig, ServerStreamingReply},
     };
 
     #[derive(Clone, PartialEq, Message)]
@@ -296,6 +300,903 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn server_streaming_client_reads_ordered_messages_metadata_and_trailers() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = http.accept(cx).unwrap().unwrap();
+                    let response = Response::builder()
+                        .status(HttpStatusCode::OK)
+                        .header(CONTENT_TYPE, "application/grpc")
+                        .header("x-response", "stream")
+                        .body(())
+                        .unwrap();
+                    http.send_response_headers(cx, incoming.stream_id, &response)
+                        .unwrap();
+                    http.send_response_data(
+                        cx,
+                        incoming.stream_id,
+                        &codec::encode_message(
+                            &TestMessage {
+                                value: "one".to_owned(),
+                            },
+                            1024,
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+                    http.send_response_data(
+                        cx,
+                        incoming.stream_id,
+                        &codec::encode_message(
+                            &TestMessage {
+                                value: "two".to_owned(),
+                            },
+                            1024,
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+                    let mut trailers = Status::ok().to_trailers().unwrap();
+                    trailers.insert(
+                        HeaderName::from_static("x-trailer"),
+                        HeaderValue::from_static("done"),
+                    );
+                    http.finish_response_stream(cx, incoming.stream_id, Some(&trailers))
+                        .unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let http = h2::ClientConnection::new(client_transport, HttpConfig::default());
+                    let mut client = UnaryClient::new(http, ClientConfig::default());
+                    let mut stream = client
+                        .call_server_streaming::<_, TestMessage>(
+                            cx,
+                            "/test.Echo/Stream",
+                            Metadata::new(),
+                            &TestMessage {
+                                value: "request".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        stream.metadata.get(&HeaderName::from_static("x-response")),
+                        Some(&HeaderValue::from_static("stream"))
+                    );
+                    assert_eq!(stream.next(cx).unwrap().unwrap().value, "one");
+                    assert_eq!(stream.next(cx).unwrap().unwrap().value, "two");
+                    assert!(stream.next(cx).unwrap().is_none());
+                    assert_eq!(
+                        stream.trailers.get(&HeaderName::from_static("x-trailer")),
+                        Some(&HeaderValue::from_static("done"))
+                    );
+                    drop(stream);
+                    client.close(cx).unwrap();
+                });
+
+                server.join(cx).unwrap();
+                client.join(cx).unwrap();
+            });
+        });
+    }
+
+    #[test]
+    fn server_streaming_client_decodes_split_and_coalesced_grpc_frames() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = http.accept(cx).unwrap().unwrap();
+                    let response = Response::builder()
+                        .status(HttpStatusCode::OK)
+                        .header(CONTENT_TYPE, "application/grpc")
+                        .body(())
+                        .unwrap();
+                    http.send_response_headers(cx, incoming.stream_id, &response)
+                        .unwrap();
+
+                    let split = codec::encode_message(
+                        &TestMessage {
+                            value: "split".to_owned(),
+                        },
+                        1024,
+                    )
+                    .unwrap();
+                    let midpoint = split.len() / 2;
+                    http.send_response_data(cx, incoming.stream_id, &split[..midpoint])
+                        .unwrap();
+                    http.send_response_data(cx, incoming.stream_id, &split[midpoint..])
+                        .unwrap();
+
+                    let mut coalesced = BytesMut::new();
+                    coalesced.extend_from_slice(
+                        &codec::encode_message(
+                            &TestMessage {
+                                value: "coalesced-a".to_owned(),
+                            },
+                            1024,
+                        )
+                        .unwrap(),
+                    );
+                    coalesced.extend_from_slice(
+                        &codec::encode_message(
+                            &TestMessage {
+                                value: "coalesced-b".to_owned(),
+                            },
+                            1024,
+                        )
+                        .unwrap(),
+                    );
+                    http.send_response_data(cx, incoming.stream_id, &coalesced)
+                        .unwrap();
+                    let trailers = Status::ok().to_trailers().unwrap();
+                    http.finish_response_stream(cx, incoming.stream_id, Some(&trailers))
+                        .unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let http = h2::ClientConnection::new(client_transport, HttpConfig::default());
+                    let mut client = UnaryClient::new(http, ClientConfig::default());
+                    let mut stream = client
+                        .call_server_streaming::<_, TestMessage>(
+                            cx,
+                            "/test.Echo/Stream",
+                            Metadata::new(),
+                            &TestMessage {
+                                value: "request".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                    let values = [
+                        stream.next(cx).unwrap().unwrap().value,
+                        stream.next(cx).unwrap().unwrap().value,
+                        stream.next(cx).unwrap().unwrap().value,
+                    ];
+                    assert!(stream.next(cx).unwrap().is_none());
+                    drop(stream);
+                    client.close(cx).unwrap();
+                    values
+                });
+
+                server.join(cx).unwrap();
+                assert_eq!(
+                    client.join(cx).unwrap(),
+                    ["split", "coalesced-a", "coalesced-b"]
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn server_streaming_client_handles_empty_stream_with_initial_metadata() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = http.accept(cx).unwrap().unwrap();
+                    let response = Response::builder()
+                        .status(HttpStatusCode::OK)
+                        .header(CONTENT_TYPE, "application/grpc")
+                        .header("x-empty", "yes")
+                        .body(())
+                        .unwrap();
+                    http.send_response_headers(cx, incoming.stream_id, &response)
+                        .unwrap();
+                    let trailers = Status::ok().to_trailers().unwrap();
+                    http.finish_response_stream(cx, incoming.stream_id, Some(&trailers))
+                        .unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let http = h2::ClientConnection::new(client_transport, HttpConfig::default());
+                    let mut client = UnaryClient::new(http, ClientConfig::default());
+                    let mut stream = client
+                        .call_server_streaming::<_, TestMessage>(
+                            cx,
+                            "/test.Echo/Stream",
+                            Metadata::new(),
+                            &TestMessage {
+                                value: "request".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        stream.metadata.get(&HeaderName::from_static("x-empty")),
+                        Some(&HeaderValue::from_static("yes"))
+                    );
+                    assert!(stream.next(cx).unwrap().is_none());
+                    drop(stream);
+                    client.close(cx).unwrap();
+                });
+
+                server.join(cx).unwrap();
+                client.join(cx).unwrap();
+            });
+        });
+    }
+
+    #[test]
+    fn server_streaming_client_surfaces_terminal_status_after_messages() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = http.accept(cx).unwrap().unwrap();
+                    let response = Response::builder()
+                        .status(HttpStatusCode::OK)
+                        .header(CONTENT_TYPE, "application/grpc")
+                        .body(())
+                        .unwrap();
+                    http.send_response_headers(cx, incoming.stream_id, &response)
+                        .unwrap();
+                    http.send_response_data(
+                        cx,
+                        incoming.stream_id,
+                        &codec::encode_message(
+                            &TestMessage {
+                                value: "before-error".to_owned(),
+                            },
+                            1024,
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+                    let trailers = Status::new(StatusCode::Unavailable, "stream down")
+                        .to_trailers()
+                        .unwrap();
+                    http.finish_response_stream(cx, incoming.stream_id, Some(&trailers))
+                        .unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let http = h2::ClientConnection::new(client_transport, HttpConfig::default());
+                    let mut client = UnaryClient::new(http, ClientConfig::default());
+                    let mut stream = client
+                        .call_server_streaming::<_, TestMessage>(
+                            cx,
+                            "/test.Echo/Stream",
+                            Metadata::new(),
+                            &TestMessage {
+                                value: "request".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                    assert_eq!(stream.next(cx).unwrap().unwrap().value, "before-error");
+                    let error = stream.next(cx).unwrap_err();
+                    drop(stream);
+                    client.close(cx).unwrap();
+                    error
+                });
+
+                server.join(cx).unwrap();
+                match client.join(cx).unwrap() {
+                    Error::Status(status) => {
+                        assert_eq!(status.code(), StatusCode::Unavailable);
+                        assert_eq!(status.message(), "stream down");
+                    }
+                    other => panic!("unexpected error: {other:?}"),
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn server_streaming_client_handles_header_carried_terminal_status() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = http.accept(cx).unwrap().unwrap();
+                    let response = Response::builder()
+                        .status(HttpStatusCode::OK)
+                        .header(CONTENT_TYPE, "application/grpc")
+                        .header("grpc-status", "14")
+                        .header("grpc-message", "header-down")
+                        .body(Body::empty())
+                        .unwrap();
+                    http.send_response(cx, incoming.stream_id, &response)
+                        .unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let http = h2::ClientConnection::new(client_transport, HttpConfig::default());
+                    let mut client = UnaryClient::new(http, ClientConfig::default());
+                    let mut stream = client
+                        .call_server_streaming::<_, TestMessage>(
+                            cx,
+                            "/test.Echo/Stream",
+                            Metadata::new(),
+                            &TestMessage {
+                                value: "request".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                    let error = stream.next(cx).unwrap_err();
+                    drop(stream);
+                    client.close(cx).unwrap();
+                    error
+                });
+
+                server.join(cx).unwrap();
+                match client.join(cx).unwrap() {
+                    Error::Status(status) => {
+                        assert_eq!(status.code(), StatusCode::Unavailable);
+                        assert_eq!(status.message(), "header-down");
+                    }
+                    other => panic!("unexpected error: {other:?}"),
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn server_streaming_client_cancel_sends_reset() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+        let client_settings = h2::Settings {
+            initial_window_size: 0,
+            ..h2::Settings::default()
+        };
+        let (headers_sent_tx, headers_sent_rx) = channel::bounded::<()>(1);
+        let (cancelled_tx, cancelled_rx) = channel::bounded::<()>(1);
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = http.accept(cx).unwrap().unwrap();
+                    let response = Response::builder()
+                        .status(HttpStatusCode::OK)
+                        .header(CONTENT_TYPE, "application/grpc")
+                        .body(())
+                        .unwrap();
+                    http.send_response_headers(cx, incoming.stream_id, &response)
+                        .unwrap();
+                    headers_sent_tx.send(cx, ()).unwrap();
+                    cancelled_rx.recv(cx).unwrap();
+                    http.send_response_data(
+                        cx,
+                        incoming.stream_id,
+                        &codec::encode_message(
+                            &TestMessage {
+                                value: "blocked".to_owned(),
+                            },
+                            1024,
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap_err()
+                    .kind()
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let http = h2::ClientConnection::new_with_settings(
+                        client_transport,
+                        HttpConfig::default(),
+                        client_settings,
+                    );
+                    let mut client = UnaryClient::new(http, ClientConfig::default());
+                    let stream = client
+                        .call_server_streaming::<_, TestMessage>(
+                            cx,
+                            "/test.Echo/Stream",
+                            Metadata::new(),
+                            &TestMessage {
+                                value: "request".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                    headers_sent_rx.recv(cx).unwrap();
+                    stream.cancel(cx).unwrap();
+                    cancelled_tx.send(cx, ()).unwrap();
+                    client.close(cx).unwrap();
+                });
+
+                client.join(cx).unwrap();
+                assert_eq!(
+                    server.join(cx).unwrap(),
+                    kimojio_stack_http::ErrorKind::PeerReset
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn server_streaming_client_cancel_after_message_sends_reset() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+        let client_settings = h2::Settings {
+            initial_window_size: 16,
+            ..h2::Settings::default()
+        };
+        let (message_sent_tx, message_sent_rx) = channel::bounded::<()>(1);
+        let (cancelled_tx, cancelled_rx) = channel::bounded::<()>(1);
+        let (observed_tx, observed_rx) = channel::bounded::<()>(1);
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = http.accept(cx).unwrap().unwrap();
+                    let response = Response::builder()
+                        .status(HttpStatusCode::OK)
+                        .header(CONTENT_TYPE, "application/grpc")
+                        .body(())
+                        .unwrap();
+                    http.send_response_headers(cx, incoming.stream_id, &response)
+                        .unwrap();
+                    http.send_response_data(
+                        cx,
+                        incoming.stream_id,
+                        &codec::encode_message(
+                            &TestMessage {
+                                value: "first".to_owned(),
+                            },
+                            1024,
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+                    message_sent_tx.send(cx, ()).unwrap();
+                    cancelled_rx.recv(cx).unwrap();
+                    let kind = http
+                        .send_response_data(
+                            cx,
+                            incoming.stream_id,
+                            &codec::encode_message(
+                                &TestMessage {
+                                    value: "second-message-that-exceeds-the-small-window"
+                                        .to_owned(),
+                                },
+                                1024,
+                            )
+                            .unwrap(),
+                        )
+                        .unwrap_err()
+                        .kind();
+                    observed_tx.send(cx, ()).unwrap();
+                    kind
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let http = h2::ClientConnection::new_with_settings(
+                        client_transport,
+                        HttpConfig::default(),
+                        client_settings,
+                    );
+                    let mut client = UnaryClient::new(http, ClientConfig::default());
+                    let mut stream = client
+                        .call_server_streaming::<_, TestMessage>(
+                            cx,
+                            "/test.Echo/Stream",
+                            Metadata::new(),
+                            &TestMessage {
+                                value: "request".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                    message_sent_rx.recv(cx).unwrap();
+                    assert_eq!(stream.next(cx).unwrap().unwrap().value, "first");
+                    stream.cancel(cx).unwrap();
+                    cancelled_tx.send(cx, ()).unwrap();
+                    observed_rx.recv(cx).unwrap();
+                    client.close(cx).unwrap();
+                });
+
+                client.join(cx).unwrap();
+                assert_eq!(
+                    server.join(cx).unwrap(),
+                    kimojio_stack_http::ErrorKind::PeerReset
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn server_streaming_invalid_initial_headers_cancel_stream() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+        let client_settings = h2::Settings {
+            initial_window_size: 0,
+            ..h2::Settings::default()
+        };
+        let (headers_sent_tx, headers_sent_rx) = channel::bounded::<()>(1);
+        let (client_done_tx, client_done_rx) = channel::bounded::<()>(1);
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = http.accept(cx).unwrap().unwrap();
+                    let response = Response::builder()
+                        .status(HttpStatusCode::OK)
+                        .header(CONTENT_TYPE, "text/plain")
+                        .body(())
+                        .unwrap();
+                    http.send_response_headers(cx, incoming.stream_id, &response)
+                        .unwrap();
+                    headers_sent_tx.send(cx, ()).unwrap();
+                    client_done_rx.recv(cx).unwrap();
+                    http.send_response_data(cx, incoming.stream_id, b"after-invalid")
+                        .unwrap_err()
+                        .kind()
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let http = h2::ClientConnection::new_with_settings(
+                        client_transport,
+                        HttpConfig::default(),
+                        client_settings,
+                    );
+                    let mut client = UnaryClient::new(http, ClientConfig::default());
+                    let error = match client.call_server_streaming::<_, TestMessage>(
+                        cx,
+                        "/test.Echo/Stream",
+                        Metadata::new(),
+                        &TestMessage {
+                            value: "request".to_owned(),
+                        },
+                    ) {
+                        Ok(_) => panic!("invalid content-type unexpectedly succeeded"),
+                        Err(error) => error,
+                    };
+                    assert_eq!(error.kind(), ErrorKind::Protocol);
+                    headers_sent_rx.recv(cx).unwrap();
+                    client_done_tx.send(cx, ()).unwrap();
+                    client.close(cx).unwrap();
+                });
+
+                client.join(cx).unwrap();
+                assert_eq!(
+                    server.join(cx).unwrap(),
+                    kimojio_stack_http::ErrorKind::PeerReset
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn server_streaming_handler_sends_ordered_messages_metadata_and_trailers() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let mut grpc = UnaryServer::new(ServerConfig::default());
+                    grpc.add_server_streaming::<TestMessage, TestMessage, _, _>(
+                        "/test.Echo/Stream",
+                        |_cx, metadata, request| {
+                            assert_eq!(
+                                metadata.get(&HeaderName::from_static("x-request")),
+                                Some(&HeaderValue::from_static("seen"))
+                            );
+                            let messages = [
+                                format!("{}-one", request.value),
+                                format!("{}-two", request.value),
+                            ];
+                            let mut index = 0;
+                            let stream = move |_cx: &kimojio_stack::RuntimeContext<'_>| {
+                                let Some(value) = messages.get(index).cloned() else {
+                                    return Ok(None);
+                                };
+                                index += 1;
+                                Ok(Some(TestMessage { value }))
+                            };
+                            let mut reply = ServerStreamingReply::new(stream);
+                            reply
+                                .metadata
+                                .insert(
+                                    HeaderName::from_static("x-response"),
+                                    HeaderValue::from_static("stream"),
+                                )
+                                .unwrap();
+                            reply
+                                .trailers
+                                .insert(
+                                    HeaderName::from_static("x-trailer"),
+                                    HeaderValue::from_static("done"),
+                                )
+                                .unwrap();
+                            Ok(reply)
+                        },
+                    );
+                    grpc.serve_one(cx, &mut http).unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let http = h2::ClientConnection::new(client_transport, HttpConfig::default());
+                    let mut client = UnaryClient::new(http, ClientConfig::default());
+                    let mut metadata = Metadata::new();
+                    metadata
+                        .insert(
+                            HeaderName::from_static("x-request"),
+                            HeaderValue::from_static("seen"),
+                        )
+                        .unwrap();
+                    let mut stream = client
+                        .call_server_streaming::<_, TestMessage>(
+                            cx,
+                            "/test.Echo/Stream",
+                            metadata,
+                            &TestMessage {
+                                value: "request".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        stream.metadata.get(&HeaderName::from_static("x-response")),
+                        Some(&HeaderValue::from_static("stream"))
+                    );
+                    assert_eq!(stream.next(cx).unwrap().unwrap().value, "request-one");
+                    assert_eq!(stream.next(cx).unwrap().unwrap().value, "request-two");
+                    assert!(stream.next(cx).unwrap().is_none());
+                    assert_eq!(
+                        stream.trailers.get(&HeaderName::from_static("x-trailer")),
+                        Some(&HeaderValue::from_static("done"))
+                    );
+                    drop(stream);
+                    client.close(cx).unwrap();
+                });
+
+                server.join(cx).unwrap();
+                client.join(cx).unwrap();
+            });
+        });
+    }
+
+    #[test]
+    fn server_streaming_handler_yielded_status_reaches_client() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let mut grpc = UnaryServer::new(ServerConfig::default());
+                    grpc.add_server_streaming::<TestMessage, TestMessage, _, _>(
+                        "/test.Echo/Stream",
+                        |_cx, _metadata, _request| {
+                            let mut sent = false;
+                            let stream = move |_cx: &kimojio_stack::RuntimeContext<'_>| {
+                                if !sent {
+                                    sent = true;
+                                    return Ok(Some(TestMessage {
+                                        value: "before-error".to_owned(),
+                                    }));
+                                }
+                                Err(Status::new(StatusCode::Unavailable, "server stream down"))
+                            };
+                            Ok(ServerStreamingReply::new(stream))
+                        },
+                    );
+                    grpc.serve_one(cx, &mut http).unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let http = h2::ClientConnection::new(client_transport, HttpConfig::default());
+                    let mut client = UnaryClient::new(http, ClientConfig::default());
+                    let mut stream = client
+                        .call_server_streaming::<_, TestMessage>(
+                            cx,
+                            "/test.Echo/Stream",
+                            Metadata::new(),
+                            &TestMessage {
+                                value: "request".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                    assert_eq!(stream.next(cx).unwrap().unwrap().value, "before-error");
+                    let error = stream.next(cx).unwrap_err();
+                    assert!(stream.next(cx).unwrap().is_none());
+                    drop(stream);
+                    client.close(cx).unwrap();
+                    error
+                });
+
+                server.join(cx).unwrap();
+                match client.join(cx).unwrap() {
+                    Error::Status(status) => {
+                        assert_eq!(status.code(), StatusCode::Unavailable);
+                        assert_eq!(status.message(), "server stream down");
+                    }
+                    other => panic!("unexpected error: {other:?}"),
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn server_streaming_receiver_stream_parks_until_message_and_completes() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+        let (tx, rx) = channel::bounded::<Result<TestMessage, Status>>(1);
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let mut grpc = UnaryServer::new(ServerConfig::default());
+                    grpc.add_server_streaming::<TestMessage, TestMessage, _, _>(
+                        "/test.Echo/Stream",
+                        move |_cx, _metadata, _request| {
+                            Ok(ServerStreamingReply::new(ReceiverStream::new(rx.clone())))
+                        },
+                    );
+                    grpc.serve_one(cx, &mut http).unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let producer = scope.spawn(move |cx| {
+                    cx.yield_now();
+                    tx.send(
+                        cx,
+                        Ok(TestMessage {
+                            value: "delayed".to_owned(),
+                        }),
+                    )
+                    .unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let http = h2::ClientConnection::new(client_transport, HttpConfig::default());
+                    let mut client = UnaryClient::new(http, ClientConfig::default());
+                    let mut stream = client
+                        .call_server_streaming::<_, TestMessage>(
+                            cx,
+                            "/test.Echo/Stream",
+                            Metadata::new(),
+                            &TestMessage {
+                                value: "request".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                    assert_eq!(stream.next(cx).unwrap().unwrap().value, "delayed");
+                    assert!(stream.next(cx).unwrap().is_none());
+                    drop(stream);
+                    client.close(cx).unwrap();
+                });
+
+                producer.join(cx).unwrap();
+                server.join(cx).unwrap();
+                client.join(cx).unwrap();
+            });
+        });
+    }
+
+    #[test]
+    fn server_streaming_client_cancel_surfaces_to_server_serve_one() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+        let client_settings = h2::Settings {
+            initial_window_size: 0,
+            ..h2::Settings::default()
+        };
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let mut grpc = UnaryServer::new(ServerConfig::default());
+                    grpc.add_server_streaming::<TestMessage, TestMessage, _, _>(
+                        "/test.Echo/Stream",
+                        |_cx, _metadata, _request| {
+                            let mut sent = false;
+                            let stream = move |_cx: &kimojio_stack::RuntimeContext<'_>| {
+                                if sent {
+                                    Ok(None)
+                                } else {
+                                    sent = true;
+                                    Ok(Some(TestMessage {
+                                        value: "blocked".to_owned(),
+                                    }))
+                                }
+                            };
+                            Ok(ServerStreamingReply::new(stream))
+                        },
+                    );
+                    match grpc.serve_one(cx, &mut http).unwrap_err() {
+                        Error::Transport(error) => error.kind(),
+                        other => panic!("unexpected error: {other:?}"),
+                    }
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let http = h2::ClientConnection::new_with_settings(
+                        client_transport,
+                        HttpConfig::default(),
+                        client_settings,
+                    );
+                    let mut client = UnaryClient::new(http, ClientConfig::default());
+                    let stream = client
+                        .call_server_streaming::<_, TestMessage>(
+                            cx,
+                            "/test.Echo/Stream",
+                            Metadata::new(),
+                            &TestMessage {
+                                value: "request".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                    stream.cancel(cx).unwrap();
+                    client.close(cx).unwrap();
+                });
+
+                client.join(cx).unwrap();
+                assert_eq!(
+                    server.join(cx).unwrap(),
+                    kimojio_stack_http::ErrorKind::PeerReset
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn server_streaming_independent_client_connections_run_concurrently() {
+        let (first_client_transport, first_server_transport) = socket_transport_pair();
+        let (second_client_transport, second_server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let first_server = scope.spawn(move |cx| {
+                    serve_single_value_stream(cx, first_server_transport, "first");
+                });
+                let second_server = scope.spawn(move |cx| {
+                    serve_single_value_stream(cx, second_server_transport, "second");
+                });
+                let first_client = scope
+                    .spawn(move |cx| read_single_value_stream(cx, first_client_transport, "first"));
+                let second_client = scope.spawn(move |cx| {
+                    read_single_value_stream(cx, second_client_transport, "second")
+                });
+
+                assert_eq!(second_client.join(cx).unwrap(), "second");
+                assert_eq!(first_client.join(cx).unwrap(), "first");
+                first_server.join(cx).unwrap();
+                second_server.join(cx).unwrap();
+            });
+        });
     }
 
     #[test]
@@ -522,6 +1423,58 @@ mod tests {
                 client.join(cx).unwrap()
             })
         })
+    }
+
+    fn serve_single_value_stream(
+        cx: &kimojio_stack::RuntimeContext<'_>,
+        transport: StackTransport,
+        value: &'static str,
+    ) {
+        let mut http = h2::ServerConnection::new(transport, HttpConfig::default());
+        let mut grpc = UnaryServer::new(ServerConfig::default());
+        grpc.add_server_streaming::<TestMessage, TestMessage, _, _>(
+            "/test.Echo/Stream",
+            move |_cx, _metadata, _request| {
+                let mut sent = false;
+                let stream = move |_cx: &kimojio_stack::RuntimeContext<'_>| {
+                    if sent {
+                        Ok(None)
+                    } else {
+                        sent = true;
+                        Ok(Some(TestMessage {
+                            value: value.to_owned(),
+                        }))
+                    }
+                };
+                Ok(ServerStreamingReply::new(stream))
+            },
+        );
+        grpc.serve_one(cx, &mut http).unwrap();
+        http.shutdown_write_and_close_after_peer(cx).unwrap();
+    }
+
+    fn read_single_value_stream(
+        cx: &kimojio_stack::RuntimeContext<'_>,
+        transport: StackTransport,
+        request_value: &'static str,
+    ) -> String {
+        let http = h2::ClientConnection::new(transport, HttpConfig::default());
+        let mut client = UnaryClient::new(http, ClientConfig::default());
+        let mut stream = client
+            .call_server_streaming::<_, TestMessage>(
+                cx,
+                "/test.Echo/Stream",
+                Metadata::new(),
+                &TestMessage {
+                    value: request_value.to_owned(),
+                },
+            )
+            .unwrap();
+        let value = stream.next(cx).unwrap().unwrap().value;
+        assert!(stream.next(cx).unwrap().is_none());
+        drop(stream);
+        client.close(cx).unwrap();
+        value
     }
 
     fn raw_grpc_request_status(

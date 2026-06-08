@@ -124,6 +124,110 @@ fn stackful_grpc_client_receives_tonic_error_status_and_metadata() {
     }
 }
 
+#[test]
+fn stackful_grpc_client_reads_tonic_server_streaming_success_with_metadata() {
+    let (addr_tx, addr_rx) = mpsc::channel();
+    let (server, shutdown) = spawn_tonic_server(TonicBehavior::Success, addr_tx);
+    let addr = addr_rx.recv().unwrap();
+
+    let (metadata_value, messages) = Runtime::new().block_on(|cx| {
+        let transport = stack_connect(cx, addr);
+        let http = h2::ClientConnection::new(transport, HttpConfig::default());
+        let mut client = UnaryClient::new(http, ClientConfig::default());
+        let mut metadata = Metadata::new();
+        metadata
+            .insert(
+                HeaderName::from_static("x-request"),
+                http::HeaderValue::from_static("stackful"),
+            )
+            .unwrap();
+        metadata
+            .insert_bin(HeaderName::from_static("trace-bin"), b"trace")
+            .unwrap();
+        let mut stream = client
+            .call_server_streaming::<_, interop_proto::TestResponse>(
+                cx,
+                interop_proto::STREAM_PATH,
+                metadata,
+                &TestRequest {
+                    value: "client".to_owned(),
+                },
+            )
+            .unwrap();
+        let metadata_value = stream
+            .metadata
+            .get(&HeaderName::from_static("x-tonic"))
+            .cloned();
+        let messages = [
+            stream.next(cx).unwrap().unwrap().value,
+            stream.next(cx).unwrap().unwrap().value,
+        ];
+        assert!(stream.next(cx).unwrap().is_none());
+        drop(stream);
+        client.close(cx).unwrap();
+        (metadata_value, messages)
+    });
+
+    shutdown.send(()).unwrap();
+    server.join().unwrap();
+    assert_eq!(metadata_value, Some(http::HeaderValue::from_static("yes")));
+    assert_eq!(messages, ["tonic client one", "tonic client two"]);
+}
+
+#[test]
+fn stackful_grpc_client_receives_tonic_server_streaming_error_status() {
+    let (addr_tx, addr_rx) = mpsc::channel();
+    let (server, shutdown) = spawn_tonic_server(TonicBehavior::Error, addr_tx);
+    let addr = addr_rx.recv().unwrap();
+
+    let (message, error) = Runtime::new().block_on(|cx| {
+        let transport = stack_connect(cx, addr);
+        let http = h2::ClientConnection::new(transport, HttpConfig::default());
+        let mut client = UnaryClient::new(http, ClientConfig::default());
+        let mut metadata = Metadata::new();
+        metadata
+            .insert(
+                HeaderName::from_static("x-request"),
+                http::HeaderValue::from_static("stackful"),
+            )
+            .unwrap();
+        metadata
+            .insert_bin(HeaderName::from_static("trace-bin"), b"trace")
+            .unwrap();
+        let mut stream = client
+            .call_server_streaming::<_, interop_proto::TestResponse>(
+                cx,
+                interop_proto::STREAM_PATH,
+                metadata,
+                &TestRequest {
+                    value: "client".to_owned(),
+                },
+            )
+            .unwrap();
+        let message = stream.next(cx).unwrap().unwrap().value;
+        let error = stream.next(cx).unwrap_err();
+        drop(stream);
+        client.close(cx).unwrap();
+        (message, error)
+    });
+
+    shutdown.send(()).unwrap();
+    server.join().unwrap();
+    assert_eq!(message, "tonic client before-error");
+    match error {
+        Error::Status(status) => {
+            assert_eq!(status.code(), StatusCode::Unavailable);
+            assert_eq!(status.message(), "tonic stream down");
+            assert_eq!(status.details(), b"stream-opaque");
+            assert_eq!(
+                status.metadata().get(&HeaderName::from_static("x-error")),
+                Some(&http::HeaderValue::from_static("tonic"))
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
 fn spawn_tonic_server(
     behavior: TonicBehavior,
     addr_tx: mpsc::Sender<std::net::SocketAddr>,

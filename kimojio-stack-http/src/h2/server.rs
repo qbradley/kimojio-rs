@@ -41,6 +41,7 @@ pub struct ServerConnection {
     initialized: bool,
     pending: BTreeMap<StreamId, PendingRequest>,
     completed: VecDeque<IncomingRequest>,
+    reset_streams: BTreeMap<StreamId, Error>,
     goaway: Option<Error>,
 }
 
@@ -62,6 +63,7 @@ impl ServerConnection {
             initialized: false,
             pending: BTreeMap::new(),
             completed: VecDeque::new(),
+            reset_streams: BTreeMap::new(),
             goaway: None,
         }
     }
@@ -142,6 +144,96 @@ impl ServerConnection {
                 Bytes::from(block),
                 true,
                 self.state.peer_settings().max_frame_size,
+            )?;
+        }
+        self.state.remove_stream(stream_id);
+        Ok(())
+    }
+
+    /// Starts an incremental response stream by sending response HEADERS.
+    ///
+    /// Call this once for a stream returned by [`accept`](Self::accept), before
+    /// any [`send_response_data`](Self::send_response_data) or
+    /// [`finish_response_stream`](Self::finish_response_stream) call. The
+    /// response body type is `()` because DATA is provided incrementally.
+    /// Stream state remains active until `finish_response_stream` or a reset.
+    pub fn send_response_headers(
+        &mut self,
+        cx: &RuntimeContext<'_>,
+        stream_id: StreamId,
+        response: &Response<()>,
+    ) -> Result<(), Error> {
+        self.ensure_initialized(cx)?;
+        self.check_stream_reset(stream_id)?;
+        let headers = codec::response_headers(response)?;
+        let block = self.state.encode_header_block(&headers);
+        self.state
+            .stream_mut(stream_id)
+            .ok_or(Error::Protocol("unknown stream"))?
+            .send_headers(false)?;
+        codec::write_header_block(
+            cx,
+            &mut self.transport,
+            stream_id,
+            Bytes::from(block),
+            false,
+            self.state.peer_settings().max_frame_size,
+        )
+    }
+
+    /// Sends one DATA payload on an incremental response stream.
+    ///
+    /// This method preserves HTTP/2 flow control by blocking in the existing
+    /// write path when outbound stream or connection capacity is unavailable.
+    /// Peer resets observed while waiting for capacity are surfaced as errors.
+    pub fn send_response_data(
+        &mut self,
+        cx: &RuntimeContext<'_>,
+        stream_id: StreamId,
+        data: &[u8],
+    ) -> Result<(), Error> {
+        self.ensure_initialized(cx)?;
+        self.check_stream_reset(stream_id)?;
+        self.write_data(cx, stream_id, data, false)
+    }
+
+    /// Finishes an incremental response stream.
+    ///
+    /// Non-empty `trailers` are sent as terminal HEADERS with `END_STREAM`.
+    /// Empty or absent trailers finish with an empty DATA frame carrying
+    /// `END_STREAM`. Local stream state is removed after this succeeds.
+    pub fn finish_response_stream(
+        &mut self,
+        cx: &RuntimeContext<'_>,
+        stream_id: StreamId,
+        trailers: Option<&Trailers>,
+    ) -> Result<(), Error> {
+        self.ensure_initialized(cx)?;
+        self.check_stream_reset(stream_id)?;
+        if let Some(trailers) = trailers.filter(|trailers| !trailers.is_empty()) {
+            let headers = codec::trailers_headers(trailers)?;
+            let block = self.state.encode_header_block(&headers);
+            self.state
+                .stream_mut(stream_id)
+                .ok_or(Error::Protocol("unknown stream"))?
+                .send_headers(true)?;
+            codec::write_header_block(
+                cx,
+                &mut self.transport,
+                stream_id,
+                Bytes::from(block),
+                true,
+                self.state.peer_settings().max_frame_size,
+            )?;
+        } else {
+            self.state
+                .stream_mut(stream_id)
+                .ok_or(Error::Protocol("unknown stream"))?
+                .send_data(true)?;
+            codec::write_frame(
+                cx,
+                &mut self.transport,
+                &Frame::data(stream_id, Bytes::new(), true),
             )?;
         }
         self.state.remove_stream(stream_id);
@@ -256,6 +348,7 @@ impl ServerConnection {
                     self.state.local_settings().max_frame_size,
                 )?;
                 self.process_frame(cx, frame)?;
+                self.check_stream_reset(stream_id)?;
                 continue;
             }
 
@@ -311,7 +404,7 @@ impl ServerConnection {
             }
             FrameType::RstStream => {
                 self.state.track_inbound_frame(&frame)?;
-                let FramePayload::RstStream { error_code: _ } = frame.payload else {
+                let FramePayload::RstStream { error_code } = frame.payload else {
                     return Err(Error::Protocol("expected RST_STREAM payload"));
                 };
                 let stream_id = StreamId::new(frame.stream_id)?;
@@ -319,6 +412,8 @@ impl ServerConnection {
                 self.pending.remove(&stream_id);
                 self.completed
                     .retain(|request| request.stream_id != stream_id);
+                self.reset_streams
+                    .insert(stream_id, Error::stream_reset(frame.stream_id, error_code));
                 Ok(())
             }
             FrameType::Goaway => {
@@ -426,6 +521,14 @@ impl ServerConnection {
         self.completed
             .push_back(IncomingRequest { stream_id, request });
         Ok(())
+    }
+
+    fn check_stream_reset(&mut self, stream_id: StreamId) -> Result<(), Error> {
+        if let Some(error) = self.reset_streams.remove(&stream_id) {
+            Err(error)
+        } else {
+            Ok(())
+        }
     }
 }
 

@@ -1,7 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::{collections::BTreeMap, time::Instant};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    time::Instant,
+};
 
 use bytes::Bytes;
 use http::{Request, Response};
@@ -19,19 +22,74 @@ pub struct ResponseWithTrailers {
     pub trailers: Trailers,
 }
 
+/// Incremental response event returned by [`ClientConnection::read_response_event`].
+#[derive(Debug)]
+pub enum ResponseStreamEvent {
+    /// One DATA payload for the response stream.
+    Data(Bytes),
+    /// Terminal trailers for the response stream.
+    ///
+    /// Empty trailers represent a DATA frame with `END_STREAM` and no trailer
+    /// HEADERS.
+    Trailers(Trailers),
+}
+
+struct QueuedResponseStreamEvent {
+    event: ResponseStreamEvent,
+    data_len: usize,
+    update_stream_window: bool,
+}
+
 struct PendingResponse {
     headers: Option<Vec<Header>>,
-    body: BodyBuilder,
+    body: Option<BodyBuilder>,
     trailers: Trailers,
+    events: VecDeque<QueuedResponseStreamEvent>,
+    head_delivered: bool,
 }
 
 impl PendingResponse {
     fn new(limits: BodyLimits) -> Self {
         Self {
             headers: None,
-            body: BodyBuilder::new(limits),
+            body: Some(BodyBuilder::new(limits)),
             trailers: Trailers::new(),
+            events: VecDeque::new(),
+            head_delivered: false,
         }
+    }
+
+    fn new_streaming() -> Self {
+        Self {
+            headers: None,
+            body: None,
+            trailers: Trailers::new(),
+            events: VecDeque::new(),
+            head_delivered: false,
+        }
+    }
+
+    fn is_streaming(&self) -> bool {
+        self.body.is_none()
+    }
+
+    fn push_data_event(&mut self, data: Bytes, update_stream_window: bool) {
+        let data_len = data.len();
+        if data_len != 0 {
+            self.events.push_back(QueuedResponseStreamEvent {
+                event: ResponseStreamEvent::Data(data),
+                data_len,
+                update_stream_window,
+            });
+        }
+    }
+
+    fn push_trailers_event(&mut self, trailers: Trailers) {
+        self.events.push_back(QueuedResponseStreamEvent {
+            event: ResponseStreamEvent::Trailers(trailers),
+            data_len: 0,
+            update_stream_window: false,
+        });
     }
 }
 
@@ -186,62 +244,133 @@ impl ClientConnection {
         H: FnMut(&Response<Body>) -> Result<bool, Error>,
         F: FnMut(Bytes) -> Result<(), Error>,
     {
-        self.ensure_initialized(cx)?;
-        if let Some(response) = self.completed.remove(&stream_id) {
-            let stream_body = on_headers(&response.response)?;
-            if stream_body && !response.response.body().is_empty() {
-                on_chunk(Bytes::copy_from_slice(response.response.body().as_bytes()))?;
-            }
-            return Ok(response);
-        }
-        if let Some(error) = self.reset_streams.remove(&stream_id) {
-            return Err(error);
-        }
-        if let Some(error) = self.goaway_for_stream(stream_id) {
-            return Err(error);
-        }
-        let mut stream_body = None;
+        let head = self.read_response_headers(cx, stream_id)?;
+        let (parts, ()) = head.into_parts();
+        let response = Response::from_parts(parts, Body::empty());
+        let stream_body = on_headers(&response)?;
+        let trailers;
         loop {
+            match self.read_response_event(cx, stream_id)? {
+                ResponseStreamEvent::Data(data) => {
+                    if stream_body {
+                        on_chunk(data)?;
+                    }
+                }
+                ResponseStreamEvent::Trailers(done) => {
+                    trailers = done;
+                    break;
+                }
+            }
+        }
+        Ok(ResponseWithTrailers { response, trailers })
+    }
+
+    /// Reads and returns response headers for an incremental response stream.
+    ///
+    /// Call this after [`send_request`](Self::send_request) and before
+    /// [`read_response_event`](Self::read_response_event). While waiting for the
+    /// target stream, the connection may process unrelated frames for other
+    /// streams so connection state remains current.
+    pub fn read_response_headers(
+        &mut self,
+        cx: &RuntimeContext<'_>,
+        stream_id: StreamId,
+    ) -> Result<Response<()>, Error> {
+        self.ensure_initialized(cx)?;
+        self.ensure_streaming_pending(stream_id)?;
+        loop {
+            if let Some(error) = self.reset_streams.remove(&stream_id) {
+                self.pending.remove(&stream_id);
+                return Err(error);
+            }
+            if let Some(error) = self.goaway_for_stream(stream_id) {
+                self.pending.remove(&stream_id);
+                return Err(error);
+            }
+            if let Some(pending) = self.pending.get_mut(&stream_id)
+                && let Some(headers) = pending.headers.clone().filter(|_| !pending.head_delivered)
+            {
+                pending.head_delivered = true;
+                return codec::response_from_headers(headers, ());
+            }
+
             let frame = codec::read_frame(
                 cx,
                 &mut self.transport,
                 self.state.local_settings().max_frame_size,
             )?;
-            if frame.frame_type == FrameType::Data && frame.stream_id == stream_id.get() {
-                let should_stream = match stream_body {
-                    Some(should_stream) => should_stream,
-                    None => {
-                        let response = self
-                            .pending_response_head(stream_id)?
-                            .ok_or(Error::Protocol("DATA before response headers"))?;
-                        let should_stream = on_headers(&response)?;
-                        stream_body = Some(should_stream);
-                        should_stream
-                    }
-                };
-                if should_stream {
-                    self.process_data_chunk(cx, frame, &mut on_chunk)?;
-                } else {
-                    self.process_data_discard(cx, frame)?;
-                }
-            } else {
-                self.process_frame(cx, frame)?;
-                if stream_body.is_none()
-                    && let Some(response) = self.pending_response_head(stream_id)?
-                {
-                    stream_body = Some(on_headers(&response)?);
-                }
-            }
-            if let Some(response) = self.completed.remove(&stream_id) {
-                return Ok(response);
+            self.process_frame(cx, frame)?;
+        }
+    }
+
+    /// Reads the next DATA or terminal trailers event for a response stream.
+    ///
+    /// [`read_response_headers`](Self::read_response_headers) must be called for
+    /// the same `stream_id` first. For DATA events, inbound HTTP/2 flow-control
+    /// credit is returned immediately before the event is delivered to the
+    /// caller, so unread queued DATA remains bounded by the advertised windows.
+    /// A trailers event is terminal; after it is returned, local pending state
+    /// for the stream is removed.
+    pub fn read_response_event(
+        &mut self,
+        cx: &RuntimeContext<'_>,
+        stream_id: StreamId,
+    ) -> Result<ResponseStreamEvent, Error> {
+        self.ensure_initialized(cx)?;
+        self.ensure_streaming_pending(stream_id)?;
+        if self
+            .pending
+            .get(&stream_id)
+            .is_some_and(|pending| !pending.head_delivered)
+        {
+            return Err(Error::Protocol("response headers not read"));
+        }
+
+        loop {
+            if let Some(event) = self.pop_streaming_event(cx, stream_id)? {
+                return Ok(event);
             }
             if let Some(error) = self.reset_streams.remove(&stream_id) {
+                self.pending.remove(&stream_id);
                 return Err(error);
             }
             if let Some(error) = self.goaway_for_stream(stream_id) {
+                self.pending.remove(&stream_id);
                 return Err(error);
             }
+
+            let frame = codec::read_frame(
+                cx,
+                &mut self.transport,
+                self.state.local_settings().max_frame_size,
+            )?;
+            self.process_frame(cx, frame)?;
         }
+    }
+
+    /// Cancels an open response stream with the supplied HTTP/2 error code.
+    ///
+    /// If local state for the stream is still active, this sends `RST_STREAM`
+    /// and removes any pending buffered or streaming response state. Calling it
+    /// after the stream has already completed is a no-op.
+    pub fn cancel_response_stream(
+        &mut self,
+        cx: &RuntimeContext<'_>,
+        stream_id: StreamId,
+        error_code: u32,
+    ) -> Result<(), Error> {
+        self.ensure_initialized(cx)?;
+        self.pending.remove(&stream_id);
+        self.completed.remove(&stream_id);
+        self.reset_streams.remove(&stream_id);
+        if self.state.remove_stream(stream_id).is_some() {
+            codec::write_frame(
+                cx,
+                &mut self.transport,
+                &Frame::rst_stream(stream_id, error_code),
+            )?;
+        }
+        Ok(())
     }
 
     pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
@@ -389,13 +518,18 @@ impl ClientConnection {
             .or_insert_with(|| PendingResponse::new(limits));
 
         if pending.headers.is_none() {
+            let streaming = pending.is_streaming();
             self.state
                 .stream_mut(stream_id)
                 .ok_or(Error::Protocol("unknown stream"))?
                 .receive_headers(true, end_stream)?;
             pending.headers = Some(headers);
             if end_stream {
-                self.complete_response(stream_id)?;
+                if streaming {
+                    self.complete_streaming_response(stream_id, Trailers::new())?;
+                } else {
+                    self.complete_response(stream_id)?;
+                }
             }
         } else {
             if !end_stream {
@@ -405,8 +539,13 @@ impl ClientConnection {
                 .stream_mut(stream_id)
                 .ok_or(Error::Protocol("unknown stream"))?
                 .receive_trailers(headers.clone())?;
-            pending.trailers = codec::trailers_from_headers(headers)?;
-            self.complete_response(stream_id)?;
+            let trailers = codec::trailers_from_headers(headers)?;
+            if pending.is_streaming() {
+                self.complete_streaming_response(stream_id, trailers)?;
+            } else {
+                pending.trailers = trailers;
+                self.complete_response(stream_id)?;
+            }
         }
         Ok(())
     }
@@ -429,94 +568,29 @@ impl ClientConnection {
             .receive_data(&data, end_stream, limits)?;
         let data_len = data.len();
         self.state.consume_inbound_connection_window(data_len)?;
-        self.state.queue_connection_window_update(data_len)?;
-        pending.body.append(&data)?;
-        let should_update =
-            !end_stream && self.state.queue_stream_window_update_to_target(stream_id)?;
-        if data_len != 0 || should_update {
-            codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
+        if let Some(body) = pending.body.as_mut() {
+            self.state.queue_connection_window_update(data_len)?;
+            body.append(&data)?;
+            let should_update =
+                !end_stream && self.state.queue_stream_window_update_to_target(stream_id)?;
+            if data_len != 0 || should_update {
+                codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
+            }
+        } else if !data.is_empty() {
+            pending.push_data_event(data, !end_stream);
         }
         if end_stream {
-            self.complete_response(stream_id)?;
+            if self
+                .pending
+                .get(&stream_id)
+                .is_some_and(PendingResponse::is_streaming)
+            {
+                self.complete_streaming_response(stream_id, Trailers::new())?;
+            } else {
+                self.complete_response(stream_id)?;
+            }
         }
         Ok(())
-    }
-
-    fn process_data_chunk<F>(
-        &mut self,
-        cx: &RuntimeContext<'_>,
-        frame: Frame,
-        on_chunk: &mut F,
-    ) -> Result<(), Error>
-    where
-        F: FnMut(Bytes) -> Result<(), Error>,
-    {
-        self.state.track_inbound_frame(&frame)?;
-        let stream_id = StreamId::new(frame.stream_id)?;
-        let end_stream = frame.flags.contains(FrameFlags::END_STREAM);
-        let FramePayload::Data(data) = frame.payload else {
-            return Err(Error::Protocol("expected DATA payload"));
-        };
-        if !self.pending.contains_key(&stream_id) {
-            return Err(Error::Protocol("DATA before response headers"));
-        }
-        let limits = BodyLimits::new(self.config.max_body_bytes);
-        self.state
-            .stream_mut(stream_id)
-            .ok_or(Error::Protocol("unknown stream"))?
-            .receive_data(&data, end_stream, limits)?;
-        let data_len = data.len();
-        self.state.consume_inbound_connection_window(data_len)?;
-        self.state.queue_connection_window_update(data_len)?;
-        on_chunk(data)?;
-        let should_update =
-            !end_stream && self.state.queue_stream_window_update_to_target(stream_id)?;
-        if data_len != 0 || should_update {
-            codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
-        }
-        if end_stream {
-            self.complete_response(stream_id)?;
-        }
-        Ok(())
-    }
-
-    fn process_data_discard(&mut self, cx: &RuntimeContext<'_>, frame: Frame) -> Result<(), Error> {
-        self.state.track_inbound_frame(&frame)?;
-        let stream_id = StreamId::new(frame.stream_id)?;
-        let end_stream = frame.flags.contains(FrameFlags::END_STREAM);
-        let FramePayload::Data(data) = frame.payload else {
-            return Err(Error::Protocol("expected DATA payload"));
-        };
-        if !self.pending.contains_key(&stream_id) {
-            return Err(Error::Protocol("DATA before response headers"));
-        }
-        let limits = BodyLimits::new(self.config.max_body_bytes);
-        self.state
-            .stream_mut(stream_id)
-            .ok_or(Error::Protocol("unknown stream"))?
-            .receive_data(&data, end_stream, limits)?;
-        let data_len = data.len();
-        self.state.consume_inbound_connection_window(data_len)?;
-        self.state.queue_connection_window_update(data_len)?;
-        let should_update =
-            !end_stream && self.state.queue_stream_window_update_to_target(stream_id)?;
-        if data_len != 0 || should_update {
-            codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
-        }
-        if end_stream {
-            self.complete_response(stream_id)?;
-        }
-        Ok(())
-    }
-
-    fn pending_response_head(&self, stream_id: StreamId) -> Result<Option<Response<Body>>, Error> {
-        let Some(pending) = self.pending.get(&stream_id) else {
-            return Ok(None);
-        };
-        let Some(headers) = &pending.headers else {
-            return Ok(None);
-        };
-        codec::response_from_headers(headers.clone(), Body::empty()).map(Some)
     }
 
     fn complete_response(&mut self, stream_id: StreamId) -> Result<(), Error> {
@@ -527,7 +601,11 @@ impl ClientConnection {
         let headers = pending
             .headers
             .ok_or(Error::Protocol("response headers missing"))?;
-        let response = codec::response_from_headers(headers, pending.body.finish())?;
+        let body = pending
+            .body
+            .ok_or(Error::Protocol("response body state missing"))?
+            .finish();
+        let response = codec::response_from_headers(headers, body)?;
         self.completed.insert(
             stream_id,
             ResponseWithTrailers {
@@ -537,6 +615,77 @@ impl ClientConnection {
         );
         self.state.remove_stream(stream_id);
         Ok(())
+    }
+
+    fn complete_streaming_response(
+        &mut self,
+        stream_id: StreamId,
+        trailers: Trailers,
+    ) -> Result<(), Error> {
+        self.pending
+            .get_mut(&stream_id)
+            .ok_or(Error::Protocol("response state missing"))?
+            .push_trailers_event(trailers);
+        Ok(())
+    }
+
+    fn ensure_streaming_pending(&mut self, stream_id: StreamId) -> Result<(), Error> {
+        if let Some(completed) = self.completed.remove(&stream_id) {
+            let (parts, body) = completed.response.into_parts();
+            let response = Response::from_parts(parts, ());
+            let headers = codec::response_headers(&response)?;
+            let mut pending = PendingResponse::new_streaming();
+            pending.headers = Some(headers);
+            pending.head_delivered = false;
+            pending.push_data_event(body.into_bytes(), false);
+            pending.push_trailers_event(completed.trailers);
+            self.pending.insert(stream_id, pending);
+            return Ok(());
+        }
+        match self.pending.get_mut(&stream_id) {
+            Some(pending) if pending.is_streaming() => Ok(()),
+            Some(pending) => {
+                let body = pending
+                    .body
+                    .take()
+                    .ok_or(Error::Protocol("response body state missing"))?;
+                pending.push_data_event(body.finish().into_bytes(), true);
+                Ok(())
+            }
+            None => {
+                self.pending
+                    .insert(stream_id, PendingResponse::new_streaming());
+                Ok(())
+            }
+        }
+    }
+
+    fn pop_streaming_event(
+        &mut self,
+        cx: &RuntimeContext<'_>,
+        stream_id: StreamId,
+    ) -> Result<Option<ResponseStreamEvent>, Error> {
+        let Some(queued) = self
+            .pending
+            .get_mut(&stream_id)
+            .and_then(|pending| pending.events.pop_front())
+        else {
+            return Ok(None);
+        };
+
+        if queued.data_len != 0 {
+            self.state.queue_connection_window_update(queued.data_len)?;
+            let should_update = queued.update_stream_window
+                && self.state.queue_stream_window_update_to_target(stream_id)?;
+            if should_update || queued.data_len != 0 {
+                codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
+            }
+        }
+        if matches!(queued.event, ResponseStreamEvent::Trailers(_)) {
+            self.state.remove_stream(stream_id);
+            self.pending.remove(&stream_id);
+        }
+        Ok(Some(queued.event))
     }
 
     fn goaway_for_stream(&self, stream_id: StreamId) -> Option<Error> {

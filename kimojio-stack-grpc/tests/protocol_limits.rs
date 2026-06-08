@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use bytes::Bytes;
 use http::{HeaderName, HeaderValue, Response, StatusCode, header::CONTENT_TYPE};
 use kimojio_stack::Runtime;
 use kimojio_stack_grpc::{
@@ -74,7 +75,7 @@ fn protocol_limits_client_requires_status_trailers() {
                     .unwrap();
                 http.send_response(cx, incoming.stream_id, &response)
                     .unwrap();
-                http.shutdown_write_and_close_after_peer(cx).unwrap();
+                let _ = http.shutdown_write_and_close_after_peer(cx);
             });
 
             let http = h2::ClientConnection::new(client_transport, HttpConfig::default());
@@ -94,6 +95,128 @@ fn protocol_limits_client_requires_status_trailers() {
             error
         })
     });
+
+    assert_eq!(error.kind(), ErrorKind::Protocol);
+}
+
+#[test]
+fn protocol_limits_streaming_client_rejects_oversized_response_message() {
+    let (client_transport, server_transport) = socket_transport_pair();
+    let mut runtime = Runtime::new();
+
+    let error = runtime.block_on(|cx| {
+        cx.scope(|scope| {
+            let server = scope.spawn(move |cx| {
+                let mut http = h2::ServerConnection::new(server_transport, HttpConfig::default());
+                let incoming = http.accept(cx).unwrap().unwrap();
+                let response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, "application/grpc")
+                    .body(())
+                    .unwrap();
+                http.send_response_headers(cx, incoming.stream_id, &response)
+                    .unwrap();
+                http.send_response_data(
+                    cx,
+                    incoming.stream_id,
+                    &codec::encode_message(
+                        &TestMessage {
+                            value: "too-large".to_owned(),
+                        },
+                        1024,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+                let trailers = Status::ok().to_trailers().unwrap();
+                http.finish_response_stream(cx, incoming.stream_id, Some(&trailers))
+                    .unwrap();
+                let _ = http.shutdown_write_and_close_after_peer(cx);
+            });
+
+            let http = h2::ClientConnection::new(client_transport, HttpConfig::default());
+            let mut client = UnaryClient::new(http, ClientConfig { max_message_len: 1 });
+            let mut stream = client
+                .call_server_streaming::<_, TestMessage>(
+                    cx,
+                    "/test.Protocol/Stream",
+                    Metadata::new(),
+                    &TestMessage {
+                        value: String::new(),
+                    },
+                )
+                .unwrap();
+            let error = stream.next(cx).unwrap_err();
+            drop(stream);
+            client.close(cx).unwrap();
+            server.join(cx).unwrap();
+            error
+        })
+    });
+
+    assert_eq!(error.kind(), ErrorKind::SizeLimit);
+}
+
+#[test]
+fn protocol_limits_streaming_client_rejects_invalid_terminal_status() {
+    let (client_transport, server_transport) = socket_transport_pair();
+    let mut runtime = Runtime::new();
+
+    let error = runtime.block_on(|cx| {
+        cx.scope(|scope| {
+            let server = scope.spawn(move |cx| {
+                let mut http = h2::ServerConnection::new(server_transport, HttpConfig::default());
+                let incoming = http.accept(cx).unwrap().unwrap();
+                let response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, "application/grpc")
+                    .body(())
+                    .unwrap();
+                http.send_response_headers(cx, incoming.stream_id, &response)
+                    .unwrap();
+                let mut trailers = kimojio_stack_http::Trailers::new();
+                trailers.insert(
+                    kimojio_stack_grpc::status::GRPC_STATUS,
+                    HeaderValue::from_static("99"),
+                );
+                http.finish_response_stream(cx, incoming.stream_id, Some(&trailers))
+                    .unwrap();
+                http.shutdown_write_and_close_after_peer(cx).unwrap();
+            });
+
+            let http = h2::ClientConnection::new(client_transport, HttpConfig::default());
+            let mut client = UnaryClient::new(http, ClientConfig::default());
+            let mut stream = client
+                .call_server_streaming::<_, TestMessage>(
+                    cx,
+                    "/test.Protocol/Stream",
+                    Metadata::new(),
+                    &TestMessage {
+                        value: "request".to_owned(),
+                    },
+                )
+                .unwrap();
+            let error = stream.next(cx).unwrap_err();
+            drop(stream);
+            client.close(cx).unwrap();
+            server.join(cx).unwrap();
+            error
+        })
+    });
+
+    assert_eq!(error.kind(), ErrorKind::Protocol);
+}
+
+#[test]
+fn protocol_limits_streaming_client_rejects_truncated_frame_header_before_ok() {
+    let error = streaming_client_error_for_raw_data(Bytes::from_static(&[0, 0, 0]));
+
+    assert_eq!(error.kind(), ErrorKind::Protocol);
+}
+
+#[test]
+fn protocol_limits_streaming_client_rejects_truncated_frame_payload_before_ok() {
+    let error = streaming_client_error_for_raw_data(Bytes::from_static(&[0, 0, 0, 0, 4, 1, 2]));
 
     assert_eq!(error.kind(), ErrorKind::Protocol);
 }
@@ -236,4 +359,49 @@ fn socket_transport_pair() -> (StackTransport, StackTransport) {
         StackTransport::plaintext(client),
         StackTransport::plaintext(server),
     )
+}
+
+fn streaming_client_error_for_raw_data(data: Bytes) -> kimojio_stack_grpc::Error {
+    let (client_transport, server_transport) = socket_transport_pair();
+    let mut runtime = Runtime::new();
+
+    runtime.block_on(|cx| {
+        cx.scope(|scope| {
+            let server = scope.spawn(move |cx| {
+                let mut http = h2::ServerConnection::new(server_transport, HttpConfig::default());
+                let incoming = http.accept(cx).unwrap().unwrap();
+                let response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, "application/grpc")
+                    .body(())
+                    .unwrap();
+                http.send_response_headers(cx, incoming.stream_id, &response)
+                    .unwrap();
+                http.send_response_data(cx, incoming.stream_id, &data)
+                    .unwrap();
+                let trailers = Status::ok().to_trailers().unwrap();
+                http.finish_response_stream(cx, incoming.stream_id, Some(&trailers))
+                    .unwrap();
+                let _ = http.shutdown_write_and_close_after_peer(cx);
+            });
+
+            let http = h2::ClientConnection::new(client_transport, HttpConfig::default());
+            let mut client = UnaryClient::new(http, ClientConfig::default());
+            let mut stream = client
+                .call_server_streaming::<_, TestMessage>(
+                    cx,
+                    "/test.Protocol/Stream",
+                    Metadata::new(),
+                    &TestMessage {
+                        value: "request".to_owned(),
+                    },
+                )
+                .unwrap();
+            let error = stream.next(cx).unwrap_err();
+            drop(stream);
+            client.close(cx).unwrap();
+            server.join(cx).unwrap();
+            error
+        })
+    })
 }

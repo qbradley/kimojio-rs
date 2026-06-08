@@ -6,7 +6,7 @@ use prost::Message;
 
 use crate::Error;
 
-const HEADER_LEN: usize = 5;
+pub(crate) const HEADER_LEN: usize = 5;
 const UNCOMPRESSED_FLAG: u8 = 0;
 
 /// Encodes a prost-compatible message into one unary gRPC data frame.
@@ -106,4 +106,23 @@ pub fn decode_bytes(frame: &[u8], max_len: usize) -> Result<Bytes, Error> {
         return Err(Error::Protocol("gRPC frame length does not match payload"));
     }
     Ok(Bytes::copy_from_slice(&frame[HEADER_LEN..]))
+}
+
+pub(crate) fn frame_len(frame: &[u8], max_len: usize) -> Result<usize, Error> {
+    if frame.len() < HEADER_LEN {
+        return Err(Error::Protocol("gRPC frame header is incomplete"));
+    }
+    let compressed_flag = frame[0];
+    if compressed_flag != UNCOMPRESSED_FLAG {
+        return Err(Error::UnsupportedCompression(compressed_flag));
+    }
+    let mut len_bytes = &frame[1..HEADER_LEN];
+    let message_len = len_bytes.get_u32() as usize;
+    if message_len > max_len {
+        return Err(Error::SizeLimit {
+            limit: max_len,
+            actual: message_len,
+        });
+    }
+    Ok(HEADER_LEN + message_len)
 }

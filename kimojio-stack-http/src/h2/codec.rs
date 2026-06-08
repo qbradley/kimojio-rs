@@ -260,7 +260,7 @@ pub(super) fn request_headers(request: &Request<Body>) -> Result<Vec<Header>, Er
     Ok(headers)
 }
 
-pub(super) fn response_headers(response: &Response<Body>) -> Result<Vec<Header>, Error> {
+pub(super) fn response_headers<B>(response: &Response<B>) -> Result<Vec<Header>, Error> {
     let mut headers = Vec::with_capacity(response.headers().len() + 1);
     headers.push(Header::new(
         ":status",
@@ -331,10 +331,10 @@ pub(super) fn request_from_headers(
         .map_err(|_| Error::Protocol("failed to build HTTP/2 request"))
 }
 
-pub(super) fn response_from_headers(
+pub(super) fn response_from_headers<B>(
     headers: Vec<Header>,
-    body: Body,
-) -> Result<Response<Body>, Error> {
+    body: B,
+) -> Result<Response<B>, Error> {
     let mut status = None;
     let mut regular = HeaderMap::new();
     let mut saw_regular = false;
