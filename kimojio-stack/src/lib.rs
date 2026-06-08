@@ -567,7 +567,7 @@ impl Runtime {
     where
         F: FnOnce(&RuntimeContext<'_>) -> T,
     {
-        let core = Rc::new(RefCell::new(Scheduler::new(self.config)));
+        let core = Rc::new(SchedulerCell::new(Scheduler::new(self.config)));
         let cx = RuntimeContext {
             core: Rc::clone(&core),
             stack_size: effective_stack_size(self.config.stack_size),
@@ -602,7 +602,7 @@ impl Default for Runtime {
 
 /// Methods available to code running inside a [`Runtime`].
 pub struct RuntimeContext<'cx> {
-    core: Rc<RefCell<Scheduler>>,
+    core: Rc<SchedulerCell>,
     stack_size: usize,
     current: CurrentTask<'cx>,
     active_scopes: RefCell<Vec<Rc<ScopeState>>>,
@@ -2053,7 +2053,7 @@ enum CurrentTask<'cx> {
 
 /// A structured concurrency scope for stackful coroutines.
 pub struct Scope<'scope, 'env: 'scope> {
-    core: Rc<RefCell<Scheduler>>,
+    core: Rc<SchedulerCell>,
     state: Rc<ScopeState>,
     stack_size: usize,
     _scope: PhantomData<&'scope mut &'scope ()>,
@@ -2330,7 +2330,7 @@ pub struct RegisteredFd {
 }
 
 impl RegisteredFd {
-    fn new(core: Weak<RefCell<Scheduler>>, fd: OwnedFd) -> Result<Self, Errno> {
+    fn new(core: Weak<SchedulerCell>, fd: OwnedFd) -> Result<Self, Errno> {
         let core = core.upgrade().expect("runtime scheduler dropped");
         let slot = core.borrow_mut().register_fixed_fd(&fd)?;
         let state = Rc::new(RegisteredFdState {
@@ -2375,12 +2375,7 @@ pub struct RegisteredBuffer<B> {
 }
 
 impl<B> RegisteredBuffer<B> {
-    fn new(
-        core: Weak<RefCell<Scheduler>>,
-        buffer: B,
-        ptr: *mut u8,
-        len: usize,
-    ) -> Result<Self, Errno> {
+    fn new(core: Weak<SchedulerCell>, buffer: B, ptr: *mut u8, len: usize) -> Result<Self, Errno> {
         let core = core.upgrade().expect("runtime scheduler dropped");
         let slot = core.borrow_mut().register_fixed_buffer(ptr, len)?;
         let state = Rc::new(RegisteredBufferState {
@@ -2482,7 +2477,7 @@ trait RegisteredResource {
 }
 
 struct RegisteredFdState {
-    core: Weak<RefCell<Scheduler>>,
+    core: Weak<SchedulerCell>,
     slot: u32,
     fd: Cell<Option<OwnedFd>>,
     in_flight: Cell<usize>,
@@ -2528,7 +2523,7 @@ impl RegisteredResource for RegisteredFdState {
 }
 
 struct RegisteredBufferState<B> {
-    core: Weak<RefCell<Scheduler>>,
+    core: Weak<SchedulerCell>,
     slot: u16,
     buffer: UnsafeCell<B>,
     ptr: *mut u8,
@@ -2618,7 +2613,7 @@ impl RegisteredResources {
 /// A pending io_uring operation.
 #[must_use = "pending IO should be completed with get, try_get, or RuntimeContext::join"]
 pub struct IoResult<T, B = Vec<u8>> {
-    core: Weak<RefCell<Scheduler>>,
+    core: Weak<SchedulerCell>,
     state: Option<Rc<IoState>>,
     buffer: ManuallyDrop<B>,
     output: fn(B, u32) -> T,
@@ -2628,7 +2623,7 @@ pub struct IoResult<T, B = Vec<u8>> {
 
 impl<T, B> IoResult<T, B> {
     fn new(
-        core: Weak<RefCell<Scheduler>>,
+        core: Weak<SchedulerCell>,
         state: Rc<IoState>,
         buffer: B,
         output: fn(B, u32) -> T,
@@ -2845,13 +2840,13 @@ pub(crate) struct TimeoutState {
 /// A waitable io_uring timeout.
 #[must_use = "timeouts should be waited on, canceled, or allowed to complete"]
 pub struct Timeout {
-    core: Weak<RefCell<Scheduler>>,
+    core: Weak<SchedulerCell>,
     state: Option<Rc<IoState>>,
     user_data: io_uring_user_data,
 }
 
 impl Timeout {
-    fn new(core: Weak<RefCell<Scheduler>>, state: TimeoutState) -> Self {
+    fn new(core: Weak<SchedulerCell>, state: TimeoutState) -> Self {
         Self {
             core,
             state: Some(state.state),
@@ -3143,7 +3138,7 @@ struct ScopeStateInner {
 
 #[derive(Clone)]
 pub(crate) struct Waiter {
-    core: Weak<RefCell<Scheduler>>,
+    core: Weak<SchedulerCell>,
     task_id: TaskId,
 }
 
@@ -3505,6 +3500,35 @@ impl StackTracker {
             .iter()
             .position(|byte| byte & 1 != 0)
             .map_or(0, |first_resident| self.size - first_resident * page_size)
+    }
+}
+
+struct SchedulerCell {
+    scheduler: UnsafeCell<Scheduler>,
+}
+
+impl SchedulerCell {
+    fn new(scheduler: Scheduler) -> Self {
+        Self {
+            scheduler: UnsafeCell::new(scheduler),
+        }
+    }
+
+    fn borrow(&self) -> &Scheduler {
+        // SAFETY: Runtime and all scheduler handles are `Rc`-backed and confined to
+        // one OS thread. Callers must not keep scheduler references across coroutine
+        // resume/user-code boundaries; the scheduler loop scopes those accesses.
+        unsafe { &*self.scheduler.get() }
+    }
+
+    #[allow(
+        clippy::mut_from_ref,
+        reason = "the runtime is single-threaded and replaces RefCell's checked interior mutability"
+    )]
+    fn borrow_mut(&self) -> &mut Scheduler {
+        // SAFETY: See `borrow`. Mutable accesses are manually scoped so no scheduler
+        // reference is live while coroutine/user code can re-enter scheduler APIs.
+        unsafe { &mut *self.scheduler.get() }
     }
 }
 
@@ -3932,7 +3956,7 @@ fn io_state_user_data(state: &Rc<IoState>) -> io_uring_user_data {
     io_uring_user_data::from_ptr(Rc::as_ptr(state).cast_mut().cast())
 }
 
-fn drain_scheduler_io(core: &Rc<RefCell<Scheduler>>) {
+fn drain_scheduler_io(core: &Rc<SchedulerCell>) {
     while core.borrow().in_flight_io != 0 {
         assert!(
             drive_scheduler(core),
@@ -3941,9 +3965,9 @@ fn drain_scheduler_io(core: &Rc<RefCell<Scheduler>>) {
     }
 }
 
-fn drive_scheduler(core: &Rc<RefCell<Scheduler>>) -> bool {
+fn drive_scheduler(core: &Rc<SchedulerCell>) -> bool {
     {
-        let mut scheduler = core.borrow_mut();
+        let scheduler = core.borrow_mut();
         scheduler.prepare_external_wake();
     }
 
@@ -3968,14 +3992,14 @@ fn drive_scheduler(core: &Rc<RefCell<Scheduler>>) -> bool {
     if should_wait_for_io {
         if core.borrow().has_external_waiters_or_ready() {
             if run_completed_io(core, false) {
-                let mut scheduler = core.borrow_mut();
+                let scheduler = core.borrow_mut();
                 scheduler.finish_external_wake_io();
                 scheduler.drain_external_ready();
                 return true;
             }
 
             {
-                let mut scheduler = core.borrow_mut();
+                let scheduler = core.borrow_mut();
                 if scheduler.prepare_external_wake() {
                     return true;
                 }
@@ -3985,7 +4009,7 @@ fn drive_scheduler(core: &Rc<RefCell<Scheduler>>) -> bool {
             }
             run_completed_io(core, !busy_poll_io);
             let scheduled = {
-                let mut scheduler = core.borrow_mut();
+                let scheduler = core.borrow_mut();
                 scheduler.finish_external_wake_io();
                 scheduler.drain_external_ready()
             };
@@ -4003,7 +4027,7 @@ fn drive_scheduler(core: &Rc<RefCell<Scheduler>>) -> bool {
         let external_wake = core.borrow().external_wake();
         if external_wake.has_waiters_or_ready() {
             external_wake.wait_for_ready(None);
-            let mut scheduler = core.borrow_mut();
+            let scheduler = core.borrow_mut();
             scheduler.finish_external_wake_io();
             scheduler.drain_external_ready()
         } else {
@@ -4012,13 +4036,13 @@ fn drive_scheduler(core: &Rc<RefCell<Scheduler>>) -> bool {
     }
 }
 
-fn run_one(core: &Rc<RefCell<Scheduler>>) -> bool {
+fn run_one(core: &Rc<SchedulerCell>) -> bool {
     let Some((id, mut task)) = core.borrow_mut().pop_ready() else {
         return false;
     };
 
     let result = task.coroutine.resume(ResumeAction::Run);
-    let mut scheduler = core.borrow_mut();
+    let scheduler = core.borrow_mut();
     match result {
         CoroutineResult::Yield(Suspend::Ready) => {
             scheduler.tasks[id] = Some(task);
@@ -4033,14 +4057,14 @@ fn run_one(core: &Rc<RefCell<Scheduler>>) -> bool {
     true
 }
 
-fn interrupt_scheduler_tasks<I, F>(core: &Rc<RefCell<Scheduler>>, ids: I, mut interrupt: F)
+fn interrupt_scheduler_tasks<I, F>(core: &Rc<SchedulerCell>, ids: I, mut interrupt: F)
 where
     I: IntoIterator<Item = TaskId>,
     F: FnMut(TaskId) -> TaskInterruptFn,
 {
     for id in ids {
         let Some(mut task) = ({
-            let mut scheduler = core.borrow_mut();
+            let scheduler = core.borrow_mut();
             let Some(task) = scheduler.tasks.get(id).and_then(Option::as_ref) else {
                 continue;
             };
@@ -4055,7 +4079,7 @@ where
         let result = task
             .coroutine
             .resume(ResumeAction::Interrupt(interrupt(id)));
-        let mut scheduler = core.borrow_mut();
+        let scheduler = core.borrow_mut();
         match result {
             CoroutineResult::Yield(_) => {
                 scheduler.tasks[id] = Some(task);
@@ -4093,9 +4117,9 @@ fn handle_resume_action(
     }
 }
 
-fn run_completed_io(core: &Rc<RefCell<Scheduler>>, wait: bool) -> bool {
+fn run_completed_io(core: &Rc<SchedulerCell>, wait: bool) -> bool {
     let (submitted, mut completed) = {
-        let mut scheduler = core.borrow_mut();
+        let scheduler = core.borrow_mut();
         if wait {
             debug_assert!(
                 scheduler.ready.is_empty(),
@@ -4127,7 +4151,7 @@ fn run_completed_io(core: &Rc<RefCell<Scheduler>>, wait: bool) -> bool {
 }
 
 fn submit_cancel(
-    core: &Weak<RefCell<Scheduler>>,
+    core: &Weak<SchedulerCell>,
     state: &Rc<IoState>,
     cancel_kind: IoCancelKind,
 ) -> Option<Rc<IoState>> {
@@ -4135,7 +4159,7 @@ fn submit_cancel(
         .and_then(|core| core.borrow_mut().submit_cancel(state, cancel_kind))
 }
 
-fn recycle_io_state(core: &Weak<RefCell<Scheduler>>, state: Rc<IoState>) {
+fn recycle_io_state(core: &Weak<SchedulerCell>, state: Rc<IoState>) {
     if let Some(core) = core.upgrade() {
         core.borrow_mut().recycle_io_state(state);
     }
