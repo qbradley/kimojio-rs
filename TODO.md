@@ -1,2 +1,1 @@
-- cancelation behavior (cancel I/O when scope exits)
 - Make sure TLS can support registered buffers and fds

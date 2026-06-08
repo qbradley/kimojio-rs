@@ -1376,13 +1376,13 @@ mod tests {
                     assert_eq!(written.bytes, message.len());
 
                     let read = tls.read_async(cx, vec![0_u8; message.len()]);
-                    let timeout = cx.timeout(Duration::from_secs(1));
+                    let mut timeout = cx.timeout(Duration::from_secs(1));
                     let waitables: [&dyn Waitable; 2] = [&read, &timeout];
                     let ready = cx
                         .select(&waitables, None)
                         .expect("client TLS async select failed");
                     assert_eq!(ready, 0);
-                    timeout.cancel(cx).expect("cancel timeout failed");
+                    timeout.cancel();
 
                     let echoed = read.get(cx).expect("client TLS async read failed");
                     tls.shutdown(cx).expect("client TLS shutdown failed");
@@ -1423,13 +1423,13 @@ mod tests {
                     }
 
                     let mut read = tls.read_async(cx, vec![0_u8; 1]);
-                    let timeout = cx.timeout(Duration::from_millis(1));
+                    let mut timeout = cx.timeout(Duration::from_millis(1));
                     let waitables: [&dyn Waitable; 2] = [&read, &timeout];
                     let ready = cx
                         .select(&waitables, None)
                         .expect("server TLS async select failed");
                     assert_eq!(ready, 1);
-                    timeout.cancel(cx).expect("cancel timeout failed");
+                    timeout.cancel();
 
                     read.cancel(cx).expect("cancel TLS read failed");
                     assert!(read.is_ready());

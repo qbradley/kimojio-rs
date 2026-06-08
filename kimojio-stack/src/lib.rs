@@ -27,7 +27,8 @@
 //! so applications can tune stack sizes. [`JoinHandle::join`] retrieves the
 //! coroutine return value. If a coroutine panic escapes the spawned closure, the
 //! panic is propagated to the parent when the handle is joined or when the scope
-//! finishes.
+//! finishes. Unjoined coroutines that are still blocked when their scope body has
+//! no runnable work left are canceled before the scope returns.
 //!
 //! The scheduler is deliberately flat. A coroutine that blocks on a join, scope,
 //! channel receive, or I/O operation records an internal waiter and suspends with
@@ -83,19 +84,22 @@
 //! [`RuntimeContext::read_async`] and [`RuntimeContext::write_async`] return an
 //! [`IoResult`]. `try_get` observes a completion that has already been reaped
 //! without entering io_uring or running other tasks. `get` waits cooperatively by
-//! parking the current coroutine. [`RuntimeContext::join`] waits for multiple
-//! [`Waitable`] values at once and can optionally use an io_uring timeout; timed
-//! out operations remain pending and their handles can still be completed later.
+//! parking the current coroutine. [`Cancellable::cancel`] requests cancellation
+//! without waiting for the kernel CQE. [`RuntimeContext::join`] waits for
+//! multiple [`Waitable`] values at once and can optionally use an io_uring
+//! timeout; timed out operations remain pending and their handles can still be
+//! completed later.
 //!
 //! Async I/O takes ownership of buffers instead of borrowing them. This keeps the
 //! safe API sound even if a handle is dropped or forgotten while the kernel still
 //! has a pointer. Buffer ownership is abstracted with [`IoReadBuffer`] and
 //! [`IoWriteBuffer`]; `Vec<u8>` is the default buffer type and `Box<[u8]>` is
 //! also supported. Successful read/write completions return the original buffer
-//! in [`ReadOutput`] or [`WriteOutput`]. If an [`IoResult`] is dropped while its
-//! operation is still pending, the backing buffer is intentionally leaked rather
-//! than allowing io_uring to complete into freed memory. Complete pending results
-//! with `get` or `try_get` when buffer reclamation matters.
+//! in [`ReadOutput`] or [`WriteOutput`]. If an [`IoResult`] is canceled or
+//! dropped while its operation is still pending, the runtime requests kernel
+//! cancellation and intentionally leaks the backing buffer rather than allowing
+//! io_uring to complete into freed memory. Complete pending results with `get`
+//! or `try_get` when buffer reclamation matters.
 //!
 //! [`Runtime::with_registered_resources`] configures io_uring fixed-file and
 //! fixed-buffer tables for lower-overhead I/O. [`RuntimeContext::register_fd`]
@@ -250,6 +254,19 @@ type TaskId = usize;
 type PanicPayload = Box<dyn Any + Send + 'static>;
 type KernelIoResult = Result<u32, Errno>;
 type IoUring = rustix_uring::IoUring<Sqe, Cqe>;
+
+struct TaskCanceled;
+
+/// A handle for kernel work that can be canceled without blocking.
+///
+/// Cancellation is best-effort at the submission boundary: the method requests
+/// cancellation and returns immediately. The runtime still drains the eventual
+/// completion before [`Runtime::block_on`] returns, so cancellation never leaves
+/// an io_uring operation owned by a dropped scheduler.
+pub trait Cancellable {
+    /// Requests cancellation of the pending operation.
+    fn cancel(&mut self);
+}
 
 fn effective_stack_size(stack_size: usize) -> usize {
     let page_size = param::page_size();
@@ -557,7 +574,8 @@ impl Runtime {
             current: CurrentTask::Root,
             active_scopes: RefCell::new(Vec::new()),
         };
-        let output = main(&cx);
+        let output = panic::catch_unwind(AssertUnwindSafe(|| main(&cx)));
+        drain_scheduler_io(&core);
 
         let scheduler = core.borrow();
         debug_assert!(
@@ -569,7 +587,10 @@ impl Runtime {
             "io_uring operations should complete before Runtime::block_on returns"
         );
 
-        output
+        match output {
+            Ok(output) => output,
+            Err(payload) => panic::resume_unwind(payload),
+        }
     }
 }
 
@@ -685,9 +706,8 @@ impl RuntimeContext<'_> {
     /// Parks the current stackful coroutine until `duration` has elapsed.
     pub fn sleep(&self, duration: Duration) -> Result<(), Errno> {
         let timeout = self.submit_timeout(duration);
-        let result = self.wait_for_io_state(&timeout.state);
-        self.recycle_io_state(timeout.state);
-        self.resume_active_scope_panic();
+        let result = self
+            .wait_for_submitted_io_state(timeout.state, IoCancelKind::Timeout(timeout.user_data));
 
         match result {
             Ok(_) | Err(Errno::TIME) => Ok(()),
@@ -1302,14 +1322,13 @@ impl RuntimeContext<'_> {
     pub fn read_registered_fd(&self, fd: &RegisteredFd, buf: &mut [u8]) -> Result<usize, Errno> {
         let len = u32::try_from(buf.len()).expect("io_uring read length exceeds u32::MAX");
         let state = self.acquire_io_state();
-        self.submit_io_state(
+        let user_data = self.submit_io_state(
             opcode::Read::new(Fixed(fd.slot()), buf.as_mut_ptr(), len)
                 .offset(u64::MAX)
                 .build(),
             Rc::clone(&state),
         );
-        let result = self.wait_for_io_state(&state);
-        self.recycle_io_state(state);
+        let result = self.wait_for_submitted_io_state(state, IoCancelKind::Async(user_data));
         result.map(|result| result as usize)
     }
     /// Reads from `fd` into a registered fixed buffer.
@@ -1321,14 +1340,13 @@ impl RuntimeContext<'_> {
         let len = u32::try_from(buffer.len()).expect("io_uring read length exceeds u32::MAX");
         let fd = fd.as_fd().as_raw_fd();
         let state = self.acquire_io_state();
-        self.submit_io_state(
+        let user_data = self.submit_io_state(
             opcode::ReadFixed::new(Fd(fd), buffer.mut_ptr(), len, buffer.slot())
                 .offset(u64::MAX)
                 .build(),
             Rc::clone(&state),
         );
-        let result = self.wait_for_io_state(&state);
-        self.recycle_io_state(state);
+        let result = self.wait_for_submitted_io_state(state, IoCancelKind::Async(user_data));
         result.map(|result| result as usize)
     }
 
@@ -1340,14 +1358,13 @@ impl RuntimeContext<'_> {
     ) -> Result<usize, Errno> {
         let len = u32::try_from(buffer.len()).expect("io_uring read length exceeds u32::MAX");
         let state = self.acquire_io_state();
-        self.submit_io_state(
+        let user_data = self.submit_io_state(
             opcode::ReadFixed::new(Fixed(fd.slot()), buffer.mut_ptr(), len, buffer.slot())
                 .offset(u64::MAX)
                 .build(),
             Rc::clone(&state),
         );
-        let result = self.wait_for_io_state(&state);
-        self.recycle_io_state(state);
+        let result = self.wait_for_submitted_io_state(state, IoCancelKind::Async(user_data));
         result.map(|result| result as usize)
     }
 
@@ -1477,14 +1494,13 @@ impl RuntimeContext<'_> {
     pub fn write_registered_fd(&self, fd: &RegisteredFd, buf: &[u8]) -> Result<usize, Errno> {
         let len = u32::try_from(buf.len()).expect("io_uring write length exceeds u32::MAX");
         let state = self.acquire_io_state();
-        self.submit_io_state(
+        let user_data = self.submit_io_state(
             opcode::Write::new(Fixed(fd.slot()), buf.as_ptr(), len)
                 .offset(u64::MAX)
                 .build(),
             Rc::clone(&state),
         );
-        let result = self.wait_for_io_state(&state);
-        self.recycle_io_state(state);
+        let result = self.wait_for_submitted_io_state(state, IoCancelKind::Async(user_data));
         result.map(|result| result as usize)
     }
     /// Writes from a registered fixed buffer to `fd`.
@@ -1496,14 +1512,13 @@ impl RuntimeContext<'_> {
         let len = u32::try_from(buffer.len()).expect("io_uring write length exceeds u32::MAX");
         let fd = fd.as_fd().as_raw_fd();
         let state = self.acquire_io_state();
-        self.submit_io_state(
+        let user_data = self.submit_io_state(
             opcode::WriteFixed::new(Fd(fd), buffer.ptr(), len, buffer.slot())
                 .offset(u64::MAX)
                 .build(),
             Rc::clone(&state),
         );
-        let result = self.wait_for_io_state(&state);
-        self.recycle_io_state(state);
+        let result = self.wait_for_submitted_io_state(state, IoCancelKind::Async(user_data));
         result.map(|result| result as usize)
     }
 
@@ -1515,14 +1530,13 @@ impl RuntimeContext<'_> {
     ) -> Result<usize, Errno> {
         let len = u32::try_from(buffer.len()).expect("io_uring write length exceeds u32::MAX");
         let state = self.acquire_io_state();
-        self.submit_io_state(
+        let user_data = self.submit_io_state(
             opcode::WriteFixed::new(Fixed(fd.slot()), buffer.ptr(), len, buffer.slot())
                 .offset(u64::MAX)
                 .build(),
             Rc::clone(&state),
         );
-        let result = self.wait_for_io_state(&state);
-        self.recycle_io_state(state);
+        let result = self.wait_for_submitted_io_state(state, IoCancelKind::Async(user_data));
         result.map(|result| result as usize)
     }
 
@@ -1688,6 +1702,9 @@ impl RuntimeContext<'_> {
 
     /// Attempts to cancel a pending [`IoResult`].
     pub fn cancel_io<T, B>(&self, io: &IoResult<T, B>) -> Result<(), Errno> {
+        let Some(state) = io.state.as_ref() else {
+            return Ok(());
+        };
         let Some(user_data) = io.user_data() else {
             return Ok(());
         };
@@ -1700,8 +1717,14 @@ impl RuntimeContext<'_> {
             return Err(Errno::OPNOTSUPP);
         }
 
-        self.submit_and_wait_for_io(opcode::AsyncCancel::new(user_data).build())
-            .map(|_| ())
+        let Some(cancel_state) =
+            self.submit_cancel_for_io_state(state, IoCancelKind::Async(user_data))
+        else {
+            return Ok(());
+        };
+        let result = self.wait_for_io_state_without_scope_panic(&cancel_state);
+        self.recycle_io_state(cancel_state);
+        result.map(|_| ())
     }
 
     /// Attempts to cancel requests matched by `builder`.
@@ -1819,7 +1842,14 @@ impl RuntimeContext<'_> {
     }
 
     fn wait_for_scope(&self, state: &Rc<ScopeState>) {
+        let mut cancel_requested = false;
         while state.remaining.get() != 0 {
+            if !cancel_requested && self.core.borrow().ready_len() == 0 {
+                self.cancel_scope_tasks(state);
+                cancel_requested = true;
+                continue;
+            }
+
             if let Some(waiter) = self.waiter() {
                 state.waiters.borrow_mut().push(waiter);
             }
@@ -1827,13 +1857,37 @@ impl RuntimeContext<'_> {
         }
     }
 
+    fn cancel_scope_tasks(&self, state: &ScopeState) {
+        let task_ids = state.task_ids.borrow().clone();
+        interrupt_scheduler_tasks(&self.core, task_ids, |_| {
+            Box::new(|_| panic::panic_any(TaskCanceled))
+        });
+    }
+
     fn submit_and_wait_for_io(&self, entry: impl Into<Sqe>) -> KernelIoResult {
         let state = self.acquire_io_state();
-        self.submit_io_state(entry, Rc::clone(&state));
-        let result = self.wait_for_io_state(&state);
-        self.recycle_io_state(state);
-        self.resume_active_scope_panic();
-        result
+        let user_data = self.submit_io_state(entry, Rc::clone(&state));
+        self.wait_for_submitted_io_state(state, IoCancelKind::Async(user_data))
+    }
+
+    fn wait_for_submitted_io_state(
+        &self,
+        state: Rc<IoState>,
+        cancel_kind: IoCancelKind,
+    ) -> KernelIoResult {
+        let result = panic::catch_unwind(AssertUnwindSafe(|| self.wait_for_io_state(&state)));
+        match result {
+            Ok(result) => {
+                self.recycle_io_state(state);
+                self.resume_active_scope_panic();
+                result
+            }
+            Err(payload) => {
+                self.cancel_and_wait_for_io_state(&state, cancel_kind);
+                self.recycle_io_state(state);
+                panic::resume_unwind(payload);
+            }
+        }
     }
 
     fn wait_for_io_state(&self, state: &Rc<IoState>) -> KernelIoResult {
@@ -1844,7 +1898,42 @@ impl RuntimeContext<'_> {
 
             state.add_waiter_from(self);
             self.park();
+            self.resume_active_scope_panic();
         }
+    }
+
+    fn wait_for_io_state_without_scope_panic(&self, state: &Rc<IoState>) -> KernelIoResult {
+        loop {
+            if let Some(result) = state.take_result() {
+                return result;
+            }
+
+            state.add_waiter_from(self);
+            self.park();
+        }
+    }
+
+    fn cancel_and_wait_for_io_state(&self, state: &Rc<IoState>, cancel_kind: IoCancelKind) {
+        let cancel_state = self.submit_cancel_for_io_state(state, cancel_kind);
+        while !state.is_ready() || cancel_state.as_ref().is_some_and(|state| !state.is_ready()) {
+            state.add_waiter_from(self);
+            if let Some(cancel_state) = &cancel_state {
+                cancel_state.add_waiter_from(self);
+            }
+            self.park();
+        }
+
+        if let Some(cancel_state) = cancel_state {
+            self.recycle_io_state(cancel_state);
+        }
+    }
+
+    fn submit_cancel_for_io_state(
+        &self,
+        state: &Rc<IoState>,
+        cancel_kind: IoCancelKind,
+    ) -> Option<Rc<IoState>> {
+        self.core.borrow_mut().submit_cancel(state, cancel_kind)
     }
 
     fn submit_io_state(&self, entry: impl Into<Sqe>, state: Rc<IoState>) -> io_uring_user_data {
@@ -1869,18 +1958,23 @@ impl RuntimeContext<'_> {
             return;
         }
 
-        let cancel_state = self.acquire_io_state();
-        let entry = opcode::TimeoutRemove::new(timeout.user_data).build();
-        self.submit_io_state(entry, Rc::clone(&cancel_state));
+        let cancel_state = self
+            .submit_cancel_for_io_state(&timeout.state, IoCancelKind::Timeout(timeout.user_data));
 
-        while !timeout.state.is_ready() || !cancel_state.is_ready() {
+        while !timeout.state.is_ready()
+            || cancel_state.as_ref().is_some_and(|state| !state.is_ready())
+        {
             timeout.state.add_waiter_from(self);
-            cancel_state.add_waiter_from(self);
+            if let Some(cancel_state) = &cancel_state {
+                cancel_state.add_waiter_from(self);
+            }
             self.park();
         }
 
         self.recycle_io_state(timeout.state);
-        self.recycle_io_state(cancel_state);
+        if let Some(cancel_state) = cancel_state {
+            self.recycle_io_state(cancel_state);
+        }
     }
 
     fn acquire_io_state(&self) -> Rc<IoState> {
@@ -1973,8 +2067,8 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
     /// Spawns a stackful coroutine in this scope.
     ///
     /// The returned handle can be joined to retrieve the coroutine's return
-    /// value. If the handle is dropped, the coroutine still finishes before the
-    /// scope returns.
+    /// value. If the handle is dropped, the coroutine is still driven until it
+    /// completes or is canceled as the scope exits.
     pub fn spawn<F, T>(&self, f: F) -> JoinHandle<'scope, T>
     where
         F: FnOnce(&RuntimeContext<'_>) -> T + 'scope,
@@ -2025,12 +2119,15 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                 let result = panic::catch_unwind(AssertUnwindSafe(|| {
                     handle_resume_action(id, yielder, stack_tracker, Suspend::Ready, action);
                     f(&cx)
-                }))
-                .map(TaskOutcome::Value)
-                .unwrap_or_else(|payload| {
-                    task_join.store_panic_payload(payload);
-                    TaskOutcome::Panicked
-                });
+                }));
+                let result = match result {
+                    Ok(value) => TaskOutcome::Value(value),
+                    Err(payload) if payload.is::<TaskCanceled>() => TaskOutcome::Canceled,
+                    Err(payload) => {
+                        task_join.store_panic_payload(payload);
+                        TaskOutcome::Panicked
+                    }
+                };
                 let stack_usage = cx
                     .stack_usage()
                     .expect("stackful coroutine missing stack usage");
@@ -2040,6 +2137,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
         };
 
         state.remaining.set(state.remaining.get() + 1);
+        state.register_task(id);
         self.core.borrow_mut().insert_task(
             id,
             Task {
@@ -2093,6 +2191,7 @@ impl<T> JoinHandle<'_, T> {
         match outcome {
             TaskOutcome::Value(result) => Some((result, stack_usage)),
             TaskOutcome::Panicked => self.state.resume_panic(),
+            TaskOutcome::Canceled => panic!("stackful coroutine canceled before JoinHandle joined"),
         }
     }
 
@@ -2587,13 +2686,49 @@ impl<T, B> IoResult<T, B> {
                 .expect("IoResult state missing")
                 .add_waiter_from(cx);
             cx.park();
+            cx.resume_active_scope_panic();
         }
     }
 
     fn user_data(&self) -> Option<io_uring_user_data> {
-        self.state
-            .as_ref()
-            .map(|state| io_uring_user_data::from_ptr(Rc::as_ptr(state).cast_mut().cast()))
+        self.state.as_ref().map(io_state_user_data)
+    }
+
+    /// Requests cancellation of this operation without waiting for completion.
+    pub fn cancel(&mut self) {
+        self.cancel_pending();
+    }
+
+    fn cancel_pending(&mut self) {
+        if self.taken {
+            return;
+        }
+
+        let Some(state) = self.state.take() else {
+            return;
+        };
+
+        if state.is_ready() {
+            unsafe {
+                ManuallyDrop::drop(&mut self.buffer);
+            }
+            self.taken = true;
+            recycle_io_state(&self.core, state);
+            return;
+        }
+
+        submit_cancel(
+            &self.core,
+            &state,
+            IoCancelKind::Async(io_state_user_data(&state)),
+        );
+        self.taken = true;
+    }
+}
+
+impl<T, B> Cancellable for IoResult<T, B> {
+    fn cancel(&mut self) {
+        self.cancel_pending();
     }
 }
 
@@ -2620,25 +2755,7 @@ impl<T, B> fmt::Debug for IoResult<T, B> {
 
 impl<T, B> Drop for IoResult<T, B> {
     fn drop(&mut self) {
-        if self.taken {
-            return;
-        }
-
-        let Some(state) = self.state.take() else {
-            return;
-        };
-
-        if state.is_ready() {
-            unsafe {
-                ManuallyDrop::drop(&mut self.buffer);
-            }
-            self.taken = true;
-            recycle_io_state(&self.core, state);
-        }
-        // If the operation is still pending, deliberately leak the owned buffer.
-        // The raw io_uring reference keeps the state alive until the CQE arrives,
-        // and leaking the backing allocation keeps the kernel-visible memory
-        // valid even when safe code drops the handle early.
+        self.cancel_pending();
     }
 }
 
@@ -2659,6 +2776,7 @@ fn write_output<B>(buffer: B, bytes: u32) -> WriteOutput<B> {
 enum TaskOutcome<T> {
     Value(T),
     Panicked,
+    Canceled,
 }
 
 struct JoinState<T> {
@@ -2758,6 +2876,7 @@ impl Timeout {
                 .expect("timeout state missing")
                 .add_waiter_from(cx);
             cx.park();
+            cx.resume_active_scope_panic();
         }
     }
 
@@ -2774,14 +2893,18 @@ impl Timeout {
             .build()
         };
 
-        cx.submit_io_state(entry, Rc::clone(&state));
-        let result = cx.wait_for_io_state(&state);
-        cx.recycle_io_state(state);
-        result.map(|_| ())
+        let user_data = cx.submit_io_state(entry, Rc::clone(&state));
+        cx.wait_for_submitted_io_state(state, IoCancelKind::Async(user_data))
+            .map(|_| ())
     }
 
-    /// Cancels this timeout.
-    pub fn cancel(mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+    /// Requests cancellation of this timeout without waiting for completion.
+    pub fn cancel(&mut self) {
+        self.cancel_pending();
+    }
+
+    /// Cancels this timeout and waits for the cancel request to complete.
+    pub fn cancel_and_wait(mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
         let Some(state) = self.state.take() else {
             return Ok(());
         };
@@ -2791,22 +2914,45 @@ impl Timeout {
             return Ok(());
         }
 
-        let cancel_state = cx.acquire_io_state();
-        cx.submit_io_state(
-            opcode::TimeoutRemove::new(self.user_data).build(),
-            Rc::clone(&cancel_state),
-        );
+        let cancel_state =
+            cx.submit_cancel_for_io_state(&state, IoCancelKind::Timeout(self.user_data));
 
-        while !state.is_ready() || !cancel_state.is_ready() {
+        while !state.is_ready() || cancel_state.as_ref().is_some_and(|state| !state.is_ready()) {
             state.add_waiter_from(cx);
-            cancel_state.add_waiter_from(cx);
+            if let Some(cancel_state) = &cancel_state {
+                cancel_state.add_waiter_from(cx);
+            }
             cx.park();
         }
 
-        let cancel_result = cancel_state.take_result().expect("cancel result missing");
+        let cancel_result = cancel_state
+            .as_ref()
+            .and_then(|state| state.take_result())
+            .unwrap_or(Ok(0));
         cx.recycle_io_state(state);
-        cx.recycle_io_state(cancel_state);
+        if let Some(cancel_state) = cancel_state {
+            cx.recycle_io_state(cancel_state);
+        }
         cancel_result.map(|_| ())
+    }
+
+    fn cancel_pending(&mut self) {
+        let Some(state) = self.state.take() else {
+            return;
+        };
+
+        if state.is_ready() {
+            recycle_io_state(&self.core, state);
+            return;
+        }
+
+        submit_cancel(&self.core, &state, IoCancelKind::Timeout(self.user_data));
+    }
+}
+
+impl Cancellable for Timeout {
+    fn cancel(&mut self) {
+        self.cancel_pending();
     }
 }
 
@@ -2832,13 +2978,7 @@ impl fmt::Debug for Timeout {
 
 impl Drop for Timeout {
     fn drop(&mut self) {
-        let Some(state) = self.state.take() else {
-            return;
-        };
-
-        if state.is_ready() {
-            recycle_io_state(&self.core, state);
-        }
+        self.cancel_pending();
     }
 }
 
@@ -2854,6 +2994,7 @@ pub(crate) struct IoState {
     waiters: RefCell<Waiters>,
     timeout: RefCell<Option<Timespec>>,
     registered_resources: RefCell<RegisteredResources>,
+    cancel_requested: Cell<bool>,
 }
 
 impl IoState {
@@ -2863,6 +3004,7 @@ impl IoState {
             waiters: RefCell::new(Waiters::default()),
             timeout: RefCell::new(None),
             registered_resources: RefCell::new(RegisteredResources::new()),
+            cancel_requested: Cell::new(false),
         }
     }
 
@@ -2871,6 +3013,7 @@ impl IoState {
         self.waiters.borrow_mut().clear();
         *self.timeout.borrow_mut() = None;
         self.registered_resources.borrow_mut().clear();
+        self.cancel_requested.set(false);
     }
 
     fn complete(&self, result: KernelIoResult) {
@@ -2900,6 +3043,10 @@ impl IoState {
     fn attach_registered_resource(&self, resource: Rc<dyn RegisteredResource>) {
         self.registered_resources.borrow_mut().push(resource);
     }
+
+    fn mark_cancel_requested(&self) -> bool {
+        !self.cancel_requested.replace(true)
+    }
 }
 
 #[derive(Default)]
@@ -2907,9 +3054,14 @@ struct ScopeState {
     remaining: Cell<usize>,
     waiters: RefCell<Waiters>,
     panic_payloads: RefCell<Vec<Rc<RefCell<Option<PanicPayload>>>>>,
+    task_ids: RefCell<Vec<TaskId>>,
 }
 
 impl ScopeState {
+    fn register_task(&self, id: TaskId) {
+        self.task_ids.borrow_mut().push(id);
+    }
+
     fn register_panic_payload(&self, payload: Rc<RefCell<Option<PanicPayload>>>) {
         self.panic_payloads.borrow_mut().push(payload);
     }
@@ -3435,11 +3587,19 @@ impl Scheduler {
         dump
     }
 
-    fn interrupt_started_tasks<F>(&mut self, mut interrupt: F)
+    fn interrupt_started_tasks<F>(&mut self, interrupt: F)
     where
         F: FnMut(TaskId) -> TaskInterruptFn,
     {
-        for id in 0..self.tasks.len() {
+        self.interrupt_tasks(0..self.tasks.len(), interrupt);
+    }
+
+    fn interrupt_tasks<I, F>(&mut self, ids: I, mut interrupt: F)
+    where
+        I: IntoIterator<Item = TaskId>,
+        F: FnMut(TaskId) -> TaskInterruptFn,
+    {
+        for id in ids {
             let Some(task) = &self.tasks[id] else {
                 continue;
             };
@@ -3483,11 +3643,26 @@ impl Scheduler {
     }
 
     fn submit_io_state(&mut self, entry: impl Into<Sqe>, state: Rc<IoState>) -> io_uring_user_data {
-        let user_data =
-            io_uring_user_data::from_ptr(Rc::into_raw(Rc::clone(&state)) as *mut c_void);
+        let user_data = io_state_user_data(&state);
+        let _ = Rc::into_raw(Rc::clone(&state));
         let entry = entry.into().user_data(user_data);
         self.submit_io(&entry);
         user_data
+    }
+
+    fn submit_cancel(
+        &mut self,
+        state: &Rc<IoState>,
+        cancel_kind: IoCancelKind,
+    ) -> Option<Rc<IoState>> {
+        if state.is_ready() || !cancel_kind.is_supported(self) || !state.mark_cancel_requested() {
+            return None;
+        }
+
+        let cancel_state = self.acquire_io_state();
+        let entry = cancel_kind.build();
+        self.submit_io_state(entry, Rc::clone(&cancel_state));
+        Some(cancel_state)
     }
 
     fn external_wake(&self) -> Arc<ExternalWake> {
@@ -3679,6 +3854,41 @@ struct CompletedIo {
     result: KernelIoResult,
 }
 
+#[derive(Clone, Copy)]
+enum IoCancelKind {
+    Async(io_uring_user_data),
+    Timeout(io_uring_user_data),
+}
+
+impl IoCancelKind {
+    fn is_supported(self, scheduler: &Scheduler) -> bool {
+        match self {
+            Self::Async(_) => scheduler.supports_opcode(opcode::AsyncCancel::CODE),
+            Self::Timeout(_) => scheduler.supports_opcode(opcode::TimeoutRemove::CODE),
+        }
+    }
+
+    fn build(self) -> Sqe {
+        match self {
+            Self::Async(user_data) => opcode::AsyncCancel::new(user_data).build().into(),
+            Self::Timeout(user_data) => opcode::TimeoutRemove::new(user_data).build().into(),
+        }
+    }
+}
+
+fn io_state_user_data(state: &Rc<IoState>) -> io_uring_user_data {
+    io_uring_user_data::from_ptr(Rc::as_ptr(state).cast_mut().cast())
+}
+
+fn drain_scheduler_io(core: &Rc<RefCell<Scheduler>>) {
+    while core.borrow().in_flight_io != 0 {
+        assert!(
+            drive_scheduler(core),
+            "kimojio-stack runtime deadlocked while draining io_uring operations"
+        );
+    }
+}
+
 fn drive_scheduler(core: &Rc<RefCell<Scheduler>>) -> bool {
     {
         let mut scheduler = core.borrow_mut();
@@ -3771,6 +3981,38 @@ fn run_one(core: &Rc<RefCell<Scheduler>>) -> bool {
     true
 }
 
+fn interrupt_scheduler_tasks<I, F>(core: &Rc<RefCell<Scheduler>>, ids: I, mut interrupt: F)
+where
+    I: IntoIterator<Item = TaskId>,
+    F: FnMut(TaskId) -> TaskInterruptFn,
+{
+    for id in ids {
+        let Some(mut task) = ({
+            let mut scheduler = core.borrow_mut();
+            let Some(task) = scheduler.tasks.get(id).and_then(Option::as_ref) else {
+                continue;
+            };
+            if !task.coroutine.started() {
+                continue;
+            }
+            scheduler.tasks[id].take()
+        }) else {
+            continue;
+        };
+
+        let result = task
+            .coroutine
+            .resume(ResumeAction::Interrupt(interrupt(id)));
+        let mut scheduler = core.borrow_mut();
+        match result {
+            CoroutineResult::Yield(_) => {
+                scheduler.tasks[id] = Some(task);
+            }
+            CoroutineResult::Return(()) => {}
+        }
+    }
+}
+
 fn suspend_task(
     id: TaskId,
     yielder: &Yielder<ResumeAction, Suspend>,
@@ -3830,6 +4072,15 @@ fn run_completed_io(core: &Rc<RefCell<Scheduler>>, wait: bool) -> bool {
     core.borrow_mut().completed_io = completed;
 
     submitted != 0 || had_completion
+}
+
+fn submit_cancel(
+    core: &Weak<RefCell<Scheduler>>,
+    state: &Rc<IoState>,
+    cancel_kind: IoCancelKind,
+) -> Option<Rc<IoState>> {
+    core.upgrade()
+        .and_then(|core| core.borrow_mut().submit_cancel(state, cancel_kind))
 }
 
 fn recycle_io_state(core: &Weak<RefCell<Scheduler>>, state: Rc<IoState>) {
@@ -3976,7 +4227,7 @@ mod allocation_tracking {
 #[cfg(test)]
 mod tests {
     use super::{
-        AddressFamily, AtFlags, BusyPoll, DEFAULT_STACK_SIZE, EpollCtlOp, EpollEvent,
+        AddressFamily, AtFlags, BusyPoll, Cancellable, DEFAULT_STACK_SIZE, EpollCtlOp, EpollEvent,
         EpollEventData, EpollEventFlags, FallocateFlags, FileAdvice, FutexWaitFlags, IoJoinError,
         IoVec, MemoryAdvice, Mode, MsgHdr, OFlags, RecvFlags, RenameFlags, ResolveFlags, Runtime,
         RuntimeConfig, RuntimeContext, SendFlags, Shutdown, SocketType, StatxFlags, TaskStackState,
@@ -3993,7 +4244,7 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::mpsc;
     use std::thread;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     fn send_all(cx: &RuntimeContext<'_>, fd: &impl AsFd, mut bytes: &[u8]) {
         while !bytes.is_empty() {
@@ -4107,7 +4358,7 @@ mod tests {
         let mut runtime = Runtime::new();
 
         let output = runtime.block_on(|cx| {
-            let timeout = cx.timeout(Duration::from_secs(60));
+            let mut timeout = cx.timeout(Duration::from_secs(60));
 
             let output = cx.scope(|scope| {
                 let worker = scope.spawn(|cx| {
@@ -4122,7 +4373,7 @@ mod tests {
                 worker.join(cx)
             });
 
-            timeout.cancel(cx).unwrap();
+            timeout.cancel();
             output
         });
 
@@ -4858,8 +5109,8 @@ mod tests {
         let mut runtime = Runtime::new();
 
         runtime.block_on(|cx| {
-            let timeout = cx.timeout(Duration::from_secs(60));
-            timeout.cancel(cx).unwrap();
+            let mut timeout = cx.timeout(Duration::from_secs(60));
+            timeout.cancel();
 
             if cx.supports_io_uring_opcode(rustix_uring::opcode::AsyncCancel::CODE) {
                 let (read_fd, write_fd) = pipe().unwrap();
@@ -4902,6 +5153,82 @@ mod tests {
                 });
             }
         });
+    }
+
+    #[test]
+    fn dropped_timeout_is_canceled_before_block_on_returns() {
+        let mut runtime = Runtime::new();
+        let start = Instant::now();
+
+        let supported = runtime.block_on(|cx| {
+            if !cx.supports_io_uring_opcode(rustix_uring::opcode::TimeoutRemove::CODE) {
+                return false;
+            }
+
+            drop(cx.timeout(Duration::from_secs(60)));
+            true
+        });
+
+        if supported {
+            assert!(start.elapsed() < Duration::from_secs(5));
+        }
+    }
+
+    #[test]
+    fn scope_exit_cancels_child_sleeping_for_a_long_time() {
+        let mut runtime = Runtime::new();
+        let start = Instant::now();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                scope.spawn(|cx| {
+                    cx.sleep(Duration::from_secs(60 * 60)).unwrap();
+                });
+            });
+        });
+
+        assert!(start.elapsed() < Duration::from_secs(60));
+    }
+
+    #[test]
+    fn dropped_io_result_is_canceled_before_block_on_returns() {
+        let mut runtime = Runtime::new();
+
+        let fds = runtime.block_on(|cx| {
+            if !cx.supports_io_uring_opcode(rustix_uring::opcode::AsyncCancel::CODE) {
+                return None;
+            }
+
+            let (read_fd, write_fd) = pipe().unwrap();
+            drop(cx.read_async(&read_fd, vec![0]));
+            Some((read_fd, write_fd))
+        });
+
+        drop(fds);
+    }
+
+    #[test]
+    fn cancellable_trait_requests_timeout_and_io_result_cancellation() {
+        let mut runtime = Runtime::new();
+
+        let fds = runtime.block_on(|cx| {
+            if !cx.supports_io_uring_opcode(rustix_uring::opcode::AsyncCancel::CODE)
+                || !cx.supports_io_uring_opcode(rustix_uring::opcode::TimeoutRemove::CODE)
+            {
+                return None;
+            }
+
+            let mut timeout = cx.timeout(Duration::from_secs(60));
+            Cancellable::cancel(&mut timeout);
+
+            let (read_fd, write_fd) = pipe().unwrap();
+            let mut read = cx.read_async(&read_fd, vec![0]);
+            Cancellable::cancel(&mut read);
+
+            Some((read_fd, write_fd))
+        });
+
+        drop(fds);
     }
 
     #[test]
