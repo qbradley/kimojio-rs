@@ -156,7 +156,7 @@ impl Status {
     /// Serializes the status into terminal gRPC trailers.
     pub fn to_trailers(&self) -> Result<Trailers, Error> {
         let mut trailers = Trailers::new();
-        for (name, value) in self.metadata.as_ref().clone().into_headers() {
+        for (name, value) in self.metadata.as_ref().clone().into_http_headers() {
             let Some(name) = name else {
                 return Err(Error::Protocol("metadata continuation header unsupported"));
             };
@@ -218,7 +218,7 @@ impl Status {
             })
             .transpose()?
             .unwrap_or_default();
-        let metadata = Metadata::from_headers(trailers.as_map().clone())?;
+        let metadata = Metadata::from_http_headers(trailers.as_map().clone())?;
         Ok(Self {
             code,
             message,

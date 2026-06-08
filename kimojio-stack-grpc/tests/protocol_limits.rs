@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 use bytes::Bytes;
-use http::{HeaderName, HeaderValue, Response, StatusCode, header::CONTENT_TYPE};
+use http::{HeaderMap, HeaderName, HeaderValue, Response, StatusCode, header::CONTENT_TYPE};
 use kimojio_stack::Runtime;
 use kimojio_stack_grpc::{
     ErrorKind, Metadata, ServerConfig, Status, StatusCode as GrpcStatusCode, UnaryClient,
@@ -328,6 +328,71 @@ fn protocol_limits_rejects_invalid_metadata_names() {
     assert_eq!(content_type.kind(), ErrorKind::Protocol);
     assert_eq!(binary_name.kind(), ErrorKind::Protocol);
     assert_eq!(ascii_name.kind(), ErrorKind::Protocol);
+}
+
+#[test]
+fn protocol_limits_metadata_from_http_headers_filters_transport_fields() {
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/grpc"));
+    headers.insert(
+        HeaderName::from_static("te"),
+        HeaderValue::from_static("trailers"),
+    );
+    headers.insert(
+        kimojio_stack_grpc::status::GRPC_STATUS,
+        HeaderValue::from_static("0"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-user"),
+        HeaderValue::from_static("visible"),
+    );
+
+    let metadata = Metadata::from_http_headers(headers).unwrap();
+
+    assert_eq!(
+        metadata.get(&HeaderName::from_static("x-user")),
+        Some(&HeaderValue::from_static("visible"))
+    );
+    assert!(metadata.get(&CONTENT_TYPE).is_none());
+    assert!(
+        metadata
+            .get(&kimojio_stack_grpc::status::GRPC_STATUS)
+            .is_none()
+    );
+}
+
+#[test]
+fn protocol_limits_metadata_from_http_trailers_filters_status_fields() {
+    let mut trailers = kimojio_stack_http::Trailers::new();
+    trailers.insert(
+        kimojio_stack_grpc::status::GRPC_STATUS,
+        HeaderValue::from_static("14"),
+    );
+    trailers.insert(
+        kimojio_stack_grpc::status::GRPC_MESSAGE,
+        HeaderValue::from_static("unavailable"),
+    );
+    trailers.insert(
+        HeaderName::from_static("x-trailer"),
+        HeaderValue::from_static("visible"),
+    );
+
+    let metadata = Metadata::from_http_trailers(trailers).unwrap();
+
+    assert_eq!(
+        metadata.get(&HeaderName::from_static("x-trailer")),
+        Some(&HeaderValue::from_static("visible"))
+    );
+    assert!(
+        metadata
+            .get(&kimojio_stack_grpc::status::GRPC_STATUS)
+            .is_none()
+    );
+    assert!(
+        metadata
+            .get(&kimojio_stack_grpc::status::GRPC_MESSAGE)
+            .is_none()
+    );
 }
 
 #[test]

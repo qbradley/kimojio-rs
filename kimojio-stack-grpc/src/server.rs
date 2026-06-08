@@ -142,7 +142,7 @@ impl UnaryServer {
         let Some(handler) = self.handlers.get(path) else {
             return Err(Status::new(GrpcStatusCode::Unimplemented, "unknown method"));
         };
-        let metadata = Metadata::from_headers(request.headers().clone())
+        let metadata = Metadata::from_http_headers(request.headers().clone())
             .map_err(|_| Status::new(GrpcStatusCode::InvalidArgument, "invalid metadata"))?;
         handler.call(cx, metadata, request.body().as_bytes())
     }
@@ -441,7 +441,7 @@ fn write_reply(
     let mut response = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "application/grpc");
-    for (name, value) in reply.metadata.into_headers() {
+    for (name, value) in reply.metadata.into_http_headers() {
         let Some(name) = name else {
             return Err(Error::Protocol("metadata continuation header unsupported"));
         };
@@ -451,7 +451,7 @@ fn write_reply(
         .body(Body::from_bytes(reply.message, BodyLimits::new(usize::MAX)).map_err(Error::from)?)
         .map_err(|_| Error::Protocol("failed to build gRPC response"))?;
     let mut trailers = Status::ok().to_trailers()?;
-    for (name, value) in reply.trailers.into_headers() {
+    for (name, value) in reply.trailers.into_http_headers() {
         let Some(name) = name else {
             return Err(Error::Protocol("metadata continuation header unsupported"));
         };
@@ -470,7 +470,7 @@ fn write_streaming_reply(
     let mut response = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "application/grpc");
-    for (name, value) in reply.metadata.into_headers() {
+    for (name, value) in reply.metadata.into_http_headers() {
         let Some(name) = name else {
             return Err(Error::Protocol("metadata continuation header unsupported"));
         };
@@ -489,7 +489,7 @@ fn write_streaming_reply(
                 .map_err(Error::from)?,
             Ok(None) => {
                 let mut trailers = Status::ok().to_trailers()?;
-                for (name, value) in reply.trailers.into_headers() {
+                for (name, value) in reply.trailers.into_http_headers() {
                     let Some(name) = name else {
                         return Err(Error::Protocol("metadata continuation header unsupported"));
                     };

@@ -5,6 +5,9 @@
 //!
 //! The wrappers keep type names stable across the stack crates while still
 //! allowing callers to inspect or take the underlying `HeaderMap` when needed.
+//! They model HTTP transport fields only. Higher-level protocols such as gRPC
+//! translate these into their own concepts (for example gRPC metadata and
+//! status) in their own crates.
 
 use http::{HeaderMap, HeaderName, HeaderValue};
 
@@ -51,7 +54,11 @@ impl Headers {
     }
 }
 
-/// HTTP trailer block used by response trailers and gRPC status metadata.
+/// HTTP trailer block used by responses.
+///
+/// This is a transport-level HTTP trailer map. gRPC status and trailing
+/// metadata are encoded into HTTP trailers by `kimojio-stack-grpc`; HTTP callers
+/// should not need to understand those gRPC-specific names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Trailers {
     map: HeaderMap,

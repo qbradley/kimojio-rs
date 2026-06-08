@@ -23,10 +23,17 @@ use base64::{
     engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
 };
 use http::{HeaderMap, HeaderName, HeaderValue};
+use kimojio_stack_http::Trailers;
 
 use crate::Error;
 
-/// Low-level gRPC metadata wrapper over HTTP headers or trailers.
+/// gRPC metadata wrapper.
+///
+/// Metadata is serialized on the wire as HTTP/2 header or trailer fields, but
+/// this type only represents user-visible gRPC metadata. Reserved HTTP/gRPC
+/// transport fields such as `content-type`, `te`, `grpc-status`, and
+/// `grpc-message` are rejected when inserted directly and filtered when building
+/// metadata from HTTP transport fields.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Metadata {
     headers: HeaderMap,
@@ -88,21 +95,55 @@ impl Metadata {
             .map_err(|_| Error::Protocol("invalid binary metadata"))
     }
 
-    /// Borrows the underlying header map.
-    pub fn as_headers(&self) -> &HeaderMap {
+    /// Borrows metadata as HTTP-compatible fields.
+    ///
+    /// This exposes only user metadata fields, not reserved gRPC transport
+    /// fields such as `grpc-status`.
+    pub fn as_http_headers(&self) -> &HeaderMap {
         &self.headers
     }
 
-    /// Consumes the metadata and returns the underlying header map.
-    pub fn into_headers(self) -> HeaderMap {
+    /// Consumes metadata and returns HTTP-compatible fields.
+    ///
+    /// Use this when adding metadata to HTTP/2 request/response headers or
+    /// terminal trailers. The returned map still represents gRPC metadata, not a
+    /// general-purpose HTTP header block.
+    pub fn into_http_headers(self) -> HeaderMap {
         self.headers
     }
 
-    /// Builds metadata from an HTTP header/trailer map.
+    /// Backwards-compatible alias for [`as_http_headers`](Self::as_http_headers).
+    pub fn as_headers(&self) -> &HeaderMap {
+        self.as_http_headers()
+    }
+
+    /// Backwards-compatible alias for [`into_http_headers`](Self::into_http_headers).
+    pub fn into_headers(self) -> HeaderMap {
+        self.into_http_headers()
+    }
+
+    /// Builds gRPC metadata from HTTP/2 request or response headers.
     ///
     /// Reserved transport names are dropped. Invalid user metadata names return a
     /// protocol error.
+    pub fn from_http_headers(headers: HeaderMap) -> Result<Self, Error> {
+        Self::from_http_field_map(headers)
+    }
+
+    /// Builds gRPC trailing metadata from HTTP trailers.
+    ///
+    /// Reserved gRPC status trailer fields are filtered out, leaving only
+    /// user-visible trailing metadata.
+    pub fn from_http_trailers(trailers: Trailers) -> Result<Self, Error> {
+        Self::from_http_field_map(trailers.into_map())
+    }
+
+    /// Backwards-compatible alias for [`from_http_headers`](Self::from_http_headers).
     pub fn from_headers(headers: HeaderMap) -> Result<Self, Error> {
+        Self::from_http_headers(headers)
+    }
+
+    fn from_http_field_map(headers: HeaderMap) -> Result<Self, Error> {
         let mut metadata = HeaderMap::new();
         let mut current_name = None;
         for (name, value) in headers {

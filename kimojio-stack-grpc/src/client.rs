@@ -164,7 +164,7 @@ impl UnaryClient {
                 .cancel_response_stream(cx, stream_id, h2::ERROR_CODE_CANCEL);
             return Err(error);
         }
-        let metadata = match Metadata::from_headers(response.headers().clone()) {
+        let metadata = match Metadata::from_http_headers(response.headers().clone()) {
             Ok(metadata) => metadata,
             Err(error) => {
                 let _ = self
@@ -242,7 +242,7 @@ where
                         ));
                     }
                     let status = response_status(&self.response_headers, &trailers)?;
-                    self.trailers = Metadata::from_headers(trailers.into_map())?;
+                    self.trailers = Metadata::from_http_trailers(trailers)?;
                     if status.code() == GrpcStatusCode::Ok {
                         return Ok(None);
                     }
@@ -341,7 +341,7 @@ fn build_request(
         .uri(path)
         .header(CONTENT_TYPE, "application/grpc")
         .header(TE, "trailers");
-    for (name, value) in metadata.into_headers() {
+    for (name, value) in metadata.into_http_headers() {
         let Some(name) = name else {
             return Err(Error::Protocol("metadata continuation header unsupported"));
         };
@@ -367,8 +367,8 @@ where
     if status.code() != GrpcStatusCode::Ok {
         return Err(Error::Status(status));
     }
-    let metadata = Metadata::from_headers(response.response.headers().clone())?;
-    let trailers = Metadata::from_headers(response.trailers.into_map())?;
+    let metadata = Metadata::from_http_headers(response.response.headers().clone())?;
+    let trailers = Metadata::from_http_trailers(response.trailers)?;
     let message = codec::decode_message::<M>(response.response.body().as_bytes(), max_message_len)?;
     Ok(UnaryResponse {
         metadata,
