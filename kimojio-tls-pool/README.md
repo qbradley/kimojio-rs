@@ -42,7 +42,9 @@ For a benchmark smoke test, run:
 cargo bench -p kimojio-tls-pool --bench rpc_write -- --test
 ```
 
-The benchmark covers single-pair, three-pair per-connection-pool, and three-pair shared-pool RPC write scenarios across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies. It also includes `rpc_write/throughput_scaling`, `tls_write/throughput_scaling`, and `tls_write/batched_throughput_scaling`, which run shared-pool 32 KiB workloads with 1, 2, 4, and 8 executor threads.
+The benchmark covers single-pair, three-pair per-connection-pool, and three-pair shared-pool RPC write scenarios across 4 KiB, 8 KiB, 16 KiB, 24 KiB, and 32 KiB bodies. It also includes fixed-workload RPC/TLS write scaling groups, a saturated `tls_write/saturated_encrypt_scaling` group, and corrected direct-OpenSSL baselines. The saturated group gives each executor one independent TLS stream and a fixed amount of 32 KiB full-write work, which measures aggregate encryption throughput with 1, 2, 4, and 8 executor threads.
+
+On the current test host, saturated pool throughput scales from about 4.9 GiB/s with one executor to about 9.7 GiB/s with two, 18.4 GiB/s with four, and 27.9 GiB/s with eight. Corrected direct-OpenSSL baselines show the same shape, so the remaining eight-thread ceiling appears to be below the pool scheduler rather than executor routing or callback dispatch.
 
 ## Limitations
 

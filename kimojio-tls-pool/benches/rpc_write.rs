@@ -20,7 +20,7 @@ use openssl::{
     nid::Nid,
     pkey::PKey,
     rsa::Rsa,
-    ssl::{SslAcceptor, SslConnector, SslMethod, SslVerifyMode},
+    ssl::{HandshakeError, SslAcceptor, SslConnector, SslMethod, SslStream, SslVerifyMode},
     x509::{X509, X509NameBuilder},
 };
 
@@ -32,6 +32,7 @@ const RPC_RESPONSE_LEN: usize = 64;
 const BODY_SIZES: [usize; 5] = [4 * 1024, 8 * 1024, 16 * 1024, 24 * 1024, 32 * 1024];
 const THROUGHPUT_BODY_LEN: usize = 32 * 1024;
 const THROUGHPUT_MESSAGES_PER_ITER: u64 = 512;
+const SATURATED_MESSAGES_PER_EXECUTOR: u64 = 2048;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
@@ -144,6 +145,41 @@ fn stream_pair_with_discarding_client(
     (client, server, discard)
 }
 
+trait BenchTlsTransport: Read + Write + AsFd + Send {}
+
+impl<T> BenchTlsTransport for T where T: Read + Write + AsFd + Send {}
+
+fn direct_boxed_discarding_client() -> (
+    SslStream<Box<dyn BenchTlsTransport>>,
+    SslStream<UnixStream>,
+    Arc<std::sync::atomic::AtomicBool>,
+) {
+    let (acceptor, connector) = make_contexts();
+    let (client_io, server_io) = UnixStream::pair().unwrap();
+    let discard = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let client_transport = DiscardAfterHandshake {
+        inner: client_io,
+        discard: Arc::clone(&discard),
+    };
+    let server_thread = thread::spawn(move || acceptor.accept(server_io).unwrap());
+
+    let client = connector
+        .connect(
+            "localhost",
+            Box::new(client_transport) as Box<dyn BenchTlsTransport>,
+        )
+        .map_err(|error| match error {
+            HandshakeError::SetupFailure(error) => error.to_string(),
+            HandshakeError::Failure(error) => error.error().to_string(),
+            HandshakeError::WouldBlock(error) => error.error().to_string(),
+        })
+        .unwrap();
+    let server = server_thread.join().unwrap();
+    discard.store(true, Ordering::Release);
+    (client, server, discard)
+}
+
+#[derive(Debug)]
 struct DiscardAfterHandshake {
     inner: UnixStream,
     discard: Arc<std::sync::atomic::AtomicBool>,
@@ -176,6 +212,18 @@ impl Write for DiscardAfterHandshake {
 impl AsFd for DiscardAfterHandshake {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.inner.as_fd()
+    }
+}
+
+fn ssl_write_all<S>(stream: &mut SslStream<S>, bytes: &[u8])
+where
+    S: Read + Write,
+{
+    let mut written = 0;
+    while written < bytes.len() {
+        let amount = stream.ssl_write(&bytes[written..]).unwrap();
+        assert_ne!(amount, 0);
+        written += amount;
     }
 }
 
@@ -479,16 +527,34 @@ fn run_batched_write_throughput_scaling(iters: u64, executor_count: usize) -> Du
 }
 
 fn run_encrypt_throughput_scaling(iters: u64, executor_count: usize) -> Duration {
-    let counts = split_iters_across(iters, THROUGHPUT_CONNECTIONS);
-    let barrier = Arc::new(Barrier::new(THROUGHPUT_CONNECTIONS + 1));
+    run_encrypt_with_connections(iters, executor_count, THROUGHPUT_CONNECTIONS, "encrypt")
+}
+
+fn run_saturated_encrypt_throughput_scaling(iters: u64, executor_count: usize) -> Duration {
+    run_encrypt_with_connections(
+        iters * SATURATED_MESSAGES_PER_EXECUTOR * executor_count as u64,
+        executor_count,
+        executor_count,
+        "saturated_encrypt",
+    )
+}
+
+fn run_encrypt_with_connections(
+    message_count: u64,
+    executor_count: usize,
+    connection_count: usize,
+    stats_label: &str,
+) -> Duration {
+    let counts = split_iters_across(message_count, connection_count);
+    let barrier = Arc::new(Barrier::new(connection_count + 1));
     let client_config =
         PoolConfig::new(executor_count).with_placement_mode(PlacementMode::BackgroundOnly);
     let server_config = PoolConfig::new(1).with_placement_mode(PlacementMode::ImmediateOnly);
     let client_pool = TlsPool::new(client_config).unwrap();
     let server_pool = TlsPool::new(server_config).unwrap();
-    let mut clients = Vec::with_capacity(THROUGHPUT_CONNECTIONS);
-    let mut servers = Vec::with_capacity(THROUGHPUT_CONNECTIONS);
-    let mut discard_flags = Vec::with_capacity(THROUGHPUT_CONNECTIONS);
+    let mut clients = Vec::with_capacity(connection_count);
+    let mut servers = Vec::with_capacity(connection_count);
+    let mut discard_flags = Vec::with_capacity(connection_count);
 
     for count in counts {
         let (client, server, discard) =
@@ -507,9 +573,83 @@ fn run_encrypt_throughput_scaling(iters: u64, executor_count: usize) -> Duration
     for client in clients {
         client.join().unwrap();
     }
+    print_pool_stats(stats_label, executor_count, &client_pool);
     drop(discard_flags);
     drop(servers);
     start.elapsed()
+}
+
+fn run_pool_single_encrypt(iters: u64, executor_count: usize) -> Duration {
+    let client_config =
+        PoolConfig::new(executor_count).with_placement_mode(PlacementMode::BackgroundOnly);
+    let server_config = PoolConfig::new(1).with_placement_mode(PlacementMode::ImmediateOnly);
+    let client_pool = TlsPool::new(client_config).unwrap();
+    let server_pool = TlsPool::new(server_config).unwrap();
+    let (client, server, discard) = stream_pair_with_discarding_client(&client_pool, &server_pool);
+
+    let start = Instant::now();
+    client_write_batch(&client, iters, THROUGHPUT_BODY_LEN);
+    print_pool_stats("pool_single_encrypt", executor_count, &client_pool);
+    drop(discard);
+    drop(server);
+    start.elapsed()
+}
+
+fn run_direct_boxed_encrypt_throughput_scaling(iters: u64, thread_count: usize) -> Duration {
+    let counts = split_iters_across(iters, thread_count);
+    let barrier = Arc::new(Barrier::new(thread_count + 1));
+    let body = Arc::<[u8]>::from(vec![0x6d; THROUGHPUT_BODY_LEN].into_boxed_slice());
+    let mut clients = Vec::with_capacity(thread_count);
+    let mut servers = Vec::with_capacity(thread_count);
+    let mut discard_flags = Vec::with_capacity(thread_count);
+
+    for count in counts {
+        let (mut client, server, discard) = direct_boxed_discarding_client();
+        let client_barrier = Arc::clone(&barrier);
+        let body = Arc::clone(&body);
+        clients.push(thread::spawn(move || {
+            client_barrier.wait();
+            for _ in 0..count {
+                ssl_write_all(&mut client, &body);
+            }
+        }));
+        servers.push(server);
+        discard_flags.push(discard);
+    }
+
+    barrier.wait();
+    let start = Instant::now();
+    for client in clients {
+        client.join().unwrap();
+    }
+    drop(discard_flags);
+    drop(servers);
+    start.elapsed()
+}
+
+fn run_direct_boxed_saturated_encrypt(iters: u64, thread_count: usize) -> Duration {
+    run_direct_boxed_encrypt_throughput_scaling(
+        iters * SATURATED_MESSAGES_PER_EXECUTOR * thread_count as u64,
+        thread_count,
+    )
+}
+
+fn print_pool_stats(label: &str, executor_count: usize, pool: &TlsPool) {
+    if std::env::var_os("KIMOJIO_TLS_POOL_PRINT_STATS").is_none() {
+        return;
+    }
+
+    let stats = pool.stats();
+    let completed = stats
+        .executors
+        .iter()
+        .map(|executor| executor.completed.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    eprintln!(
+        "{label}/{executor_count}: submitted={} background={} queued={} completed=[{completed}]",
+        stats.submitted, stats.background_routed, stats.executor_queued,
+    );
 }
 
 fn print_latency_summary(label: &str, mut run_once: impl FnMut() -> Duration) {
@@ -724,12 +864,92 @@ fn bench_encrypt_throughput_scaling(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_saturated_encrypt_throughput_scaling(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tls_write/saturated_encrypt_scaling");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(4));
+
+    for executor_count in EXECUTOR_COUNTS {
+        let bytes =
+            THROUGHPUT_BODY_LEN as u64 * SATURATED_MESSAGES_PER_EXECUTOR * executor_count as u64;
+        group.throughput(Throughput::Bytes(bytes));
+        let label = format!("tls_write/saturated_encrypt_scaling/{executor_count}_executors");
+        print_latency_summary(&label, || {
+            run_saturated_encrypt_throughput_scaling(1, executor_count)
+        });
+        group.bench_with_input(
+            BenchmarkId::new("executors", executor_count),
+            &executor_count,
+            |b, &executor_count| {
+                b.iter_custom(|iters| {
+                    run_saturated_encrypt_throughput_scaling(iters, executor_count)
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_pool_single_encrypt(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tls_write/single_stream_encrypt");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(4));
+    group.throughput(Throughput::Bytes(
+        THROUGHPUT_BODY_LEN as u64 * THROUGHPUT_MESSAGES_PER_ITER,
+    ));
+
+    let executor_count = 1;
+    print_latency_summary("tls_write/single_stream_encrypt/1_executor", || {
+        run_pool_single_encrypt(THROUGHPUT_MESSAGES_PER_ITER, executor_count)
+    });
+    group.bench_function("1_executor", |b| {
+        b.iter_custom(|iters| {
+            run_pool_single_encrypt(iters * THROUGHPUT_MESSAGES_PER_ITER, executor_count)
+        });
+    });
+
+    group.finish();
+}
+
+fn bench_direct_boxed_saturated_encrypt(c: &mut Criterion) {
+    let mut group = c.benchmark_group("openssl_direct_boxed/saturated_encrypt_scaling");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(4));
+
+    for thread_count in EXECUTOR_COUNTS {
+        let bytes =
+            THROUGHPUT_BODY_LEN as u64 * SATURATED_MESSAGES_PER_EXECUTOR * thread_count as u64;
+        group.throughput(Throughput::Bytes(bytes));
+        let label =
+            format!("openssl_direct_boxed/saturated_encrypt_scaling/{thread_count}_threads");
+        print_latency_summary(&label, || {
+            run_direct_boxed_saturated_encrypt(1, thread_count)
+        });
+        group.bench_with_input(
+            BenchmarkId::new("threads", thread_count),
+            &thread_count,
+            |b, &thread_count| {
+                b.iter_custom(|iters| run_direct_boxed_saturated_encrypt(iters, thread_count));
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_rpc_write,
     bench_throughput_scaling,
     bench_write_throughput_scaling,
     bench_batched_write_throughput_scaling,
-    bench_encrypt_throughput_scaling
+    bench_encrypt_throughput_scaling,
+    bench_saturated_encrypt_throughput_scaling,
+    bench_pool_single_encrypt,
+    bench_direct_boxed_saturated_encrypt
 );
 criterion_main!(benches);
