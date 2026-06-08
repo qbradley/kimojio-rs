@@ -1,5 +1,3 @@
-- Add polling mode (BusyPoll::Never, Always, or suspend after some idle time)
 - panic behavior on nested threads (should they immediately propagate up?)
 - cancelation behavior (cancel I/O when scope exits)
-- Make sure TLS implements Waitable
 - Make sure TLS can support registered buffers and fds

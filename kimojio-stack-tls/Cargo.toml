@@ -15,3 +15,10 @@ kimojio-tls.workspace = true
 openssl.workspace = true
 rustix = { workspace = true, features = ["net"] }
 rustix-uring.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "tls_read_write"
+harness = false
