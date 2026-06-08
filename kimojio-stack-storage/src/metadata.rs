@@ -1,32 +1,66 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Typed metadata helpers.
+//!
+//! Storage services expose metadata as strings. [`TypedMetadata`] parses and
+//! writes the metadata keys used by this crate while preserving the lower-level
+//! [`MetadataMap`] representation for request builders.
+//!
+//! ```
+//! use kimojio_stack_storage::{TypedMetadata, UPLOAD_LSN};
+//!
+//! let typed = TypedMetadata { upload_lsn: Some(42), ..TypedMetadata::default() };
+//! let metadata = typed.to_metadata_map();
+//! assert_eq!(metadata.get(UPLOAD_LSN), Some("42"));
+//! ```
+
 use crate::{Error, ErrorKind, MetadataMap};
 
+/// Highest durable log sequence number metadata key.
 pub const HIGH_WATER_LSN: &str = "high-water-lsn";
+/// Oldest replay log sequence number metadata key.
 pub const OLDEST_REPLAY_LSN: &str = "oldest-replay-lsn";
+/// Relation size metadata key.
 pub const RELATION_SIZE: &str = "relation-size";
+/// Deletion marker metadata key.
 pub const DELETION_MARKER: &str = "deletion-marker";
+/// Truncation log sequence number metadata key.
 pub const TRUNCATION_LSN: &str = "truncation-lsn";
+/// Shard config metadata key.
 pub const SHARD_CONFIG: &str = "shard-config";
+/// Upload log sequence number metadata key.
 pub const UPLOAD_LSN: &str = "upload-lsn";
+/// Backup time metadata key.
 pub const BACKUP_TIME: &str = "backup-time";
+/// Ownership epoch metadata key.
 pub const OWNERSHIP_EPOCH: &str = "ownership-epoch";
 
+/// Parsed metadata fields used by storage helpers.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TypedMetadata {
+    /// Highest durable log sequence number.
     pub high_water_lsn: Option<u64>,
+    /// Oldest replay log sequence number.
     pub oldest_replay_lsn: Option<u64>,
+    /// Relation size in bytes.
     pub relation_size: Option<u64>,
+    /// Whether this object marks deletion.
     pub deletion_marker: bool,
+    /// Truncation log sequence number.
     pub truncation_lsn: Option<u64>,
+    /// Shard configuration payload.
     pub shard_config: Option<String>,
+    /// Upload log sequence number.
     pub upload_lsn: Option<u64>,
+    /// Backup timestamp or marker.
     pub backup_time: Option<String>,
+    /// Ownership epoch.
     pub ownership_epoch: Option<u64>,
 }
 
 impl TypedMetadata {
+    /// Parses typed metadata from a normalized metadata map.
     pub fn parse(metadata: &MetadataMap) -> Result<Self, Error> {
         Ok(Self {
             high_water_lsn: parse_optional_u64(metadata, HIGH_WATER_LSN)?,
@@ -41,6 +75,7 @@ impl TypedMetadata {
         })
     }
 
+    /// Writes present typed fields into a metadata map.
     pub fn write_to(&self, metadata: &mut MetadataMap) {
         insert_optional_u64(metadata, HIGH_WATER_LSN, self.high_water_lsn);
         insert_optional_u64(metadata, OLDEST_REPLAY_LSN, self.oldest_replay_lsn);
@@ -59,6 +94,7 @@ impl TypedMetadata {
         insert_optional_u64(metadata, OWNERSHIP_EPOCH, self.ownership_epoch);
     }
 
+    /// Creates a new metadata map containing the present typed fields.
     pub fn to_metadata_map(&self) -> MetadataMap {
         let mut metadata = MetadataMap::new();
         self.write_to(&mut metadata);

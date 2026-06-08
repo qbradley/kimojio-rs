@@ -16,9 +16,12 @@ use super::{
     ConnectionState, Frame, FrameFlags, FramePayload, FrameType, Header, Settings, StreamId, codec,
 };
 
+/// Buffered HTTP/2 response plus terminal trailers.
 #[derive(Debug)]
 pub struct ResponseWithTrailers {
+    /// Response head and buffered body.
     pub response: Response<Body>,
+    /// Terminal response trailers.
     pub trailers: Trailers,
 }
 
@@ -93,6 +96,20 @@ impl PendingResponse {
     }
 }
 
+/// Low-level HTTP/2 client connection over a stack transport.
+///
+/// A connection can have multiple outstanding streams when callers use
+/// [`send_request`](Self::send_request) and later read the matching response by
+/// stream ID. The implementation processes frames for all streams while waiting
+/// for any one stream, keeping flow control and peer settings current.
+///
+/// # Incremental response streaming
+///
+/// Use [`read_response_headers`](Self::read_response_headers) followed by
+/// [`read_response_event`](Self::read_response_event) for protocols such as gRPC
+/// where response DATA frames carry independently framed messages. Call
+/// [`cancel_response_stream`](Self::cancel_response_stream) when abandoning a
+/// stream before terminal trailers are received.
 pub struct ClientConnection {
     transport: StackTransport,
     config: HttpConfig,
@@ -106,11 +123,17 @@ pub struct ClientConnection {
 }
 
 impl ClientConnection {
+    /// Creates a client connection with settings derived from [`HttpConfig`].
     pub fn new(transport: StackTransport, config: HttpConfig) -> Self {
         let settings = codec::settings_from_config(config);
         Self::new_with_settings(transport, config, settings)
     }
 
+    /// Creates a client connection with explicit local HTTP/2 settings.
+    ///
+    /// This is mainly useful for tests and callers that need to tune advertised
+    /// flow-control or frame-size values independently from the broader
+    /// [`HttpConfig`].
     pub fn new_with_settings(
         transport: StackTransport,
         config: HttpConfig,
@@ -129,10 +152,20 @@ impl ClientConnection {
         }
     }
 
+    /// Sets an I/O deadline on the underlying transport.
+    ///
+    /// The deadline applies to subsequent stack transport reads and writes until
+    /// replaced. The previous deadline is returned so request-specific timeout
+    /// wrappers can restore it.
     pub fn set_io_deadline(&mut self, deadline: Option<Instant>) -> Option<Instant> {
         self.transport.set_io_deadline(deadline)
     }
 
+    /// Sends one request and buffers the complete response body.
+    ///
+    /// This is the simplest path for small responses. For large responses or
+    /// response-framed protocols, use [`send_request`](Self::send_request) and an
+    /// incremental read method.
     pub fn send(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -143,6 +176,11 @@ impl ClientConnection {
             .map(|response| response.response)
     }
 
+    /// Sends request headers and body, returning the allocated stream ID.
+    ///
+    /// The connection preface and initial SETTINGS are written lazily on the
+    /// first call. The returned [`StreamId`] must later be passed to a response
+    /// reader or cancellation method.
     pub fn send_request(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -178,6 +216,7 @@ impl ClientConnection {
         Ok(stream_id)
     }
 
+    /// Reads a buffered response body for a previously sent stream.
     pub fn read_response(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -187,6 +226,10 @@ impl ClientConnection {
             .map(|response| response.response)
     }
 
+    /// Reads a buffered response plus terminal trailers for a stream.
+    ///
+    /// While waiting for `stream_id`, frames for other streams are processed and
+    /// queued so those streams can be read later.
     pub fn read_response_with_trailers(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -221,6 +264,10 @@ impl ClientConnection {
         }
     }
 
+    /// Reads a response and delivers DATA payloads to `on_chunk`.
+    ///
+    /// The returned response has an empty body. DATA flow-control credit is
+    /// returned as chunks are delivered.
     pub fn read_response_with_body_chunks<F>(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -233,6 +280,11 @@ impl ClientConnection {
         self.read_response_with_body_chunks_after_headers(cx, stream_id, |_| Ok(true), on_chunk)
     }
 
+    /// Reads headers first, then optionally streams DATA payloads.
+    ///
+    /// `on_headers` receives the response head with an empty body. Return `true`
+    /// to receive DATA chunks through `on_chunk`, or `false` to drain the body
+    /// without delivering chunks.
     pub fn read_response_with_body_chunks_after_headers<H, F>(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -373,6 +425,7 @@ impl ClientConnection {
         Ok(())
     }
 
+    /// Closes the underlying transport.
     pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
         self.transport.close(cx)
     }

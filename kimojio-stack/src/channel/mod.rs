@@ -1,8 +1,26 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Bounded and unbounded channels for stackful coroutines, plus cross-thread
-//! channels for stackful runtime, OS-thread, and Tokio-compatible interop.
+//! Bounded and unbounded channels for stackful coroutines.
+//!
+//! The `bounded` and `unbounded` modules provide multi-producer/multi-consumer
+//! channels that park stackful coroutines when a send or receive cannot make
+//! progress. They do not block the OS thread and they do not start helper
+//! workers. The `cross_thread` module is the explicit boundary for communicating
+//! with other runtimes, OS threads, or Tokio-compatible tasks.
+//!
+//! ```
+//! use kimojio_stack::{Runtime, channel};
+//!
+//! let mut runtime = Runtime::new();
+//! runtime.block_on(|cx| {
+//!     cx.scope(|scope| {
+//!         let (tx, rx) = channel::bounded(1);
+//!         scope.spawn(move |cx| tx.send(cx, "hello").unwrap());
+//!         assert_eq!(rx.recv(cx).unwrap(), "hello");
+//!     });
+//! });
+//! ```
 
 use std::fmt;
 

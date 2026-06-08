@@ -1,6 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! gRPC message frame encoding and decoding.
+//!
+//! These helpers encode the five-byte gRPC message header plus uncompressed
+//! payload bytes. Compression is intentionally unsupported; a nonzero
+//! compression flag returns [`Error::UnsupportedCompression`].
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use prost::Message;
 
@@ -65,6 +71,7 @@ where
     M::decode(&frame[HEADER_LEN..]).map_err(Error::from)
 }
 
+/// Encodes already-serialized message bytes into one gRPC frame.
 pub fn encode_bytes(bytes: &[u8], max_len: usize) -> Result<Bytes, Error> {
     if bytes.len() > max_len {
         return Err(Error::SizeLimit {
@@ -85,6 +92,7 @@ pub fn encode_bytes(bytes: &[u8], max_len: usize) -> Result<Bytes, Error> {
     Ok(frame.freeze())
 }
 
+/// Decodes one gRPC frame and returns the serialized message bytes.
 pub fn decode_bytes(frame: &[u8], max_len: usize) -> Result<Bytes, Error> {
     if frame.len() < HEADER_LEN {
         return Err(Error::Protocol("gRPC frame header is incomplete"));

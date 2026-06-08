@@ -1,6 +1,22 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! HTTP/2 connection, stream, frame, and settings primitives.
+//!
+//! The public client and server connection types expose a low-level, stackful
+//! HTTP/2 surface. Unary request/response helpers buffer bodies into
+//! [`Body`](crate::Body), while streaming helpers expose response headers,
+//! individual DATA chunks, and terminal trailers so higher-level protocols such
+//! as gRPC can avoid whole-body buffering.
+//!
+//! ```
+//! use kimojio_stack_http::h2::{Settings, Setting, SettingId};
+//!
+//! let mut settings = Settings::default();
+//! settings.apply(Setting::new(SettingId::MaxConcurrentStreams, 32)).unwrap();
+//! assert_eq!(settings.max_concurrent_streams, 32);
+//! ```
+
 pub mod client;
 mod codec;
 pub mod connection;
@@ -27,9 +43,13 @@ pub const CLIENT_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 /// HTTP/2 connection settings used by the stackful connection core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct H2Config {
+    /// Initial per-stream inbound flow-control window.
     pub initial_stream_window: u32,
+    /// Initial connection-level inbound flow-control window.
     pub initial_connection_window: u32,
+    /// Maximum frame payload size to advertise and accept.
     pub max_frame_size: u32,
+    /// Maximum concurrent streams to advertise to the peer.
     pub max_concurrent_streams: u32,
 }
 
@@ -44,6 +64,10 @@ impl Default for H2Config {
     }
 }
 
+/// Validates the exact HTTP/2 client connection preface.
+///
+/// Servers call this while initializing an HTTP/2 connection. It is exposed for
+/// tests and custom handshake code that needs the same protocol check.
 pub fn validate_client_preface(bytes: &[u8]) -> Result<(), crate::Error> {
     if bytes == CLIENT_PREFACE {
         Ok(())

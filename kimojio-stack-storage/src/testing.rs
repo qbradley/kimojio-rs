@@ -1,6 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! In-memory test doubles for storage operation tests.
+//!
+//! [`FakeService`] implements [`Transport`] and records request
+//! parts while returning queued responses or errors. It is intended for tests of
+//! retry, request construction, and streaming sinks without starting an external
+//! service.
+
 use std::collections::VecDeque;
 
 use bytes::Bytes;
@@ -10,14 +17,19 @@ use crate::{
     RequestParts, ResponseParts, RetryObservation, Transport,
 };
 
+/// Queued fake service response.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FakeResponse {
+    /// HTTP status code to report.
     pub status: u16,
+    /// Response metadata.
     pub metadata: MetadataMap,
+    /// Success body chunks delivered to the sink.
     pub body: Vec<Bytes>,
 }
 
 impl FakeResponse {
+    /// Creates a 200 response with a single body chunk.
     pub fn ok(body: impl Into<Bytes>) -> Self {
         Self {
             status: 200,
@@ -27,6 +39,7 @@ impl FakeResponse {
     }
 }
 
+/// Deterministic fake transport for unit tests.
 #[derive(Debug, Default)]
 pub struct FakeService {
     responses: VecDeque<Result<FakeResponse, ErrorKind>>,
@@ -35,26 +48,32 @@ pub struct FakeService {
 }
 
 impl FakeService {
+    /// Creates an empty fake service.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Queues a successful response.
     pub fn push_response(&mut self, response: FakeResponse) {
         self.responses.push_back(Ok(response));
     }
 
+    /// Queues an error response with the supplied kind.
     pub fn push_error(&mut self, kind: ErrorKind) {
         self.responses.push_back(Err(kind));
     }
 
+    /// Records a retry observation for assertions.
     pub fn record_retry(&mut self, observation: RetryObservation) {
         self.retry_observations.push(observation);
     }
 
+    /// Returns recorded requests.
     pub fn requests(&self) -> &[RequestParts] {
         &self.requests
     }
 
+    /// Returns recorded retry observations.
     pub fn retry_observations(&self) -> &[RetryObservation] {
         &self.retry_observations
     }
@@ -118,13 +137,17 @@ fn fake_attempt_error(kind: ErrorKind, operation: OperationClass) -> AttemptErro
     }
 }
 
+/// Deterministic emulator endpoint descriptor used by compatibility tests.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeterministicEmulator {
+    /// Emulator account name.
     pub account: String,
+    /// Whether to produce an HTTPS endpoint.
     pub secure: bool,
 }
 
 impl DeterministicEmulator {
+    /// Returns a stable local endpoint string.
     pub fn endpoint(&self) -> String {
         let scheme = if self.secure { "https" } else { "http" };
         format!("{scheme}://127.0.0.1/{}", self.account)

@@ -1,14 +1,24 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Ownership lease and epoch helpers.
+//!
+//! Ownership combines service leases with caller-maintained epoch metadata.
+//! Request builders produce lease acquire/renew/change/break calls and metadata
+//! updates; [`OwnershipWriteGuard`] classifies failed writes so callers know when
+//! to retry, reacquire, or stop because their epoch is stale.
+
 use crate::{
     Error, ErrorKind, LeaseContext, MetadataMap, ObjectRef, OperationClass, RequestParts,
     metadata::{OWNERSHIP_EPOCH, TypedMetadata},
 };
 
+/// Lease duration requested from the service.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LeaseDuration {
+    /// Infinite lease duration.
     Infinite,
+    /// Finite lease duration in seconds.
     Seconds(u16),
 }
 
@@ -21,14 +31,20 @@ impl LeaseDuration {
     }
 }
 
+/// Decision after an ownership-protected write fails.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OwnershipWriteDecision {
+    /// No recovery is needed; proceed.
     Proceed,
+    /// Caller can retry according to its own policy.
     CallerRetry,
+    /// Caller should reacquire ownership before retrying.
     ReacquireAndRetry,
+    /// Failure is terminal.
     Terminal(Error),
 }
 
+/// Validates writes against the caller's expected ownership lease and epoch.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OwnershipWriteGuard {
     expected: LeaseContext,
@@ -36,6 +52,7 @@ pub struct OwnershipWriteGuard {
 }
 
 impl OwnershipWriteGuard {
+    /// Creates a guard for an expected lease context.
     pub fn new(expected: LeaseContext) -> Self {
         Self {
             expected,
@@ -43,19 +60,26 @@ impl OwnershipWriteGuard {
         }
     }
 
+    /// Allows ownership reacquire classification on lease/condition failures.
     pub fn with_reacquire(mut self, allow_reacquire: bool) -> Self {
         self.allow_reacquire = allow_reacquire;
         self
     }
 
+    /// Returns the expected lease context.
     pub fn expected(&self) -> &LeaseContext {
         &self.expected
     }
 
+    /// Validates response/object metadata against the expected ownership epoch.
     pub fn validate_metadata(&self, metadata: &MetadataMap) -> Result<(), Error> {
         validate_ownership_epoch(metadata, self.expected.epoch)
     }
 
+    /// Classifies a failed ownership-protected write.
+    ///
+    /// If observed metadata contains a newer ownership epoch, the result is
+    /// terminal even when reacquire is allowed.
     pub fn classify_failure(
         &self,
         error: &Error,
@@ -87,6 +111,7 @@ impl OwnershipWriteGuard {
     }
 }
 
+/// Builds a lease-acquire request.
 pub fn acquire_ownership_request(
     object: &ObjectRef,
     proposed_lease_id: Option<&str>,
@@ -104,12 +129,14 @@ pub fn acquire_ownership_request(
     request
 }
 
+/// Builds a lease-renew request.
 pub fn renew_ownership_request(object: &ObjectRef, lease: &LeaseContext) -> RequestParts {
     let mut request = lease_request(object, "renew");
     apply_lease(&mut request, lease);
     request
 }
 
+/// Builds a lease-change request.
 pub fn change_ownership_request(
     object: &ObjectRef,
     current: &LeaseContext,
@@ -123,6 +150,7 @@ pub fn change_ownership_request(
     request
 }
 
+/// Builds a metadata update request that persists the caller's ownership epoch.
 pub fn set_ownership_epoch_request(
     object: &ObjectRef,
     lease: &LeaseContext,
@@ -145,6 +173,7 @@ pub fn set_ownership_epoch_request(
     request
 }
 
+/// Builds a lease-break request.
 pub fn break_ownership_request(
     object: &ObjectRef,
     break_period_seconds: Option<u16>,
@@ -158,6 +187,7 @@ pub fn break_ownership_request(
     request
 }
 
+/// Validates that metadata contains exactly the expected ownership epoch.
 pub fn validate_ownership_epoch(metadata: &MetadataMap, expected_epoch: u64) -> Result<(), Error> {
     let typed = TypedMetadata::parse(metadata)?;
     match typed.ownership_epoch {
@@ -179,6 +209,7 @@ pub fn validate_ownership_epoch(metadata: &MetadataMap, expected_epoch: u64) -> 
     }
 }
 
+/// Applies the lease ID header to a request.
 pub fn apply_lease(request: &mut RequestParts, lease: &LeaseContext) {
     request
         .metadata

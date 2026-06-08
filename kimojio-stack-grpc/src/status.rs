@@ -13,8 +13,11 @@ use kimojio_stack_http::Trailers;
 
 use crate::{Error, Metadata};
 
+/// Trailer name carrying the numeric gRPC status code.
 pub const GRPC_STATUS: HeaderName = HeaderName::from_static("grpc-status");
+/// Trailer name carrying the percent-encoded gRPC status message.
 pub const GRPC_MESSAGE: HeaderName = HeaderName::from_static("grpc-message");
+/// Trailer name carrying base64-encoded rich status details.
 pub const GRPC_STATUS_DETAILS_BIN: HeaderName = HeaderName::from_static("grpc-status-details-bin");
 
 /// gRPC status code values.
@@ -41,10 +44,12 @@ pub enum StatusCode {
 }
 
 impl StatusCode {
+    /// Returns the wire numeric gRPC status code.
     pub const fn as_grpc_code(self) -> u8 {
         self as u8
     }
 
+    /// Converts a wire numeric gRPC status code into a status enum.
     pub const fn from_grpc_code(code: u8) -> Option<Self> {
         match code {
             0 => Some(Self::Ok),
@@ -69,7 +74,11 @@ impl StatusCode {
     }
 }
 
-/// gRPC status returned by unary calls and handlers.
+/// gRPC status returned by calls, streams, and handlers.
+///
+/// Status values are serialized into terminal trailers. `message` is
+/// percent-encoded according to gRPC rules, `details` is written to
+/// `grpc-status-details-bin`, and custom metadata is merged into the trailer map.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Status {
     code: StatusCode,
@@ -79,6 +88,7 @@ pub struct Status {
 }
 
 impl Status {
+    /// Creates a status with no details or custom metadata.
     pub fn new(code: StatusCode, message: impl Into<String>) -> Self {
         Self {
             code,
@@ -88,14 +98,17 @@ impl Status {
         }
     }
 
+    /// Creates a status with binary rich details.
     pub fn with_details(code: StatusCode, message: impl Into<String>, details: Bytes) -> Self {
         Self::with_details_and_metadata(code, message, details, Metadata::new())
     }
 
+    /// Creates a status with custom trailing metadata.
     pub fn with_metadata(code: StatusCode, message: impl Into<String>, metadata: Metadata) -> Self {
         Self::with_details_and_metadata(code, message, Bytes::new(), metadata)
     }
 
+    /// Creates a status with details and custom trailing metadata.
     pub fn with_details_and_metadata(
         code: StatusCode,
         message: impl Into<String>,
@@ -110,30 +123,37 @@ impl Status {
         }
     }
 
+    /// Creates an OK status with an empty message.
     pub fn ok() -> Self {
         Self::new(StatusCode::Ok, "")
     }
 
+    /// Returns the canonical gRPC status code.
     pub fn code(&self) -> StatusCode {
         self.code
     }
 
+    /// Returns the decoded status message.
     pub fn message(&self) -> &str {
         &self.message
     }
 
+    /// Returns binary rich status details.
     pub fn details(&self) -> &[u8] {
         &self.details
     }
 
+    /// Returns custom trailing metadata.
     pub fn metadata(&self) -> &Metadata {
         &self.metadata
     }
 
+    /// Returns mutable custom trailing metadata.
     pub fn metadata_mut(&mut self) -> &mut Metadata {
         &mut self.metadata
     }
 
+    /// Serializes the status into terminal gRPC trailers.
     pub fn to_trailers(&self) -> Result<Trailers, Error> {
         let mut trailers = Trailers::new();
         for (name, value) in self.metadata.as_ref().clone().into_headers() {
@@ -165,6 +185,10 @@ impl Status {
         Ok(trailers)
     }
 
+    /// Parses status information from terminal gRPC trailers.
+    ///
+    /// Custom metadata remains available through [`metadata`](Self::metadata);
+    /// reserved gRPC status fields are not included in that metadata view.
     pub fn from_trailers(trailers: &Trailers) -> Result<Self, Error> {
         let code = trailers
             .get(&GRPC_STATUS)

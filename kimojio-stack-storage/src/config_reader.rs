@@ -1,6 +1,22 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! ETag-aware JSON configuration reads.
+//!
+//! [`ConfigReader`] reads a JSON object from storage and updates caller-owned
+//! [`ConfigState`] with the latest ETag. Subsequent reads send `if-none-match`
+//! and can return [`ConfigReadOutcome::Unchanged`] without requiring callers to
+//! compare response metadata manually.
+//!
+//! ```
+//! use kimojio_stack_storage::{ConfigState, parse_config_json};
+//!
+//! let value = parse_config_json(br#"{"version":1}"#).unwrap();
+//! assert_eq!(value["version"], 1);
+//! let state = ConfigState::default();
+//! assert!(state.etag.is_none());
+//! ```
+
 use bytes::BytesMut;
 use serde_json::Value;
 
@@ -9,22 +25,30 @@ use crate::{
     RequestParts, Transport,
 };
 
+/// Outcome of one config read.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConfigReadOutcome {
+    /// New JSON value was fetched and the ETag changed or was unknown.
     Updated { value: Value, etag: String },
+    /// Caller already has the current value for this ETag.
     Unchanged { etag: String },
+    /// Config object was not found.
     Missing,
 }
 
+/// Caller-owned config cache state.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ConfigState {
+    /// Last observed ETag, if any.
     pub etag: Option<String>,
 }
 
+/// Client helper for ETag-aware config reads.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ConfigReader;
 
 impl ConfigReader {
+    /// Reads the config object, using `state.etag` as an `if-none-match` condition.
     pub fn read<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -69,6 +93,7 @@ impl ConfigReader {
     }
 }
 
+/// Builds a config read request with an optional known ETag.
 pub fn config_request(object: &ObjectRef, known_etag: Option<&str>) -> RequestParts {
     let mut request = RequestParts::new(
         OperationClass::Config,
@@ -81,6 +106,7 @@ pub fn config_request(object: &ObjectRef, known_etag: Option<&str>) -> RequestPa
     request
 }
 
+/// Parses config bytes and requires a JSON object root.
 pub fn parse_config_json(bytes: &[u8]) -> Result<Value, Error> {
     let value = serde_json::from_slice::<Value>(bytes)
         .map_err(|error| Error::new(ErrorKind::Corruption, error.to_string()))?;

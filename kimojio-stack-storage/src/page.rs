@@ -1,6 +1,20 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Page-object helpers for aligned random I/O.
+//!
+//! Page writes and clears require 512-byte alignment. Ambiguous write failures
+//! are not directly retried by [`RetryPolicy`](crate::RetryPolicy); use
+//! [`classify_page_write_failure`] or [`classify_sequence_number_failure`] to
+//! decide whether to refresh properties before attempting recovery.
+//!
+//! ```
+//! use kimojio_stack_storage::{PageRange, PAGE_ALIGNMENT};
+//!
+//! let range = PageRange::aligned_len(0, PAGE_ALIGNMENT).unwrap();
+//! assert_eq!(range.header_value(), "bytes=0-511");
+//! ```
+
 use bytes::Bytes;
 
 use crate::{
@@ -9,20 +23,25 @@ use crate::{
     ownership::apply_lease,
 };
 
+/// Required page-object range and length alignment in bytes.
 pub const PAGE_ALIGNMENT: u64 = 512;
 
+/// Inclusive byte range for page operations.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct PageRange {
     start: u64,
     end: u64,
 }
 
+/// Optional conditions for page writes.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PageWriteConditions {
+    /// Require the object sequence number to equal this value.
     pub sequence_number_eq: Option<u64>,
 }
 
 impl PageWriteConditions {
+    /// Adds an exact sequence-number precondition.
     pub fn with_sequence_number_eq(mut self, sequence_number: u64) -> Self {
         self.sequence_number_eq = Some(sequence_number);
         self
@@ -30,6 +49,7 @@ impl PageWriteConditions {
 }
 
 impl PageRange {
+    /// Creates an inclusive byte range without enforcing page alignment.
     pub fn new(start: u64, end: u64) -> Result<Self, Error> {
         if end < start {
             return Err(Error::new(
@@ -40,6 +60,7 @@ impl PageRange {
         Ok(Self { start, end })
     }
 
+    /// Creates an aligned inclusive range from `start` and byte `len`.
     pub fn aligned_len(start: u64, len: u64) -> Result<Self, Error> {
         if len == 0 {
             return Err(Error::new(ErrorKind::Range, "page range length is zero"));
@@ -56,18 +77,22 @@ impl PageRange {
         Self::new(start, end)
     }
 
+    /// Returns the inclusive start offset.
     pub fn start(self) -> u64 {
         self.start
     }
 
+    /// Returns the inclusive end offset.
     pub fn end(self) -> u64 {
         self.end
     }
 
+    /// Returns the saturating inclusive length.
     pub fn len(self) -> u64 {
         self.end.saturating_sub(self.start).saturating_add(1)
     }
 
+    /// Returns the checked inclusive length.
     pub fn checked_len(self) -> Result<u64, Error> {
         self.end
             .checked_sub(self.start)
@@ -75,31 +100,43 @@ impl PageRange {
             .ok_or_else(|| Error::new(ErrorKind::Range, "page range length overflows u64"))
     }
 
+    /// Page ranges are never empty because `end >= start`.
     pub fn is_empty(self) -> bool {
         false
     }
 
+    /// Formats the range as an HTTP `bytes=start-end` header value.
     pub fn header_value(self) -> String {
         format!("bytes={}-{}", self.start, self.end)
     }
 }
 
+/// Sequence-number update action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SequenceNumberAction {
+    /// Set the service sequence number to the larger of current and supplied values.
     Max,
+    /// Replace the service sequence number.
     Update(u64),
+    /// Increment the service sequence number.
     Increment,
 }
 
+/// Recommended recovery path after sequence-number operations fail.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SequenceNumberRecovery {
+    /// Refresh properties and reevaluate the caller's expected sequence number.
     RefreshProperties,
+    /// Failure is terminal for the supplied error kind.
     Terminal(ErrorKind),
 }
 
+/// Recommended recovery path after page writes fail.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PageWriteRecovery {
+    /// Refresh properties before deciding whether another write is safe.
     RefreshPropertiesBeforeRetry,
+    /// Failure is terminal for the supplied error kind.
     Terminal(ErrorKind),
 }
 
@@ -113,6 +150,7 @@ impl SequenceNumberAction {
     }
 }
 
+/// Classifies a failed sequence-number operation for recovery handling.
 pub fn classify_sequence_number_failure(error: &Error) -> SequenceNumberRecovery {
     if error.kind() == ErrorKind::SequenceNumber {
         SequenceNumberRecovery::RefreshProperties
@@ -121,6 +159,7 @@ pub fn classify_sequence_number_failure(error: &Error) -> SequenceNumberRecovery
     }
 }
 
+/// Classifies a failed page write for recovery handling.
 pub fn classify_page_write_failure(error: &Error) -> PageWriteRecovery {
     match error.kind() {
         ErrorKind::SequenceNumber
@@ -131,10 +170,12 @@ pub fn classify_page_write_failure(error: &Error) -> PageWriteRecovery {
     }
 }
 
+/// Client helper for page-object operations.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PageClient;
 
 impl PageClient {
+    /// Creates a page object with aligned total length.
     pub fn create<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -149,6 +190,7 @@ impl PageClient {
         transport.execute(cx, &request)
     }
 
+    /// Uploads one aligned page range.
     pub fn upload_range<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -163,6 +205,7 @@ impl PageClient {
         transport.execute(cx, &request)
     }
 
+    /// Clears one aligned page range.
     pub fn clear_range<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -176,6 +219,7 @@ impl PageClient {
         transport.execute(cx, &request)
     }
 
+    /// Updates the service sequence number.
     pub fn update_sequence_number<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -188,6 +232,7 @@ impl PageClient {
         transport.execute(cx, &request)
     }
 
+    /// Reads object properties and parses page-object metadata.
     pub fn get_properties<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -200,6 +245,7 @@ impl PageClient {
             .map_err(|error| attempt_error(OperationClass::Metadata, error))
     }
 
+    /// Lists written page ranges, optionally constrained to a byte range.
     pub fn list_written_ranges<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -215,6 +261,10 @@ impl PageClient {
             .map_err(|error| attempt_error(OperationClass::PageRead, error))
     }
 
+    /// Reads one aligned page range, delivering body chunks to `on_chunk`.
+    ///
+    /// If the transport fails after bytes have been delivered, the returned error
+    /// is converted to [`ErrorKind::Incomplete`].
     pub fn read_range<T, F>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -257,6 +307,7 @@ impl PageClient {
     }
 }
 
+/// Builds a request to create a page object.
 pub fn create_page_request(
     object: &ObjectRef,
     content_len: u64,
@@ -283,6 +334,7 @@ pub fn create_page_request(
     Ok(request)
 }
 
+/// Builds a request to upload an aligned page range.
 pub fn upload_range_request(
     object: &ObjectRef,
     range: PageRange,
@@ -292,6 +344,7 @@ pub fn upload_range_request(
     upload_range_request_with_conditions(object, range, body, lease, PageWriteConditions::default())
 }
 
+/// Builds a request to upload an aligned page range with preconditions.
 pub fn upload_range_request_with_conditions(
     object: &ObjectRef,
     range: PageRange,
@@ -338,6 +391,7 @@ pub fn upload_range_request_with_conditions(
     Ok(request)
 }
 
+/// Builds a request to clear an aligned page range.
 pub fn clear_range_request(
     object: &ObjectRef,
     range: PageRange,
@@ -358,10 +412,12 @@ pub fn clear_range_request(
     Ok(request)
 }
 
+/// Builds a request to fetch object properties.
 pub fn properties_request(object: &ObjectRef) -> RequestParts {
     RequestParts::new(OperationClass::Metadata, "HEAD", object_uri(object))
 }
 
+/// Builds a request to list written page ranges.
 pub fn written_ranges_request(object: &ObjectRef, range: Option<PageRange>) -> RequestParts {
     let mut request = RequestParts::new(
         OperationClass::PageRead,
@@ -374,6 +430,7 @@ pub fn written_ranges_request(object: &ObjectRef, range: Option<PageRange>) -> R
     request
 }
 
+/// Builds a request to update the page sequence number.
 pub fn sequence_number_request(
     object: &ObjectRef,
     action: SequenceNumberAction,
@@ -399,12 +456,14 @@ pub fn sequence_number_request(
     request
 }
 
+/// Builds a request to read one page range.
 pub fn read_range_request(object: &ObjectRef, range: PageRange) -> RequestParts {
     let mut request = RequestParts::new(OperationClass::PageRead, "GET", object_uri(object));
     request.metadata.insert("x-ms-range", range.header_value());
     request
 }
 
+/// Parses object properties from response metadata.
 pub fn parse_object_properties(metadata: &MetadataMap) -> Result<ObjectProperties, Error> {
     let content_len = parse_u64_header(metadata, "content-length")?.unwrap_or(0);
     let sequence_number = parse_u64_header(metadata, "x-ms-blob-sequence-number")?;
@@ -423,6 +482,7 @@ pub fn parse_object_properties(metadata: &MetadataMap) -> Result<ObjectPropertie
     })
 }
 
+/// Parses and coalesces written page ranges from service XML.
 pub fn parse_written_ranges(xml: &str) -> Result<Vec<PageRange>, Error> {
     let mut ranges = Vec::new();
     let mut rest = xml;
@@ -440,6 +500,7 @@ pub fn parse_written_ranges(xml: &str) -> Result<Vec<PageRange>, Error> {
     Ok(coalesce_ranges(ranges))
 }
 
+/// Sorts ranges and merges overlapping or adjacent entries.
 pub fn coalesce_ranges(mut ranges: Vec<PageRange>) -> Vec<PageRange> {
     ranges.sort();
     let mut coalesced: Vec<PageRange> = Vec::new();

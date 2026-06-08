@@ -1,15 +1,42 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Deterministic object routing helpers.
+//!
+//! [`RoutingTable`] routes non-data objects to a primary account and data objects
+//! across optional data accounts using a stable hash of the object name. The
+//! routing result is deterministic across processes and does not require shared
+//! mutable state.
+//!
+//! ```
+//! use kimojio_stack_storage::{
+//!     AccountEndpoint, AccountId, ContainerName, ObjectKind, ObjectName, ObjectRef, RoutingTable,
+//! };
+//!
+//! let table = RoutingTable::new(AccountEndpoint::new(AccountId::new("primary"), "https://p"))
+//!     .with_data_accounts(vec![AccountEndpoint::new(AccountId::new("data0"), "https://d0")]);
+//! let routed = table.route(&ObjectRef {
+//!     account: AccountId::new("ignored"),
+//!     container: ContainerName::new("container"),
+//!     name: ObjectName::new("object"),
+//!     kind: ObjectKind::Data,
+//! });
+//! assert_eq!(routed.account.as_str(), "data0");
+//! ```
+
 use crate::{AccountId, ObjectKind, ObjectRef};
 
+/// Storage account plus service endpoint.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccountEndpoint {
+    /// Account identifier.
     pub account: AccountId,
+    /// Endpoint base URL or connection key.
     pub endpoint: String,
 }
 
 impl AccountEndpoint {
+    /// Creates an account endpoint.
     pub fn new(account: AccountId, endpoint: impl Into<String>) -> Self {
         Self {
             account,
@@ -18,13 +45,18 @@ impl AccountEndpoint {
     }
 }
 
+/// Routed object destination.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RoutedObject {
+    /// Selected account.
     pub account: AccountId,
+    /// Selected endpoint.
     pub endpoint: String,
+    /// Human-readable routed path.
     pub path: String,
 }
 
+/// Deterministic routing table.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RoutingTable {
     primary: AccountEndpoint,
@@ -32,6 +64,7 @@ pub struct RoutingTable {
 }
 
 impl RoutingTable {
+    /// Creates a routing table with a primary account.
     pub fn new(primary: AccountEndpoint) -> Self {
         Self {
             primary,
@@ -39,11 +72,13 @@ impl RoutingTable {
         }
     }
 
+    /// Adds data accounts used for [`ObjectKind::Data`] objects.
     pub fn with_data_accounts(mut self, data_accounts: Vec<AccountEndpoint>) -> Self {
         self.data_accounts = data_accounts;
         self
     }
 
+    /// Routes an object to an account/endpoint.
     pub fn route(&self, object: &ObjectRef) -> RoutedObject {
         let endpoint = match object.kind {
             ObjectKind::Data if !self.data_accounts.is_empty() => {

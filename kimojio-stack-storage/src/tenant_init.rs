@@ -1,49 +1,77 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Tenant/container initialization helpers.
+//!
+//! Initialization is designed to be explicit and idempotence-aware. The
+//! initializer creates target containers, ensures required page objects exist
+//! with expected sizes, and finally writes metadata with an initialized marker.
+//! A caller-owned [`TenantInitState`] prevents accidental repeated initialization
+//! from the same process.
+
 use crate::{
     AccountId, AttemptError, ContainerClient, ContainerName, Diagnostics, Error, ErrorKind,
     MetadataMap, ObjectRef, OperationClass, PageClient, Transport,
     properties::object_properties_request, properties::set_object_metadata_request,
 };
 
+/// Metadata key used to mark initialization completion.
 pub const INITIALIZED_MARKER: &str = "initialized";
 
+/// Container that should exist before tenant startup completes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContainerTarget {
+    /// Account that owns the container.
     pub account: AccountId,
+    /// Container name.
     pub container: ContainerName,
 }
 
+/// Page object that should exist with a specific length.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PageObjectInit {
+    /// Page object reference.
     pub object: ObjectRef,
+    /// Required object length in bytes.
     pub content_len: u64,
 }
 
+/// Complete initialization plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TenantInitPlan {
+    /// Containers to create if absent.
     pub containers: Vec<ContainerTarget>,
+    /// Metadata object that receives the initialized marker.
     pub metadata_object: ObjectRef,
+    /// Metadata to write with the initialized marker.
     pub metadata: MetadataMap,
+    /// Page objects to create or verify.
     pub page_objects: Vec<PageObjectInit>,
 }
 
+/// Caller-owned initialization state.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TenantInitState {
     initialized: bool,
 }
 
 impl TenantInitState {
+    /// Returns whether initialization completed in this state object.
     pub fn is_initialized(&self) -> bool {
         self.initialized
     }
 }
 
+/// Client helper that executes a [`TenantInitPlan`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct TenantInitializer;
 
 impl TenantInitializer {
+    /// Runs tenant initialization.
+    ///
+    /// The final initialized marker is written with an ETag condition when a
+    /// metadata object already exists, reducing the chance of racing initializers
+    /// silently overwriting each other.
     pub fn initialize<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,

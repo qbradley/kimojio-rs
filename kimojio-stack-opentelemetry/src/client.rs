@@ -9,6 +9,10 @@ use prost::Message;
 use crate::{Error, ExportLimits};
 
 /// Shared configuration for low-level OpenTelemetry export clients.
+///
+/// Both limits are checked by the client path before writing to the transport:
+/// `export_limits` constrains the encoded OTLP protobuf request, and
+/// `max_message_len` configures the underlying gRPC frame/message limit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExportClientConfig {
     /// Maximum accepted gRPC message length for requests and responses.

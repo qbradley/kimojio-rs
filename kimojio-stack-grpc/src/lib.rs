@@ -1,7 +1,71 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Unary-first gRPC foundations for `kimojio-stack`.
+//! Low-level gRPC foundations for `kimojio-stack`.
+//!
+//! The crate implements unary and server-streaming gRPC over the stackful HTTP/2
+//! client/server primitives. It does not generate service code, start a runtime,
+//! manage connection pools, or hide background tasks. Callers provide Prost
+//! message types, explicit metadata, and stackful HTTP/2 connections.
+//!
+//! # Client sketch
+//!
+//! ```no_run
+//! use kimojio_stack::RuntimeContext;
+//! use kimojio_stack_grpc::{Metadata, UnaryClient, UnaryResponse};
+//! use kimojio_stack_http::{HttpConfig, StackTransport, h2};
+//! use prost::Message;
+//!
+//! #[derive(Clone, PartialEq, Message)]
+//! struct Echo {
+//!     #[prost(string, tag = "1")]
+//!     value: String,
+//! }
+//!
+//! # fn transport() -> StackTransport { unimplemented!() }
+//! # fn example(cx: &RuntimeContext<'_>) -> Result<(), kimojio_stack_grpc::Error> {
+//! let http = h2::ClientConnection::new(transport(), HttpConfig::default());
+//! let mut client = UnaryClient::new(http, Default::default());
+//! let response: UnaryResponse<Echo> = client.call(
+//!     cx,
+//!     "/example.Echo/Unary",
+//!     Metadata::new(),
+//!     &Echo { value: "hello".into() },
+//! )?;
+//! assert_eq!(response.status.code(), kimojio_stack_grpc::StatusCode::Ok);
+//! client.close(cx)?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Server sketch
+//!
+//! ```no_run
+//! use kimojio_stack_grpc::{Status, StatusCode, UnaryReply, UnaryServer};
+//! use prost::Message;
+//!
+//! #[derive(Clone, PartialEq, Message)]
+//! struct Echo {
+//!     #[prost(string, tag = "1")]
+//!     value: String,
+//! }
+//!
+//! let mut server = UnaryServer::new(Default::default());
+//! server.add_unary::<Echo, Echo, _>("/example.Echo/Unary", |_cx, _metadata, request| {
+//!     if request.value.is_empty() {
+//!         return Err(Status::new(StatusCode::InvalidArgument, "empty value"));
+//!     }
+//!     Ok(UnaryReply::new(Echo { value: request.value }))
+//! });
+//! ```
+//!
+//! # Caveats
+//!
+//! Compression is intentionally not implemented yet. Message limits are enforced
+//! before encode/decode and oversized messages return size-limit errors. A
+//! [`client::ServerStreamingResponse`] borrows its [`UnaryClient`] mutably for
+//! the life of the stream; use separate HTTP/2 connections when concurrent
+//! streaming RPCs are needed.
 
 pub mod client;
 pub mod codec;

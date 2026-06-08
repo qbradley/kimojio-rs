@@ -1,6 +1,36 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Cooperative mutual exclusion for stackful coroutines.
+//!
+//! [`Mutex`] protects data shared by coroutines running on the same
+//! [`Runtime`](crate::Runtime). It is not an OS blocking primitive: [`Mutex::lock`]
+//! records the current coroutine as a waiter and parks it, allowing the runtime
+//! to run other stackful work until the guard is dropped.
+//!
+//! Use this when the protected data is only accessed from one stack runtime. For
+//! cross-thread sharing, put an ordinary `std::sync` primitive at the boundary or
+//! use [`channel::cross_thread`](crate::channel::cross_thread).
+//!
+//! ```
+//! use kimojio_stack::{Mutex, Runtime};
+//!
+//! let value = Mutex::new(0);
+//! let mut runtime = Runtime::new();
+//! runtime.block_on(|cx| {
+//!     cx.scope(|scope| {
+//!         scope.spawn(|cx| {
+//!             *value.lock(cx) += 1;
+//!         });
+//!         scope.spawn(|cx| {
+//!             *value.lock(cx) += 10;
+//!         });
+//!     });
+//! });
+//!
+//! assert_eq!(*value.try_lock().unwrap(), 11);
+//! ```
+
 use std::cell::{RefCell, UnsafeCell};
 use std::fmt;
 use std::ops::{Deref, DerefMut};

@@ -10,6 +10,44 @@
 //! buffer, and the runtime drains it with `RuntimeContext::write`. That keeps the
 //! OS-thread nonblocking without adding an intermediate copy between the socket
 //! and OpenSSL's encrypted buffers.
+//!
+//! # Success path
+//!
+//! Create an OpenSSL client or server context in ordinary OpenSSL code, convert it
+//! with [`TlsContext::from_openssl`], then perform the handshake from a stackful
+//! coroutine. After handshake, [`TlsStream::read`] and [`TlsStream::write`]
+//! exchange plaintext while the runtime drives encrypted socket I/O underneath.
+//!
+//! ```no_run
+//! use kimojio_stack::{RuntimeContext, OwnedFd};
+//! use kimojio_stack_tls::TlsContext;
+//! use openssl::ssl::{SslConnector, SslMethod};
+//!
+//! # fn connected_socket() -> OwnedFd { unimplemented!() }
+//! # fn example(cx: &RuntimeContext<'_>) -> Result<(), kimojio_stack::Errno> {
+//! let connector = SslConnector::builder(SslMethod::tls())
+//!     .expect("create TLS connector")
+//!     .build();
+//! let context = TlsContext::from_openssl(connector.into_context());
+//! let socket = connected_socket();
+//!
+//! let mut stream = context.client(cx, 16 * 1024, socket, "example.com")?;
+//! stream.write(cx, b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")?;
+//! let mut buf = [0_u8; 4096];
+//! let amount = stream.read(cx, &mut buf)?;
+//! # let _ = amount;
+//! stream.shutdown(cx)?;
+//! stream.close(cx)?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Caveats
+//!
+//! This crate is stack-runtime oriented rather than `std::io::Read`/`Write`
+//! oriented. All I/O methods require a [`RuntimeContext`] and may park the
+//! current coroutine. `TlsContext::from_openssl` takes ownership of the OpenSSL
+//! context; do not keep using the original `SslContext` value after conversion.
 
 use std::{ffi::c_void, mem};
 
@@ -30,7 +68,9 @@ pub struct TlsContext {
 impl TlsContext {
     /// Creates a stack TLS context from an OpenSSL crate context.
     ///
-    /// Ownership of the OpenSSL context is transferred into this type.
+    /// Ownership of the OpenSSL context is transferred into this type. Use a
+    /// client context for [`client`](Self::client) and a server/acceptor context
+    /// for [`server`](Self::server).
     pub fn from_openssl(ctx: openssl::ssl::SslContext) -> Self {
         let ssl_ctx = TlsServerContext::from_raw(ctx.as_ptr() as *mut c_void);
         mem::forget(ctx);
@@ -38,6 +78,10 @@ impl TlsContext {
     }
 
     /// Performs a server-side TLS handshake over `socket`.
+    ///
+    /// The handshake runs synchronously from the caller's perspective but parks
+    /// the current coroutine whenever OpenSSL needs socket input or output. The
+    /// returned [`TlsStream`] owns the connected socket.
     pub fn server(
         &self,
         cx: &RuntimeContext<'_>,
@@ -51,6 +95,10 @@ impl TlsContext {
     }
 
     /// Performs a client-side TLS handshake over `socket`.
+    ///
+    /// `server_name` is installed as the OpenSSL hostname before the handshake so
+    /// normal SNI and certificate-name verification policies can apply according
+    /// to the supplied OpenSSL context.
     pub fn client(
         &self,
         cx: &RuntimeContext<'_>,
@@ -70,6 +118,10 @@ impl TlsContext {
 }
 
 /// A TLS stream driven by `kimojio-stack` I/O.
+///
+/// The stream owns one connected socket until [`close`](Self::close) consumes it.
+/// `shutdown_write` only half-closes the socket write side; use
+/// [`shutdown`](Self::shutdown) first when TLS close-notify matters to the peer.
 pub struct TlsStream {
     ssl: TlsServer,
     socket: Option<OwnedFd>,
@@ -77,6 +129,9 @@ pub struct TlsStream {
 
 impl TlsStream {
     /// Creates a TLS stream from an initialized TLS handle and connected socket.
+    ///
+    /// Most callers should prefer [`TlsContext::client`] or
+    /// [`TlsContext::server`], which create the TLS handle and run the handshake.
     pub fn new(ssl: TlsServer, socket: OwnedFd) -> Self {
         Self {
             ssl,
@@ -92,6 +147,9 @@ impl TlsStream {
     }
 
     /// Gets the mutable OpenSSL `SslRef` for pre-handshake configuration.
+    ///
+    /// Use this before calling a manual handshake method when you need to set
+    /// OpenSSL options that are not represented by [`TlsContext`].
     pub fn ssl_mut(&mut self) -> &mut openssl::ssl::SslRef {
         let raw_ssl = self.ssl.get_ssl_raw();
         // SAFETY: `raw_ssl` is uniquely borrowed through `&mut self`.
@@ -99,6 +157,9 @@ impl TlsStream {
     }
 
     /// Performs the client side of the TLS handshake.
+    ///
+    /// This is useful when constructing a stream manually with [`TlsStream::new`].
+    /// `TlsContext::client` calls it automatically.
     pub fn client_side_handshake(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
         loop {
             match self.ssl.client_side_handshake() {
@@ -112,6 +173,9 @@ impl TlsStream {
     }
 
     /// Performs the server side of the TLS handshake.
+    ///
+    /// This is useful when constructing a stream manually with [`TlsStream::new`].
+    /// `TlsContext::server` calls it automatically.
     pub fn server_side_handshake(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
         loop {
             match self.ssl.server_side_handshake() {
@@ -140,6 +204,9 @@ impl TlsStream {
     }
 
     /// Fills `buf` with decrypted TLS plaintext unless EOF is reached first.
+    ///
+    /// The return value is the number of bytes copied into `buf`. It may be less
+    /// than `buf.len()` when the peer closes cleanly.
     pub fn read_exact_or_eof(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -157,6 +224,10 @@ impl TlsStream {
     }
 
     /// Writes all plaintext from `buf` and flushes encrypted bytes to the socket.
+    ///
+    /// The method loops until every plaintext byte has been accepted by OpenSSL
+    /// and all produced encrypted bytes have been written through the stack
+    /// runtime. It returns the original plaintext length on success.
     pub fn write(&mut self, cx: &RuntimeContext<'_>, mut buf: &[u8]) -> Result<usize, Errno> {
         let requested = buf.len();
         while !buf.is_empty() {
@@ -178,6 +249,10 @@ impl TlsStream {
     }
 
     /// Sends TLS close-notify if possible.
+    ///
+    /// A peer that has already closed the transport is treated as a successful
+    /// shutdown. Transport or protocol errors before close-notify completes are
+    /// returned as [`Errno`].
     pub fn shutdown(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
         loop {
             match self.ssl.shutdown() {

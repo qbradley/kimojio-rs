@@ -1,30 +1,41 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Snapshot cleanup helpers.
+//!
+//! Cleanup is intentionally caller-bounded: discover orphan snapshots with
+//! [`orphan_snapshots`], then delete at most a configured number with
+//! [`delete_orphans_bounded`] so maintenance work has visible cost.
+
 use std::collections::BTreeSet;
 
 use crate::{AttemptError, SnapshotClient, SnapshotRef, Transport};
 
+/// Set of snapshots that must not be deleted by cleanup.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SnapshotProtection {
     protected: BTreeSet<(String, String)>,
 }
 
 impl SnapshotProtection {
+    /// Creates an empty protection set.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Adds a snapshot to the protection set.
     pub fn protect(mut self, snapshot: &SnapshotRef) -> Self {
         self.protected.insert(snapshot_key(snapshot));
         self
     }
 
+    /// Returns whether a snapshot is protected.
     pub fn is_protected(&self, snapshot: &SnapshotRef) -> bool {
         self.protected.contains(&snapshot_key(snapshot))
     }
 }
 
+/// Returns listed snapshots that are not protected.
 pub fn orphan_snapshots(
     listed: impl IntoIterator<Item = SnapshotRef>,
     protection: &SnapshotProtection,
@@ -35,6 +46,9 @@ pub fn orphan_snapshots(
         .collect()
 }
 
+/// Deletes at most `max_deletes` orphan snapshots.
+///
+/// The return value is the number of delete requests that succeeded.
 pub fn delete_orphans_bounded<T: Transport>(
     cx: &kimojio_stack::RuntimeContext<'_>,
     transport: &mut T,

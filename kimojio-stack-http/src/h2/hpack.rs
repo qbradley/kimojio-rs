@@ -1,6 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Minimal HPACK encoder/decoder used by the HTTP/2 connection layer.
+//!
+//! Only the public [`Header`] pair type is exported; encoder/decoder internals
+//! stay crate-private.
+
 use bytes::Bytes;
 
 use crate::Error;
@@ -37,13 +42,17 @@ impl StaticEntry {
     }
 }
 
+/// HTTP/2 header name/value pair as raw bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
+    /// Lowercase header name or pseudo-header name.
     pub name: Bytes,
+    /// Header value bytes.
     pub value: Bytes,
 }
 
 impl Header {
+    /// Creates a header pair.
     pub fn new(name: impl Into<Bytes>, value: impl Into<Bytes>) -> Self {
         Self {
             name: name.into(),

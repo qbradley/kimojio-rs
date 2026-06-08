@@ -1,6 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Archive object helpers.
+//!
+//! Archive support stores archive-specific metadata on block objects and streams
+//! downloads through caller sinks while verifying CRC32. Compression codecs are
+//! intentionally caller-owned; this module records whether bytes are stored
+//! uncompressed or externally compressed.
+
 use bytes::Bytes;
 use std::sync::OnceLock;
 
@@ -9,19 +16,27 @@ use crate::{
     ReplayBody, Transport, block_upload_request,
 };
 
+/// Archive compression metadata.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Compression {
+    /// Stored bytes are not compressed.
     None,
+    /// Compression was applied outside this crate.
     External,
 }
 
+/// Descriptor for an archive object and its integrity metadata.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ArchiveDescriptor {
+    /// Archive object reference.
     pub object: ObjectRef,
+    /// Expected IEEE CRC32 of the stored bytes.
     pub crc32: u32,
+    /// Compression metadata advertised with the archive.
     pub compression: Compression,
 }
 
+/// Builds a block upload request with archive metadata.
 pub fn archive_upload_request(
     descriptor: &ArchiveDescriptor,
     body: ReplayBody,
@@ -47,6 +62,7 @@ pub fn archive_upload_request(
     Ok(request)
 }
 
+/// Validates bytes against an expected CRC32.
 pub fn validate_archive_crc(bytes: &[u8], expected: u32) -> Result<(), Error> {
     let actual = crc32(bytes);
     if actual == expected {
@@ -59,6 +75,9 @@ pub fn validate_archive_crc(bytes: &[u8], expected: u32) -> Result<(), Error> {
     }
 }
 
+/// Returns primary and fallback archive object names.
+///
+/// Fallback prefixes are joined with the primary name using one slash.
 pub fn archive_candidates(primary: &ObjectName, fallback_prefixes: &[String]) -> Vec<ObjectName> {
     let mut candidates = Vec::with_capacity(fallback_prefixes.len() + 1);
     candidates.push(primary.clone());
@@ -72,10 +91,16 @@ pub fn archive_candidates(primary: &ObjectName, fallback_prefixes: &[String]) ->
     candidates
 }
 
+/// Client helper for archive downloads with integrity validation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ArchiveClient;
 
 impl ArchiveClient {
+    /// Downloads an archive, streams bytes to `on_chunk`, and validates CRC32.
+    ///
+    /// A CRC mismatch is returned after the complete body has been delivered. A
+    /// mid-stream transport failure after any bytes have reached the sink remains
+    /// an incomplete-download error from the block client.
     pub fn download_validate_to_sink<T, F>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -140,6 +165,7 @@ impl Crc32 {
     }
 }
 
+/// Computes IEEE CRC32 for bytes.
 pub fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = Crc32::new();
     crc.update(bytes);

@@ -1,27 +1,42 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Container lifecycle request helpers.
+//!
+//! These helpers create, delete, and probe containers through the generic
+//! [`Transport`] abstraction. Already-existing and missing-container responses
+//! are converted into explicit outcomes so callers can write idempotent setup and
+//! cleanup code without inspecting service error codes.
+
 use crate::{
     AccountId, AttemptError, ContainerName, Diagnostics, Error, ErrorKind, OperationClass,
     RequestParts, Transport, model::percent_encode_component,
 };
 
+/// Result of creating a container.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContainerCreateOutcome {
+    /// Container was created.
     Created,
+    /// Container already existed.
     AlreadyExists,
 }
 
+/// Result of deleting a container.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContainerDeleteOutcome {
+    /// Container was deleted.
     Deleted,
+    /// Container was already absent.
     NotFound,
 }
 
+/// Client helper for container lifecycle operations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContainerClient;
 
 impl ContainerClient {
+    /// Creates a container if it does not already exist.
     pub fn create<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -38,6 +53,7 @@ impl ContainerClient {
         }
     }
 
+    /// Deletes a container if it exists.
     pub fn delete<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -54,6 +70,7 @@ impl ContainerClient {
         }
     }
 
+    /// Returns whether the container exists.
     pub fn exists<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -69,6 +86,7 @@ impl ContainerClient {
     }
 }
 
+/// Builds an idempotent create-container request.
 pub fn create_container_request(account: &AccountId, container: &ContainerName) -> RequestParts {
     let mut request = RequestParts::new(
         OperationClass::Metadata,
@@ -80,6 +98,7 @@ pub fn create_container_request(account: &AccountId, container: &ContainerName) 
     request
 }
 
+/// Builds a delete-container request.
 pub fn delete_container_request(account: &AccountId, container: &ContainerName) -> RequestParts {
     let mut request = RequestParts::new(
         OperationClass::Metadata,
@@ -90,6 +109,7 @@ pub fn delete_container_request(account: &AccountId, container: &ContainerName) 
     request
 }
 
+/// Builds a container existence probe request.
 pub fn container_exists_request(account: &AccountId, container: &ContainerName) -> RequestParts {
     RequestParts::new(
         OperationClass::Metadata,
@@ -106,6 +126,7 @@ fn container_uri(account: &AccountId, container: &ContainerName) -> String {
     )
 }
 
+/// Builds an attempt error with container-operation diagnostics.
 pub fn container_attempt_error(kind: ErrorKind) -> AttemptError {
     AttemptError {
         error: Error::new(kind, "container operation failed"),

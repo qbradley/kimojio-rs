@@ -1,15 +1,42 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Authentication descriptors and refresh hooks.
+//!
+//! This crate does not perform token acquisition or request signing itself yet.
+//! Instead, callers describe the auth mode they intend to use and can provide an
+//! [`AuthProvider`] that refreshes credentials between attempts. Debug output
+//! redacts bearer tokens, account keys, and signed-source material.
+//!
+//! ```
+//! use kimojio_stack_storage::{AuthMode, AuthRefresh, AuthRefreshContext, AuthProvider};
+//!
+//! struct StaticProvider(AuthMode);
+//! impl AuthProvider for StaticProvider {
+//!     fn auth_for_attempt(&mut self, context: AuthRefreshContext) -> AuthRefresh {
+//!         if context.force_refresh {
+//!             AuthRefresh::Refreshed(self.0.clone())
+//!         } else {
+//!             AuthRefresh::Reuse
+//!         }
+//!     }
+//! }
+//! ```
+
 use std::fmt;
 
 /// Authentication mode selected by the caller.
 #[derive(Clone, Eq, PartialEq)]
 pub enum AuthMode {
+    /// Caller will use identity-based credentials, optionally for a specific client ID.
     Identity { client_id: Option<String> },
+    /// Caller provides a bearer token.
     Bearer { token: String },
+    /// Caller provides account key material for signing.
     Key { account: String, secret: KeySecret },
+    /// Source URL/authorization used by copy-style operations.
     SignedSource(SignedSource),
+    /// Local emulator account.
     Emulator { account: String, secure: bool },
 }
 
@@ -126,18 +153,26 @@ impl SignedSource {
 /// Per-attempt auth refresh decision.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AuthRefresh {
+    /// Reuse the current auth mode.
     Reuse,
+    /// Replace the current auth mode before the next attempt.
     Refreshed(AuthMode),
 }
 
 /// Context passed to auth providers before each attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthRefreshContext {
+    /// One-based attempt number.
     pub attempt: u32,
+    /// Whether the caller requires new credentials.
     pub force_refresh: bool,
 }
 
 /// Caller-supplied authorization provider.
+///
+/// Providers are called synchronously by higher-level retry loops; they should
+/// avoid blocking the OS thread. If refresh requires I/O, perform it through a
+/// stackful helper before returning the new [`AuthMode`].
 pub trait AuthProvider {
     /// Returns the auth mode to use for an attempt.
     fn auth_for_attempt(&mut self, context: AuthRefreshContext) -> AuthRefresh;

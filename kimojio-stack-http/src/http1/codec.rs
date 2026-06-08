@@ -1,6 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! HTTP/1.1 head parser and serializer helpers.
+//!
+//! The public functions here are the low-level building blocks used by
+//! [`crate::http1::ClientConnection`] and [`crate::http1::ServerConnection`].
+//! They are useful in tests and specialized transports; most callers should use
+//! the connection types.
+
 use http::{
     HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri, Version,
     header::{CONNECTION, CONTENT_LENGTH, TRANSFER_ENCODING, UPGRADE},
@@ -11,18 +18,25 @@ use crate::{Body, BodyLimits, Error, HttpConfig, LimitKind, StackTransport};
 
 use super::body::{BodyKind, drain_body, read_body, read_body_chunks, write_body};
 
+/// Parsed HTTP request plus connection-close decision.
 #[derive(Debug)]
 pub struct IncomingRequest {
+    /// Parsed request.
     pub request: Request<Body>,
+    /// Whether the server should close after sending the response.
     pub close_after_response: bool,
 }
 
+/// Parsed HTTP response plus connection-close decision.
 #[derive(Debug)]
 pub struct IncomingResponse {
+    /// Parsed response.
     pub response: Response<Body>,
+    /// Whether the client should close after receiving the response.
     pub close_after_response: bool,
 }
 
+/// Reads one request, returning `Ok(None)` after clean peer EOF.
 pub fn read_request(
     cx: &RuntimeContext<'_>,
     transport: &mut StackTransport,
@@ -84,6 +98,7 @@ pub fn read_request(
     }))
 }
 
+/// Reads one response and buffers its body.
 pub fn read_response(
     cx: &RuntimeContext<'_>,
     transport: &mut StackTransport,
@@ -139,6 +154,7 @@ pub fn read_response(
     })
 }
 
+/// Reads one response and streams its body to `on_chunk`.
 pub fn read_response_with_body_chunks<F>(
     cx: &RuntimeContext<'_>,
     transport: &mut StackTransport,
@@ -161,6 +177,7 @@ where
     )
 }
 
+/// Reads one response, exposes headers, then optionally streams body chunks.
 pub fn read_response_with_body_chunks_after_headers<H, F>(
     cx: &RuntimeContext<'_>,
     transport: &mut StackTransport,
@@ -234,6 +251,7 @@ where
     })
 }
 
+/// Serializes and writes a complete request.
 pub fn write_request(
     cx: &RuntimeContext<'_>,
     transport: &mut StackTransport,
@@ -244,6 +262,7 @@ pub fn write_request(
     transport.write_all(cx, &bytes)
 }
 
+/// Writes request head and body with fewer intermediate body copies.
 pub fn write_request_head_and_body(
     cx: &RuntimeContext<'_>,
     transport: &mut StackTransport,
@@ -291,6 +310,7 @@ pub fn write_request_head_and_body(
     }
 }
 
+/// Serializes a complete request into `bytes`.
 pub fn write_request_to_vec(bytes: &mut Vec<u8>, request: &Request<Body>) -> Result<(), Error> {
     let target = request
         .uri()
@@ -306,6 +326,7 @@ pub fn write_request_to_vec(bytes: &mut Vec<u8>, request: &Request<Body>) -> Res
     write_headers_and_body(bytes, request.headers(), request.body())
 }
 
+/// Serializes and writes a complete response.
 pub fn write_response(
     cx: &RuntimeContext<'_>,
     transport: &mut StackTransport,
@@ -316,6 +337,7 @@ pub fn write_response(
     transport.write_all(cx, &bytes)
 }
 
+/// Serializes a complete response into `bytes`.
 pub fn write_response_to_vec(bytes: &mut Vec<u8>, response: &Response<Body>) -> Result<(), Error> {
     write_version(bytes, response.version())?;
     bytes.extend_from_slice(b" ");

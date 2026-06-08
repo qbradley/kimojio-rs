@@ -1,6 +1,22 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Simple caller-owned pooling utilities.
+//!
+//! The crate does not start a background pool. These helpers are small building
+//! blocks for higher-level code that wants explicit in-flight limits or reusable
+//! idle items keyed by destination.
+//!
+//! ```
+//! use kimojio_stack_storage::ConcurrencyLimiter;
+//!
+//! let limiter = ConcurrencyLimiter::new(1);
+//! let permit = limiter.try_acquire().unwrap();
+//! assert!(limiter.try_acquire().is_none());
+//! drop(permit);
+//! assert!(limiter.try_acquire().is_some());
+//! ```
+
 use std::{cell::Cell, collections::BTreeMap, time::Duration};
 
 /// Simple caller-visible concurrency limiter for storage operations.
@@ -50,6 +66,10 @@ impl Drop for ConcurrencyPermit<'_> {
 }
 
 /// Minimal idle pool keyed by destination.
+///
+/// Items are stored in LIFO order per destination. The pool does not close or
+/// dispose dropped entries; callers own that policy when `checkin` returns
+/// `false` or `checkout_at` expires entries.
 #[derive(Debug, Default)]
 pub struct IdlePool<T> {
     max_idle_per_host: usize,

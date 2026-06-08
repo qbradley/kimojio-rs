@@ -51,14 +51,17 @@ pub enum Error {
 }
 
 impl Error {
+    /// Creates an I/O error.
     pub fn io(errno: Errno) -> Self {
         Self::Io(errno)
     }
 
+    /// Creates a TLS transport error.
     pub fn tls(errno: Errno) -> Self {
         Self::Tls(errno)
     }
 
+    /// Creates a size-limit error with the observed and configured lengths.
     pub fn size_limit(kind: LimitKind, limit: usize, actual: usize) -> Self {
         Self::SizeLimit {
             kind,
@@ -67,6 +70,7 @@ impl Error {
         }
     }
 
+    /// Creates an HTTP/2 stream reset error.
     pub fn stream_reset(stream_id: u32, error_code: u32) -> Self {
         Self::PeerReset {
             stream_id: Some(stream_id),
@@ -76,6 +80,7 @@ impl Error {
         }
     }
 
+    /// Creates an HTTP/2 GOAWAY error.
     pub fn goaway(last_stream_id: u32, error_code: u32, debug_data: Vec<u8>) -> Self {
         Self::PeerReset {
             stream_id: None,
@@ -85,6 +90,7 @@ impl Error {
         }
     }
 
+    /// Returns the stable error category.
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::Io(_) => ErrorKind::Io,

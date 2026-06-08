@@ -5,6 +5,55 @@
 //!
 //! This crate provides low-level transport, buffering, error, and protocol
 //! boundary types used by the HTTP/1.1 and HTTP/2 implementations.
+//!
+//! It intentionally exposes connection objects instead of a global client,
+//! background connection pool, or async runtime integration. Callers decide how
+//! sockets are opened, whether TLS is used, how connections are shared, and where
+//! response bodies are buffered or streamed.
+//!
+//! # Choosing a layer
+//!
+//! - [`client::ClientConnection`] and [`server::ServerConnection`] are
+//!   protocol-neutral enums for code that can select HTTP/1.1 or HTTP/2 at
+//!   construction time.
+//! - [`http1`] exposes low-level HTTP/1.1 request/response handling over one
+//!   stack transport.
+//! - [`h2`] exposes HTTP/2 stream IDs, trailers, flow-control aware response
+//!   streaming, and request multiplexing primitives.
+//! - [`transport`] adapts plaintext sockets and, with the `tls` feature, stack
+//!   TLS streams to a common read/write surface.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use http::Request;
+//! use kimojio_stack::RuntimeContext;
+//! use kimojio_stack_http::{Body, BodyLimits, HttpConfig, StackTransport, client::ClientConnection};
+//!
+//! # fn connected_transport() -> StackTransport { unimplemented!() }
+//! # fn example(cx: &RuntimeContext<'_>) -> Result<(), kimojio_stack_http::Error> {
+//! let mut client = ClientConnection::http1(connected_transport(), HttpConfig::default());
+//! let request = Request::builder()
+//!     .method("GET")
+//!     .uri("/")
+//!     .header("host", "example.com")
+//!     .body(Body::empty())
+//!     .expect("valid request");
+//!
+//! let response = client.send(cx, &request)?;
+//! assert!(response.body().len() <= BodyLimits::default().max_len());
+//! client.close(cx)?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Body and streaming behavior
+//!
+//! [`Body`] is a bounded in-memory body. Use
+//! [`client::ClientConnection::send_with_body_chunks`] or the HTTP/2 streaming
+//! APIs when response bodies should be delivered incrementally instead of fully
+//! buffered. Body limits are still enforced on buffered responses and request
+//! construction.
 
 pub mod body;
 pub mod client;

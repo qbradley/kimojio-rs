@@ -1,6 +1,31 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Core storage identifiers, metadata, and caller configuration.
+//!
+//! The model types are intentionally small wrappers around strings and maps. They
+//! keep object identity explicit while leaving validation policy to callers or
+//! service-specific helpers. Metadata keys are normalized to lower case so
+//! service headers and user metadata can be queried consistently.
+//!
+//! ```
+//! use kimojio_stack_storage::{
+//!     AccountId, ContainerName, MetadataMap, ObjectKind, ObjectName, ObjectRef,
+//! };
+//!
+//! let object = ObjectRef {
+//!     account: AccountId::new("acct"),
+//!     container: ContainerName::new("container"),
+//!     name: ObjectName::new("dir/object"),
+//!     kind: ObjectKind::Data,
+//! };
+//! assert_eq!(object.path(), "acct/container/dir/object");
+//!
+//! let mut metadata = MetadataMap::new();
+//! metadata.insert("Upload-LSN", "42");
+//! assert_eq!(metadata.get("upload-lsn"), Some("42"));
+//! ```
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
@@ -12,10 +37,12 @@ use crate::AuthMode;
 pub struct AccountId(String);
 
 impl AccountId {
+    /// Creates an account identifier from caller-owned text.
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
+    /// Returns the account identifier as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -26,10 +53,12 @@ impl AccountId {
 pub struct ContainerName(String);
 
 impl ContainerName {
+    /// Creates a container name from caller-owned text.
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
+    /// Returns the container name as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -40,10 +69,14 @@ impl ContainerName {
 pub struct ObjectName(String);
 
 impl ObjectName {
+    /// Creates an object name from caller-owned text.
+    ///
+    /// Slash separators are preserved in object paths.
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
+    /// Returns the object name as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -71,6 +104,10 @@ pub struct ObjectRef {
 }
 
 impl ObjectRef {
+    /// Returns a human-readable `account/container/name` path.
+    ///
+    /// This is for diagnostics and local routing. Request builders percent-encode
+    /// the path internally before sending it on the wire.
     pub fn path(&self) -> String {
         format!(
             "{}/{}/{}",
@@ -237,6 +274,7 @@ pub struct StorageContext {
 }
 
 impl StorageContext {
+    /// Creates storage context with default pool and concurrency limits.
     pub fn new(endpoint: impl Into<String>, container: ContainerName, auth: AuthMode) -> Self {
         Self {
             endpoint: endpoint.into(),
@@ -248,6 +286,7 @@ impl StorageContext {
         }
     }
 
+    /// Marks whether requests should target an emulator-compatible endpoint.
     pub fn with_emulator(mut self, emulator: bool) -> Self {
         self.emulator = emulator;
         self

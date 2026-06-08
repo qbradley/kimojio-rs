@@ -28,7 +28,7 @@
 //! coroutine return value and propagates panics as [`JoinError`].
 //!
 //! The scheduler is deliberately flat. A coroutine that blocks on a join, scope,
-//! channel receive, or I/O operation records a [`Waiter`] and suspends with
+//! channel receive, or I/O operation records an internal waiter and suspends with
 //! `yielder.suspend`; it never recursively drives the scheduler from inside that
 //! coroutine. Only the root context drives the scheduler loop. Waking a waiter
 //! requeues the suspended task by ID, and the scheduler later resumes it on its

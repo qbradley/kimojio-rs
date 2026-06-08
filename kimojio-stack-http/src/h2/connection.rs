@@ -1,6 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! HTTP/2 connection state machine.
+//!
+//! [`ConnectionState`] tracks peer/local settings, HPACK state, open streams,
+//! flow-control windows, and protocol frames queued for writing. Client and
+//! server connections use it internally; it remains public so low-level tests can
+//! exercise protocol behavior without a socket.
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::Error;
@@ -13,6 +20,7 @@ use super::stream::{FlowControlWindow, Stream, StreamId};
 const INITIAL_CONNECTION_WINDOW: u32 = 65_535;
 const STREAM_WINDOW_UPDATE_THRESHOLD_DIVISOR: i32 = 2;
 
+/// Mutable HTTP/2 connection state shared by client and server code.
 pub struct ConnectionState {
     local_settings: Settings,
     peer_settings: Settings,
@@ -28,6 +36,7 @@ pub struct ConnectionState {
 }
 
 impl ConnectionState {
+    /// Creates connection state with local settings.
     pub fn new(local_settings: Settings) -> Result<Self, Error> {
         let mut header_decoder = HeaderBlockDecoder::new();
         header_decoder.set_max_table_size(local_settings.header_table_size as usize);
@@ -47,45 +56,55 @@ impl ConnectionState {
         })
     }
 
+    /// Returns local settings advertised to the peer.
     pub fn local_settings(&self) -> Settings {
         self.local_settings
     }
 
+    /// Returns current peer settings.
     pub fn peer_settings(&self) -> Settings {
         self.peer_settings
     }
 
+    /// Returns outbound connection-level flow-control window.
     pub fn connection_window(&self) -> FlowControlWindow {
         self.connection_window
     }
 
+    /// Returns queued outbound protocol-frame count.
     pub fn pending_outbound_len(&self) -> usize {
         self.pending_outbound.len()
     }
 
+    /// Returns number of currently active streams.
     pub fn active_stream_count(&self) -> usize {
         self.streams.len()
     }
 
+    /// Validates and records the client preface.
     pub fn receive_preface(&mut self, preface: &[u8]) -> Result<(), Error> {
         super::validate_client_preface(preface)?;
         self.preface_received = true;
         Ok(())
     }
 
+    /// Returns whether a valid client preface has been received.
     pub fn preface_received(&self) -> bool {
         self.preface_received
     }
 
+    /// Encodes headers using the connection HPACK encoder.
     pub fn encode_header_block(&mut self, headers: &[Header]) -> Vec<u8> {
         self.header_encoder.encode(headers)
     }
 
+    /// Decodes headers using the connection HPACK decoder and header-list limit.
     pub fn decode_header_block(&mut self, block: &[u8]) -> Result<Vec<Header>, Error> {
         self.header_decoder
             .decode_with_limit(block, self.local_settings.max_header_list_size as usize)
     }
 
+    /// Tracks inbound frame ordering constraints such as CONTINUATION sequences.
     pub fn track_inbound_frame(&mut self, frame: &Frame) -> Result<(), Error> {
         if let Some(stream_id) = self.continuation_stream {
             if frame.frame_type != FrameType::Continuation || frame.stream_id != stream_id.get() {
@@ -112,6 +131,7 @@ impl ConnectionState {
         }
     }
 
+    /// Opens or returns an existing stream.
     pub fn open_stream(&mut self, id: StreamId) -> Result<&mut Stream, Error> {
         if self.closed_streams.contains(&id) {
             return Err(Error::Protocol("stream id was already closed"));
@@ -127,6 +147,7 @@ impl ConnectionState {
         Ok(self.streams.get_mut(&id).expect("stream was just inserted"))
     }
 
+    /// Opens an inbound stream, enforcing local concurrent-stream limits.
     pub fn open_inbound_stream(&mut self, id: StreamId) -> Result<&mut Stream, Error> {
         if !self.streams.contains_key(&id)
             && self.streams.len() >= self.local_settings.max_concurrent_streams as usize
@@ -136,6 +157,7 @@ impl ConnectionState {
         self.open_stream(id)
     }
 
+    /// Opens an outbound stream, enforcing peer concurrent-stream limits.
     pub fn open_outbound_stream(&mut self, id: StreamId) -> Result<&mut Stream, Error> {
         if !self.streams.contains_key(&id)
             && self.streams.len() >= self.peer_settings.max_concurrent_streams as usize
@@ -147,6 +169,7 @@ impl ConnectionState {
         self.open_stream(id)
     }
 
+    /// Removes and marks a stream as closed.
     pub fn remove_stream(&mut self, id: StreamId) -> Option<Stream> {
         let stream = self.streams.remove(&id);
         if stream.is_some() {
@@ -155,14 +178,17 @@ impl ConnectionState {
         stream
     }
 
+    /// Borrows a stream by ID.
     pub fn stream(&self, id: StreamId) -> Option<&Stream> {
         self.streams.get(&id)
     }
 
+    /// Mutably borrows a stream by ID.
     pub fn stream_mut(&mut self, id: StreamId) -> Option<&mut Stream> {
         self.streams.get_mut(&id)
     }
 
+    /// Returns bytes currently sendable on a stream given stream and connection windows.
     pub fn outbound_capacity(&self, stream_id: StreamId) -> Result<usize, Error> {
         let stream = self
             .streams
@@ -175,6 +201,7 @@ impl ConnectionState {
         Ok(available.max(0) as usize)
     }
 
+    /// Consumes outbound stream and connection window credit.
     pub fn consume_outbound_window(
         &mut self,
         stream_id: StreamId,
@@ -188,6 +215,7 @@ impl ConnectionState {
         stream.consume_outbound_window(amount)
     }
 
+    /// Queues a connection-level WINDOW_UPDATE.
     pub fn queue_connection_window_update(&mut self, amount: usize) -> Result<(), Error> {
         if amount == 0 {
             return Ok(());
@@ -200,10 +228,12 @@ impl ConnectionState {
         Ok(())
     }
 
+    /// Consumes inbound connection-level window credit.
     pub fn consume_inbound_connection_window(&mut self, amount: usize) -> Result<(), Error> {
         self.inbound_connection_window.consume(amount)
     }
 
+    /// Queues a stream-level WINDOW_UPDATE.
     pub fn queue_stream_window_update(
         &mut self,
         stream_id: StreamId,
@@ -223,6 +253,9 @@ impl ConnectionState {
         Ok(())
     }
 
+    /// Tops a stream inbound window back up toward the local initial-window target.
+    ///
+    /// Returns `true` when a WINDOW_UPDATE frame was queued.
     pub fn queue_stream_window_update_to_target(
         &mut self,
         stream_id: StreamId,
@@ -250,6 +283,7 @@ impl ConnectionState {
         Ok(true)
     }
 
+    /// Applies a received SETTINGS frame and queues an acknowledgement.
     pub fn receive_settings(&mut self, frame: &Frame) -> Result<(), Error> {
         self.track_inbound_frame(frame)?;
         let FramePayload::Settings(settings) = &frame.payload else {
@@ -285,6 +319,7 @@ impl ConnectionState {
         Ok(())
     }
 
+    /// Applies a received WINDOW_UPDATE frame.
     pub fn receive_window_update(&mut self, frame: &Frame) -> Result<(), Error> {
         self.track_inbound_frame(frame)?;
         let FramePayload::WindowUpdate { increment } = frame.payload else {
@@ -302,10 +337,12 @@ impl ConnectionState {
         }
     }
 
+    /// Queues an outbound frame.
     pub fn queue_frame(&mut self, frame: Frame) {
         self.pending_outbound.push_back(frame);
     }
 
+    /// Pops the next queued outbound frame.
     pub fn pop_outbound(&mut self) -> Option<Frame> {
         self.pending_outbound.pop_front()
     }

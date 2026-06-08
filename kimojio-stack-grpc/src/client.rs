@@ -17,6 +17,7 @@ use crate::{Error, Metadata, Status, StatusCode as GrpcStatusCode, codec, status
 /// Shared configuration for unary gRPC clients.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientConfig {
+    /// Maximum encoded gRPC message length, excluding the five-byte gRPC frame header.
     pub max_message_len: usize,
 }
 
@@ -28,11 +29,19 @@ impl Default for ClientConfig {
     }
 }
 
+/// Successful unary gRPC response.
+///
+/// A unary call returns this only after the HTTP response is valid, the gRPC
+/// status is OK, and the response message has decoded successfully.
 #[derive(Debug)]
 pub struct UnaryResponse<M> {
+    /// Initial response metadata from HTTP/2 headers.
     pub metadata: Metadata,
+    /// Decoded response message.
     pub message: M,
+    /// Terminal status. Unary calls return `Ok` only when this is [`StatusCode::Ok`](crate::StatusCode::Ok).
     pub status: Status,
+    /// Terminal trailing metadata.
     pub trailers: Metadata,
 }
 
@@ -73,16 +82,27 @@ pub struct ServerStreamingResponse<'a, M> {
     _marker: PhantomData<fn() -> M>,
 }
 
+/// Low-level gRPC client over one stackful HTTP/2 connection.
+///
+/// The client name is historical: it supports both unary calls and
+/// server-streaming calls. It owns the HTTP/2 connection and does not perform
+/// background reads, retries, or automatic reconnects.
 pub struct UnaryClient {
     http: h2::ClientConnection,
     config: ClientConfig,
 }
 
 impl UnaryClient {
+    /// Creates a client over a caller-created HTTP/2 connection.
     pub fn new(http: h2::ClientConnection, config: ClientConfig) -> Self {
         Self { http, config }
     }
 
+    /// Performs one unary RPC.
+    ///
+    /// The request message is Prost-encoded, framed, and sent as one HTTP/2
+    /// request body. The response body must contain exactly one gRPC message and
+    /// terminal status must be OK; non-OK statuses return [`Error::Status`].
     pub fn call<Req, Resp>(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -167,6 +187,7 @@ impl UnaryClient {
         })
     }
 
+    /// Closes the underlying HTTP/2 connection.
     pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
         self.http.close(cx).map_err(Error::from)
     }

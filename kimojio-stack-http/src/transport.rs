@@ -1,6 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Stackful transport abstraction used by HTTP/1.1 and HTTP/2.
+//!
+//! [`StackTransport`] owns either a plaintext connected socket or, with the
+//! `tls` feature, a stack TLS stream. Deadlines are stored on the transport and
+//! apply to subsequent read/write calls until replaced.
+
 use std::time::{Duration, Instant};
 
 use kimojio_stack::{Errno, RuntimeContext, WaitError, Waitable};
@@ -12,22 +18,30 @@ use crate::error::Error;
 
 /// Stackful plaintext or TLS transport over a connected socket.
 pub enum StackTransport {
+    /// Plain connected socket.
     Plaintext {
+        /// Owned file descriptor.
         fd: OwnedFd,
+        /// Optional absolute I/O deadline.
         deadline: Option<Instant>,
     },
+    /// Stack TLS stream.
     #[cfg(feature = "tls")]
     Tls {
+        /// TLS stream.
         stream: TlsStream,
+        /// Optional absolute I/O deadline.
         deadline: Option<Instant>,
     },
 }
 
 impl StackTransport {
+    /// Creates a plaintext transport from a connected socket.
     pub fn plaintext(fd: OwnedFd) -> Self {
         Self::Plaintext { fd, deadline: None }
     }
 
+    /// Creates a TLS transport from an established stack TLS stream.
     #[cfg(feature = "tls")]
     pub fn tls(stream: TlsStream) -> Self {
         Self::Tls {
@@ -55,6 +69,10 @@ impl StackTransport {
         }
     }
 
+    /// Reads bytes into `buf`.
+    ///
+    /// The method may park the current stackful coroutine while the underlying
+    /// socket or TLS stream waits for input.
     pub fn read(&mut self, cx: &RuntimeContext<'_>, buf: &mut [u8]) -> Result<usize, Error> {
         match self {
             Self::Plaintext { fd, deadline } => match remaining_io_timeout(*deadline)? {
@@ -69,6 +87,9 @@ impl StackTransport {
         }
     }
 
+    /// Fills `buf` unless EOF is reached first.
+    ///
+    /// Returns the number of bytes copied into `buf`.
     pub fn read_exact_or_eof(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -85,6 +106,7 @@ impl StackTransport {
         Ok(requested - buf.len())
     }
 
+    /// Writes bytes from `buf`, returning the number accepted by the transport.
     pub fn write(&mut self, cx: &RuntimeContext<'_>, buf: &[u8]) -> Result<usize, Error> {
         match self {
             Self::Plaintext { fd, deadline } => match remaining_io_timeout(*deadline)? {
@@ -99,6 +121,7 @@ impl StackTransport {
         }
     }
 
+    /// Writes all bytes from `buf` or returns an error.
     pub fn write_all(&mut self, cx: &RuntimeContext<'_>, mut buf: &[u8]) -> Result<(), Error> {
         while !buf.is_empty() {
             let amount = self.write(cx, buf)?;
@@ -110,6 +133,7 @@ impl StackTransport {
         Ok(())
     }
 
+    /// Half-closes the write side of the transport.
     pub fn shutdown_write(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
         match self {
             Self::Plaintext { fd, .. } => cx.shutdown(fd, Shutdown::Write).map_err(Error::io),
@@ -118,6 +142,7 @@ impl StackTransport {
         }
     }
 
+    /// Shuts down both directions where supported.
     pub fn shutdown(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
         match self {
             Self::Plaintext { fd, .. } => cx.shutdown(fd, Shutdown::Both).map_err(Error::io),
@@ -126,6 +151,7 @@ impl StackTransport {
         }
     }
 
+    /// Closes the transport through the stack runtime.
     pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
         match self {
             Self::Plaintext { fd, .. } => cx.close(fd).map_err(Error::io),

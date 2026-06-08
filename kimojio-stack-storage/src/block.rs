@@ -1,6 +1,36 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Block-object upload, download, and delete helpers.
+//!
+//! Block operations are the simplest durable object path: uploads require a
+//! replayable body with a known length, downloads stream success body chunks to a
+//! caller sink, and deletes classify missing objects as [`DeleteOutcome::NotFound`].
+//!
+//! ```
+//! use kimojio_stack_storage::{
+//!     AccountId, BlockUpload, ContainerName, MetadataMap, ObjectKind, ObjectName,
+//!     ObjectRef, ReplayBody, block_upload_request,
+//! };
+//!
+//! let object = ObjectRef {
+//!     account: AccountId::new("acct"),
+//!     container: ContainerName::new("container"),
+//!     name: ObjectName::new("block"),
+//!     kind: ObjectKind::Data,
+//! };
+//! let metadata = MetadataMap::new();
+//! let request = block_upload_request(BlockUpload {
+//!     object: &object,
+//!     body: ReplayBody::from_vec(vec![1, 2, 3]),
+//!     metadata: &metadata,
+//!     lease: None,
+//!     conditions: None,
+//!     if_not_exists: false,
+//! }).unwrap();
+//! assert_eq!(request.metadata.get("content-length"), Some("3"));
+//! ```
+
 use bytes::{Bytes, BytesMut};
 
 use crate::{
@@ -8,22 +38,30 @@ use crate::{
     OperationClass, ReplayBody, RequestParts, ResponseParts, Transport, ownership::apply_lease,
 };
 
+/// Result of deleting a block object.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeleteOutcome {
+    /// Object was deleted.
     Deleted,
+    /// Object was already absent.
     NotFound,
 }
 
+/// Result of a conditional block upload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BlockUploadOutcome {
+    /// Upload was accepted.
     Uploaded,
+    /// Conditional upload was skipped because an object already existed.
     Skipped,
 }
 
+/// Client helper for block-object operations.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BlockClient;
 
 impl BlockClient {
+    /// Uploads one block object using the supplied transport.
     pub fn upload<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -34,6 +72,10 @@ impl BlockClient {
         transport.execute(cx, &request)
     }
 
+    /// Uploads only if the destination does not already exist.
+    ///
+    /// Already-exists and condition-not-met responses are converted to
+    /// [`BlockUploadOutcome::Skipped`].
     pub fn upload_if_not_exists<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -56,6 +98,11 @@ impl BlockClient {
         }
     }
 
+    /// Downloads an object or byte range, delivering success body chunks to `on_chunk`.
+    ///
+    /// If the transport fails after any bytes have been delivered, the error kind
+    /// is converted to [`ErrorKind::Incomplete`] so callers know the sink received
+    /// a prefix of the object.
     pub fn download<T, F>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -97,6 +144,10 @@ impl BlockClient {
         }
     }
 
+    /// Downloads an object in explicit byte ranges.
+    ///
+    /// This is useful when callers need each response to fit within HTTP body
+    /// limits or service-side range quotas.
     pub fn download_in_ranges<T, F>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -132,6 +183,7 @@ impl BlockClient {
         Ok(())
     }
 
+    /// Downloads a small object into memory with a caller-supplied size limit.
     pub fn collect_small<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -150,6 +202,7 @@ impl BlockClient {
         Ok(body.freeze())
     }
 
+    /// Deletes a block object or snapshot.
     pub fn delete<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -165,24 +218,40 @@ impl BlockClient {
     }
 }
 
+/// Parameters for a block upload request.
 #[derive(Clone, Debug)]
 pub struct BlockUpload<'a> {
+    /// Destination object.
     pub object: &'a ObjectRef,
+    /// Replayable upload body.
     pub body: ReplayBody,
+    /// User metadata applied as object metadata.
     pub metadata: &'a MetadataMap,
+    /// Optional ownership lease.
     pub lease: Option<&'a LeaseContext>,
+    /// Optional HTTP/service conditions.
     pub conditions: Option<&'a Conditions>,
+    /// Whether to add an `if-none-match: *` condition.
     pub if_not_exists: bool,
 }
 
+/// Parameters for a block delete request.
 #[derive(Clone, Copy, Debug)]
 pub struct BlockDelete<'a> {
+    /// Object to delete.
     pub object: &'a ObjectRef,
+    /// Optional snapshot identifier.
     pub snapshot: Option<&'a str>,
+    /// Optional ownership lease.
     pub lease: Option<&'a LeaseContext>,
+    /// Optional HTTP/service conditions.
     pub conditions: Option<&'a Conditions>,
 }
 
+/// Builds a block upload request.
+///
+/// The body must have a known length and expose replayable bytes. Request bodies
+/// that are non-replayable are rejected before any transport attempt is made.
 pub fn block_upload_request(input: BlockUpload<'_>) -> Result<RequestParts, Error> {
     let Some(len) = input.body.len() else {
         return Err(Error::new(
@@ -215,6 +284,7 @@ pub fn block_upload_request(input: BlockUpload<'_>) -> Result<RequestParts, Erro
     Ok(request)
 }
 
+/// Builds a block download request with an optional inclusive byte range.
 pub fn block_download_request(object: &ObjectRef, range: Option<(u64, u64)>) -> RequestParts {
     let mut request = RequestParts::new(OperationClass::Block, "GET", object_uri(object));
     if let Some((start, end)) = range {
@@ -225,6 +295,7 @@ pub fn block_download_request(object: &ObjectRef, range: Option<(u64, u64)>) -> 
     request
 }
 
+/// Builds a block delete request.
 pub fn block_delete_request(input: BlockDelete<'_>) -> RequestParts {
     let mut uri = object_uri(input.object);
     if let Some(snapshot) = input.snapshot {

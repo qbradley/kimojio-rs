@@ -1,6 +1,22 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Transport abstraction and stack HTTP adapter.
+//!
+//! Storage operation modules produce [`RequestParts`] and consume
+//! [`ResponseParts`]. A [`Transport`] implementation owns the wire details for a
+//! single attempt: converting request parts to HTTP, applying deadlines,
+//! streaming success body chunks, and returning diagnostics on failure.
+//!
+//! ```
+//! use kimojio_stack_storage::{OperationClass, RequestParts, ReplayBody};
+//!
+//! let mut request = RequestParts::new(OperationClass::Block, "PUT", "/acct/container/object");
+//! request.body = ReplayBody::from_vec(b"payload".to_vec());
+//! request.metadata.insert("content-length", "7");
+//! assert!(request.body.as_bytes().is_some());
+//! ```
+
 use std::fmt;
 use std::time::{Duration, Instant};
 
@@ -12,6 +28,10 @@ use crate::{
 };
 
 /// Caller-visible request parts for a storage operation.
+///
+/// The request is deliberately decomposed into method, URI, metadata, replay
+/// body, and deadline fields so retry and diagnostics code can inspect costs and
+/// safety before a transport sends bytes.
 #[derive(Clone, Eq, PartialEq)]
 pub struct RequestParts {
     pub operation: OperationClass,
@@ -67,6 +87,9 @@ fn redacted_uri(uri: &str) -> String {
 }
 
 /// Caller-visible response parts for a storage operation.
+///
+/// `ResponseParts` contains response metadata and diagnostics. Success bodies are
+/// delivered by the transport chunk callback instead of being stored here.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResponseParts {
     pub status: u16,
@@ -82,6 +105,10 @@ pub struct AttemptError {
 }
 
 /// Storage transport abstraction used by retry/execution code.
+///
+/// Implement this trait for custom test doubles, pooled transports, or service
+/// connectors. Implementations should report one attempted request and include
+/// whatever diagnostics are available when an error occurs.
 pub trait Transport {
     /// Executes one request attempt.
     fn execute(
@@ -91,6 +118,11 @@ pub trait Transport {
     ) -> Result<ResponseParts, AttemptError>;
 
     /// Executes one request attempt and delivers response body chunks as they arrive.
+    ///
+    /// The default implementation fails explicitly. Transports that support
+    /// downloads should call `on_chunk` for successful response body data only;
+    /// error response bodies should be consumed for connection health and
+    /// reported through diagnostics or [`Error`].
     fn execute_with_body_chunks(
         &mut self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -110,6 +142,11 @@ pub trait Transport {
 }
 
 /// Adapter from storage request parts to the stack HTTP client.
+///
+/// The adapter owns one protocol-neutral HTTP connection. It applies
+/// request-specific deadlines or a default total timeout from [`PoolConfig`], maps
+/// HTTP status codes to storage errors, and streams success body chunks to the
+/// caller sink.
 pub struct StackHttpTransport {
     client: kimojio_stack_http::client::ClientConnection,
     pool_config: Option<PoolConfig>,

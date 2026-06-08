@@ -1,6 +1,23 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! gRPC metadata helpers.
+//!
+//! Metadata is represented as HTTP/2 headers or trailers with gRPC transport
+//! headers filtered out. ASCII metadata must be inserted with [`Metadata::insert`].
+//! Binary metadata names must end in `-bin` and are base64 encoded/decoded with
+//! [`Metadata::insert_bin`] and [`Metadata::get_bin`].
+//!
+//! ```
+//! use http::HeaderName;
+//! use kimojio_stack_grpc::Metadata;
+//!
+//! let trace = HeaderName::from_static("trace-bin");
+//! let mut metadata = Metadata::new();
+//! metadata.insert_bin(trace.clone(), b"abc").unwrap();
+//! assert_eq!(metadata.get_bin(&trace).unwrap().as_deref(), Some(&b"abc"[..]));
+//! ```
+
 use base64::{
     Engine,
     engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
@@ -16,10 +33,16 @@ pub struct Metadata {
 }
 
 impl Metadata {
+    /// Creates an empty metadata block.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Inserts ASCII metadata.
+    ///
+    /// Reserved gRPC transport names such as `content-type`, `grpc-status`, and
+    /// `te` are rejected. Names ending in `-bin` must use
+    /// [`insert_bin`](Self::insert_bin).
     pub fn insert(&mut self, name: HeaderName, value: HeaderValue) -> Result<(), Error> {
         validate_name(&name)?;
         if name.as_str().ends_with("-bin") {
@@ -29,6 +52,9 @@ impl Metadata {
         Ok(())
     }
 
+    /// Inserts binary metadata, base64-encoding `value`.
+    ///
+    /// The metadata name must end in `-bin`.
     pub fn insert_bin(&mut self, name: HeaderName, value: &[u8]) -> Result<(), Error> {
         validate_name(&name)?;
         if !name.as_str().ends_with("-bin") {
@@ -41,10 +67,15 @@ impl Metadata {
         Ok(())
     }
 
+    /// Returns a raw metadata value.
     pub fn get(&self, name: &HeaderName) -> Option<&HeaderValue> {
         self.headers.get(name)
     }
 
+    /// Returns decoded binary metadata.
+    ///
+    /// The metadata name must end in `-bin`. Both padded and unpadded base64
+    /// encodings are accepted when decoding peer metadata.
     pub fn get_bin(&self, name: &HeaderName) -> Result<Option<Vec<u8>>, Error> {
         let Some(value) = self.headers.get(name) else {
             return Ok(None);
@@ -57,14 +88,20 @@ impl Metadata {
             .map_err(|_| Error::Protocol("invalid binary metadata"))
     }
 
+    /// Borrows the underlying header map.
     pub fn as_headers(&self) -> &HeaderMap {
         &self.headers
     }
 
+    /// Consumes the metadata and returns the underlying header map.
     pub fn into_headers(self) -> HeaderMap {
         self.headers
     }
 
+    /// Builds metadata from an HTTP header/trailer map.
+    ///
+    /// Reserved transport names are dropped. Invalid user metadata names return a
+    /// protocol error.
     pub fn from_headers(headers: HeaderMap) -> Result<Self, Error> {
         let mut metadata = HeaderMap::new();
         let mut current_name = None;

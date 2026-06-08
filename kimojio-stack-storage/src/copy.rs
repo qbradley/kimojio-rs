@@ -1,22 +1,34 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Copy-from-source request helpers.
+//!
+//! Copy operations are represented as a destination object plus a caller-supplied
+//! [`SignedSource`]. The source may carry an authorization header as well as a
+//! signed URL; debug output in the auth module redacts both.
+
 use crate::{
     AttemptError, Conditions, Error, ErrorKind, ObjectRef, OperationClass, RequestParts,
     ResponseParts, SignedSource, Transport, properties::object_uri,
 };
 
+/// Copy acceptance information captured from response metadata.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CopyInfo {
+    /// Service copy ID, when present.
     pub copy_id: Option<String>,
+    /// Service copy status, such as `pending` or `success`.
     pub status: Option<String>,
+    /// Request ID from response metadata or diagnostics.
     pub request_id: Option<String>,
 }
 
+/// Client helper for copy-from-source operations.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CopyClient;
 
 impl CopyClient {
+    /// Starts a copy operation and requires the service to accept it.
     pub fn copy_from_source<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -47,6 +59,7 @@ impl CopyClient {
     }
 }
 
+/// Builds a copy-from-source request.
 pub fn copy_from_source_request(
     destination: &ObjectRef,
     source: &SignedSource,
@@ -68,6 +81,7 @@ pub fn copy_from_source_request(
     request
 }
 
+/// Extracts copy information from a response.
 pub fn copy_info_from_response(response: &ResponseParts) -> CopyInfo {
     CopyInfo {
         copy_id: response.metadata.get("x-ms-copy-id").map(str::to_owned),
@@ -86,6 +100,7 @@ pub fn copy_info_from_response(response: &ResponseParts) -> CopyInfo {
     }
 }
 
+/// Converts an attempt error into an inspectable copy error and best-effort info.
 pub fn copy_error_with_diagnostics(error: AttemptError) -> (Error, CopyInfo) {
     let info = CopyInfo {
         copy_id: None,
@@ -101,6 +116,7 @@ pub fn copy_error_with_diagnostics(error: AttemptError) -> (Error, CopyInfo) {
     (error.error, info)
 }
 
+/// Requires a copy status that means the operation was accepted.
 pub fn require_accepted_copy(info: &CopyInfo) -> Result<(), Error> {
     match info.status.as_deref() {
         Some("success" | "pending") => Ok(()),

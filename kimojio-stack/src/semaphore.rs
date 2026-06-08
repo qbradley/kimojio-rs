@@ -1,6 +1,33 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Cooperative counting semaphore for stackful coroutines.
+//!
+//! [`Semaphore::acquire`] parks only the current coroutine when no permit is
+//! available. Dropping the returned [`SemaphorePermit`] releases one permit and
+//! wakes a waiter. The primitive is useful for making concurrency limits
+//! explicit around transports, request fan-out, or other scarce resources inside
+//! a single stack runtime.
+//!
+//! ```
+//! use kimojio_stack::{Runtime, Semaphore};
+//!
+//! let limiter = Semaphore::new(1);
+//! let mut runtime = Runtime::new();
+//! runtime.block_on(|cx| {
+//!     cx.scope(|scope| {
+//!         scope.spawn(|cx| {
+//!             let _permit = limiter.acquire(cx);
+//!             cx.yield_now();
+//!         });
+//!         scope.spawn(|cx| {
+//!             let _permit = limiter.acquire(cx);
+//!         });
+//!     });
+//! });
+//! assert_eq!(limiter.available_permits(), 1);
+//! ```
+
 use std::cell::RefCell;
 use std::fmt;
 

@@ -2,6 +2,28 @@
 // Licensed under the MIT License.
 
 //! A single-send channel for stackful coroutines.
+//!
+//! The channel is the stackful equivalent of a one-shot handoff: one
+//! [`Sender`] moves exactly one value to one [`Receiver`]. [`Receiver::recv`]
+//! parks cooperatively instead of blocking the OS thread, and `Receiver`
+//! implements [`Waitable`] so it can participate in
+//! [`RuntimeContext::wait_any`](crate::RuntimeContext::wait_any) or
+//! [`RuntimeContext::join`](crate::RuntimeContext::join).
+//!
+//! ```
+//! use kimojio_stack::{Runtime, once};
+//!
+//! let mut runtime = Runtime::new();
+//! let value = runtime.block_on(|cx| {
+//!     cx.scope(|scope| {
+//!         let (tx, rx) = once::channel();
+//!         scope.spawn(move |_| tx.send(42).unwrap());
+//!         scope.spawn(move |cx| rx.recv(cx).unwrap()).join(cx).unwrap()
+//!     })
+//! });
+//!
+//! assert_eq!(value, 42);
+//! ```
 
 use std::cell::RefCell;
 use std::fmt;

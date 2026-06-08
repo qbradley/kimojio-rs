@@ -1,6 +1,39 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Low-level OTLP logs export.
+//!
+//! Logs are grouped by one [`Resource`] and one [`InstrumentationScope`] per
+//! [`LogBatch`]. Empty batches complete locally without sending a request. A
+//! receiver may accept the request but report rejected records through
+//! [`LogsExportResult`]; callers decide whether that partial success is fatal.
+//!
+//! ```no_run
+//! use kimojio_stack::RuntimeContext;
+//! use kimojio_stack_http::{HttpConfig, StackTransport};
+//! use kimojio_stack_opentelemetry::{
+//!     AnyValue, ExportClientConfig, InstrumentationScope, LogBatch, LogRecord,
+//!     LogsClient, Resource, SeverityNumber,
+//! };
+//!
+//! # fn transport() -> StackTransport { unimplemented!() }
+//! # fn example(cx: &RuntimeContext<'_>) -> Result<(), kimojio_stack_opentelemetry::Error> {
+//! let batch = LogBatch::new(Resource::new(), InstrumentationScope::new("worker"))
+//!     .with_record(LogRecord::new(1, SeverityNumber::Info, AnyValue::String("started".into())));
+//! let mut client = LogsClient::from_transport(
+//!     transport(),
+//!     HttpConfig::default(),
+//!     ExportClientConfig::default(),
+//! );
+//! let result = client.export(cx, batch)?;
+//! if result.rejected_log_records() != 0 {
+//!     eprintln!("receiver rejected logs: {}", result.error_message());
+//! }
+//! client.finish(cx)?;
+//! # Ok(())
+//! # }
+//! ```
+
 use kimojio_stack::RuntimeContext;
 use kimojio_stack_http::{HttpConfig, StackTransport, h2};
 use prost::Message;
@@ -14,6 +47,9 @@ use crate::{
 pub const LOGS_SERVICE_PATH: &str = "/opentelemetry.proto.collector.logs.v1.LogsService/Export";
 
 /// OpenTelemetry log severity number.
+///
+/// Values use the standard OTLP numeric severity groups. Intermediate numeric
+/// severities are not represented yet; choose the nearest group boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub enum SeverityNumber {
@@ -27,6 +63,10 @@ pub enum SeverityNumber {
 }
 
 /// A low-level log record.
+///
+/// The record stores exactly the fields this crate emits today. It does not
+/// capture source location, trace/span IDs, flags, or dropped-attribute counts;
+/// higher-level instrumentation can layer those in once their costs are explicit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LogRecord {
     time_unix_nano: u64,
@@ -39,6 +79,8 @@ pub struct LogRecord {
 
 impl LogRecord {
     /// Creates a log record with nanosecond timestamps and a body.
+    ///
+    /// `observed_time_unix_nano` defaults to `time_unix_nano`.
     pub fn new(time_unix_nano: u64, severity_number: SeverityNumber, body: AnyValue) -> Self {
         Self {
             time_unix_nano,
@@ -85,6 +127,9 @@ impl LogRecord {
 }
 
 /// Caller-owned batch of log records.
+///
+/// The batch consumes records by value so callers can prebuild telemetry without
+/// hidden global state or background queues.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LogBatch {
     resource: Resource,
@@ -119,6 +164,9 @@ impl LogBatch {
     }
 
     /// Builds an OTLP export request.
+    ///
+    /// Use [`encode_request`](Self::encode_request) when you want local size
+    /// validation and a serialized request for tests or fixtures.
     pub fn into_request(self) -> proto::ExportLogsServiceRequest {
         proto::ExportLogsServiceRequest {
             resource_logs: vec![proto::ResourceLogs {
@@ -154,6 +202,8 @@ impl LogBatch {
 }
 
 /// Low-level logs export result.
+///
+/// An all-zero/default result means the receiver did not report partial failure.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct LogsExportResult {
     rejected_log_records: i64,
@@ -190,6 +240,9 @@ impl LogsExportResult {
 }
 
 /// Low-level OTLP logs export client.
+///
+/// The client owns one gRPC connection. It performs one unary export per
+/// [`export`](Self::export) call and does not retry or batch in the background.
 pub struct LogsClient {
     inner: UnaryExportClient,
 }
@@ -237,6 +290,9 @@ impl LogsClient {
     }
 
     /// Exports one caller-owned batch of log records.
+    ///
+    /// Empty batches return `Ok(LogsExportResult::default())` without sending a
+    /// gRPC request.
     pub fn export(
         &mut self,
         cx: &RuntimeContext<'_>,

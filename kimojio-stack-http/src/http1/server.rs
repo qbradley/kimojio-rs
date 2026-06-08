@@ -16,6 +16,7 @@ pub struct ServerConnection {
 }
 
 impl ServerConnection {
+    /// Creates an HTTP/1.1 server over an already-connected transport.
     pub fn new(transport: StackTransport, config: HttpConfig) -> Self {
         Self {
             transport,
@@ -24,6 +25,7 @@ impl ServerConnection {
         }
     }
 
+    /// Reads the next request, returning `Ok(None)` after clean peer EOF.
     pub fn read_request(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -32,6 +34,7 @@ impl ServerConnection {
             .map(|request| request.map(|request| request.request))
     }
 
+    /// Writes one response on the connection.
     pub fn write_response(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -40,6 +43,10 @@ impl ServerConnection {
         codec::write_response(cx, &mut self.transport, response)
     }
 
+    /// Reads one request, calls `handler`, and writes the returned response.
+    ///
+    /// Returns `Ok(false)` when the client closed before another request. Returns
+    /// `Ok(true)` when the connection can be kept alive for another request.
     pub fn serve_one(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -59,6 +66,7 @@ impl ServerConnection {
         Ok(!close_after_response)
     }
 
+    /// Closes the underlying transport.
     pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
         self.transport.close(cx)
     }

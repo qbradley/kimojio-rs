@@ -30,6 +30,7 @@ pub enum Error {
 }
 
 impl Error {
+    /// Returns the stable error category.
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::Transport(_) => ErrorKind::Transport,

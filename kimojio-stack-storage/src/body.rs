@@ -1,6 +1,21 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Request body replay model.
+//!
+//! Storage retries are only safe when the request body can be sent again. This
+//! module makes that explicit with [`ReplayBody`]: request builders can reject
+//! non-replayable uploads, and [`RetryPolicy`](crate::RetryPolicy) can refuse to
+//! retry attempts whose body cannot be reconstructed.
+//!
+//! ```
+//! use kimojio_stack_storage::{BodyReplay, ReplayBody};
+//!
+//! let body = ReplayBody::from_vec(vec![1, 2, 3]);
+//! assert_eq!(body.replay(), BodyReplay::Replayable);
+//! assert_eq!(body.as_bytes(), Some(&[1, 2, 3][..]));
+//! ```
+
 use std::fmt;
 
 use bytes::Bytes;
@@ -8,17 +23,24 @@ use bytes::Bytes;
 /// Replay behavior for a request body.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BodyReplay {
+    /// The body bytes can be sent again on retry.
     Replayable,
+    /// The body cannot be replayed safely.
     NonReplayable,
 }
 
 /// Caller-visible request body representation.
 #[derive(Clone, Eq, PartialEq)]
 pub enum ReplayBody {
+    /// Empty replayable body.
     Empty,
+    /// Replayable static byte slice.
     BorrowedStatic(&'static [u8]),
+    /// Replayable shared bytes.
     Shared(Bytes),
+    /// Replayable bytes owned by this request representation.
     Owned(Bytes),
+    /// Body is supplied by an external one-shot stream not represented here.
     NonReplayable { len: Option<usize> },
 }
 

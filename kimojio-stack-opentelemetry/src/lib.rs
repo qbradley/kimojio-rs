@@ -6,6 +6,62 @@
 //! This crate intentionally exposes caller-controlled data construction and
 //! export building blocks. It does not install a global provider, start
 //! background workers, or perform implicit periodic export.
+//!
+//! The API is compatible with OTLP gRPC receivers while keeping the Kimojio cost
+//! model explicit: construct batches, export them from stackful code, inspect
+//! partial success, and close the client yourself. Logs and metrics currently use
+//! unary OTLP export requests over `kimojio-stack-grpc`; traces, automatic
+//! instrumentation, periodic export, and retry policy are left to higher layers.
+//!
+//! # Encoding a log batch
+//!
+//! ```
+//! use kimojio_stack_opentelemetry::{
+//!     AnyValue, ExportLimits, InstrumentationScope, KeyValue, LogBatch,
+//!     LogRecord, Resource, SeverityNumber,
+//! };
+//!
+//! let batch = LogBatch::new(
+//!     Resource::new().with_attribute(KeyValue::new(
+//!         "service.name",
+//!         AnyValue::String("payments".into()),
+//!     )),
+//!     InstrumentationScope::new("request-handler").with_version("1.0.0"),
+//! )
+//! .with_record(
+//!     LogRecord::new(1_700_000_000_000_000_000, SeverityNumber::Info, AnyValue::String("accepted".into()))
+//!         .with_attribute(KeyValue::new("tenant", AnyValue::String("a".into()))),
+//! );
+//!
+//! let encoded = batch.encode_request(ExportLimits::default()).unwrap();
+//! assert!(!encoded.is_empty());
+//! ```
+//!
+//! # Exporting from a stackful client
+//!
+//! ```no_run
+//! use kimojio_stack::RuntimeContext;
+//! use kimojio_stack_http::{HttpConfig, StackTransport};
+//! use kimojio_stack_opentelemetry::{
+//!     AnyValue, ExportClientConfig, InstrumentationScope, LogBatch, LogRecord,
+//!     LogsClient, Resource, SeverityNumber,
+//! };
+//!
+//! # fn connected_transport() -> StackTransport { unimplemented!() }
+//! # fn example(cx: &RuntimeContext<'_>) -> Result<(), kimojio_stack_opentelemetry::Error> {
+//! let mut client = LogsClient::from_transport(
+//!     connected_transport(),
+//!     HttpConfig::default(),
+//!     ExportClientConfig::default(),
+//! );
+//! let batch = LogBatch::new(Resource::new(), InstrumentationScope::new("example"))
+//!     .with_record(LogRecord::new(1, SeverityNumber::Info, AnyValue::String("ready".into())));
+//! let result = client.export(cx, batch)?;
+//! assert_eq!(result.rejected_log_records(), 0);
+//! client.finish(cx)?;
+//! # Ok(())
+//! # }
+//! ```
 
 pub mod client;
 pub mod error;
@@ -135,6 +191,8 @@ pub struct Resource {
 
 impl Resource {
     /// Creates an empty resource.
+    ///
+    /// Add attributes such as `service.name` with [`with_attribute`](Self::with_attribute).
     pub fn new() -> Self {
         Self::default()
     }
@@ -171,6 +229,9 @@ pub struct InstrumentationScope {
 
 impl InstrumentationScope {
     /// Creates scope metadata with a name.
+    ///
+    /// Use stable instrumentation names so receivers can group telemetry by
+    /// library or subsystem.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -227,6 +288,9 @@ pub struct KeyValue {
 
 impl KeyValue {
     /// Creates a key/value pair.
+    ///
+    /// Keys are not normalized by this crate. Use the exact semantic-convention
+    /// key expected by your receiver.
     pub fn new(key: impl Into<String>, value: AnyValue) -> Self {
         Self {
             key: key.into(),
@@ -253,11 +317,19 @@ impl KeyValue {
 }
 
 /// Supported low-level telemetry attribute values.
+///
+/// The initial low-level surface keeps the value set intentionally small. Add
+/// richer OTLP value forms in higher layers only when their allocation and
+/// encoding costs are explicit.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AnyValue {
+    /// UTF-8 string value.
     String(String),
+    /// Boolean value.
     Bool(bool),
+    /// Signed 64-bit integer value.
     I64(i64),
+    /// Opaque bytes value.
     Bytes(Vec<u8>),
 }
 
@@ -276,6 +348,9 @@ impl AnyValue {
 }
 
 /// Shared export limits.
+///
+/// Limits are checked before gRPC framing so oversized batches fail locally
+/// without writing a partial request to the transport.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExportLimits {
     /// Maximum encoded request bytes.

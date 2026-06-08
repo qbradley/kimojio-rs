@@ -17,6 +17,7 @@ use crate::{Error, Metadata, Status, StatusCode as GrpcStatusCode, codec};
 /// Shared configuration for unary gRPC servers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServerConfig {
+    /// Maximum encoded gRPC message length, excluding the five-byte gRPC frame header.
     pub max_message_len: usize,
 }
 
@@ -36,6 +37,7 @@ pub struct UnaryServer {
 }
 
 impl UnaryServer {
+    /// Creates an empty gRPC dispatcher.
     pub fn new(config: ServerConfig) -> Self {
         Self {
             handlers: BTreeMap::new(),
@@ -43,6 +45,11 @@ impl UnaryServer {
         }
     }
 
+    /// Registers a unary handler for a fully-qualified gRPC path.
+    ///
+    /// `path` should look like `/package.Service/Method`. The handler runs
+    /// inline on the coroutine serving the request and may use the supplied
+    /// [`RuntimeContext`] to perform stackful I/O or synchronization.
     pub fn add_unary<Req, Resp, F>(&mut self, path: impl Into<String>, handler: F)
     where
         Req: Message + Default + 'static,
@@ -100,6 +107,12 @@ impl UnaryServer {
         );
     }
 
+    /// Serves one HTTP/2 request through the registered handler table.
+    ///
+    /// Returns `Ok(false)` when the underlying HTTP/2 connection reaches clean
+    /// EOF before another request. Handler `Err(Status)` values are converted
+    /// into gRPC status responses; transport/protocol failures are returned as
+    /// [`Error`] so the serve loop can stop.
     pub fn serve_one(
         &self,
         cx: &RuntimeContext<'_>,
@@ -135,13 +148,21 @@ impl UnaryServer {
     }
 }
 
+/// Return value from a unary handler.
+///
+/// Handlers return this to send initial metadata, one response message, and
+/// terminal OK trailers.
 pub struct UnaryReply<M> {
+    /// Initial response metadata sent before the message.
     pub metadata: Metadata,
+    /// Response message encoded into the DATA frame.
     pub message: M,
+    /// Trailing metadata merged into the terminal OK status.
     pub trailers: Metadata,
 }
 
 impl<M> UnaryReply<M> {
+    /// Creates a unary reply with empty metadata and trailers.
     pub fn new(message: M) -> Self {
         Self {
             metadata: Metadata::new(),
@@ -169,6 +190,7 @@ pub struct ServerStreamingReply<S> {
 }
 
 impl<S> ServerStreamingReply<S> {
+    /// Creates a server-streaming reply with empty metadata and trailers.
     pub fn new(stream: S) -> Self {
         Self {
             metadata: Metadata::new(),
@@ -221,6 +243,7 @@ pub struct ReceiverStream<M> {
 }
 
 impl<M> ReceiverStream<M> {
+    /// Creates a server stream backed by a bounded stack channel receiver.
     pub fn new(receiver: channel::bounded::Receiver<Result<M, Status>>) -> Self {
         Self { receiver }
     }

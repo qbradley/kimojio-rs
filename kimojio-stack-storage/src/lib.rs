@@ -5,6 +5,55 @@
 //!
 //! This crate keeps storage operation costs explicit: callers choose auth mode,
 //! deadlines, retry policy, body replay behavior, and concurrency limits.
+//!
+//! It is intentionally a low-level client toolkit rather than a hidden service
+//! layer. Operation modules build [`RequestParts`] values, [`Transport`] executes
+//! one attempt from stackful code, and helpers preserve diagnostics and retry
+//! eligibility so higher-level policy can stay visible to the caller.
+//!
+//! # Success path
+//!
+//! 1. Build stable identifiers such as [`AccountId`], [`ContainerName`],
+//!    [`ObjectName`], and [`ObjectRef`].
+//! 2. Select an [`AuthMode`] and transport. [`StackHttpTransport`] adapts an
+//!    existing `kimojio-stack-http` client connection.
+//! 3. Use operation clients like [`BlockClient`], [`PageClient`], or
+//!    [`ListClient`] from a stackful coroutine.
+//! 4. Stream large downloads through chunk callbacks instead of buffering whole
+//!    responses.
+//!
+//! ```
+//! use kimojio_stack_storage::{
+//!     AccountId, ContainerName, MetadataMap, ObjectKind, ObjectName, ObjectRef,
+//!     ReplayBody, BlockUpload, block_upload_request,
+//! };
+//!
+//! let object = ObjectRef {
+//!     account: AccountId::new("account"),
+//!     container: ContainerName::new("container"),
+//!     name: ObjectName::new("path/object"),
+//!     kind: ObjectKind::Data,
+//! };
+//! let metadata = MetadataMap::new();
+//! let request = block_upload_request(BlockUpload {
+//!     object: &object,
+//!     body: ReplayBody::from_vec(b"payload".to_vec()),
+//!     metadata: &metadata,
+//!     lease: None,
+//!     conditions: None,
+//!     if_not_exists: true,
+//! }).unwrap();
+//! assert_eq!(request.method, "PUT");
+//! ```
+//!
+//! # Cost and safety model
+//!
+//! Request bodies declare whether they are replayable through [`ReplayBody`].
+//! Retry helpers refuse to retry non-replayable bodies and ambiguous page writes.
+//! Debug output redacts signed URIs, credentials, and request body bytes.
+//! Transport implementations should deliver success body chunks incrementally
+//! through `execute_with_body_chunks`; error bodies are diagnostics, not success
+//! payloads.
 
 pub mod archive;
 pub mod auth;

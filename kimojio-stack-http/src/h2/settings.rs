@@ -1,24 +1,37 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! HTTP/2 settings and validation helpers.
+
 use crate::Error;
 
+/// Default maximum HTTP/2 frame payload size.
 pub const DEFAULT_MAX_FRAME_SIZE: u32 = 16_384;
+/// Largest frame size permitted by RFC 9113.
 pub const MAX_ALLOWED_FRAME_SIZE: u32 = 16_777_215;
+/// Largest flow-control window permitted by HTTP/2.
 pub const MAX_WINDOW_SIZE: u32 = 2_147_483_647;
 
+/// HTTP/2 SETTINGS identifiers supported by this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum SettingId {
+    /// SETTINGS_HEADER_TABLE_SIZE.
     HeaderTableSize = 0x1,
+    /// SETTINGS_ENABLE_PUSH.
     EnablePush = 0x2,
+    /// SETTINGS_MAX_CONCURRENT_STREAMS.
     MaxConcurrentStreams = 0x3,
+    /// SETTINGS_INITIAL_WINDOW_SIZE.
     InitialWindowSize = 0x4,
+    /// SETTINGS_MAX_FRAME_SIZE.
     MaxFrameSize = 0x5,
+    /// SETTINGS_MAX_HEADER_LIST_SIZE.
     MaxHeaderListSize = 0x6,
 }
 
 impl SettingId {
+    /// Converts a raw SETTINGS identifier.
     pub fn from_u16(id: u16) -> Option<Self> {
         match id {
             0x1 => Some(Self::HeaderTableSize),
@@ -32,29 +45,41 @@ impl SettingId {
     }
 }
 
+/// One HTTP/2 setting value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Setting {
+    /// Setting identifier.
     pub id: SettingId,
+    /// Raw setting value.
     pub value: u32,
 }
 
 impl Setting {
+    /// Creates one setting value.
     pub const fn new(id: SettingId, value: u32) -> Self {
         Self { id, value }
     }
 }
 
+/// Effective HTTP/2 connection settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
+    /// HPACK dynamic table size.
     pub header_table_size: u32,
+    /// Whether server push is enabled by the peer.
     pub enable_push: bool,
+    /// Maximum concurrent streams.
     pub max_concurrent_streams: u32,
+    /// Initial per-stream flow-control window.
     pub initial_window_size: u32,
+    /// Maximum frame payload size.
     pub max_frame_size: u32,
+    /// Maximum decompressed header-list size.
     pub max_header_list_size: u32,
 }
 
 impl Settings {
+    /// Applies one setting after validating its value.
     pub fn apply(&mut self, setting: Setting) -> Result<(), Error> {
         match setting.id {
             SettingId::HeaderTableSize => self.header_table_size = setting.value,
@@ -83,6 +108,7 @@ impl Settings {
         Ok(())
     }
 
+    /// Applies settings in order.
     pub fn apply_all(&mut self, settings: &[Setting]) -> Result<(), Error> {
         for &setting in settings {
             self.apply(setting)?;

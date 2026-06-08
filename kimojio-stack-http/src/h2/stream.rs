@@ -1,15 +1,23 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! HTTP/2 stream state and flow-control primitives.
+//!
+//! These types back the higher-level HTTP/2 client/server connections. They are
+//! public for tests and custom protocol integration that needs to inspect stream
+//! state transitions or flow-control accounting.
+
 use crate::{BodyLimits, Error};
 
 use super::hpack::Header;
 use super::settings::MAX_WINDOW_SIZE;
 
+/// Nonzero 31-bit HTTP/2 stream identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StreamId(u32);
 
 impl StreamId {
+    /// Validates and creates a stream ID.
     pub fn new(id: u32) -> Result<Self, Error> {
         if id == 0 || id & 0x8000_0000 != 0 {
             Err(Error::Protocol("invalid HTTP/2 stream id"))
@@ -18,30 +26,42 @@ impl StreamId {
         }
     }
 
+    /// Creates a stream ID without validation.
+    ///
+    /// Callers must ensure `id` is nonzero and fits in 31 bits.
     pub const fn from_u31_unchecked(id: u32) -> Self {
         Self(id)
     }
 
+    /// Returns the raw stream ID.
     pub const fn get(self) -> u32 {
         self.0
     }
 }
 
+/// HTTP/2 stream state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamState {
+    /// No headers have been exchanged.
     Idle,
+    /// Both sides may send frames.
     Open,
+    /// Local side has ended its stream.
     HalfClosedLocal,
+    /// Remote side has ended its stream.
     HalfClosedRemote,
+    /// Stream is closed.
     Closed,
 }
 
+/// Signed HTTP/2 flow-control window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FlowControlWindow {
     available: i32,
 }
 
 impl FlowControlWindow {
+    /// Creates a window with an initial size.
     pub fn new(size: u32) -> Result<Self, Error> {
         if size > MAX_WINDOW_SIZE {
             return Err(Error::Protocol("flow-control window exceeds maximum"));
@@ -51,10 +71,12 @@ impl FlowControlWindow {
         })
     }
 
+    /// Returns currently available credit.
     pub fn available(self) -> i32 {
         self.available
     }
 
+    /// Consumes outbound or inbound credit.
     pub fn consume(&mut self, amount: usize) -> Result<(), Error> {
         let amount =
             i32::try_from(amount).map_err(|_| Error::Protocol("flow-control amount too large"))?;
@@ -65,6 +87,7 @@ impl FlowControlWindow {
         Ok(())
     }
 
+    /// Increases credit from a WINDOW_UPDATE increment.
     pub fn increase(&mut self, amount: u32) -> Result<(), Error> {
         if amount == 0 {
             return Err(Error::Protocol("WINDOW_UPDATE increment must be non-zero"));
@@ -82,6 +105,7 @@ impl FlowControlWindow {
         Ok(())
     }
 
+    /// Adjusts credit after a peer initial-window setting change.
     pub fn adjust(&mut self, delta: i32) -> Result<(), Error> {
         let next = self
             .available
@@ -95,6 +119,7 @@ impl FlowControlWindow {
     }
 }
 
+/// State for one HTTP/2 stream.
 #[derive(Debug, Clone)]
 pub struct Stream {
     id: StreamId,
@@ -107,6 +132,7 @@ pub struct Stream {
 }
 
 impl Stream {
+    /// Creates a stream with local and peer initial windows.
     pub fn new(
         id: StreamId,
         inbound_initial_window: u32,
@@ -123,46 +149,57 @@ impl Stream {
         })
     }
 
+    /// Returns the stream ID.
     pub fn id(&self) -> StreamId {
         self.id
     }
 
+    /// Returns the current stream state.
     pub fn state(&self) -> StreamState {
         self.state
     }
 
+    /// Returns inbound flow-control state.
     pub fn inbound_window(&self) -> FlowControlWindow {
         self.inbound_window
     }
 
+    /// Returns outbound flow-control state.
     pub fn outbound_window(&self) -> FlowControlWindow {
         self.outbound_window
     }
 
+    /// Increases inbound window credit.
     pub fn increase_inbound_window(&mut self, amount: u32) -> Result<(), Error> {
         self.inbound_window.increase(amount)
     }
 
+    /// Increases outbound window credit.
     pub fn increase_outbound_window(&mut self, amount: u32) -> Result<(), Error> {
         self.outbound_window.increase(amount)
     }
 
+    /// Consumes outbound window credit.
     pub fn consume_outbound_window(&mut self, amount: usize) -> Result<(), Error> {
         self.outbound_window.consume(amount)
     }
 
+    /// Adjusts outbound credit after peer SETTINGS changes.
     pub fn adjust_outbound_window(&mut self, delta: i32) -> Result<(), Error> {
         self.outbound_window.adjust(delta)
     }
 
+    /// Returns received body bytes counted against body limits.
     pub fn received_body_len(&self) -> usize {
         self.received_body_len
     }
 
+    /// Returns terminal trailers, if received.
     pub fn trailers(&self) -> Option<&[Header]> {
         self.trailers.as_deref()
     }
 
+    /// Applies inbound HEADERS state transition.
     pub fn receive_headers(&mut self, end_headers: bool, end_stream: bool) -> Result<(), Error> {
         if self.awaiting_continuation {
             return Err(Error::Protocol(
@@ -187,6 +224,7 @@ impl Stream {
         Ok(())
     }
 
+    /// Applies outbound HEADERS state transition.
     pub fn send_headers(&mut self, end_stream: bool) -> Result<(), Error> {
         match self.state {
             StreamState::Idle => {
@@ -209,6 +247,7 @@ impl Stream {
         Ok(())
     }
 
+    /// Applies inbound CONTINUATION state transition.
     pub fn receive_continuation(&mut self, end_headers: bool) -> Result<(), Error> {
         if !self.awaiting_continuation {
             return Err(Error::Protocol("unexpected CONTINUATION frame"));
@@ -217,6 +256,7 @@ impl Stream {
         Ok(())
     }
 
+    /// Applies inbound DATA accounting and state transition.
     pub fn receive_data(
         &mut self,
         data: &[u8],
@@ -242,6 +282,7 @@ impl Stream {
         Ok(())
     }
 
+    /// Applies outbound DATA state transition.
     pub fn send_data(&mut self, end_stream: bool) -> Result<(), Error> {
         match self.state {
             StreamState::Open | StreamState::HalfClosedRemote => {}
@@ -253,6 +294,7 @@ impl Stream {
         Ok(())
     }
 
+    /// Records inbound trailers and closes the remote side.
     pub fn receive_trailers(&mut self, headers: Vec<Header>) -> Result<(), Error> {
         if self.awaiting_continuation {
             return Err(Error::Protocol(
@@ -269,6 +311,7 @@ impl Stream {
         }
     }
 
+    /// Marks the stream closed.
     pub fn close(&mut self) {
         self.state = StreamState::Closed;
     }

@@ -15,7 +15,7 @@
 //!   integration and are compatible with Tokio tasks.
 //!
 //! Choose endpoint types explicitly with [`bounded`] or the convenience
-//! constructors [`thread`], [`stackful`], and [`tokio`].
+//! constructors [`thread()`], [`stackful()`], and [`tokio()`].
 //!
 //! ```
 //! use kimojio_stack::channel::cross_thread;

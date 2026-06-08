@@ -1,6 +1,30 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Explicit retry policy for storage attempts.
+//!
+//! The policy is deliberately a pure decision function: it does not sleep,
+//! mutate transport state, or resubmit requests. Operation loops call
+//! [`RetryPolicy::decide_with_state`], sleep through the stack runtime if a retry
+//! is allowed, and then execute another attempt themselves.
+//!
+//! ```
+//! use std::time::Duration;
+//! use kimojio_stack_storage::{
+//!     Error, ErrorKind, OperationClass, ReplayBody, RetryDecision, RetryPolicy,
+//! };
+//!
+//! let policy = RetryPolicy::default();
+//! let decision = policy.decide(
+//!     1,
+//!     OperationClass::PageRead,
+//!     &ReplayBody::Empty,
+//!     &Error::new(ErrorKind::Unavailable, "busy"),
+//!     None,
+//! );
+//! assert!(matches!(decision, RetryDecision::RetryAfter(_)));
+//! ```
+
 use std::time::Duration;
 
 use crate::{BodyReplay, Error, ErrorKind, OperationClass, ReplayBody};
@@ -8,25 +32,38 @@ use crate::{BodyReplay, Error, ErrorKind, OperationClass, ReplayBody};
 /// Retry decision for one failed attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RetryDecision {
+    /// Retry after the supplied delay.
     RetryAfter(Duration),
+    /// Do not retry this failure.
     DoNotRetry,
 }
 
 /// Dynamic retry state supplied for an attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RetryState {
+    /// Total elapsed time since the operation started.
     pub elapsed: Duration,
+    /// Whether the caller has cancelled the operation.
     pub canceled: bool,
+    /// Caller-supplied jitter for this decision.
     pub jitter: Duration,
 }
 
 /// Retry policy configuration.
+///
+/// `max_attempts` includes the first attempt. `max_jitter` caps the jitter value
+/// supplied through [`RetryState`]; the policy does not generate randomness.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RetryPolicy {
+    /// Maximum total attempts, including attempt 1.
     pub max_attempts: u32,
+    /// Base exponential backoff delay.
     pub base_delay: Duration,
+    /// Maximum computed backoff delay before jitter.
     pub max_delay: Duration,
+    /// Maximum caller-supplied jitter that can be added.
     pub max_jitter: Duration,
+    /// Total operation retry budget.
     pub total_timeout: Duration,
 }
 
@@ -43,7 +80,7 @@ impl Default for RetryPolicy {
 }
 
 impl RetryPolicy {
-    /// Decides whether to retry an attempt.
+    /// Decides whether to retry an attempt with default elapsed/cancel/jitter state.
     pub fn decide(
         self,
         attempt: u32,
@@ -67,6 +104,10 @@ impl RetryPolicy {
     }
 
     /// Decides whether to retry an attempt with timeout and cancellation state.
+    ///
+    /// Page writes are not retried directly because completion can be ambiguous
+    /// after a transport failure. Callers should refresh properties or sequence
+    /// number state before deciding whether another write is safe.
     pub fn decide_with_state(
         self,
         attempt: u32,
@@ -118,8 +159,11 @@ fn is_retriable(operation: OperationClass, kind: ErrorKind) -> bool {
 /// Observation emitted for retry instrumentation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RetryObservation {
+    /// Attempt number that produced this observation.
     pub attempt: u32,
+    /// Retry decision returned by the policy.
     pub decision: RetryDecision,
+    /// Stable error kind used for the decision.
     pub error_kind: ErrorKind,
 }
 

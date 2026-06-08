@@ -10,25 +10,37 @@ use crate::{Body, Error, HttpConfig, StackTransport, h2, http1};
 /// Shared configuration for stackful HTTP clients.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ClientConfig {
+    /// Protocol limits and buffer sizes used by the selected HTTP implementation.
     pub http: HttpConfig,
 }
 
 /// Protocol-neutral client connection entry point.
+///
+/// This enum keeps the concrete HTTP/1.1 or HTTP/2 connection inline so callers
+/// can choose a protocol without paying for dynamic dispatch or heap allocation.
 #[allow(clippy::large_enum_variant)] // Keep concrete connections inline to avoid heap allocation.
 pub enum ClientConnection {
+    /// HTTP/1.1 connection.
     Http1(http1::ClientConnection),
+    /// HTTP/2 connection.
     Http2(h2::ClientConnection),
 }
 
 impl ClientConnection {
+    /// Wraps a transport as an HTTP/1.1 client connection.
     pub fn http1(transport: StackTransport, config: HttpConfig) -> Self {
         Self::Http1(http1::ClientConnection::new(transport, config))
     }
 
+    /// Wraps a transport as an HTTP/2 client connection.
     pub fn http2(transport: StackTransport, config: HttpConfig) -> Self {
         Self::Http2(h2::ClientConnection::new(transport, config))
     }
 
+    /// Sends one request and buffers the complete response body.
+    ///
+    /// Use [`send_with_body_chunks`](Self::send_with_body_chunks) when response
+    /// bodies can be large or should be processed incrementally.
     pub fn send(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -40,6 +52,10 @@ impl ClientConnection {
         }
     }
 
+    /// Sets an I/O deadline on the underlying transport.
+    ///
+    /// The previous deadline is returned so callers can restore it after a
+    /// request-specific timeout.
     pub fn set_io_deadline(&mut self, deadline: Option<Instant>) -> Option<Instant> {
         match self {
             Self::Http1(connection) => connection.set_io_deadline(deadline),
@@ -47,6 +63,10 @@ impl ClientConnection {
         }
     }
 
+    /// Sends one request and delivers response body chunks incrementally.
+    ///
+    /// The returned response has an empty body; body bytes are delivered to
+    /// `on_chunk`. If `on_chunk` returns an error, the request fails immediately.
     pub fn send_with_body_chunks<F>(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -67,6 +87,11 @@ impl ClientConnection {
         }
     }
 
+    /// Sends one request, exposes response headers, then optionally streams body chunks.
+    ///
+    /// `on_headers` receives the response head with an empty body. Return `true`
+    /// to stream the body to `on_chunk`, or `false` to drain/discard the body
+    /// while still completing the response.
     pub fn send_with_body_chunks_after_headers<H, F>(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -93,6 +118,7 @@ impl ClientConnection {
         }
     }
 
+    /// Closes the underlying transport through the stack runtime.
     pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
         match self {
             Self::Http1(connection) => connection.close(cx),

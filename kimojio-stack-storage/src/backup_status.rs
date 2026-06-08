@@ -1,6 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Small JSON backup-status object helpers.
+//!
+//! Backup status is stored as a block object containing JSON. The helper client
+//! reuses [`BlockClient`] so update/read behavior follows the
+//! same replay and streaming rules as other block operations.
+
 use bytes::{Bytes, BytesMut};
 use serde_json::{Value, json};
 
@@ -9,13 +15,17 @@ use crate::{
     OperationClass, ReplayBody, Transport,
 };
 
+/// Backup checkpoint status persisted as JSON.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BackupStatus {
+    /// Checkpoint log sequence number.
     pub checkpoint_lsn: u64,
+    /// Caller-defined state string.
     pub state: String,
 }
 
 impl BackupStatus {
+    /// Serializes the status as JSON bytes.
     pub fn to_bytes(&self) -> Bytes {
         Bytes::from(
             json!({
@@ -26,6 +36,7 @@ impl BackupStatus {
         )
     }
 
+    /// Parses status JSON from bytes.
     pub fn parse(bytes: &[u8]) -> Result<Self, Error> {
         let value = serde_json::from_slice::<Value>(bytes)
             .map_err(|error| Error::new(ErrorKind::Corruption, error.to_string()))?;
@@ -45,10 +56,12 @@ impl BackupStatus {
     }
 }
 
+/// Client helper for backup-status reads and updates.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BackupStatusClient;
 
 impl BackupStatusClient {
+    /// Writes backup status to a block object.
     pub fn update<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -73,6 +86,7 @@ impl BackupStatusClient {
         Ok(())
     }
 
+    /// Reads and parses backup status from a block object.
     pub fn read<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,

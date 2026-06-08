@@ -1,6 +1,26 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Container listing helpers.
+//!
+//! Listing is page-oriented. [`ListClient::fetch_page`] fetches one page,
+//! [`ListClient::stream_pages`] follows continuation tokens, and
+//! [`merge_dedup_pages`] can combine pages while preserving one item per
+//! `(name, snapshot)` key.
+//!
+//! ```
+//! use kimojio_stack_storage::{AccountId, ContainerName, ListOptions, list_request};
+//!
+//! let options = ListOptions {
+//!     prefix: Some("tenant/".into()),
+//!     include_metadata: true,
+//!     max_results: Some(100),
+//!     ..ListOptions::default()
+//! };
+//! let request = list_request(&AccountId::new("acct"), &ContainerName::new("container"), &options);
+//! assert!(request.uri.contains("comp=list"));
+//! ```
+
 use std::collections::BTreeMap;
 use std::time::Instant;
 
@@ -12,34 +32,51 @@ use crate::{
     Transport, model::percent_encode_component,
 };
 
+/// Options controlling one list page request.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ListOptions {
+    /// Optional object-name prefix.
     pub prefix: Option<String>,
+    /// Continuation marker from a previous [`ListPage`].
     pub continuation: Option<String>,
+    /// Whether to ask the service to include metadata.
     pub include_metadata: bool,
+    /// Whether to include snapshots in the listing.
     pub include_snapshots: bool,
+    /// Optional object-kind filter. Requires metadata to be present.
     pub kind: Option<ObjectKind>,
+    /// Optional service-side maximum number of results.
     pub max_results: Option<u32>,
 }
 
+/// One item returned by a list operation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ListItem {
+    /// Object name.
     pub name: ObjectName,
+    /// Parsed object kind.
     pub kind: ObjectKind,
+    /// Parsed object metadata.
     pub metadata: MetadataMap,
+    /// Optional snapshot identifier.
     pub snapshot: Option<String>,
 }
 
+/// One page returned by a list operation.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ListPage {
+    /// Items in this page after filtering.
     pub items: Vec<ListItem>,
+    /// Continuation marker for the next page.
     pub continuation: Option<String>,
 }
 
+/// Client helper for container listing.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ListClient;
 
 impl ListClient {
+    /// Fetches and parses one list page.
     pub fn fetch_page<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -63,6 +100,7 @@ impl ListClient {
         parse_list_page(text, options.kind).map_err(attempt_error)
     }
 
+    /// Fetches one page with retry policy applied to retryable list failures.
     pub fn fetch_page_with_retry<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -111,6 +149,10 @@ impl ListClient {
         }
     }
 
+    /// Follows continuations and calls `on_page` for each page.
+    ///
+    /// The callback runs before the next page is fetched, allowing callers to
+    /// apply backpressure or stop by returning an error.
     pub fn stream_pages<T, F>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -138,6 +180,7 @@ impl ListClient {
     }
 }
 
+/// Builds a list request for one container page.
 pub fn list_request(
     account: &AccountId,
     container: &ContainerName,
@@ -176,6 +219,10 @@ pub fn list_request(
     )
 }
 
+/// Parses service XML into a list page.
+///
+/// If `kind_filter` is supplied, each item must include `object-kind` metadata
+/// so filtering can be validated rather than silently defaulted.
 pub fn parse_list_page(xml: &str, kind_filter: Option<ObjectKind>) -> Result<ListPage, Error> {
     let continuation = tag_text(xml, "NextMarker")?.filter(|value| !value.is_empty());
     let mut items = Vec::new();
@@ -215,6 +262,7 @@ pub fn parse_list_page(xml: &str, kind_filter: Option<ObjectKind>) -> Result<Lis
     })
 }
 
+/// Merges pages and de-duplicates by object name plus snapshot identifier.
 pub fn merge_dedup_pages(pages: &[ListPage]) -> Vec<ListItem> {
     let mut merged = BTreeMap::<(String, Option<String>), ListItem>::new();
     for page in pages {
@@ -227,6 +275,7 @@ pub fn merge_dedup_pages(pages: &[ListPage]) -> Vec<ListItem> {
     merged.into_values().collect()
 }
 
+/// Returns whether a list error is eligible for retry.
 pub fn is_retryable_list_error(error: &Error) -> bool {
     matches!(
         error.kind(),

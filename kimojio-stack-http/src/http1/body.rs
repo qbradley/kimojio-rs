@@ -1,19 +1,31 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! HTTP/1.1 body read/write helpers.
+//!
+//! These helpers are public for low-level protocol tests and custom connection
+//! code. Higher-level callers should normally use
+//! [`crate::http1::ClientConnection`] or [`crate::http1::ServerConnection`].
+
 use bytes::Bytes;
 use kimojio_stack::RuntimeContext;
 
 use crate::{Body, BodyBuilder, BodyLimits, Error, LimitKind, StackTransport};
 
+/// HTTP/1.1 body framing strategy for a message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BodyKind {
+    /// No body is present.
     Empty,
+    /// Body has an explicit content length.
     ContentLength(usize),
+    /// Body is transfer-encoding chunked.
     Chunked,
+    /// Body continues until EOF.
     Eof,
 }
 
+/// Reads and buffers a body according to `kind`.
 pub fn read_body(
     cx: &RuntimeContext<'_>,
     transport: &mut StackTransport,
@@ -29,6 +41,7 @@ pub fn read_body(
     }
 }
 
+/// Reads a body incrementally according to `kind`.
 pub fn read_body_chunks<F>(
     cx: &RuntimeContext<'_>,
     transport: &mut StackTransport,
@@ -51,6 +64,7 @@ where
     }
 }
 
+/// Drains a body without delivering bytes to a caller sink.
 pub fn drain_body(
     cx: &RuntimeContext<'_>,
     transport: &mut StackTransport,
@@ -69,6 +83,7 @@ pub fn drain_body(
     }
 }
 
+/// Serializes a buffered body as either raw bytes or chunked transfer coding.
 pub fn write_body(buf: &mut Vec<u8>, body: &Body, chunked: bool) {
     if chunked {
         if !body.is_empty() {

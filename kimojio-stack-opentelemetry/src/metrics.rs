@@ -1,6 +1,26 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Low-level OTLP metrics export.
+//!
+//! The initial metrics surface supports cumulative monotonic sums and gauges.
+//! Histograms and summaries are recognized by [`MetricShape`] but return
+//! [`ErrorKind::Unsupported`](crate::ErrorKind::Unsupported) until a caller-facing
+//! allocation and aggregation model is added.
+//!
+//! ```
+//! use kimojio_stack_opentelemetry::{
+//!     ExportLimits, GaugeDataPoint, InstrumentationScope, MetricBatch,
+//!     MonotonicSumDataPoint, NumberValue, Resource,
+//! };
+//!
+//! let batch = MetricBatch::new(Resource::new(), InstrumentationScope::new("worker"))
+//!     .with_monotonic_sum(MonotonicSumDataPoint::new("requests", 1, 2, NumberValue::I64(10)))
+//!     .with_gauge(GaugeDataPoint::new("queue.depth", 2, NumberValue::I64(3)));
+//! let encoded = batch.encode_request(ExportLimits::default()).unwrap();
+//! assert!(!encoded.is_empty());
+//! ```
+
 use std::collections::BTreeMap;
 
 use kimojio_stack::RuntimeContext;
@@ -17,11 +37,18 @@ pub const METRICS_SERVICE_PATH: &str =
     "/opentelemetry.proto.collector.metrics.v1.MetricsService/Export";
 
 /// Metric shapes recognized by the low-level validation surface.
+///
+/// Use [`validate_supported`](Self::validate_supported) when accepting
+/// user-selected metric shapes before building a batch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MetricShape {
+    /// Cumulative monotonic sum.
     MonotonicSum,
+    /// Last-value gauge.
     Gauge,
+    /// Recognized but not exported by this crate yet.
     Histogram,
+    /// Recognized but not exported by this crate yet.
     Summary,
 }
 
@@ -39,7 +66,9 @@ impl MetricShape {
 /// Supported numeric metric values.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NumberValue {
+    /// Floating-point value.
     F64(f64),
+    /// Signed integer value.
     I64(i64),
 }
 
@@ -52,7 +81,10 @@ impl NumberValue {
     }
 }
 
-/// A monotonic sum data point.
+/// A cumulative monotonic sum data point.
+///
+/// Multiple points with the same name are grouped into one OTLP metric. The
+/// start timestamp must not be later than the point timestamp.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MonotonicSumDataPoint {
     name: String,
@@ -87,6 +119,8 @@ impl MonotonicSumDataPoint {
 }
 
 /// A gauge data point.
+///
+/// Multiple points with the same name are grouped into one OTLP metric.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GaugeDataPoint {
     name: String,
@@ -114,6 +148,9 @@ impl GaugeDataPoint {
 }
 
 /// Caller-owned batch of supported metric data points.
+///
+/// A metric name may appear as either a sum or a gauge, but not both in the same
+/// batch. `into_request` validates this before constructing the OTLP request.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MetricBatch {
     resource: Resource,
@@ -151,6 +188,10 @@ impl MetricBatch {
     }
 
     /// Builds an OTLP export request.
+    ///
+    /// This validates metric names, timestamp intervals, and shape/name
+    /// consistency. Use [`encode_request`](Self::encode_request) for tests that
+    /// also need local encoded-size enforcement.
     pub fn into_request(self) -> Result<proto::ExportMetricsServiceRequest, Error> {
         let mut sums: BTreeMap<String, Vec<proto::NumberDataPoint>> = BTreeMap::new();
         for point in self.sums {
@@ -251,6 +292,8 @@ fn number_data_point(
 }
 
 /// Low-level metrics export result.
+///
+/// An all-zero/default result means the receiver did not report partial failure.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MetricsExportResult {
     rejected_data_points: i64,
@@ -287,6 +330,9 @@ impl MetricsExportResult {
 }
 
 /// Low-level OTLP metrics export client.
+///
+/// The client owns one gRPC connection. It performs one unary export per
+/// [`export`](Self::export) call and leaves retry/batching policy to the caller.
 pub struct MetricsClient {
     inner: UnaryExportClient,
 }
@@ -334,6 +380,9 @@ impl MetricsClient {
     }
 
     /// Exports one caller-owned batch of metric data.
+    ///
+    /// Empty batches return `Ok(MetricsExportResult::default())` without sending
+    /// a gRPC request.
     pub fn export(
         &mut self,
         cx: &RuntimeContext<'_>,

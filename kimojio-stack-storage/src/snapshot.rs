@@ -1,27 +1,41 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Snapshot lifecycle helpers.
+//!
+//! Snapshots are addressed by a base object plus snapshot identifier. Helpers
+//! build create/delete/property/list requests, poll for delta-size metadata, and
+//! convert list items with snapshot IDs back into [`SnapshotRef`] values.
+
 use crate::{
     AttemptError, Conditions, Error, ErrorKind, LeaseContext, MetadataMap, ObjectProperties,
     ObjectRef, OperationClass, RequestParts, Transport, properties::object_uri,
 };
 
+/// Reference to one object snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SnapshotRef {
+    /// Base object.
     pub object: ObjectRef,
+    /// Service snapshot identifier.
     pub snapshot: String,
 }
 
+/// Delta-size availability for a snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeltaSize {
+    /// Delta size has not appeared yet.
     Pending,
+    /// Delta size is available in bytes.
     Available(u64),
 }
 
+/// Client helper for snapshot lifecycle operations.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SnapshotClient;
 
 impl SnapshotClient {
+    /// Creates a snapshot and returns its service identifier.
     pub fn create<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -41,6 +55,7 @@ impl SnapshotClient {
         })
     }
 
+    /// Deletes a snapshot, treating already-absent snapshots as success.
     pub fn delete<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -54,6 +69,10 @@ impl SnapshotClient {
         }
     }
 
+    /// Polls snapshot properties until delta size is available or attempts are exhausted.
+    ///
+    /// This method does not sleep between polls; callers that need backoff should
+    /// perform it around repeated property calls.
     pub fn poll_delta_size<T: Transport>(
         self,
         cx: &kimojio_stack::RuntimeContext<'_>,
@@ -73,6 +92,7 @@ impl SnapshotClient {
     }
 }
 
+/// Builds a create-snapshot request.
 pub fn create_snapshot_request(
     object: &ObjectRef,
     conditions: Option<&Conditions>,
@@ -95,16 +115,19 @@ pub fn create_snapshot_request(
     request
 }
 
+/// Builds a delete-snapshot request.
 pub fn delete_snapshot_request(snapshot: &SnapshotRef) -> RequestParts {
     let mut request = RequestParts::new(OperationClass::Snapshot, "DELETE", snapshot_uri(snapshot));
     request.metadata.insert("content-length", "0");
     request
 }
 
+/// Builds a snapshot properties request.
 pub fn snapshot_properties_request(snapshot: &SnapshotRef) -> RequestParts {
     RequestParts::new(OperationClass::Snapshot, "HEAD", snapshot_uri(snapshot))
 }
 
+/// Builds a request that lists snapshots for an object prefix.
 pub fn list_snapshots_request(object: &ObjectRef) -> RequestParts {
     RequestParts::new(
         OperationClass::Snapshot,
@@ -118,6 +141,7 @@ pub fn list_snapshots_request(object: &ObjectRef) -> RequestParts {
     )
 }
 
+/// Converts list items with snapshot identifiers into snapshot references.
 pub fn snapshot_refs_from_list_items(
     base: &ObjectRef,
     items: &[crate::ListItem],
@@ -136,10 +160,12 @@ pub fn snapshot_refs_from_list_items(
         .collect()
 }
 
+/// Parses snapshot properties from response metadata.
 pub fn parse_snapshot_properties(metadata: &MetadataMap) -> Result<ObjectProperties, Error> {
     crate::page::parse_object_properties(metadata)
 }
 
+/// Parses delta-size metadata.
 pub fn parse_delta_size(metadata: &MetadataMap) -> Result<DeltaSize, Error> {
     if let Some(value) = metadata.get("x-ms-delta-size") {
         let size = value
@@ -152,6 +178,7 @@ pub fn parse_delta_size(metadata: &MetadataMap) -> Result<DeltaSize, Error> {
     Ok(DeltaSize::Pending)
 }
 
+/// Returns the source reference URI for copy-from-snapshot operations.
 pub fn snapshot_source_reference(snapshot: &SnapshotRef) -> String {
     format!(
         "{}?snapshot={}",

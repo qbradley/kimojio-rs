@@ -14,9 +14,12 @@ use super::{
     ConnectionState, Frame, FrameFlags, FramePayload, FrameType, Header, Settings, StreamId, codec,
 };
 
+/// Completed inbound HTTP/2 request with its stream ID.
 #[derive(Debug)]
 pub struct IncomingRequest {
+    /// Stream ID that must be used when sending the response.
     pub stream_id: StreamId,
+    /// Request head and buffered body.
     pub request: Request<Body>,
 }
 
@@ -34,6 +37,14 @@ impl PendingRequest {
     }
 }
 
+/// Low-level HTTP/2 server connection over a stack transport.
+///
+/// The server accepts one completed request at a time with [`accept`](Self::accept).
+/// Responses can be sent as a single buffered body with
+/// [`send_response`](Self::send_response) or incrementally with
+/// [`send_response_headers`](Self::send_response_headers),
+/// [`send_response_data`](Self::send_response_data), and
+/// [`finish_response_stream`](Self::finish_response_stream).
 pub struct ServerConnection {
     transport: StackTransport,
     config: HttpConfig,
@@ -46,11 +57,13 @@ pub struct ServerConnection {
 }
 
 impl ServerConnection {
+    /// Creates a server connection with settings derived from [`HttpConfig`].
     pub fn new(transport: StackTransport, config: HttpConfig) -> Self {
         let settings = codec::settings_from_config(config);
         Self::new_with_settings(transport, config, settings)
     }
 
+    /// Creates a server connection with explicit local HTTP/2 settings.
     pub fn new_with_settings(
         transport: StackTransport,
         config: HttpConfig,
@@ -68,6 +81,11 @@ impl ServerConnection {
         }
     }
 
+    /// Accepts the next complete request, or `Ok(None)` after peer EOF.
+    ///
+    /// Request bodies are currently buffered up to [`HttpConfig::max_body_bytes`].
+    /// While waiting for a request, peer resets and GOAWAY frames update
+    /// connection state and can cause the connection to finish.
     pub fn accept(&mut self, cx: &RuntimeContext<'_>) -> Result<Option<IncomingRequest>, Error> {
         self.ensure_initialized(cx)?;
         if let Some(request) = self.completed.pop_front() {
@@ -93,6 +111,7 @@ impl ServerConnection {
         }
     }
 
+    /// Sends a response with no trailers.
     pub fn send_response(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -102,6 +121,10 @@ impl ServerConnection {
         self.send_response_with_trailers(cx, stream_id, response, None)
     }
 
+    /// Sends a response and optional terminal trailers.
+    ///
+    /// Non-empty trailers are sent as terminal HEADERS. Empty bodies without
+    /// trailers complete in the response HEADERS frame.
     pub fn send_response_with_trailers(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -240,6 +263,9 @@ impl ServerConnection {
         Ok(())
     }
 
+    /// Accepts one request, calls `handler`, and sends the returned response.
+    ///
+    /// Returns `Ok(false)` when the peer has closed and no request remains.
     pub fn serve_one(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -253,6 +279,10 @@ impl ServerConnection {
         Ok(true)
     }
 
+    /// Sends `RST_STREAM` for `stream_id`.
+    ///
+    /// Use this when a request cannot be processed and the caller wants to abort
+    /// only that stream while keeping the connection alive.
     pub fn reset_stream(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -267,6 +297,10 @@ impl ServerConnection {
         )
     }
 
+    /// Sends a GOAWAY frame.
+    ///
+    /// The caller supplies the last stream ID it will process and an HTTP/2 error
+    /// code. The connection is not closed automatically.
     pub fn goaway(
         &mut self,
         cx: &RuntimeContext<'_>,
@@ -281,11 +315,15 @@ impl ServerConnection {
         )
     }
 
+    /// Closes the underlying transport.
     pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
         self.transport.close(cx)
     }
 
     /// Half-closes writes, drains peer data until EOF, then closes the transport.
+    ///
+    /// This is useful for tests and short-lived protocols where the server wants
+    /// the client to observe a graceful end of writes before the socket is closed.
     pub fn shutdown_write_and_close_after_peer(
         mut self,
         cx: &RuntimeContext<'_>,

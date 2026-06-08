@@ -1,11 +1,18 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Generic object metadata and properties request helpers.
+//!
+//! These helpers build HEAD, metadata-update, and delete requests shared by
+//! object families. They do not execute requests directly; pass the returned
+//! [`RequestParts`] to a [`Transport`](crate::Transport).
+
 use crate::{
     Conditions, LeaseContext, MetadataMap, ObjectProperties, ObjectRef, OperationClass,
     RequestParts, page::parse_object_properties,
 };
 
+/// Builds a HEAD/properties request for an object.
 pub fn object_properties_request(
     object: &ObjectRef,
     conditions: Option<&Conditions>,
@@ -23,6 +30,10 @@ pub fn object_properties_request(
     request
 }
 
+/// Builds a metadata replacement request.
+///
+/// Metadata keys are emitted as `x-ms-meta-*` headers after normalization by
+/// [`MetadataMap`].
 pub fn set_object_metadata_request(
     object: &ObjectRef,
     metadata: &MetadataMap,
@@ -49,6 +60,7 @@ pub fn set_object_metadata_request(
     request
 }
 
+/// Builds a delete request for an object.
 pub fn delete_object_request(
     object: &ObjectRef,
     conditions: Option<&Conditions>,
@@ -67,6 +79,7 @@ pub fn delete_object_request(
     request
 }
 
+/// Parses object properties from response headers.
 pub fn object_properties_from_headers(
     metadata: &MetadataMap,
 ) -> Result<ObjectProperties, crate::Error> {

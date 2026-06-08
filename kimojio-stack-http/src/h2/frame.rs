@@ -1,6 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! HTTP/2 frame model and binary encoder/decoder.
+//!
+//! These types are intentionally small protocol building blocks. Most callers
+//! should use [`crate::h2::ClientConnection`] or [`crate::h2::ServerConnection`]
+//! instead of constructing frames directly.
+
 use bytes::Bytes;
 
 use crate::{Error, LimitKind};
@@ -8,18 +14,28 @@ use crate::{Error, LimitKind};
 use super::settings::{Setting, SettingId};
 use super::stream::StreamId;
 
+/// Length of the HTTP/2 frame header in bytes.
 pub const FRAME_HEADER_LEN: usize = 9;
 
+/// HTTP/2 frame types supported by this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FrameType {
+    /// DATA frame.
     Data = 0x0,
+    /// HEADERS frame.
     Headers = 0x1,
+    /// RST_STREAM frame.
     RstStream = 0x3,
+    /// SETTINGS frame.
     Settings = 0x4,
+    /// PING frame.
     Ping = 0x6,
+    /// GOAWAY frame.
     Goaway = 0x7,
+    /// WINDOW_UPDATE frame.
     WindowUpdate = 0x8,
+    /// CONTINUATION frame.
     Continuation = 0x9,
 }
 
@@ -39,59 +55,89 @@ impl FrameType {
     }
 }
 
+/// Bit flags carried in an HTTP/2 frame header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameFlags(u8);
 
 impl FrameFlags {
+    /// No flags.
     pub const EMPTY: Self = Self(0);
+    /// END_STREAM flag.
     pub const END_STREAM: Self = Self(0x1);
+    /// ACK flag for SETTINGS/PING.
     pub const ACK: Self = Self(0x1);
+    /// END_HEADERS flag.
     pub const END_HEADERS: Self = Self(0x4);
+    /// PADDED flag.
     pub const PADDED: Self = Self(0x8);
+    /// PRIORITY flag.
     pub const PRIORITY: Self = Self(0x20);
 
+    /// Returns raw flag bits.
     pub const fn bits(self) -> u8 {
         self.0
     }
 
+    /// Creates flags from raw bits.
     pub const fn from_bits(bits: u8) -> Self {
         Self(bits)
     }
 
+    /// Returns whether `flag` is set.
     pub const fn contains(self, flag: Self) -> bool {
         self.0 & flag.0 == flag.0
     }
 }
 
+/// Decoded HTTP/2 frame payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FramePayload {
+    /// DATA bytes.
     Data(Bytes),
+    /// HPACK header block fragment from HEADERS.
     Headers(Bytes),
+    /// HPACK header block continuation fragment.
     Continuation(Bytes),
+    /// SETTINGS values.
     Settings(Vec<Setting>),
+    /// RST_STREAM error code.
     RstStream {
+        /// HTTP/2 error code.
         error_code: u32,
     },
+    /// PING opaque payload.
     Ping([u8; 8]),
+    /// GOAWAY payload.
     Goaway {
+        /// Last stream ID accepted by the sender.
         last_stream_id: u32,
+        /// HTTP/2 error code.
         error_code: u32,
+        /// Optional debug data.
         debug_data: Bytes,
     },
+    /// WINDOW_UPDATE increment.
     WindowUpdate {
+        /// Flow-control increment.
         increment: u32,
     },
 }
 
+/// Complete decoded HTTP/2 frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
+    /// Frame type byte.
     pub frame_type: FrameType,
+    /// Frame flags.
     pub flags: FrameFlags,
+    /// Stream ID, or zero for connection-level frames.
     pub stream_id: u32,
+    /// Decoded payload.
     pub payload: FramePayload,
 }
 
 impl Frame {
+    /// Creates a DATA frame.
     pub fn data(stream_id: StreamId, data: impl Into<Bytes>, end_stream: bool) -> Self {
         Self {
             frame_type: FrameType::Data,
@@ -105,10 +151,12 @@ impl Frame {
         }
     }
 
+    /// Creates a complete HEADERS frame.
     pub fn headers(stream_id: StreamId, block: impl Into<Bytes>, end_stream: bool) -> Self {
         Self::headers_fragment(stream_id, block, end_stream, true)
     }
 
+    /// Creates a HEADERS frame that may require CONTINUATION frames.
     pub fn headers_fragment(
         stream_id: StreamId,
         block: impl Into<Bytes>,
@@ -130,6 +178,7 @@ impl Frame {
         }
     }
 
+    /// Creates a CONTINUATION frame.
     pub fn continuation(stream_id: StreamId, block: impl Into<Bytes>, end_headers: bool) -> Self {
         Self {
             frame_type: FrameType::Continuation,
@@ -143,6 +192,7 @@ impl Frame {
         }
     }
 
+    /// Creates a SETTINGS frame.
     pub fn settings(settings: Vec<Setting>) -> Self {
         Self {
             frame_type: FrameType::Settings,
@@ -152,6 +202,7 @@ impl Frame {
         }
     }
 
+    /// Creates a SETTINGS ack frame.
     pub fn settings_ack() -> Self {
         Self {
             frame_type: FrameType::Settings,
@@ -161,6 +212,7 @@ impl Frame {
         }
     }
 
+    /// Creates a WINDOW_UPDATE frame for a stream or connection.
     pub fn window_update(stream_id: u32, increment: u32) -> Self {
         Self {
             frame_type: FrameType::WindowUpdate,
@@ -170,6 +222,7 @@ impl Frame {
         }
     }
 
+    /// Creates an RST_STREAM frame.
     pub fn rst_stream(stream_id: StreamId, error_code: u32) -> Self {
         Self {
             frame_type: FrameType::RstStream,
@@ -179,6 +232,7 @@ impl Frame {
         }
     }
 
+    /// Creates a GOAWAY frame.
     pub fn goaway(last_stream_id: u32, error_code: u32, debug_data: impl Into<Bytes>) -> Self {
         Self {
             frame_type: FrameType::Goaway,
@@ -192,6 +246,7 @@ impl Frame {
         }
     }
 
+    /// Encodes this frame into wire bytes.
     pub fn encode(&self) -> Result<Vec<u8>, Error> {
         let payload = self.encode_payload()?;
         let len = payload.len();
@@ -210,6 +265,9 @@ impl Frame {
         Ok(bytes)
     }
 
+    /// Decodes one complete frame from `bytes`.
+    ///
+    /// Returns the frame and the number of consumed bytes.
     pub fn decode(bytes: &[u8], max_frame_size: u32) -> Result<(Self, usize), Error> {
         if bytes.len() < FRAME_HEADER_LEN {
             return Err(Error::Parse("incomplete HTTP/2 frame header"));
