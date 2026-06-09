@@ -182,6 +182,7 @@ use std::fmt;
 use std::io;
 use std::marker::PhantomData;
 use std::mem::{ManuallyDrop, MaybeUninit};
+use std::ops::{Deref, DerefMut};
 use std::os::fd::FromRawFd;
 use std::panic::{self, AssertUnwindSafe};
 use std::rc::{Rc, Weak};
@@ -3505,30 +3506,104 @@ impl StackTracker {
 
 struct SchedulerCell {
     scheduler: UnsafeCell<Scheduler>,
+    #[cfg(debug_assertions)]
+    borrow_state: Cell<isize>,
 }
 
 impl SchedulerCell {
     fn new(scheduler: Scheduler) -> Self {
         Self {
             scheduler: UnsafeCell::new(scheduler),
+            #[cfg(debug_assertions)]
+            borrow_state: Cell::new(0),
         }
     }
 
-    fn borrow(&self) -> &Scheduler {
+    fn borrow(&self) -> SchedulerRef<'_> {
+        #[cfg(debug_assertions)]
+        {
+            let borrow_state = self.borrow_state.get();
+            assert!(borrow_state >= 0, "already mutably borrowed: BorrowError");
+            self.borrow_state.set(
+                borrow_state
+                    .checked_add(1)
+                    .expect("too many shared scheduler borrows"),
+            );
+        }
+
+        SchedulerRef { cell: self }
+    }
+
+    fn borrow_mut(&self) -> SchedulerRefMut<'_> {
+        #[cfg(debug_assertions)]
+        {
+            let borrow_state = self.borrow_state.get();
+            assert_eq!(borrow_state, 0, "already borrowed: BorrowMutError");
+            self.borrow_state.set(-1);
+        }
+
+        SchedulerRefMut { cell: self }
+    }
+}
+
+struct SchedulerRef<'cell> {
+    cell: &'cell SchedulerCell,
+}
+
+impl Deref for SchedulerRef<'_> {
+    type Target = Scheduler;
+
+    fn deref(&self) -> &Self::Target {
         // SAFETY: Runtime and all scheduler handles are `Rc`-backed and confined to
         // one OS thread. Callers must not keep scheduler references across coroutine
         // resume/user-code boundaries; the scheduler loop scopes those accesses.
-        unsafe { &*self.scheduler.get() }
+        unsafe { &*self.cell.scheduler.get() }
     }
+}
 
-    #[allow(
-        clippy::mut_from_ref,
-        reason = "the runtime is single-threaded and replaces RefCell's checked interior mutability"
-    )]
-    fn borrow_mut(&self) -> &mut Scheduler {
-        // SAFETY: See `borrow`. Mutable accesses are manually scoped so no scheduler
-        // reference is live while coroutine/user code can re-enter scheduler APIs.
-        unsafe { &mut *self.scheduler.get() }
+#[cfg(debug_assertions)]
+impl Drop for SchedulerRef<'_> {
+    fn drop(&mut self) {
+        let borrow_state = self.cell.borrow_state.get();
+        debug_assert!(
+            borrow_state > 0,
+            "scheduler shared borrow underflow: {borrow_state}"
+        );
+        self.cell.borrow_state.set(borrow_state - 1);
+    }
+}
+
+struct SchedulerRefMut<'cell> {
+    cell: &'cell SchedulerCell,
+}
+
+impl Deref for SchedulerRefMut<'_> {
+    type Target = Scheduler;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: See `SchedulerRef::deref`.
+        unsafe { &*self.cell.scheduler.get() }
+    }
+}
+
+impl DerefMut for SchedulerRefMut<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // SAFETY: See `SchedulerRef::deref`. Mutable accesses are manually scoped
+        // so no scheduler reference is live while coroutine/user code can re-enter
+        // scheduler APIs; debug builds enforce that invariant with borrow_state.
+        unsafe { &mut *self.cell.scheduler.get() }
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for SchedulerRefMut<'_> {
+    fn drop(&mut self) {
+        let borrow_state = self.cell.borrow_state.get();
+        debug_assert_eq!(
+            borrow_state, -1,
+            "scheduler mutable borrow state corrupted: {borrow_state}"
+        );
+        self.cell.borrow_state.set(0);
     }
 }
 
@@ -3967,7 +4042,7 @@ fn drain_scheduler_io(core: &Rc<SchedulerCell>) {
 
 fn drive_scheduler(core: &Rc<SchedulerCell>) -> bool {
     {
-        let scheduler = core.borrow_mut();
+        let mut scheduler = core.borrow_mut();
         scheduler.prepare_external_wake();
     }
 
@@ -3992,14 +4067,14 @@ fn drive_scheduler(core: &Rc<SchedulerCell>) -> bool {
     if should_wait_for_io {
         if core.borrow().has_external_waiters_or_ready() {
             if run_completed_io(core, false) {
-                let scheduler = core.borrow_mut();
+                let mut scheduler = core.borrow_mut();
                 scheduler.finish_external_wake_io();
                 scheduler.drain_external_ready();
                 return true;
             }
 
             {
-                let scheduler = core.borrow_mut();
+                let mut scheduler = core.borrow_mut();
                 if scheduler.prepare_external_wake() {
                     return true;
                 }
@@ -4009,7 +4084,7 @@ fn drive_scheduler(core: &Rc<SchedulerCell>) -> bool {
             }
             run_completed_io(core, !busy_poll_io);
             let scheduled = {
-                let scheduler = core.borrow_mut();
+                let mut scheduler = core.borrow_mut();
                 scheduler.finish_external_wake_io();
                 scheduler.drain_external_ready()
             };
@@ -4027,7 +4102,7 @@ fn drive_scheduler(core: &Rc<SchedulerCell>) -> bool {
         let external_wake = core.borrow().external_wake();
         if external_wake.has_waiters_or_ready() {
             external_wake.wait_for_ready(None);
-            let scheduler = core.borrow_mut();
+            let mut scheduler = core.borrow_mut();
             scheduler.finish_external_wake_io();
             scheduler.drain_external_ready()
         } else {
@@ -4042,7 +4117,7 @@ fn run_one(core: &Rc<SchedulerCell>) -> bool {
     };
 
     let result = task.coroutine.resume(ResumeAction::Run);
-    let scheduler = core.borrow_mut();
+    let mut scheduler = core.borrow_mut();
     match result {
         CoroutineResult::Yield(Suspend::Ready) => {
             scheduler.tasks[id] = Some(task);
@@ -4064,7 +4139,7 @@ where
 {
     for id in ids {
         let Some(mut task) = ({
-            let scheduler = core.borrow_mut();
+            let mut scheduler = core.borrow_mut();
             let Some(task) = scheduler.tasks.get(id).and_then(Option::as_ref) else {
                 continue;
             };
@@ -4079,7 +4154,7 @@ where
         let result = task
             .coroutine
             .resume(ResumeAction::Interrupt(interrupt(id)));
-        let scheduler = core.borrow_mut();
+        let mut scheduler = core.borrow_mut();
         match result {
             CoroutineResult::Yield(_) => {
                 scheduler.tasks[id] = Some(task);
@@ -4119,7 +4194,7 @@ fn handle_resume_action(
 
 fn run_completed_io(core: &Rc<SchedulerCell>, wait: bool) -> bool {
     let (submitted, mut completed) = {
-        let scheduler = core.borrow_mut();
+        let mut scheduler = core.borrow_mut();
         if wait {
             debug_assert!(
                 scheduler.ready.is_empty(),
@@ -4372,6 +4447,43 @@ mod tests {
 
         assert!(counts.allocating_operations() != 0);
         assert!(counts.allocated_or_reallocated_bytes() != 0);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn scheduler_cell_debug_borrows_are_released_on_drop() {
+        let cell = super::SchedulerCell::new(super::Scheduler::new(RuntimeConfig::default()));
+
+        {
+            let _shared = cell.borrow();
+            let _another_shared = cell.borrow();
+        }
+
+        {
+            let _exclusive = cell.borrow_mut();
+        }
+
+        let _shared = cell.borrow();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "already borrowed: BorrowMutError")]
+    fn scheduler_cell_debug_rejects_mut_borrow_during_shared_borrow() {
+        let cell = super::SchedulerCell::new(super::Scheduler::new(RuntimeConfig::default()));
+        let _shared = cell.borrow();
+
+        let _exclusive = cell.borrow_mut();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "already mutably borrowed: BorrowError")]
+    fn scheduler_cell_debug_rejects_shared_borrow_during_mut_borrow() {
+        let cell = super::SchedulerCell::new(super::Scheduler::new(RuntimeConfig::default()));
+        let _exclusive = cell.borrow_mut();
+
+        let _shared = cell.borrow();
     }
 
     #[test]
