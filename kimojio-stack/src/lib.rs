@@ -7,6 +7,23 @@
 //! cooperatively on the current OS thread and exposes scoped spawning so
 //! coroutines cannot outlive the scope that created them.
 //!
+//! # Getting started
+//!
+//! ```
+//! use kimojio_stack::Runtime;
+//!
+//! let mut runtime = Runtime::new();
+//! let answer = runtime.block_on(|cx| {
+//!     cx.scope(|scope| {
+//!         let worker = scope.spawn(|_| 40 + 2);
+//!
+//!         worker.join(cx)
+//!     })
+//! });
+//!
+//! assert_eq!(answer, 42);
+//! ```
+//!
 //! # Design
 //!
 //! [`Runtime`] owns a single-threaded cooperative scheduler. [`Runtime::block_on`]
