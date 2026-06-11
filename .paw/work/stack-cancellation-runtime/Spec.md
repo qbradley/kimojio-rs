@@ -102,6 +102,8 @@ Acceptance Scenarios:
 - FR-008: Runtime shutdown must wait for submitted or detached operations to complete or be reaped before returning from the outermost runtime call. (Stories: P1)
 - FR-009: The implementation must include tests for cancellation races, stale waits, fd lifetime safety, resource reclamation, and bounded metadata growth. (Stories: P1, P2, P3, P4, P5)
 - FR-010: The implementation must include benchmarks or measurement tests to evaluate wait-queue tombstone accumulation and compaction thresholds. (Stories: P3)
+- FR-011: The runtime must provide explicit detach behavior for callers that intentionally want a pending operation to complete silently without default cancellation. (Stories: P1)
+- FR-012: The runtime must expose detached-operation and cancellation observability so intentional detach and cancellation-storm behavior are visible. (Stories: P1)
 
 ### Key Entities
 
@@ -110,6 +112,7 @@ Acceptance Scenarios:
 - External wait registration: A cross-thread-safe wait registration used by external wait queues and wake sources.
 - Operation state: Runtime-owned state for a submitted I/O or timeout operation that owns resources until completion is reaped.
 - Runtime fd identity: A cheap-clone, runtime-owned fd handle used by async I/O to preserve fd lifetime.
+- Detach observability: Runtime-visible counters or equivalent metrics for detached operations and cancellation outcomes.
 - Scope child metadata: Per-child state retained by a scope while a child is live or has unobserved terminal effects.
 
 ### Cross-Cutting / Non-Functional
@@ -130,6 +133,8 @@ Acceptance Scenarios:
 - SC-007: Existing panic propagation tests continue to pass, including unobserved child panic propagation. (FR-007)
 - SC-008: Benchmarks or measurement tests report tombstone accumulation behavior across timeout/cancellation churn and provide data for compaction thresholds. (FR-010)
 - SC-009: Repository validation for `kimojio-stack` passes after each implementation phase. (FR-009)
+- SC-010: Tests prove explicit detach allows a pending operation to complete silently without default cancellation while preserving resource ownership until reaping. (FR-011)
+- SC-011: Tests or diagnostics prove detached-operation and cancellation counters update for detach, cancel request, cancel completion, unsupported cancel, and original-completion-after-cancel outcomes. (FR-012)
 
 ## Assumptions
 

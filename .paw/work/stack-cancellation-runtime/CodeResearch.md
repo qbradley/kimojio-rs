@@ -258,21 +258,22 @@ The trait defining the wait protocol for runtime objects:
 
 **IoResult** owns I/O operation state and buffer:
 
-- `kimojio-stack/src/lib.rs:2633-2736`: Generic over buffer type `B` and result type `R`:
-  - `buf: ManuallyDrop<B>` at line 2635 — buffer ownership
-  - `state: IoState` at line 2636 — shared completion state
-  - `_marker: PhantomData<R>` at line 2637 — result type marker
+- `kimojio-stack/src/lib.rs:2633-2640`: Generic over output type `T` and buffer type `B`:
+  - `core: Weak<SchedulerCell>` at line 2634 — scheduler reference for recycling/cancel submission
+  - `state: Option<Rc<IoState>>` at line 2635 — shared completion state
+  - `buffer: ManuallyDrop<B>` at line 2636 — buffer ownership
+  - `output: fn(B, u32) -> T` at line 2637 — result conversion function
+  - `taken: bool` at line 2638 — tracks whether the handle has consumed or canceled the state
 
-**into_inner** extracts buffer on completion:
+**get/try_get** extracts the output on completion:
 
-- `kimojio-stack/src/lib.rs:2687-2696`: Takes `self`, calls `state.take()` to get result, uses `ManuallyDrop::take` to extract buffer
+- `kimojio-stack/src/lib.rs:2659-2683`: `try_get` takes the result from the state, extracts or drops the buffer, recycles the I/O state, and returns `Some(output)` when ready.
+- `kimojio-stack/src/lib.rs:2686-2699`: `get` loops on `try_get`, registers a waiter with `add_waiter_from(cx)`, parks, and resumes active scope panic checks.
 
 **drop** behavior with cancellation:
 
-- `kimojio-stack/src/lib.rs:2711-2735`: 
-  - Line 2714: Calls `state.cancel_pending()`
-  - Line 2716: Manually drops buffer with `ManuallyDrop::drop(&mut self.buf)`
-  - `cancel_pending` submits io_uring cancel operation if not ready (lines 3071-3092)
+- `kimojio-stack/src/lib.rs:2765-2769`: `Drop` calls `self.cancel_pending()`.
+- `kimojio-stack/src/lib.rs:2711-2735`: `cancel_pending` takes the state, drops the buffer and recycles the state if already ready, or submits io_uring async cancel via `submit_cancel(...)` if still pending.
 
 #### Timeout Structure
 
@@ -284,55 +285,60 @@ The trait defining the wait protocol for runtime objects:
 
 **drop** behavior:
 
-- `kimojio-stack/src/lib.rs:2911-2918`: Calls `state.cancel_pending()` similar to IoResult
+- `kimojio-stack/src/lib.rs:2988-2992`: `Drop` calls `self.cancel_pending()`.
+- `kimojio-stack/src/lib.rs:2952-2969`: `cancel_pending` takes the timeout state, recycles if already ready, or submits timeout cancellation if still pending.
 
 #### IoState Structure
 
 **IoState** tracks I/O operation completion state:
 
-- `kimojio-stack/src/lib.rs:3001-3096`: Wraps `Rc<RefCell<IoStateInner>>`:
-  - `result: Option<Result<i32, io::Error>>` at line 3008 — completion result
-  - `waiters: Waiters` at line 3009 — tasks waiting for completion
-  - `timeout: Option<Timeout>` at line 3010 — associated timeout
-  - `registered_resources: Option<RegisteredResources>` at line 3011 — cleanup handle
+- `kimojio-stack/src/lib.rs:3001-3008`: Wraps `RefCell<IoStateInner>`.
+- `kimojio-stack/src/lib.rs:3070-3076`: `IoStateInner` contains:
+  - `result: Option<KernelIoResult>` at line 3071 — completion result
+  - `waiters: Waiters` at line 3072 — tasks waiting for completion
+  - `timeout: Option<Timespec>` at line 3073 — timeout timespec storage
+  - `registered_resources: RegisteredResources` at line 3074 — registered resource cleanup handle
+  - `cancel_requested: bool` at line 3075 — cancel request state
 
 **complete** method sets result and wakes waiters:
 
-- `kimojio-stack/src/lib.rs:3044-3055`: Stores result, calls `waiters.wake_all()`, returns old result value
+- `kimojio-stack/src/lib.rs:3016-3021`: Stores result, completes registered resources, and calls `waiters.wake_all()`.
 
 **take** method consumes result:
 
-- `kimojio-stack/src/lib.rs:3057-3069`: Returns and clears stored result, leaving None
+- `kimojio-stack/src/lib.rs:3033-3035`: `take_result` returns and clears stored result.
 
 **cancel_pending** submits cancellation if not complete:
 
-- `kimojio-stack/src/lib.rs:3071-3092`: Checks if result is None, if so submits `IORING_OP_ASYNC_CANCEL` operation via `submit_cancel()`
+- `kimojio-stack/src/lib.rs:3062-3067`: `mark_cancel_requested` records cancel request state and reports whether this is the first request.
 
 #### submit_and_wait_for_io
 
 **submit_and_wait_for_io** coordinates I/O operation submission and waiting:
 
-- `kimojio-stack/src/lib.rs:1885-1909`: 
-  - Line 1893: Calls `io_driver.submit(&mut sqe)` to submit operation
-  - Line 1895: Calls `io_driver.register_io_state()` to track operation
-  - Line 1898: Parks on `io_state` waiting for completion
-  - Lines 1902-1907: On panic, calls `io_state.cancel_pending()` and waits for cancellation to complete
+- `kimojio-stack/src/lib.rs:1885-1889`: Acquires I/O state, submits the SQE with `submit_io_state(...)`, and waits via `wait_for_submitted_io_state(...)`.
+- `kimojio-stack/src/lib.rs:1891-1909`: `wait_for_submitted_io_state` waits for the state, recycles it on success, and on panic calls `cancel_and_wait_for_io_state(...)` before recycling and resuming the panic.
+- `kimojio-stack/src/lib.rs:1911-1915`: `wait_for_io_state` loops until `take_result()` returns a completion result.
 
 #### read_async and write_async
 
 **read_async** implementation:
 
 - `kimojio-stack/src/lib.rs:1393-1445`: 
-  - Line 1401: Creates `IoState::new()`
-  - Line 1402: Calls `submit_and_wait_for_io()` with read SQE
-  - Line 1413: Returns `IoResult` containing buffer and state
+  - `kimojio-stack/src/lib.rs:1393`: Accepts `fd: &impl AsFd`, which is converted to a raw fd for the SQE.
+  - `kimojio-stack/src/lib.rs:1399`: Copies the borrowed fd identity with `fd.as_fd().as_raw_fd()`.
+  - `kimojio-stack/src/lib.rs:1403`: Acquires I/O state with `acquire_io_state()`.
+  - `kimojio-stack/src/lib.rs:1405`: Submits the SQE with `submit_io_state(...)`.
+  - `kimojio-stack/src/lib.rs:1406`: Returns `IoResult` immediately with the buffer and state.
 
 **write_async** implementation:
 
 - `kimojio-stack/src/lib.rs:1608-1658`:
-  - Line 1616: Creates `IoState::new()`
-  - Line 1617: Calls `submit_and_wait_for_io()` with write SQE
-  - Line 1628: Returns `IoResult` containing buffer and state
+  - `kimojio-stack/src/lib.rs:1608`: Accepts `fd: &impl AsFd`, which is converted to a raw fd for the SQE.
+  - `kimojio-stack/src/lib.rs:1614`: Copies the borrowed fd identity with `fd.as_fd().as_raw_fd()`.
+  - `kimojio-stack/src/lib.rs:1618`: Acquires I/O state with `acquire_io_state()`.
+  - `kimojio-stack/src/lib.rs:1620`: Submits the SQE with `submit_io_state(...)`.
+  - `kimojio-stack/src/lib.rs:1621`: Returns `IoResult` immediately with the buffer and state.
 
 #### Registered Resources
 
