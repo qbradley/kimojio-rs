@@ -98,14 +98,16 @@
 //! and [`RuntimeContext::listen`] are synchronous setup helpers because Linux has
 //! no io_uring operations for them.
 //!
-//! [`RuntimeContext::read_async`] and [`RuntimeContext::write_async`] return an
-//! [`IoResult`]. `try_get` observes a completion that has already been reaped
-//! without entering io_uring or running other tasks. `get` waits cooperatively by
-//! parking the current coroutine. [`Cancellable::cancel`] requests cancellation
-//! without waiting for the kernel CQE. [`RuntimeContext::join`] waits for
-//! multiple [`Waitable`] values at once and can optionally use an io_uring
-//! timeout; timed out operations remain pending and their handles can still be
-//! completed later.
+//! [`RuntimeContext::read_async`] and [`RuntimeContext::write_async`] take an
+//! [`IoFd`] and return an [`IoResult`]. `IoFd` consumes an [`OwnedFd`] once and
+//! clones cheaply without duplicating the kernel fd, so async operations can keep
+//! the descriptor alive until the CQE is reaped. `try_get` observes a completion
+//! that has already been reaped without entering io_uring or running other tasks.
+//! `get` waits cooperatively by parking the current coroutine.
+//! [`Cancellable::cancel`] requests cancellation without waiting for the kernel
+//! CQE. [`RuntimeContext::join`] waits for multiple [`Waitable`] values at once
+//! and can optionally use an io_uring timeout; timed out operations remain pending
+//! and their handles can still be completed later.
 //!
 //! Async I/O takes ownership of buffers instead of borrowing them. This keeps the
 //! safe API sound even if a handle is dropped or forgotten while the kernel still
@@ -115,8 +117,9 @@
 //! in [`ReadOutput`] or [`WriteOutput`]. If an [`IoResult`] is canceled or
 //! dropped while its operation is still pending, the runtime requests kernel
 //! cancellation and intentionally leaks the backing buffer rather than allowing
-//! io_uring to complete into freed memory. Complete pending results with `get`
-//! or `try_get` when buffer reclamation matters.
+//! io_uring to complete into freed memory. Operation state still owns a cheap
+//! clone of the submitted [`IoFd`] until the CQE is reaped. Complete pending
+//! results with `get` or `try_get` when buffer reclamation matters.
 //!
 //! [`Runtime::with_registered_resources`] configures io_uring fixed-file and
 //! fixed-buffer tables for lower-overhead I/O. [`RuntimeContext::register_fd`]
@@ -214,7 +217,7 @@ pub use rustix::event::epoll::{
 };
 use rustix::event::{EventfdFlags, PollFlags, eventfd};
 pub use rustix::fd::OwnedFd;
-use rustix::fd::{AsFd, AsRawFd};
+use rustix::fd::{AsFd, AsRawFd, BorrowedFd};
 use rustix::fs;
 pub use rustix::fs::{
     Advice as FileAdvice, AtFlags, FallocateFlags, Mode, OFlags, RenameFlags, ResolveFlags, Statx,
@@ -1406,17 +1409,18 @@ impl RuntimeContext<'_> {
     ///
     /// The returned [`IoResult`] owns `buffer` until completion, so it is safe to
     /// drop the handle while the kernel operation is still pending.
-    pub fn read_async<B>(&self, fd: &impl AsFd, mut buffer: B) -> IoResult<ReadOutput<B>, B>
+    pub fn read_async<B>(&self, fd: &IoFd, mut buffer: B) -> IoResult<ReadOutput<B>, B>
     where
         B: IoReadBuffer,
     {
         let len =
             u32::try_from(buffer.io_buffer_len()).expect("io_uring read length exceeds u32::MAX");
-        let fd = fd.as_fd().as_raw_fd();
-        let entry = opcode::Read::new(Fd(fd), buffer.io_buffer_mut_ptr(), len)
+        let raw_fd = fd.raw_fd();
+        let entry = opcode::Read::new(Fd(raw_fd), buffer.io_buffer_mut_ptr(), len)
             .offset(u64::MAX)
             .build();
         let state = self.acquire_io_state();
+        state.attach_io_fd(fd.clone());
 
         self.submit_io_state(entry, Rc::clone(&state));
         IoResult::new(Rc::downgrade(&self.core), state, buffer, read_output::<B>)
@@ -1448,16 +1452,17 @@ impl RuntimeContext<'_> {
     /// Starts a read from `fd` into a registered fixed buffer.
     pub fn read_registered_buffer_async<B: 'static>(
         &self,
-        fd: &impl AsFd,
+        fd: &IoFd,
         buffer: RegisteredBuffer<B>,
     ) -> IoResult<ReadOutput<RegisteredBuffer<B>>, RegisteredBuffer<B>> {
         let len = u32::try_from(buffer.len()).expect("io_uring read length exceeds u32::MAX");
-        let fd = fd.as_fd().as_raw_fd();
+        let raw_fd = fd.raw_fd();
         let state = self.acquire_io_state();
+        state.attach_io_fd(fd.clone());
         state.attach_registered_resource(buffer.resource());
 
         self.submit_io_state(
-            opcode::ReadFixed::new(Fd(fd), buffer.mut_ptr(), len, buffer.slot())
+            opcode::ReadFixed::new(Fd(raw_fd), buffer.mut_ptr(), len, buffer.slot())
                 .offset(u64::MAX)
                 .build(),
             Rc::clone(&state),
@@ -1621,17 +1626,18 @@ impl RuntimeContext<'_> {
     ///
     /// The returned [`IoResult`] owns `buffer` until completion, so it is safe to
     /// drop the handle while the kernel operation is still pending.
-    pub fn write_async<B>(&self, fd: &impl AsFd, buffer: B) -> IoResult<WriteOutput<B>, B>
+    pub fn write_async<B>(&self, fd: &IoFd, buffer: B) -> IoResult<WriteOutput<B>, B>
     where
         B: IoWriteBuffer,
     {
         let len =
             u32::try_from(buffer.io_buffer_len()).expect("io_uring write length exceeds u32::MAX");
-        let fd = fd.as_fd().as_raw_fd();
-        let entry = opcode::Write::new(Fd(fd), buffer.io_buffer_ptr(), len)
+        let raw_fd = fd.raw_fd();
+        let entry = opcode::Write::new(Fd(raw_fd), buffer.io_buffer_ptr(), len)
             .offset(u64::MAX)
             .build();
         let state = self.acquire_io_state();
+        state.attach_io_fd(fd.clone());
 
         self.submit_io_state(entry, Rc::clone(&state));
         IoResult::new(Rc::downgrade(&self.core), state, buffer, write_output::<B>)
@@ -1663,16 +1669,17 @@ impl RuntimeContext<'_> {
     /// Starts a write from a registered fixed buffer to `fd`.
     pub fn write_registered_buffer_async<B: 'static>(
         &self,
-        fd: &impl AsFd,
+        fd: &IoFd,
         buffer: RegisteredBuffer<B>,
     ) -> IoResult<WriteOutput<RegisteredBuffer<B>>, RegisteredBuffer<B>> {
         let len = u32::try_from(buffer.len()).expect("io_uring write length exceeds u32::MAX");
-        let fd = fd.as_fd().as_raw_fd();
+        let raw_fd = fd.raw_fd();
         let state = self.acquire_io_state();
+        state.attach_io_fd(fd.clone());
         state.attach_registered_resource(buffer.resource());
 
         self.submit_io_state(
-            opcode::WriteFixed::new(Fd(fd), buffer.ptr(), len, buffer.slot())
+            opcode::WriteFixed::new(Fd(raw_fd), buffer.ptr(), len, buffer.slot())
                 .offset(u64::MAX)
                 .build(),
             Rc::clone(&state),
@@ -2387,6 +2394,55 @@ pub struct WriteOutput<B = Vec<u8>> {
     pub bytes: usize,
     /// Buffer owned by the write operation.
     pub buffer: B,
+}
+
+/// Runtime-owned file descriptor identity for unregistered async I/O.
+///
+/// `IoFd` consumes an [`OwnedFd`] once and clones by incrementing a local
+/// reference count. Cloning does not call `dup(2)` or otherwise touch the
+/// kernel. Async operations clone this handle into operation state so the
+/// underlying descriptor cannot close before the kernel CQE is reaped.
+#[derive(Clone)]
+pub struct IoFd {
+    state: Rc<IoFdState>,
+}
+
+impl IoFd {
+    /// Takes ownership of `fd` for use with unregistered async I/O.
+    pub fn from_owned(fd: OwnedFd) -> Self {
+        Self {
+            state: Rc::new(IoFdState { fd }),
+        }
+    }
+
+    /// Returns the raw fd for SQE construction.
+    fn raw_fd(&self) -> i32 {
+        self.state.fd.as_fd().as_raw_fd()
+    }
+
+    /// Converts back into the owned fd if no clones or pending operations exist.
+    pub fn into_owned(self) -> Result<OwnedFd, Self> {
+        match Rc::try_unwrap(self.state) {
+            Ok(state) => Ok(state.fd),
+            Err(state) => Err(Self { state }),
+        }
+    }
+}
+
+impl AsFd for IoFd {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.state.fd.as_fd()
+    }
+}
+
+impl fmt::Debug for IoFd {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IoFd").finish_non_exhaustive()
+    }
+}
+
+struct IoFdState {
+    fd: OwnedFd,
 }
 
 /// A file descriptor registered in the runtime's fixed-file table.
@@ -3109,6 +3165,12 @@ impl IoState {
         self.inner.borrow_mut().registered_resources.push(resource);
     }
 
+    fn attach_io_fd(&self, fd: IoFd) {
+        let mut inner = self.inner.borrow_mut();
+        debug_assert!(inner.io_fd.is_none(), "IO state already has an IoFd");
+        inner.io_fd = Some(fd);
+    }
+
     fn mark_cancel_requested(&self) -> bool {
         let mut inner = self.inner.borrow_mut();
         let already_requested = inner.cancel_requested;
@@ -3121,6 +3183,7 @@ struct IoStateInner {
     result: Option<KernelIoResult>,
     waiters: Waiters,
     timeout: Option<Timespec>,
+    io_fd: Option<IoFd>,
     registered_resources: RegisteredResources,
     cancel_requested: bool,
 }
@@ -3131,6 +3194,7 @@ impl IoStateInner {
             result: None,
             waiters: Waiters::default(),
             timeout: None,
+            io_fd: None,
             registered_resources: RegisteredResources::new(),
             cancel_requested: false,
         }
@@ -3140,6 +3204,7 @@ impl IoStateInner {
         self.result = None;
         self.waiters.clear();
         self.timeout = None;
+        self.io_fd = None;
         self.registered_resources.clear();
         self.cancel_requested = false;
     }
@@ -4743,11 +4808,11 @@ mod allocation_tracking {
 mod tests {
     use super::{
         AddressFamily, AtFlags, BusyPoll, Cancellable, DEFAULT_STACK_SIZE, EpollCtlOp, EpollEvent,
-        EpollEventData, EpollEventFlags, FallocateFlags, FileAdvice, FutexWaitFlags, IoJoinError,
-        IoVec, MemoryAdvice, Mode, MsgHdr, OFlags, RecvFlags, RenameFlags, ResolveFlags, Runtime,
-        RuntimeConfig, RuntimeContext, SendFlags, Shutdown, SocketType, StatxFlags, TaskStackState,
-        UringSpliceFlags, WaitError, WaitRegistration, Waitable, Waiters, allocation_tracking,
-        ipproto, once,
+        EpollEventData, EpollEventFlags, Errno, FallocateFlags, FileAdvice, FutexWaitFlags, IoFd,
+        IoJoinError, IoVec, MemoryAdvice, Mode, MsgHdr, OFlags, RecvFlags, RenameFlags,
+        ResolveFlags, Runtime, RuntimeConfig, RuntimeContext, SendFlags, Shutdown, SocketType,
+        StatxFlags, TaskStackState, UringSpliceFlags, WaitError, WaitRegistration, Waitable,
+        Waiters, allocation_tracking, ipproto, once,
     };
     use rustix::event::{PollFlags, epoll};
     use rustix::fd::AsFd;
@@ -5701,6 +5766,32 @@ mod tests {
     }
 
     #[test]
+    fn dropped_registered_fd_pending_async_io_reclaims_slot_after_completion() {
+        let mut runtime = Runtime::with_registered_resources(1, 0);
+
+        runtime.block_on(|cx| {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = cx.register_fd(read_fd).unwrap();
+            let read = cx.read_registered_fd_async(&read_fd, vec![0_u8]);
+            drop(read_fd);
+
+            let (second_read, second_write) = pipe().unwrap();
+            assert_eq!(cx.register_fd(second_read).unwrap_err(), Errno::NOBUFS);
+            cx.close(second_write).unwrap();
+
+            assert_eq!(cx.write(&write_fd, &[91]).unwrap(), 1);
+            let output = read.get(cx).unwrap();
+            assert_eq!(output.bytes, 1);
+            assert_eq!(output.buffer[0], 91);
+            cx.close(write_fd).unwrap();
+
+            let (third_read, third_write) = pipe().unwrap();
+            drop(cx.register_fd(third_read).unwrap());
+            cx.close(third_write).unwrap();
+        });
+    }
+
+    #[test]
     fn io_uring_nop_and_sleep_complete() {
         let mut runtime = Runtime::new();
 
@@ -5958,10 +6049,10 @@ mod tests {
 
             if cx.supports_io_uring_opcode(rustix_uring::opcode::AsyncCancel::CODE) {
                 let (read_fd, write_fd) = pipe().unwrap();
+                let read_fd = IoFd::from_owned(read_fd);
                 let read = cx.read_async(&read_fd, vec![0]);
                 cx.cancel_io(&read).unwrap();
                 assert!(read.get(cx).is_err());
-                cx.close(read_fd).unwrap();
                 cx.close(write_fd).unwrap();
             }
 
@@ -6044,6 +6135,7 @@ mod tests {
             }
 
             let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = IoFd::from_owned(read_fd);
             drop(cx.read_async(&read_fd, vec![0]));
             Some((read_fd, write_fd))
         });
@@ -6066,6 +6158,7 @@ mod tests {
             Cancellable::cancel(&mut timeout);
 
             let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = IoFd::from_owned(read_fd);
             let mut read = cx.read_async(&read_fd, vec![0]);
             Cancellable::cancel(&mut read);
 
@@ -6222,6 +6315,10 @@ mod tests {
         let output = runtime.block_on(|cx| {
             let (first_read, first_write) = pipe().unwrap();
             let (second_read, second_write) = pipe().unwrap();
+            let first_read = IoFd::from_owned(first_read);
+            let first_write = IoFd::from_owned(first_write);
+            let second_read = IoFd::from_owned(second_read);
+            let second_write = IoFd::from_owned(second_write);
 
             let mut first = cx.read_async(&first_read, vec![0; 1]);
             let mut second = cx.read_async(&second_read, vec![0; 1]);
@@ -6241,11 +6338,6 @@ mod tests {
             let first = first.get(cx).unwrap();
             let second = second.get(cx).unwrap();
 
-            cx.close(first_read).unwrap();
-            cx.close(first_write).unwrap();
-            cx.close(second_read).unwrap();
-            cx.close(second_write).unwrap();
-
             (first.buffer[0], second.buffer[0])
         });
 
@@ -6258,6 +6350,8 @@ mod tests {
 
         let output = runtime.block_on(|cx| {
             let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = IoFd::from_owned(read_fd);
+            let write_fd = IoFd::from_owned(write_fd);
             let read_buffer = vec![0_u8; 1].into_boxed_slice();
             let write_buffer: Box<[u8]> = Box::new([b'x']);
 
@@ -6268,8 +6362,6 @@ mod tests {
 
             let read = read.get(cx).unwrap();
             let write = write.get(cx).unwrap();
-            cx.close(read_fd).unwrap();
-            cx.close(write_fd).unwrap();
 
             (read.buffer[0], write.bytes)
         });
@@ -6286,6 +6378,10 @@ mod tests {
         let output = runtime.block_on(|cx| {
             let (ping_read, ping_write) = pipe().unwrap();
             let (pong_read, pong_write) = pipe().unwrap();
+            let ping_read = IoFd::from_owned(ping_read);
+            let ping_write = IoFd::from_owned(ping_write);
+            let pong_read = IoFd::from_owned(pong_read);
+            let pong_write = IoFd::from_owned(pong_write);
 
             cx.scope(|scope| {
                 let initiator = scope.spawn(move |cx| {
@@ -6304,8 +6400,6 @@ mod tests {
                         total += pong.buffer[0] as usize;
                     }
 
-                    cx.close(ping_write).unwrap();
-                    cx.close(pong_read).unwrap();
                     total
                 });
 
@@ -6318,9 +6412,6 @@ mod tests {
                             1
                         );
                     }
-
-                    cx.close(ping_read).unwrap();
-                    cx.close(pong_write).unwrap();
                 });
 
                 responder.join(cx);
@@ -6337,6 +6428,8 @@ mod tests {
 
         runtime.block_on(|cx| {
             let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = IoFd::from_owned(read_fd);
+            let write_fd = IoFd::from_owned(write_fd);
             let read = cx.read_async(&read_fd, vec![0; 1]);
 
             let pending: [&dyn Waitable; 1] = [&read];
@@ -6353,8 +6446,29 @@ mod tests {
             let write = write.get(cx).unwrap();
             assert_eq!(read.buffer[0], b'z');
             assert_eq!(write.bytes, 1);
+        });
+    }
 
-            cx.close(read_fd).unwrap();
+    #[test]
+    fn io_fd_pending_async_read_keeps_fd_alive_after_user_handles_drop() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = IoFd::from_owned(read_fd);
+            let read = cx.read_async(&read_fd, vec![0_u8]);
+
+            let read_fd = match read_fd.into_owned() {
+                Ok(_) => panic!("pending async read should keep an IoFd lease"),
+                Err(read_fd) => read_fd,
+            };
+            drop(read_fd);
+
+            assert_eq!(cx.write(&write_fd, &[73]).unwrap(), 1);
+            let output = read.get(cx).unwrap();
+            assert_eq!(output.bytes, 1);
+            assert_eq!(output.buffer[0], 73);
+
             cx.close(write_fd).unwrap();
         });
     }
@@ -6438,8 +6552,14 @@ mod tests {
         let counts = runtime.block_on(|cx| {
             let (ping_read, ping_write) = pipe().unwrap();
             let (pong_read, pong_write) = pipe().unwrap();
+            let ping_read = IoFd::from_owned(ping_read);
+            let ping_write = IoFd::from_owned(ping_write);
+            let pong_read = IoFd::from_owned(pong_read);
+            let pong_write = IoFd::from_owned(pong_write);
 
             cx.scope(|scope| {
+                scope.spawn(|_| ()).join(cx);
+
                 let responder = scope.spawn(move |cx| {
                     let mut read_buffer = vec![0];
                     let mut write_buffer = vec![0];
@@ -6459,9 +6579,6 @@ mod tests {
                         let write = cx.write_async(&pong_write, write_buffer).get(cx).unwrap();
                         write_buffer = write.buffer;
                     }
-
-                    cx.close(ping_read).unwrap();
-                    cx.close(pong_write).unwrap();
                 });
 
                 let initiator = scope.spawn(move |cx| {
@@ -6488,8 +6605,6 @@ mod tests {
                         }
                     });
 
-                    cx.close(ping_write).unwrap();
-                    cx.close(pong_read).unwrap();
                     counts
                 });
 

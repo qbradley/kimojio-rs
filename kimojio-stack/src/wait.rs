@@ -172,7 +172,7 @@ mod tests {
 
     use rustix::pipe::pipe;
 
-    use crate::{Mutex, Runtime, WaitError, Waitable};
+    use crate::{IoFd, Mutex, Runtime, WaitError, Waitable};
 
     #[test]
     fn wait_any_can_wait_for_mutex_acquire_or_task_completion() {
@@ -212,6 +212,7 @@ mod tests {
 
         runtime.block_on(|cx| {
             let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = IoFd::from_owned(read_fd);
             let mut read = cx.read_async(&read_fd, vec![0]);
 
             cx.scope(|scope| {
@@ -229,8 +230,6 @@ mod tests {
                 let read_output = read.try_get().unwrap().unwrap();
                 assert_eq!(read_output.buffer[0], 42);
             });
-
-            cx.close(read_fd).unwrap();
         });
     }
 

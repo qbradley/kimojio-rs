@@ -9,7 +9,7 @@
 
 use std::time::{Duration, Instant};
 
-use kimojio_stack::{Errno, RuntimeContext, WaitError, Waitable};
+use kimojio_stack::{Errno, IoFd, RuntimeContext, WaitError, Waitable};
 #[cfg(feature = "tls")]
 use kimojio_stack_tls::TlsStream;
 use rustix::{fd::OwnedFd, net::Shutdown};
@@ -21,7 +21,7 @@ pub enum StackTransport {
     /// Plain connected socket.
     Plaintext {
         /// Owned file descriptor.
-        fd: OwnedFd,
+        fd: IoFd,
         /// Optional absolute I/O deadline.
         deadline: Option<Instant>,
     },
@@ -38,7 +38,10 @@ pub enum StackTransport {
 impl StackTransport {
     /// Creates a plaintext transport from a connected socket.
     pub fn plaintext(fd: OwnedFd) -> Self {
-        Self::Plaintext { fd, deadline: None }
+        Self::Plaintext {
+            fd: IoFd::from_owned(fd),
+            deadline: None,
+        }
     }
 
     /// Creates a TLS transport from an established stack TLS stream.
@@ -154,7 +157,10 @@ impl StackTransport {
     /// Closes the transport through the stack runtime.
     pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
         match self {
-            Self::Plaintext { fd, .. } => cx.close(fd).map_err(Error::io),
+            Self::Plaintext { fd, .. } => match fd.into_owned() {
+                Ok(fd) => cx.close(fd).map_err(Error::io),
+                Err(_fd) => Err(Error::io(Errno::BUSY)),
+            },
             #[cfg(feature = "tls")]
             Self::Tls { stream, .. } => stream.close(cx).map_err(Error::tls),
         }
@@ -175,7 +181,7 @@ fn remaining_io_timeout(deadline: Option<Instant>) -> Result<Option<Duration>, E
 
 fn read_with_timeout(
     cx: &RuntimeContext<'_>,
-    fd: &OwnedFd,
+    fd: &IoFd,
     buf: &mut [u8],
     timeout: Duration,
 ) -> Result<usize, Error> {
@@ -199,7 +205,7 @@ fn read_with_timeout(
 
 fn write_with_timeout(
     cx: &RuntimeContext<'_>,
-    fd: &OwnedFd,
+    fd: &IoFd,
     buf: &[u8],
     timeout: Duration,
 ) -> Result<usize, Error> {

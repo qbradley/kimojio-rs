@@ -44,7 +44,7 @@ Each phase may be split into multiple logical `jj new` changes during implementa
 - [x] **Phase 1: Generation-Safe Task Identity** - Introduce generation-checked task keys and scheduler slot reuse.
 - [x] **Phase 2: Cancellation-Safe Local Waits** - Add private waiter registrations and invalidate stale local waits.
 - [x] **Phase 3: External Wake and Scope Quiescence** - Make cross-thread waiter cancellation and staged wake draining generation-safe.
-- [ ] **Phase 4: Async I/O Ownership and Runtime Fd Handles** - Add cheap-clone fd identity and operation-owned kernel resources.
+- [x] **Phase 4: Async I/O Ownership and Runtime Fd Handles** - Add cheap-clone fd identity and operation-owned fd/resource leases.
 - [ ] **Phase 5: Detached Operation Reaping and Scope Metadata Cleanup** - Reap detached operations and bound long-lived scope/task metadata.
 - [ ] **Phase 6: Tombstone Measurement and Documentation** - Add waiter churn measurements and write as-built technical docs.
 
@@ -137,22 +137,22 @@ Each phase may be split into multiple logical `jj new` changes during implementa
 
 - **`kimojio-stack/src/lib.rs` runtime fd identity**: Add a cheap-clone runtime-owned fd handle for unregistered async I/O, initially backed by local reference-counted state and shaped so it can later become a scheduler fd-table handle without changing the public type.
 - **`kimojio-stack/src/lib.rs` async I/O APIs**: Update unregistered `read_async` and `write_async` paths to require the runtime-owned fd identity rather than borrowed fd lifetimes (`kimojio-stack/src/lib.rs:1393-1445`, `kimojio-stack/src/lib.rs:1608-1658`).
-- **`kimojio-stack/src/lib.rs` operation resources**: Move fd, buffer, and registered-resource leases into operation-owned state so kernel-visible resources remain live until completion is reaped (`kimojio-stack/src/lib.rs:2633-2736`, `kimojio-stack/src/lib.rs:3001-3096`, `kimojio-stack/src/lib.rs:2590-2629`).
+- **`kimojio-stack/src/lib.rs` operation resources**: Move fd and registered-resource leases into operation-owned state so kernel-visible fd resources remain live until completion is reaped (`kimojio-stack/src/lib.rs:2633-2736`, `kimojio-stack/src/lib.rs:3001-3096`, `kimojio-stack/src/lib.rs:2590-2629`). Preserve existing typed buffer ownership for consumed `IoResult`s; deterministic reclamation of dropped pending buffers belongs to the Phase 5 detached-operation reaper.
 - **`kimojio-stack/src/lib.rs` timeout and registered-resource integration**: Preserve existing `Timeout`, registered fd, and registered buffer behavior while adapting to operation-owned resource state (`kimojio-stack/src/lib.rs:2860-2918`, `kimojio-stack/src/lib.rs:2590-2629`).
 - **Tests**: Add tests proving runtime fd identity remains alive while async operations are pending, dropping all user-visible fd handles does not close the fd early, and registered resource drops while pending are reclaimed after CQE.
 
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Tests pass: `cargo test -p kimojio-stack --all-targets --all-features`
-- [ ] Formatting passes: `cargo fmt --all --check`
-- [ ] Lint passes: `cargo clippy --all-targets -- -D warnings`
-- [ ] All-features lint passes: `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] Tests pass: `cargo test -p kimojio-stack --all-targets --all-features`
+- [x] Formatting passes: `cargo fmt --all --check`
+- [x] Lint passes: `cargo clippy --all-targets -- -D warnings`
+- [x] All-features lint passes: `cargo clippy --all-targets --all-features -- -D warnings`
 
 #### Manual Verification:
-- [ ] Async I/O no longer depends on borrowed fd lifetimes.
-- [ ] Runtime fd cloning is a local cheap-clone operation, not per-operation fd duplication.
-- [ ] Kernel-visible fd and buffer resources remain owned until operation reaping.
+- [x] Async I/O no longer depends on borrowed fd lifetimes.
+- [x] Runtime fd cloning is a local cheap-clone operation, not per-operation fd duplication.
+- [x] Kernel-visible fd and registered-resource leases remain owned until operation reaping; deterministic reclamation of dropped pending buffers remains Phase 5 work.
 
 ---
 

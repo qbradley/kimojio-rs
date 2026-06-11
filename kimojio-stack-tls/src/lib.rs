@@ -60,8 +60,8 @@ use std::{
 
 use foreign_types_shared::{ForeignType, ForeignTypeRef};
 use kimojio_stack::{
-    Errno, IoReadBuffer, IoResult, IoWriteBuffer, ReadOutput, RuntimeContext, WaitRegistration,
-    Waitable, WriteOutput,
+    Errno, IoFd, IoReadBuffer, IoResult, IoWriteBuffer, ReadOutput, RuntimeContext,
+    WaitRegistration, Waitable, WriteOutput,
 };
 use kimojio_tls::{Response, TlsServer, TlsServerContext, TlsServerError};
 use rustix::{fd::OwnedFd, net::Shutdown};
@@ -134,7 +134,7 @@ impl TlsContext {
 /// [`shutdown`](Self::shutdown) first when TLS close-notify matters to the peer.
 pub struct TlsStream {
     ssl: TlsServer,
-    socket: Option<OwnedFd>,
+    socket: Option<IoFd>,
     poisoned: bool,
 }
 
@@ -146,7 +146,7 @@ impl TlsStream {
     pub fn new(ssl: TlsServer, socket: OwnedFd) -> Self {
         Self {
             ssl,
-            socket: Some(socket),
+            socket: Some(IoFd::from_owned(socket)),
             poisoned: false,
         }
     }
@@ -346,6 +346,7 @@ impl TlsStream {
     /// Closes the underlying socket through the stack runtime.
     pub fn close(mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
         let socket = self.socket.take().ok_or(Errno::PIPE)?;
+        let socket = socket.into_owned().map_err(|_| Errno::BUSY)?;
         cx.close(socket)
     }
 

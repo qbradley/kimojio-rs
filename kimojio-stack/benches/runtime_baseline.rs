@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use kimojio_stack::channel::{bounded, cross_thread, unbounded};
-use kimojio_stack::{Mutex, Runtime, RuntimeContext, Semaphore};
+use kimojio_stack::{IoFd, Mutex, Runtime, RuntimeContext, Semaphore};
 use rustix::pipe::pipe;
 use tokio::runtime::Builder as TokioRuntimeBuilder;
 
@@ -443,6 +443,8 @@ fn bench_io(c: &mut Criterion) {
         b.iter_custom(|iters| {
             run_stackful(|cx| {
                 let (read_fd, write_fd) = pipe().unwrap();
+                let read_fd = IoFd::from_owned(read_fd);
+                let write_fd = IoFd::from_owned(write_fd);
                 let mut write_buffer = vec![0_u8];
                 let mut read_buffer = vec![0_u8];
 
@@ -460,11 +462,7 @@ fn bench_io(c: &mut Criterion) {
                     read_buffer = read.buffer;
                     black_box(read_buffer[0]);
                 }
-                let elapsed = start.elapsed();
-
-                cx.close(read_fd).unwrap();
-                cx.close(write_fd).unwrap();
-                elapsed
+                start.elapsed()
             })
         });
     });
