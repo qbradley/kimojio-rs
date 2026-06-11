@@ -45,7 +45,7 @@ Each phase may be split into multiple logical `jj new` changes during implementa
 - [x] **Phase 2: Cancellation-Safe Local Waits** - Add private waiter registrations and invalidate stale local waits.
 - [x] **Phase 3: External Wake and Scope Quiescence** - Make cross-thread waiter cancellation and staged wake draining generation-safe.
 - [x] **Phase 4: Async I/O Ownership and Runtime Fd Handles** - Add cheap-clone fd identity and operation-owned fd/resource leases.
-- [ ] **Phase 5: Detached Operation Reaping and Scope Metadata Cleanup** - Reap detached operations and bound long-lived scope/task metadata.
+- [x] **Phase 5: Detached Operation Reaping and Scope Metadata Cleanup** - Reap detached operations and bound long-lived scope/task metadata.
 - [ ] **Phase 6: Tombstone Measurement and Documentation** - Add waiter churn measurements and write as-built technical docs.
 
 ## Phase Candidates
@@ -171,21 +171,21 @@ Each phase may be split into multiple logical `jj new` changes during implementa
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Targeted shutdown/reaping tests verify dropped pending I/O drains through `block_on` and runtime-owned resource counters return to zero.
-- [ ] Targeted detach tests verify explicit detach completes silently without default cancellation and still reclaims resources on CQE.
-- [ ] Targeted unsupported/failed-cancel tests verify resources remain tracked and are reclaimed when the original CQE arrives.
-- [ ] Counter/diagnostic tests verify detach and cancel outcome counters update.
-- [ ] Tests pass: `cargo test -p kimojio-stack --all-targets --all-features`
-- [ ] Formatting passes: `cargo fmt --all --check`
-- [ ] Lint passes: `cargo clippy --all-targets -- -D warnings`
-- [ ] All-features lint passes: `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] Targeted shutdown/reaping tests verify dropped pending I/O drains through `block_on` and runtime-owned resource counters return to zero.
+- [x] Targeted detach tests verify explicit detach completes silently without default cancellation and still reclaims resources on CQE.
+- [x] Targeted unsupported/failed-cancel tests verify resources remain tracked and are reclaimed when the original CQE arrives. Coverage records unsupported cancels on kernels without the opcode and failed cancel completions on kernels that report them.
+- [x] Counter/diagnostic tests verify detach and cancel outcome counters update.
+- [x] Tests pass: `cargo test -p kimojio-stack --all-targets --all-features`
+- [x] Formatting passes: `cargo fmt --all --check`
+- [x] Lint passes: `cargo clippy --all-targets -- -D warnings`
+- [x] All-features lint passes: `cargo clippy --all-targets --all-features -- -D warnings`
 
 #### Manual Verification:
-- [ ] Dropped pending I/O resources are reclaimed after completion reaping.
-- [ ] Explicit detach is available for intentional complete-silently behavior.
-- [ ] `block_on` does not return while detached operations still own kernel-visible resources.
-- [ ] Scope and scheduler metadata stay bounded during long-lived spawn/complete churn.
-- [ ] Unobserved child panic propagation remains correct.
+- [x] Dropped pending I/O resources are reclaimed after completion reaping.
+- [x] Explicit detach is available for intentional complete-silently behavior.
+- [x] `block_on` does not return while detached operations still own kernel-visible resources.
+- [x] Scope and scheduler metadata stay bounded during long-lived spawn/complete churn.
+- [x] Unobserved child panic propagation remains correct.
 
 ---
 

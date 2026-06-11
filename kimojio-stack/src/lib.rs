@@ -116,10 +116,11 @@
 //! also supported. Successful read/write completions return the original buffer
 //! in [`ReadOutput`] or [`WriteOutput`]. If an [`IoResult`] is canceled or
 //! dropped while its operation is still pending, the runtime requests kernel
-//! cancellation and intentionally leaks the backing buffer rather than allowing
-//! io_uring to complete into freed memory. Operation state still owns a cheap
-//! clone of the submitted [`IoFd`] until the CQE is reaped. Complete pending
-//! results with `get` or `try_get` when buffer reclamation matters.
+//! cancellation, detaches the operation from the user handle, and reclaims the
+//! backing buffer after the CQE is reaped. Operation state still owns a cheap
+//! clone of the submitted [`IoFd`] until that reaping point. Forgetting an
+//! [`IoResult`] leaks the handle and buffer deliberately; complete pending
+//! results with `get`, `try_get`, `cancel`, or `detach` when reclamation matters.
 //!
 //! [`Runtime::with_registered_resources`] configures io_uring fixed-file and
 //! fixed-buffer tables for lower-overhead I/O. [`RuntimeContext::register_fd`]
@@ -205,6 +206,7 @@ use std::mem::{ManuallyDrop, MaybeUninit};
 use std::ops::{Deref, DerefMut};
 use std::os::fd::FromRawFd;
 use std::panic::{self, AssertUnwindSafe};
+use std::ptr::NonNull;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
@@ -292,9 +294,9 @@ struct TaskCanceled;
 /// A handle for kernel work that can be canceled without blocking.
 ///
 /// Cancellation is best-effort at the submission boundary: the method requests
-/// cancellation and returns immediately. The runtime still drains the eventual
-/// completion before [`Runtime::block_on`] returns, so cancellation never leaves
-/// an io_uring operation owned by a dropped scheduler.
+/// cancellation, detaches user interest, and returns immediately. The runtime
+/// still drains the eventual completion before [`Runtime::block_on`] returns, so
+/// cancellation never leaves an io_uring operation owned by a dropped scheduler.
 pub trait Cancellable {
     /// Requests cancellation of the pending operation.
     fn cancel(&mut self);
@@ -497,6 +499,29 @@ impl Default for RuntimeConfig {
     }
 }
 
+/// Runtime I/O lifecycle counters.
+///
+/// These counters are snapshots intended for tests and diagnostics. They track
+/// detach/cancel lifecycle events inside one [`Runtime::block_on`] execution and
+/// are not reset while that runtime invocation is active.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct IoCounters {
+    /// Number of detached operations that have not been reaped yet.
+    pub detached_pending: usize,
+    /// Total operations detached from user handles.
+    pub detached_total: usize,
+    /// Cancel SQEs submitted for pending operations.
+    pub cancel_requests: usize,
+    /// Cancel requests that could not be submitted because the opcode is unsupported.
+    pub unsupported_cancels: usize,
+    /// Cancel SQEs that have completed.
+    pub cancel_completions: usize,
+    /// Cancel SQEs that completed with an error result.
+    pub cancel_completion_errors: usize,
+    /// Original operation CQEs observed after cancellation had been requested.
+    pub original_completions_after_cancel: usize,
+}
+
 /// Controls whether the scheduler busy-polls for pending I/O completions.
 ///
 /// Busy polling avoids putting the OS thread to sleep while an io_uring
@@ -617,6 +642,11 @@ impl Runtime {
         debug_assert_eq!(
             scheduler.in_flight_io, 0,
             "io_uring operations should complete before Runtime::block_on returns"
+        );
+        debug_assert_eq!(
+            scheduler.detached_io.len(),
+            0,
+            "detached io_uring operations should be reaped before Runtime::block_on returns"
         );
 
         match output {
@@ -1741,6 +1771,11 @@ impl RuntimeContext<'_> {
         Timeout::new(Rc::downgrade(&self.core), self.submit_timeout(duration))
     }
 
+    /// Returns a snapshot of runtime I/O lifecycle counters.
+    pub fn io_counters(&self) -> IoCounters {
+        self.core.borrow().io_counters()
+    }
+
     /// Attempts to cancel a pending [`IoResult`].
     pub fn cancel_io<T, B>(&self, io: &IoResult<T, B>) -> Result<(), Errno> {
         let Some(state) = io.state.as_ref() else {
@@ -2159,6 +2194,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
         let task_state = Rc::clone(&state);
         let panic_payload = Rc::new(RefCell::new(None));
         state.register_panic_payload(Rc::clone(&panic_payload));
+        let task_panic_payload = Rc::clone(&panic_payload);
         let join = Rc::new(JoinState::new(panic_payload));
         let task_join = Rc::clone(&join);
         let core = Rc::clone(&self.core);
@@ -2195,11 +2231,12 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                         TaskOutcome::Panicked
                     }
                 };
+                let panicked = matches!(result, TaskOutcome::Panicked);
                 let stack_usage = cx
                     .stack_usage()
                     .expect("stackful coroutine missing stack usage");
                 task_join.complete(result, stack_usage);
-                task_state.task_finished();
+                task_state.task_finished(id, &task_panic_payload, panicked);
             })
         };
 
@@ -2310,9 +2347,10 @@ impl<T> fmt::Debug for JoinHandle<'_, T> {
 ///
 /// Implementors must return a pointer that remains valid for writes of
 /// [`IoReadBuffer::io_buffer_len`] bytes until the buffer is dropped. Moving the
-/// buffer value must not invalidate the pointer previously submitted to the
-/// kernel. If an [`IoResult`] is leaked or dropped while pending, leaking the
-/// buffer value must keep the submitted memory valid.
+/// buffer value, including into the runtime's detached-operation storage, must
+/// not invalidate the pointer previously submitted to the kernel. If an
+/// [`IoResult`] is leaked while pending, leaking the buffer value must keep the
+/// submitted memory valid.
 pub unsafe trait IoReadBuffer {
     /// Returns the writable buffer pointer submitted to io_uring.
     fn io_buffer_mut_ptr(&mut self) -> *mut u8;
@@ -2327,9 +2365,10 @@ pub unsafe trait IoReadBuffer {
 ///
 /// Implementors must return a pointer that remains valid for reads of
 /// [`IoWriteBuffer::io_buffer_len`] bytes until the buffer is dropped. Moving the
-/// buffer value must not invalidate the pointer previously submitted to the
-/// kernel. If an [`IoResult`] is leaked or dropped while pending, leaking the
-/// buffer value must keep the submitted memory valid.
+/// buffer value, including into the runtime's detached-operation storage, must
+/// not invalidate the pointer previously submitted to the kernel. If an
+/// [`IoResult`] is leaked while pending, leaking the buffer value must keep the
+/// submitted memory valid.
 pub unsafe trait IoWriteBuffer {
     /// Returns the readable buffer pointer submitted to io_uring.
     fn io_buffer_ptr(&self) -> *const u8;
@@ -2731,8 +2770,77 @@ impl RegisteredResources {
     }
 }
 
+struct DetachedBuffer {
+    ptr: NonNull<()>,
+    drop_fn: unsafe fn(NonNull<()>),
+}
+
+impl DetachedBuffer {
+    fn new<B>(buffer: B) -> Self {
+        let ptr = Box::into_raw(Box::new(buffer)).cast::<()>();
+        Self {
+            ptr: NonNull::new(ptr).expect("Box::into_raw returned null"),
+            drop_fn: drop_detached_buffer::<B>,
+        }
+    }
+}
+
+impl Drop for DetachedBuffer {
+    fn drop(&mut self) {
+        // SAFETY: DetachedBuffer::new stores a pointer and drop function for the
+        // same concrete buffer type, and no other owner can drop that allocation.
+        unsafe {
+            (self.drop_fn)(self.ptr);
+        }
+    }
+}
+
+unsafe fn drop_detached_buffer<B>(ptr: NonNull<()>) {
+    // SAFETY: `ptr` was produced by `Box::into_raw(Box::new(buffer))` for this
+    // same concrete `B` in `DetachedBuffer::new`.
+    unsafe {
+        drop(Box::from_raw(ptr.as_ptr().cast::<B>()));
+    }
+}
+
+struct DetachedIo {
+    state: Rc<IoState>,
+    cancel_state: Option<Rc<IoState>>,
+    buffer: Option<DetachedBuffer>,
+}
+
+impl DetachedIo {
+    fn new(
+        state: Rc<IoState>,
+        cancel_state: Option<Rc<IoState>>,
+        buffer: Option<DetachedBuffer>,
+    ) -> Self {
+        Self {
+            state,
+            cancel_state,
+            buffer,
+        }
+    }
+
+    fn is_ready(&self) -> bool {
+        self.state.is_ready()
+            && self
+                .cancel_state
+                .as_ref()
+                .is_none_or(|state| state.is_ready())
+    }
+
+    fn reap(mut self, core: &Weak<SchedulerCell>) {
+        drop(self.buffer.take());
+        recycle_io_state(core, self.state);
+        if let Some(cancel_state) = self.cancel_state {
+            recycle_io_state(core, cancel_state);
+        }
+    }
+}
+
 /// A pending io_uring operation.
-#[must_use = "pending IO should be completed with get, try_get, or RuntimeContext::join"]
+#[must_use = "pending IO should be completed with get, try_get, RuntimeContext::join, cancel, or detach"]
 pub struct IoResult<T, B = Vec<u8>> {
     core: Weak<SchedulerCell>,
     state: Option<Rc<IoState>>,
@@ -2809,10 +2917,18 @@ impl<T, B> IoResult<T, B> {
 
     /// Requests cancellation of this operation without waiting for completion.
     pub fn cancel(&mut self) {
-        self.cancel_pending();
+        self.detach_pending(true);
     }
 
-    fn cancel_pending(&mut self) {
+    /// Detaches this operation without requesting cancellation.
+    ///
+    /// The runtime keeps the fd and buffer alive until the CQE is reaped, then
+    /// discards the result.
+    pub fn detach(mut self) {
+        self.detach_pending(false);
+    }
+
+    fn detach_pending(&mut self, cancel: bool) {
         if self.taken {
             return;
         }
@@ -2822,6 +2938,8 @@ impl<T, B> IoResult<T, B> {
         };
 
         if state.is_ready() {
+            // SAFETY: `taken` is false, so the buffer is still initialized, and a
+            // ready state means the kernel no longer holds the submitted pointer.
             unsafe {
                 ManuallyDrop::drop(&mut self.buffer);
             }
@@ -2830,10 +2948,14 @@ impl<T, B> IoResult<T, B> {
             return;
         }
 
-        submit_cancel(
+        // SAFETY: `taken` is false, so the buffer has not been moved or dropped.
+        let buffer = unsafe { ManuallyDrop::take(&mut self.buffer) };
+        let cancel_kind = cancel.then(|| IoCancelKind::Async(io_state_user_data(&state)));
+        detach_io_state(
             &self.core,
-            &state,
-            IoCancelKind::Async(io_state_user_data(&state)),
+            state,
+            cancel_kind,
+            Some(DetachedBuffer::new(buffer)),
         );
         self.taken = true;
     }
@@ -2841,7 +2963,7 @@ impl<T, B> IoResult<T, B> {
 
 impl<T, B> Cancellable for IoResult<T, B> {
     fn cancel(&mut self) {
-        self.cancel_pending();
+        self.detach_pending(true);
     }
 }
 
@@ -2868,7 +2990,7 @@ impl<T, B> fmt::Debug for IoResult<T, B> {
 
 impl<T, B> Drop for IoResult<T, B> {
     fn drop(&mut self) {
-        self.cancel_pending();
+        self.detach_pending(true);
     }
 }
 
@@ -2960,7 +3082,7 @@ pub(crate) struct TimeoutState {
 }
 
 /// A waitable io_uring timeout.
-#[must_use = "timeouts should be waited on, canceled, or allowed to complete"]
+#[must_use = "timeouts should be waited on, canceled, detached, or allowed to complete"]
 pub struct Timeout {
     core: Weak<SchedulerCell>,
     state: Option<Rc<IoState>>,
@@ -3014,7 +3136,12 @@ impl Timeout {
 
     /// Requests cancellation of this timeout without waiting for completion.
     pub fn cancel(&mut self) {
-        self.cancel_pending();
+        self.detach_pending(true);
+    }
+
+    /// Detaches this timeout without requesting cancellation.
+    pub fn detach(mut self) {
+        self.detach_pending(false);
     }
 
     /// Cancels this timeout and waits for the cancel request to complete.
@@ -3051,7 +3178,7 @@ impl Timeout {
         cancel_result.map(|_| ())
     }
 
-    fn cancel_pending(&mut self) {
+    fn detach_pending(&mut self, cancel: bool) {
         let Some(state) = self.state.take() else {
             return;
         };
@@ -3061,13 +3188,14 @@ impl Timeout {
             return;
         }
 
-        submit_cancel(&self.core, &state, IoCancelKind::Timeout(self.user_data));
+        let cancel_kind = cancel.then_some(IoCancelKind::Timeout(self.user_data));
+        detach_io_state(&self.core, state, cancel_kind, None);
     }
 }
 
 impl Cancellable for Timeout {
     fn cancel(&mut self) {
-        self.cancel_pending();
+        self.detach_pending(true);
     }
 }
 
@@ -3093,7 +3221,7 @@ impl fmt::Debug for Timeout {
 
 impl Drop for Timeout {
     fn drop(&mut self) {
-        self.cancel_pending();
+        self.detach_pending(true);
     }
 }
 
@@ -3177,6 +3305,22 @@ impl IoState {
         inner.cancel_requested = true;
         !already_requested
     }
+
+    fn mark_cancel_operation(&self) {
+        self.inner.borrow_mut().cancel_operation = true;
+    }
+
+    fn cancel_requested(&self) -> bool {
+        self.inner.borrow().cancel_requested
+    }
+
+    fn is_cancel_operation(&self) -> bool {
+        self.inner.borrow().cancel_operation
+    }
+
+    fn result(&self) -> Option<KernelIoResult> {
+        self.inner.borrow().result
+    }
 }
 
 struct IoStateInner {
@@ -3186,6 +3330,7 @@ struct IoStateInner {
     io_fd: Option<IoFd>,
     registered_resources: RegisteredResources,
     cancel_requested: bool,
+    cancel_operation: bool,
 }
 
 impl IoStateInner {
@@ -3197,6 +3342,7 @@ impl IoStateInner {
             io_fd: None,
             registered_resources: RegisteredResources::new(),
             cancel_requested: false,
+            cancel_operation: false,
         }
     }
 
@@ -3207,6 +3353,7 @@ impl IoStateInner {
         self.io_fd = None;
         self.registered_resources.clear();
         self.cancel_requested = false;
+        self.cancel_operation = false;
     }
 }
 
@@ -3238,6 +3385,16 @@ impl ScopeState {
         self.inner.borrow().task_ids.clone()
     }
 
+    #[cfg(test)]
+    fn tracked_task_count(&self) -> usize {
+        self.inner.borrow().task_ids.len()
+    }
+
+    #[cfg(test)]
+    fn tracked_panic_payload_count(&self) -> usize {
+        self.inner.borrow().panic_payloads.len()
+    }
+
     fn take_panic_payload(&self) -> Option<PanicPayload> {
         let inner = self.inner.borrow();
         for payload in &inner.panic_payloads {
@@ -3248,12 +3405,31 @@ impl ScopeState {
         None
     }
 
-    fn task_finished(&self) {
+    fn task_finished(
+        &self,
+        id: TaskKey,
+        panic_payload: &Rc<RefCell<Option<PanicPayload>>>,
+        keep_panic_payload: bool,
+    ) {
         let mut inner = self.inner.borrow_mut();
         inner.remaining = inner
             .remaining
             .checked_sub(1)
             .expect("scope task count underflow");
+        if let Some(index) = inner.task_ids.iter().position(|task_id| *task_id == id) {
+            inner.task_ids.swap_remove(index);
+        } else {
+            debug_assert!(false, "finished task was not tracked by its scope");
+        }
+
+        if !keep_panic_payload
+            && let Some(index) = inner
+                .panic_payloads
+                .iter()
+                .position(|payload| Rc::ptr_eq(payload, panic_payload))
+        {
+            inner.panic_payloads.swap_remove(index);
+        }
 
         if inner.remaining == 0 {
             inner.waiters.wake_all();
@@ -3891,7 +4067,9 @@ struct Scheduler {
     registered_buffer_free: Vec<u16>,
     io_state_pool: Vec<Rc<IoState>>,
     completed_io: Vec<CompletedIo>,
+    detached_io: Vec<DetachedIo>,
     in_flight_io: usize,
+    io_counters: IoCounters,
     ring_enter_policy: RingEnterPolicy,
     busy_poll: BusyPoll,
     busy_poll_started: Instant,
@@ -3935,7 +4113,9 @@ impl Scheduler {
             registered_buffer_free: (0..config.registered_buffer_slots).rev().collect(),
             io_state_pool: Vec::with_capacity(config.ring_entries as usize),
             completed_io: Vec::with_capacity(config.ring_entries as usize),
+            detached_io: Vec::new(),
             in_flight_io: 0,
+            io_counters: IoCounters::default(),
             ring_enter_policy: config.ring_enter_policy,
             busy_poll: config.busy_poll,
             busy_poll_started: Instant::now(),
@@ -4212,6 +4392,50 @@ impl Scheduler {
         }
     }
 
+    fn detach_io_state(
+        &mut self,
+        state: Rc<IoState>,
+        cancel_kind: Option<IoCancelKind>,
+        buffer: Option<DetachedBuffer>,
+    ) {
+        let cancel_state =
+            cancel_kind.and_then(|cancel_kind| self.submit_cancel(&state, cancel_kind));
+        self.io_counters.detached_total += 1;
+        self.detached_io
+            .push(DetachedIo::new(state, cancel_state, buffer));
+    }
+
+    fn take_ready_detached_io(&mut self) -> Vec<DetachedIo> {
+        let mut ready = Vec::new();
+        let mut index = 0;
+        while index < self.detached_io.len() {
+            if self.detached_io[index].is_ready() {
+                ready.push(self.detached_io.swap_remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        ready
+    }
+
+    fn io_counters(&self) -> IoCounters {
+        IoCounters {
+            detached_pending: self.detached_io.len(),
+            ..self.io_counters
+        }
+    }
+
+    fn record_io_completion(&mut self, state: &IoState) {
+        if state.is_cancel_operation() {
+            self.io_counters.cancel_completions += 1;
+            if state.result().is_some_and(|result| result.is_err()) {
+                self.io_counters.cancel_completion_errors += 1;
+            }
+        } else if state.cancel_requested() {
+            self.io_counters.original_completions_after_cancel += 1;
+        }
+    }
+
     fn supports_opcode(&self, opcode: IoringOp) -> bool {
         self.probe.is_supported(opcode)
     }
@@ -4229,11 +4453,18 @@ impl Scheduler {
         state: &Rc<IoState>,
         cancel_kind: IoCancelKind,
     ) -> Option<Rc<IoState>> {
-        if state.is_ready() || !cancel_kind.is_supported(self) || !state.mark_cancel_requested() {
+        if state.is_ready() || !state.mark_cancel_requested() {
             return None;
         }
 
+        if !cancel_kind.is_supported(self) {
+            self.io_counters.unsupported_cancels += 1;
+            return None;
+        }
+
+        self.io_counters.cancel_requests += 1;
         let cancel_state = self.acquire_io_state();
+        cancel_state.mark_cancel_operation();
         let entry = cancel_kind.build();
         self.submit_io_state(entry, Rc::clone(&cancel_state));
         Some(cancel_state)
@@ -4644,23 +4875,36 @@ fn run_completed_io(core: &Rc<SchedulerCell>, wait: bool) -> bool {
     for completion in completed.drain(..) {
         let state = unsafe { Rc::from_raw(completion.state) };
         state.complete(completion.result);
+        core.borrow_mut().record_io_completion(&state);
         if Rc::strong_count(&state) == 1 {
             recycle_io_state(&Rc::downgrade(core), state);
         }
     }
 
-    core.borrow_mut().completed_io = completed;
+    let ready_detached = {
+        let mut scheduler = core.borrow_mut();
+        scheduler.completed_io = completed;
+        scheduler.take_ready_detached_io()
+    };
+
+    let core = Rc::downgrade(core);
+    for detached in ready_detached {
+        detached.reap(&core);
+    }
 
     submitted != 0 || had_completion
 }
 
-fn submit_cancel(
+fn detach_io_state(
     core: &Weak<SchedulerCell>,
-    state: &Rc<IoState>,
-    cancel_kind: IoCancelKind,
-) -> Option<Rc<IoState>> {
-    core.upgrade()
-        .and_then(|core| core.borrow_mut().submit_cancel(state, cancel_kind))
+    state: Rc<IoState>,
+    cancel_kind: Option<IoCancelKind>,
+    buffer: Option<DetachedBuffer>,
+) {
+    if let Some(core) = core.upgrade() {
+        core.borrow_mut()
+            .detach_io_state(state, cancel_kind, buffer);
+    }
 }
 
 fn recycle_io_state(core: &Weak<SchedulerCell>, state: Rc<IoState>) {
@@ -4809,10 +5053,10 @@ mod tests {
     use super::{
         AddressFamily, AtFlags, BusyPoll, Cancellable, DEFAULT_STACK_SIZE, EpollCtlOp, EpollEvent,
         EpollEventData, EpollEventFlags, Errno, FallocateFlags, FileAdvice, FutexWaitFlags, IoFd,
-        IoJoinError, IoVec, MemoryAdvice, Mode, MsgHdr, OFlags, RecvFlags, RenameFlags,
-        ResolveFlags, Runtime, RuntimeConfig, RuntimeContext, SendFlags, Shutdown, SocketType,
-        StatxFlags, TaskStackState, UringSpliceFlags, WaitError, WaitRegistration, Waitable,
-        Waiters, allocation_tracking, ipproto, once,
+        IoJoinError, IoReadBuffer, IoVec, MemoryAdvice, Mode, MsgHdr, OFlags, RecvFlags,
+        RenameFlags, ResolveFlags, Runtime, RuntimeConfig, RuntimeContext, SendFlags, Shutdown,
+        SocketType, StatxFlags, TaskStackState, UringSpliceFlags, WaitError, WaitRegistration,
+        Waitable, Waiters, allocation_tracking, ipproto, once,
     };
     use rustix::event::{PollFlags, epoll};
     use rustix::fd::AsFd;
@@ -4848,6 +5092,46 @@ mod tests {
             }
             output.extend_from_slice(&buffer[..read]);
         }
+    }
+
+    struct DropCountingReadBuffer {
+        bytes: Vec<u8>,
+        drops: Rc<Cell<usize>>,
+    }
+
+    impl DropCountingReadBuffer {
+        fn new(len: usize, drops: Rc<Cell<usize>>) -> Self {
+            Self {
+                bytes: vec![0; len],
+                drops,
+            }
+        }
+    }
+
+    impl Drop for DropCountingReadBuffer {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+        }
+    }
+
+    unsafe impl IoReadBuffer for DropCountingReadBuffer {
+        fn io_buffer_mut_ptr(&mut self) -> *mut u8 {
+            self.bytes.as_mut_ptr()
+        }
+
+        fn io_buffer_len(&self) -> usize {
+            self.bytes.len()
+        }
+    }
+
+    fn drain_detached_io(cx: &RuntimeContext<'_>) {
+        for _ in 0..32 {
+            if cx.io_counters().detached_pending == 0 {
+                return;
+            }
+            cx.nop().unwrap();
+        }
+        assert_eq!(cx.io_counters().detached_pending, 0);
     }
 
     struct ManualWait {
@@ -6144,6 +6428,129 @@ mod tests {
     }
 
     #[test]
+    fn dropped_pending_io_result_reclaims_buffer_after_drain() {
+        let drops = Rc::new(Cell::new(0));
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = IoFd::from_owned(read_fd);
+            let read = cx.read_async(&read_fd, DropCountingReadBuffer::new(1, Rc::clone(&drops)));
+            drop(read);
+
+            assert_eq!(drops.get(), 0);
+            assert_eq!(cx.io_counters().detached_pending, 1);
+
+            assert_eq!(cx.write(&write_fd, &[33]).unwrap(), 1);
+            cx.close(write_fd).unwrap();
+        });
+
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn detached_pending_io_result_reclaims_buffer_without_cancel() {
+        let drops = Rc::new(Cell::new(0));
+        let mut runtime = Runtime::new();
+
+        let counters = runtime.block_on(|cx| {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = IoFd::from_owned(read_fd);
+            let read = cx.read_async(&read_fd, DropCountingReadBuffer::new(1, Rc::clone(&drops)));
+            read.detach();
+
+            let counters = cx.io_counters();
+            assert_eq!(counters.detached_pending, 1);
+            assert_eq!(counters.cancel_requests, 0);
+
+            assert_eq!(cx.write(&write_fd, &[34]).unwrap(), 1);
+            cx.close(write_fd).unwrap();
+            drain_detached_io(cx);
+            cx.io_counters()
+        });
+
+        assert_eq!(drops.get(), 1);
+        assert_eq!(counters.detached_pending, 0);
+        assert_eq!(counters.detached_total, 1);
+        assert_eq!(counters.cancel_requests, 0);
+        assert_eq!(counters.original_completions_after_cancel, 0);
+    }
+
+    #[test]
+    fn io_lifecycle_counters_track_dropped_cancel_completion() {
+        let mut runtime = Runtime::new();
+
+        let counters = runtime.block_on(|cx| {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = IoFd::from_owned(read_fd);
+            let read = cx.read_async(&read_fd, vec![0_u8]);
+            drop(read);
+
+            assert_eq!(cx.io_counters().detached_pending, 1);
+            assert_eq!(cx.write(&write_fd, &[35]).unwrap(), 1);
+            cx.close(write_fd).unwrap();
+            drain_detached_io(cx);
+            cx.io_counters()
+        });
+
+        assert_eq!(counters.detached_pending, 0);
+        assert_eq!(counters.detached_total, 1);
+        if counters.cancel_requests != 0 {
+            assert_eq!(counters.cancel_completions, counters.cancel_requests);
+        } else {
+            assert!(counters.unsupported_cancels <= 1);
+        }
+    }
+
+    #[test]
+    fn detached_timeout_reaps_without_cancel_request() {
+        let mut runtime = Runtime::new();
+
+        let counters = runtime.block_on(|cx| {
+            cx.timeout(Duration::from_millis(1)).detach();
+            let counters = cx.io_counters();
+            assert_eq!(counters.detached_pending, 1);
+            assert_eq!(counters.cancel_requests, 0);
+
+            cx.sleep(Duration::from_millis(1)).unwrap();
+            drain_detached_io(cx);
+            cx.io_counters()
+        });
+
+        assert_eq!(counters.detached_pending, 0);
+        assert_eq!(counters.detached_total, 1);
+        assert_eq!(counters.cancel_requests, 0);
+    }
+
+    #[test]
+    fn dropped_registered_fd_async_result_reclaims_slot_after_drain() {
+        let mut runtime = Runtime::with_registered_resources(1, 0);
+
+        runtime.block_on(|cx| {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = cx.register_fd(read_fd).unwrap();
+            let read = cx.read_registered_fd_async(&read_fd, vec![0_u8]);
+            drop(read_fd);
+            drop(read);
+
+            let (second_read, second_write) = pipe().unwrap();
+            assert_eq!(cx.register_fd(second_read).unwrap_err(), Errno::NOBUFS);
+            cx.close(second_write).unwrap();
+
+            match cx.write(&write_fd, &[36]) {
+                Ok(1) | Err(Errno::PIPE) => {}
+                other => panic!("unexpected write result after dropped registered read: {other:?}"),
+            }
+            cx.close(write_fd).unwrap();
+            drain_detached_io(cx);
+
+            let (third_read, third_write) = pipe().unwrap();
+            drop(cx.register_fd(third_read).unwrap());
+            cx.close(third_write).unwrap();
+        });
+    }
+
+    #[test]
     fn cancellable_trait_requests_timeout_and_io_result_cancellation() {
         let mut runtime = Runtime::new();
 
@@ -6166,6 +6573,27 @@ mod tests {
         });
 
         drop(fds);
+    }
+
+    #[test]
+    fn successful_child_metadata_is_removed_in_long_lived_scope() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                for _ in 0..128 {
+                    scope.spawn(|_| ()).join(cx);
+                    let scope_state = cx
+                        .active_scopes
+                        .borrow()
+                        .last()
+                        .expect("scope should be active")
+                        .clone();
+                    assert_eq!(scope_state.tracked_task_count(), 0);
+                    assert_eq!(scope_state.tracked_panic_payload_count(), 0);
+                }
+            });
+        });
     }
 
     #[test]
