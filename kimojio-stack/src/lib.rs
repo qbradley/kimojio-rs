@@ -268,7 +268,18 @@ const DEFAULT_RING_ENTRIES: u32 = 128;
 static TEST_ALLOCATOR: allocation_tracking::CountingAllocator =
     allocation_tracking::CountingAllocator;
 
-type TaskId = usize;
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct TaskKey {
+    slot: usize,
+    generation: u32,
+}
+
+impl TaskKey {
+    fn index(self) -> usize {
+        self.slot
+    }
+}
+
 type PanicPayload = Box<dyn Any + Send + 'static>;
 type KernelIoResult = Result<u32, Errno>;
 type IoUring = rustix_uring::IoUring<Sqe, Cqe>;
@@ -374,9 +385,9 @@ pub struct TaskStackDump {
 }
 
 impl TaskStackDump {
-    fn not_started(task_id: TaskId, stack: StackTracker) -> Self {
+    fn not_started(task_id: TaskKey, stack: StackTracker) -> Self {
         Self {
-            task_id,
+            task_id: task_id.index(),
             state: TaskStackState::NotStarted,
             stack_usage: stack.usage_without_current(),
             backtrace: None,
@@ -683,6 +694,11 @@ impl RuntimeContext<'_> {
             CurrentTask::Root => None,
             CurrentTask::Coroutine { stack, .. } => Some(stack.usage()),
         }
+    }
+
+    #[cfg(test)]
+    fn scheduler_task_slots(&self) -> usize {
+        self.core.borrow().task_slot_len()
     }
 
     /// Cooperatively yields the current stackful coroutine.
@@ -2063,7 +2079,7 @@ impl fmt::Debug for RuntimeContext<'_> {
 enum CurrentTask<'cx> {
     Root,
     Coroutine {
-        id: TaskId,
+        id: TaskKey,
         yielder: &'cx Yielder<ResumeAction, Suspend>,
         stack: StackTracker,
     },
@@ -3105,7 +3121,7 @@ impl ScopeState {
         self.inner.borrow_mut().panic_payloads.push(payload);
     }
 
-    fn task_started(&self, id: TaskId) {
+    fn task_started(&self, id: TaskKey) {
         let mut inner = self.inner.borrow_mut();
         inner.remaining += 1;
         inner.task_ids.push(id);
@@ -3119,7 +3135,7 @@ impl ScopeState {
         self.inner.borrow_mut().waiters.push(waiter);
     }
 
-    fn task_ids(&self) -> Vec<TaskId> {
+    fn task_ids(&self) -> Vec<TaskKey> {
         self.inner.borrow().task_ids.clone()
     }
 
@@ -3151,13 +3167,13 @@ struct ScopeStateInner {
     remaining: usize,
     waiters: Waiters,
     panic_payloads: Vec<Rc<RefCell<Option<PanicPayload>>>>,
-    task_ids: Vec<TaskId>,
+    task_ids: Vec<TaskKey>,
 }
 
 #[derive(Clone)]
 pub(crate) struct Waiter {
     core: Weak<SchedulerCell>,
-    task_id: TaskId,
+    task_id: TaskKey,
 }
 
 impl Waiter {
@@ -3182,7 +3198,7 @@ pub(crate) struct ExternalWaiter {
     reason = "phase 1 infrastructure consumed by cross-thread channel phases"
 )]
 impl ExternalWaiter {
-    fn new(external_wake: &Arc<ExternalWake>, task_id: TaskId) -> Self {
+    fn new(external_wake: &Arc<ExternalWake>, task_id: TaskKey) -> Self {
         external_wake.register_waiter();
         Self {
             registration: Arc::new(ExternalWaiterRegistration {
@@ -3204,7 +3220,7 @@ impl ExternalWaiter {
 )]
 struct ExternalWaiterRegistration {
     external_wake: std::sync::Weak<ExternalWake>,
-    task_id: TaskId,
+    task_id: TaskKey,
     active: AtomicBool,
 }
 
@@ -3275,7 +3291,7 @@ impl ExternalWake {
         dead_code,
         reason = "phase 1 infrastructure consumed by cross-thread channel phases"
     )]
-    fn wake_task(&self, task_id: TaskId) {
+    fn wake_task(&self, task_id: TaskKey) {
         let mut inner = self.inner();
         inner.waiters = inner
             .waiters
@@ -3286,7 +3302,7 @@ impl ExternalWake {
         self.signal();
     }
 
-    fn take_ready(&self) -> VecDeque<TaskId> {
+    fn take_ready(&self) -> VecDeque<TaskKey> {
         let mut inner = self.inner();
         std::mem::take(&mut inner.ready)
     }
@@ -3355,7 +3371,7 @@ impl ExternalWake {
 
 #[derive(Default)]
 struct ExternalWakeInner {
-    ready: VecDeque<TaskId>,
+    ready: VecDeque<TaskKey>,
     waiters: usize,
 }
 
@@ -3418,17 +3434,17 @@ type TaskInterruptFn = Box<dyn FnOnce(TaskInterrupt)>;
 
 #[derive(Clone, Copy)]
 struct TaskInterrupt {
-    task_id: TaskId,
+    task_id: TaskKey,
     stack: StackTracker,
 }
 
 impl TaskInterrupt {
-    fn new(task_id: TaskId, stack: StackTracker) -> Self {
+    fn new(task_id: TaskKey, stack: StackTracker) -> Self {
         Self { task_id, stack }
     }
 
     fn task_id(self) -> usize {
-        self.task_id
+        self.task_id.index()
     }
 
     fn stack_usage(self) -> StackUsage {
@@ -3626,8 +3642,10 @@ impl Drop for SchedulerRefMut<'_> {
 
 struct Scheduler {
     tasks: Vec<Option<Task>>,
+    task_generations: Vec<u32>,
+    free_tasks: Vec<usize>,
     queued: Vec<bool>,
-    ready: VecDeque<TaskId>,
+    ready: VecDeque<TaskKey>,
     ring: IoUring,
     probe: Probe,
     registered_file_free: Vec<u32>,
@@ -3666,6 +3684,8 @@ impl Scheduler {
 
         Self {
             tasks: Vec::new(),
+            task_generations: Vec::new(),
+            free_tasks: Vec::new(),
             queued: Vec::new(),
             ready: VecDeque::new(),
             ring,
@@ -3687,22 +3707,49 @@ impl Scheduler {
         }
     }
 
-    fn reserve_task(&mut self) -> TaskId {
-        let id = self.tasks.len();
-        self.tasks.push(None);
-        self.queued.push(false);
-        id
+    fn reserve_task(&mut self) -> TaskKey {
+        let slot = if let Some(slot) = self.free_tasks.pop() {
+            slot
+        } else {
+            let slot = self.tasks.len();
+            self.tasks.push(None);
+            self.task_generations.push(0);
+            self.queued.push(false);
+            slot
+        };
+
+        assert!(
+            self.tasks[slot].is_none(),
+            "free task slot should not contain a task"
+        );
+        assert!(!self.queued[slot], "free task slot should not be queued");
+
+        TaskKey {
+            slot,
+            generation: self.task_generations[slot],
+        }
     }
 
-    fn insert_task(&mut self, id: TaskId, task: Task) {
-        assert!(self.tasks[id].is_none(), "task slot already occupied");
-        self.tasks[id] = Some(task);
+    fn insert_task(&mut self, id: TaskKey, task: Task) {
+        assert!(self.is_current_task_key(id), "stale task key inserted");
+        assert!(
+            self.tasks[id.index()].is_none(),
+            "task slot already occupied"
+        );
+        self.tasks[id.index()] = Some(task);
         self.schedule(id);
     }
 
-    fn schedule(&mut self, id: TaskId) -> bool {
-        if self.tasks.get(id).and_then(Option::as_ref).is_some() && !self.queued[id] {
-            self.queued[id] = true;
+    fn schedule(&mut self, id: TaskKey) -> bool {
+        if self
+            .tasks
+            .get(id.index())
+            .and_then(Option::as_ref)
+            .is_some()
+            && self.is_current_task_key(id)
+            && !self.queued[id.index()]
+        {
+            self.queued[id.index()] = true;
             self.ready.push_back(id);
             true
         } else {
@@ -3710,10 +3757,13 @@ impl Scheduler {
         }
     }
 
-    fn pop_ready(&mut self) -> Option<(TaskId, Task)> {
+    fn pop_ready(&mut self) -> Option<(TaskKey, Task)> {
         while let Some(id) = self.ready.pop_front() {
-            self.queued[id] = false;
-            if let Some(task) = self.tasks[id].take() {
+            if !self.is_current_task_key(id) {
+                continue;
+            }
+            self.queued[id.index()] = false;
+            if let Some(task) = self.tasks[id.index()].take() {
                 return Some((id, task));
             }
         }
@@ -3725,6 +3775,51 @@ impl Scheduler {
         self.ready.len()
     }
 
+    #[cfg(test)]
+    fn task_slot_len(&self) -> usize {
+        self.tasks.len()
+    }
+
+    fn is_current_task_key(&self, id: TaskKey) -> bool {
+        self.task_generations
+            .get(id.index())
+            .is_some_and(|generation| *generation == id.generation)
+    }
+
+    fn task_ref(&self, id: TaskKey) -> Option<&Task> {
+        if self.is_current_task_key(id) {
+            self.tasks.get(id.index()).and_then(Option::as_ref)
+        } else {
+            None
+        }
+    }
+
+    fn take_task(&mut self, id: TaskKey) -> Option<Task> {
+        if self.is_current_task_key(id) {
+            self.tasks.get_mut(id.index()).and_then(Option::take)
+        } else {
+            None
+        }
+    }
+
+    fn restore_task(&mut self, id: TaskKey, task: Task) {
+        if self.is_current_task_key(id) {
+            self.tasks[id.index()] = Some(task);
+        }
+    }
+
+    fn finish_task(&mut self, id: TaskKey) {
+        if !self.is_current_task_key(id) {
+            return;
+        }
+
+        let slot = id.index();
+        self.tasks[slot] = None;
+        self.queued[slot] = false;
+        self.task_generations[slot] = self.task_generations[slot].wrapping_add(1);
+        self.free_tasks.push(slot);
+    }
+
     fn is_empty(&self) -> bool {
         self.tasks.iter().all(Option::is_none)
     }
@@ -3733,10 +3828,14 @@ impl Scheduler {
         let captures = Rc::new(RefCell::new(Vec::new()));
         let mut dump = StackDump::default();
 
-        for id in 0..self.tasks.len() {
-            if let Some(task) = &self.tasks[id]
+        for (slot, task) in self.tasks.iter().enumerate() {
+            if let Some(task) = task
                 && !task.coroutine.started()
             {
+                let id = TaskKey {
+                    slot,
+                    generation: self.task_generations[slot],
+                };
                 dump.tasks.push(TaskStackDump::not_started(id, task.stack));
             }
         }
@@ -3757,18 +3856,29 @@ impl Scheduler {
 
     fn interrupt_started_tasks<F>(&mut self, interrupt: F)
     where
-        F: FnMut(TaskId) -> TaskInterruptFn,
+        F: FnMut(TaskKey) -> TaskInterruptFn,
     {
-        self.interrupt_tasks(0..self.tasks.len(), interrupt);
+        let ids = self
+            .tasks
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, task)| {
+                task.as_ref().map(|_| TaskKey {
+                    slot,
+                    generation: self.task_generations[slot],
+                })
+            })
+            .collect::<Vec<_>>();
+        self.interrupt_tasks(ids, interrupt);
     }
 
     fn interrupt_tasks<I, F>(&mut self, ids: I, mut interrupt: F)
     where
-        I: IntoIterator<Item = TaskId>,
-        F: FnMut(TaskId) -> TaskInterruptFn,
+        I: IntoIterator<Item = TaskKey>,
+        F: FnMut(TaskKey) -> TaskInterruptFn,
     {
         for id in ids {
-            let Some(task) = &self.tasks[id] else {
+            let Some(task) = self.task_ref(id) else {
                 continue;
             };
             if !task.coroutine.started() {
@@ -3776,16 +3886,18 @@ impl Scheduler {
             }
 
             let interrupt = interrupt(id);
-            let Some(mut task) = self.tasks[id].take() else {
+            let Some(mut task) = self.take_task(id) else {
                 continue;
             };
 
             let result = task.coroutine.resume(ResumeAction::Interrupt(interrupt));
             match result {
                 CoroutineResult::Yield(_) => {
-                    self.tasks[id] = Some(task);
+                    self.restore_task(id, task);
                 }
-                CoroutineResult::Return(()) => {}
+                CoroutineResult::Return(()) => {
+                    self.finish_task(id);
+                }
             }
         }
     }
@@ -4137,13 +4249,15 @@ fn run_one(core: &Rc<SchedulerCell>) -> bool {
     let mut scheduler = core.borrow_mut();
     match result {
         CoroutineResult::Yield(Suspend::Ready) => {
-            scheduler.tasks[id] = Some(task);
+            scheduler.restore_task(id, task);
             scheduler.schedule(id);
         }
         CoroutineResult::Yield(Suspend::Parked) => {
-            scheduler.tasks[id] = Some(task);
+            scheduler.restore_task(id, task);
         }
-        CoroutineResult::Return(()) => {}
+        CoroutineResult::Return(()) => {
+            scheduler.finish_task(id);
+        }
     }
 
     true
@@ -4151,19 +4265,19 @@ fn run_one(core: &Rc<SchedulerCell>) -> bool {
 
 fn interrupt_scheduler_tasks<I, F>(core: &Rc<SchedulerCell>, ids: I, mut interrupt: F)
 where
-    I: IntoIterator<Item = TaskId>,
-    F: FnMut(TaskId) -> TaskInterruptFn,
+    I: IntoIterator<Item = TaskKey>,
+    F: FnMut(TaskKey) -> TaskInterruptFn,
 {
     for id in ids {
         let Some(mut task) = ({
             let mut scheduler = core.borrow_mut();
-            let Some(task) = scheduler.tasks.get(id).and_then(Option::as_ref) else {
+            let Some(task) = scheduler.task_ref(id) else {
                 continue;
             };
             if !task.coroutine.started() {
                 continue;
             }
-            scheduler.tasks[id].take()
+            scheduler.take_task(id)
         }) else {
             continue;
         };
@@ -4174,15 +4288,17 @@ where
         let mut scheduler = core.borrow_mut();
         match result {
             CoroutineResult::Yield(_) => {
-                scheduler.tasks[id] = Some(task);
+                scheduler.restore_task(id, task);
             }
-            CoroutineResult::Return(()) => {}
+            CoroutineResult::Return(()) => {
+                scheduler.finish_task(id);
+            }
         }
     }
 }
 
 fn suspend_task(
-    id: TaskId,
+    id: TaskKey,
     yielder: &Yielder<ResumeAction, Suspend>,
     stack: StackTracker,
     suspend: Suspend,
@@ -4192,7 +4308,7 @@ fn suspend_task(
 }
 
 fn handle_resume_action(
-    id: TaskId,
+    id: TaskKey,
     yielder: &Yielder<ResumeAction, Suspend>,
     stack: StackTracker,
     suspend: Suspend,
@@ -4623,6 +4739,63 @@ mod tests {
         });
 
         assert_eq!(output, 41);
+    }
+
+    #[test]
+    fn completed_task_slots_are_reused_after_spawn_churn() {
+        let mut runtime = Runtime::new();
+
+        let slots = runtime.block_on(|cx| {
+            for i in 0..64 {
+                let output = cx.scope(|scope| {
+                    let worker = scope.spawn(move |_| i);
+                    worker.join(cx)
+                });
+                assert_eq!(output, i);
+            }
+
+            cx.scheduler_task_slots()
+        });
+
+        assert_eq!(slots, 1);
+    }
+
+    #[test]
+    fn stale_waiter_does_not_wake_reused_task_slot() {
+        let (waiter_tx, waiter_rx) = mpsc::channel::<super::Waiter>();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let first_tx = waiter_tx.clone();
+                let first = scope.spawn(move |cx| {
+                    first_tx
+                        .send(cx.waiter().expect("stackful task should have waiter"))
+                        .expect("failed to send first waiter");
+                    1
+                });
+                assert_eq!(first.join(cx), 1);
+                let stale_waiter = waiter_rx.recv().expect("missing stale waiter");
+
+                let second_tx = waiter_tx.clone();
+                let second = scope.spawn(move |cx| {
+                    second_tx
+                        .send(cx.waiter().expect("stackful task should have waiter"))
+                        .expect("failed to send second waiter");
+                    cx.park();
+                    2
+                });
+                cx.yield_now();
+                let live_waiter = waiter_rx.recv().expect("missing live waiter");
+
+                stale_waiter.wake();
+                cx.yield_now();
+                assert_eq!(second.try_join(), None);
+
+                live_waiter.wake();
+                assert_eq!(second.join(cx), 2);
+            });
+        });
     }
 
     #[test]

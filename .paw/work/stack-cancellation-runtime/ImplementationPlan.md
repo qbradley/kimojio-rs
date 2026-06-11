@@ -41,7 +41,7 @@ Each phase may be split into multiple logical `jj new` changes during implementa
 
 ## Phase Status
 
-- [ ] **Phase 1: Generation-Safe Task Identity** - Introduce generation-checked task keys and scheduler slot reuse.
+- [x] **Phase 1: Generation-Safe Task Identity** - Introduce generation-checked task keys and scheduler slot reuse.
 - [ ] **Phase 2: Cancellation-Safe Local Waits** - Add private waiter registrations and invalidate stale local waits.
 - [ ] **Phase 3: External Wake and Scope Quiescence** - Make cross-thread waiter cancellation and staged wake draining generation-safe.
 - [ ] **Phase 4: Async I/O Ownership and Runtime Fd Handles** - Add cheap-clone fd identity and operation-owned kernel resources.
