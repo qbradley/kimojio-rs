@@ -43,7 +43,7 @@ Each phase may be split into multiple logical `jj new` changes during implementa
 
 - [x] **Phase 1: Generation-Safe Task Identity** - Introduce generation-checked task keys and scheduler slot reuse.
 - [x] **Phase 2: Cancellation-Safe Local Waits** - Add private waiter registrations and invalidate stale local waits.
-- [ ] **Phase 3: External Wake and Scope Quiescence** - Make cross-thread waiter cancellation and staged wake draining generation-safe.
+- [x] **Phase 3: External Wake and Scope Quiescence** - Make cross-thread waiter cancellation and staged wake draining generation-safe.
 - [ ] **Phase 4: Async I/O Ownership and Runtime Fd Handles** - Add cheap-clone fd identity and operation-owned kernel resources.
 - [ ] **Phase 5: Detached Operation Reaping and Scope Metadata Cleanup** - Reap detached operations and bound long-lived scope/task metadata.
 - [ ] **Phase 6: Tombstone Measurement and Documentation** - Add waiter churn measurements and write as-built technical docs.
@@ -118,16 +118,16 @@ Each phase may be split into multiple logical `jj new` changes during implementa
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Tests pass: `cargo test -p kimojio-stack --all-targets --all-features`
-- [ ] Formatting passes: `cargo fmt --all --check`
-- [ ] Lint passes: `cargo clippy --all-targets -- -D warnings`
-- [ ] All-features lint passes: `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] Tests pass: `cargo test -p kimojio-stack --all-targets --all-features`
+- [x] Formatting passes: `cargo fmt --all --check`
+- [x] Lint passes: `cargo clippy --all-targets -- -D warnings`
+- [x] All-features lint passes: `cargo clippy --all-targets --all-features -- -D warnings`
 
 #### Manual Verification:
-- [ ] Cross-thread wake/cancel races do not underflow or leak external waiter accounting.
-- [ ] A staged external wake for a live scoped task is considered before scope cancellation.
-- [ ] I/O or timeout completions that make scoped tasks runnable are considered before scope cancellation.
-- [ ] Stale external ready entries do not schedule reused task slots.
+- [x] Cross-thread wake/cancel races do not underflow or leak external waiter accounting.
+- [x] A staged external wake for a live scoped task is considered before scope cancellation.
+- [x] I/O or timeout completions that make scoped tasks runnable are considered before scope cancellation.
+- [x] Stale external ready entries do not schedule reused task slots.
 
 ---
 

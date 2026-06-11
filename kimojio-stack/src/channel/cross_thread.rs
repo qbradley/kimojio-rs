@@ -390,10 +390,11 @@ impl<T> StackfulSender<T> {
         };
 
         loop {
-            let Some(waiter) = cx.external_waiter() else {
+            let Some(registration) = cx.external_wait_registration() else {
                 cx.park();
                 continue;
             };
+            let waiter = registration.waiter();
 
             let mut wait = self.inner.send_wait.lock();
             match self.inner.try_send_without_notify(value) {
@@ -478,10 +479,11 @@ impl<T> StackfulReceiver<T> {
         }
 
         loop {
-            let Some(waiter) = cx.external_waiter() else {
+            let Some(registration) = cx.external_wait_registration() else {
                 cx.park();
                 continue;
             };
+            let waiter = registration.waiter();
 
             let mut wait = self.inner.recv_wait.lock();
             match self.inner.try_recv_without_notify() {
@@ -1010,6 +1012,7 @@ impl WaitQueue {
     }
 
     fn push_stackful_waiter(&self, guard: &mut MutexGuard<'_, WaitState>, waiter: ExternalWaiter) {
+        self.compact_inactive_stackful_waiters_locked(guard);
         self.stackful_waiters.fetch_add(1, Ordering::AcqRel);
         guard.stackful_waiters.push_back(waiter);
     }
@@ -1061,18 +1064,30 @@ impl WaitQueue {
     }
 
     fn notify_one(&self) {
-        match self.advance_generation_and_pop_wake() {
-            WakeOne::Stackful(waiter) => waiter.wake(),
-            WakeOne::Async(waker) => waker.wake(),
-            WakeOne::Thread => self.ready.notify_one(),
-            WakeOne::None => {}
+        loop {
+            match self.advance_generation_and_pop_wake() {
+                WakeOne::Stackful(waiter) => {
+                    if waiter.wake_ready() {
+                        return;
+                    }
+                }
+                WakeOne::Async(waker) => {
+                    waker.wake();
+                    return;
+                }
+                WakeOne::Thread => {
+                    self.ready.notify_one();
+                    return;
+                }
+                WakeOne::None => return,
+            }
         }
     }
 
     fn notify_all(&self) {
         let wake = self.advance_generation_and_take_wakes();
         for waiter in wake.stackful {
-            waiter.wake();
+            waiter.wake_ready();
         }
         for waker in wake.async_wakers {
             waker.wake();
@@ -1084,14 +1099,16 @@ impl WaitQueue {
 
     fn advance_generation_and_pop_wake(&self) -> WakeOne {
         let mut state = self.lock();
-        if let Some(waiter) = state.stackful_waiters.pop_front() {
-            state.generation = state.generation.wrapping_add(1);
+        while let Some(waiter) = state.stackful_waiters.pop_front() {
             let previous = self.stackful_waiters.fetch_sub(1, Ordering::AcqRel);
             assert!(
                 previous != 0,
                 "cross-thread stackful wait queue count underflow"
             );
-            return WakeOne::Stackful(waiter);
+            if waiter.mark_ready() {
+                state.generation = state.generation.wrapping_add(1);
+                return WakeOne::Stackful(waiter);
+            }
         }
 
         if let Some(waiter) = state.async_waiters.pop_front() {
@@ -1112,16 +1129,33 @@ impl WaitQueue {
         }
     }
 
+    fn compact_inactive_stackful_waiters_locked(&self, guard: &mut MutexGuard<'_, WaitState>) {
+        let before = guard.stackful_waiters.len();
+        guard.stackful_waiters.retain(ExternalWaiter::is_active);
+        let removed = before - guard.stackful_waiters.len();
+        if removed != 0 {
+            let previous = self.stackful_waiters.fetch_sub(removed, Ordering::AcqRel);
+            assert!(
+                previous >= removed,
+                "cross-thread stackful wait queue count underflow"
+            );
+        }
+    }
+
     fn advance_generation_and_take_wakes(&self) -> WakeAll {
         let mut state = self.lock();
-        let stackful = std::mem::take(&mut state.stackful_waiters);
-        let stackful_count = stackful.len();
-        if stackful_count != 0 {
+        let stackful_waiters = std::mem::take(&mut state.stackful_waiters);
+        let stackful_removed = stackful_waiters.len();
+        let stackful = stackful_waiters
+            .into_iter()
+            .filter(ExternalWaiter::mark_ready)
+            .collect::<VecDeque<_>>();
+        if stackful_removed != 0 {
             let previous = self
                 .stackful_waiters
-                .fetch_sub(stackful_count, Ordering::AcqRel);
+                .fetch_sub(stackful_removed, Ordering::AcqRel);
             assert!(
-                previous >= stackful_count,
+                previous >= stackful_removed,
                 "cross-thread stackful wait queue count underflow"
             );
         }
@@ -1140,6 +1174,7 @@ impl WaitQueue {
         }
 
         let notify_threads = self.thread_waiters.load(Ordering::Acquire) != 0;
+        let stackful_count = stackful.len();
         if stackful_count != 0 || async_count != 0 || notify_threads {
             state.generation = state.generation.wrapping_add(1);
         }
@@ -1185,7 +1220,9 @@ struct WakeAll {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::hint::black_box;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::thread;
@@ -1556,6 +1593,94 @@ mod tests {
         });
 
         assert_eq!(output, 2);
+    }
+
+    #[test]
+    fn cross_runtime_channel_staged_external_wake_runs_before_scope_cancel() {
+        let (tx, rx) = cross_thread::bounded(1).thread_to_stackful();
+        let observer = rx.clone();
+        let received = Rc::new(Cell::new(false));
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let received = Rc::clone(&received);
+                scope.spawn(move |cx| {
+                    assert_eq!(rx.recv(cx), Ok(42));
+                    received.set(true);
+                });
+
+                cx.yield_now();
+                wait_until_blocked(&observer.inner.recv_wait.stackful_waiters);
+                tx.send_blocking(42).unwrap();
+            });
+        });
+
+        assert!(received.get());
+    }
+
+    #[test]
+    fn cross_runtime_channel_canceled_stackful_waiter_is_skipped_on_later_notify() {
+        let (tx, rx) = cross_thread::bounded::<i32>(1).thread_to_stackful();
+        let observer = rx.clone();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                scope.spawn(move |cx| {
+                    let _ = rx.recv(cx);
+                });
+
+                cx.yield_now();
+                wait_until_blocked(&observer.inner.recv_wait.stackful_waiters);
+            });
+        });
+
+        assert_eq!(
+            observer
+                .inner
+                .recv_wait
+                .stackful_waiters
+                .load(Ordering::Acquire),
+            1
+        );
+        drop(tx);
+        assert_eq!(
+            observer
+                .inner
+                .recv_wait
+                .stackful_waiters
+                .load(Ordering::Acquire),
+            0
+        );
+    }
+
+    #[test]
+    fn cross_runtime_channel_stackful_waiter_is_claimed_before_wake() {
+        let external_wake = std::sync::Arc::new(crate::ExternalWake::new());
+        let registration = crate::ExternalWaitRegistration::new(
+            &external_wake,
+            crate::TaskKey {
+                slot: 0,
+                generation: 0,
+            },
+        );
+        let wait_queue = super::WaitQueue::default();
+        {
+            let mut wait = wait_queue.lock();
+            wait_queue.push_stackful_waiter(&mut wait, registration.waiter());
+        }
+
+        let waiter = match wait_queue.advance_generation_and_pop_wake() {
+            super::WakeOne::Stackful(waiter) => waiter,
+            _ => panic!("expected stackful waiter"),
+        };
+        drop(registration);
+
+        assert!(waiter.wake_ready());
+        assert_eq!(wait_queue.stackful_waiters.load(Ordering::Acquire), 0);
+        assert_eq!(external_wake.inner().waiters, 0);
+        assert_eq!(external_wake.take_ready().len(), 1);
     }
 
     #[test]

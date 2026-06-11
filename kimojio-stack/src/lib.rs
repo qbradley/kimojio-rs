@@ -203,7 +203,7 @@ use std::ops::{Deref, DerefMut};
 use std::os::fd::FromRawFd;
 use std::panic::{self, AssertUnwindSafe};
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
@@ -1879,6 +1879,11 @@ impl RuntimeContext<'_> {
         let mut cancel_requested = false;
         while state.has_remaining_tasks() {
             if !cancel_requested && self.core.borrow().ready_len() == 0 {
+                self.prepare_scope_quiescence();
+                if self.core.borrow().ready_len() != 0 {
+                    continue;
+                }
+
                 self.cancel_scope_tasks(state);
                 cancel_requested = true;
                 continue;
@@ -1897,6 +1902,18 @@ impl RuntimeContext<'_> {
         interrupt_scheduler_tasks(&self.core, task_ids, |_| {
             Box::new(|_| panic::panic_any(TaskCanceled))
         });
+    }
+
+    fn prepare_scope_quiescence(&self) {
+        {
+            let mut scheduler = self.core.borrow_mut();
+            scheduler.prepare_external_wake();
+        }
+
+        run_completed_io(&self.core, false);
+
+        let mut scheduler = self.core.borrow_mut();
+        scheduler.prepare_external_wake();
     }
 
     fn submit_and_wait_for_io(&self, entry: impl Into<Sqe>) -> KernelIoResult {
@@ -2070,16 +2087,12 @@ impl RuntimeContext<'_> {
         }
     }
 
-    #[allow(
-        dead_code,
-        reason = "phase 1 infrastructure consumed by cross-thread channel phases"
-    )]
-    pub(crate) fn external_waiter(&self) -> Option<ExternalWaiter> {
+    pub(crate) fn external_wait_registration(&self) -> Option<ExternalWaitRegistration> {
         match self.current {
             CurrentTask::Root => None,
             CurrentTask::Coroutine { id, .. } => {
                 let external_wake = self.core.borrow().external_wake();
-                Some(ExternalWaiter::new(&external_wake, id))
+                Some(ExternalWaitRegistration::new(&external_wake, id))
             }
         }
     }
@@ -3262,61 +3275,105 @@ struct WaitTokenSlot {
     leased: bool,
 }
 
-#[allow(
-    dead_code,
-    reason = "phase 1 infrastructure consumed by cross-thread channel phases"
-)]
-#[derive(Clone)]
-pub(crate) struct ExternalWaiter {
+const EXTERNAL_WAIT_ACTIVE: u8 = 0;
+const EXTERNAL_WAIT_READY: u8 = 1;
+const EXTERNAL_WAIT_CANCELED: u8 = 2;
+
+pub(crate) struct ExternalWaitRegistration {
     registration: Arc<ExternalWaiterRegistration>,
 }
 
-#[allow(
-    dead_code,
-    reason = "phase 1 infrastructure consumed by cross-thread channel phases"
-)]
-impl ExternalWaiter {
+impl ExternalWaitRegistration {
     fn new(external_wake: &Arc<ExternalWake>, task_id: TaskKey) -> Self {
         external_wake.register_waiter();
         Self {
             registration: Arc::new(ExternalWaiterRegistration {
                 external_wake: Arc::downgrade(external_wake),
                 task_id,
-                active: AtomicBool::new(true),
+                state: AtomicU8::new(EXTERNAL_WAIT_ACTIVE),
             }),
         }
     }
 
-    pub(crate) fn wake(self) {
-        self.registration.wake();
+    pub(crate) fn waiter(&self) -> ExternalWaiter {
+        ExternalWaiter {
+            registration: Arc::clone(&self.registration),
+        }
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "phase 1 infrastructure consumed by cross-thread channel phases"
-)]
+impl Drop for ExternalWaitRegistration {
+    fn drop(&mut self) {
+        self.registration.cancel();
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ExternalWaiter {
+    registration: Arc<ExternalWaiterRegistration>,
+}
+
+impl ExternalWaiter {
+    #[cfg(test)]
+    pub(crate) fn wake(self) -> bool {
+        if !self.mark_ready() {
+            return false;
+        }
+
+        self.wake_ready()
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.registration.is_active()
+    }
+
+    pub(crate) fn mark_ready(&self) -> bool {
+        self.registration.mark_ready()
+    }
+
+    pub(crate) fn wake_ready(self) -> bool {
+        let registration = self.registration;
+        if let Some(external_wake) = registration.external_wake.upgrade() {
+            external_wake.wake_task(ExternalReady {
+                task_id: registration.task_id,
+                registration,
+            });
+            true
+        } else {
+            false
+        }
+    }
+}
+
 struct ExternalWaiterRegistration {
     external_wake: std::sync::Weak<ExternalWake>,
     task_id: TaskKey,
-    active: AtomicBool,
+    state: AtomicU8,
 }
 
 impl ExternalWaiterRegistration {
-    fn wake(&self) {
-        if !self.active.swap(false, Ordering::AcqRel) {
-            return;
-        }
-
-        if let Some(external_wake) = self.external_wake.upgrade() {
-            external_wake.wake_task(self.task_id);
-        }
+    fn mark_ready(&self) -> bool {
+        self.state
+            .compare_exchange(
+                EXTERNAL_WAIT_ACTIVE,
+                EXTERNAL_WAIT_READY,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
     }
-}
 
-impl Drop for ExternalWaiterRegistration {
-    fn drop(&mut self) {
-        if !self.active.swap(false, Ordering::AcqRel) {
+    fn cancel(&self) {
+        if self
+            .state
+            .compare_exchange(
+                EXTERNAL_WAIT_ACTIVE,
+                EXTERNAL_WAIT_CANCELED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
             return;
         }
 
@@ -3324,6 +3381,25 @@ impl Drop for ExternalWaiterRegistration {
             external_wake.unregister_waiter();
         }
     }
+
+    fn is_active(&self) -> bool {
+        self.state.load(Ordering::Acquire) == EXTERNAL_WAIT_ACTIVE
+    }
+
+    fn is_ready(&self) -> bool {
+        self.state.load(Ordering::Acquire) == EXTERNAL_WAIT_READY
+    }
+}
+
+impl Drop for ExternalWaiterRegistration {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+struct ExternalReady {
+    task_id: TaskKey,
+    registration: Arc<ExternalWaiterRegistration>,
 }
 
 struct ExternalWake {
@@ -3342,19 +3418,11 @@ impl ExternalWake {
         }
     }
 
-    #[allow(
-        dead_code,
-        reason = "phase 1 infrastructure consumed by cross-thread channel phases"
-    )]
     fn register_waiter(&self) {
         let mut inner = self.inner();
         inner.waiters += 1;
     }
 
-    #[allow(
-        dead_code,
-        reason = "phase 1 infrastructure consumed by cross-thread channel phases"
-    )]
     fn unregister_waiter(&self) {
         let mut inner = self.inner();
         inner.waiters = inner
@@ -3365,22 +3433,18 @@ impl ExternalWake {
         self.signal();
     }
 
-    #[allow(
-        dead_code,
-        reason = "phase 1 infrastructure consumed by cross-thread channel phases"
-    )]
-    fn wake_task(&self, task_id: TaskKey) {
+    fn wake_task(&self, ready: ExternalReady) {
         let mut inner = self.inner();
         inner.waiters = inner
             .waiters
             .checked_sub(1)
             .expect("external waiter count underflow");
-        inner.ready.push_back(task_id);
+        inner.ready.push_back(ready);
         drop(inner);
         self.signal();
     }
 
-    fn take_ready(&self) -> VecDeque<TaskKey> {
+    fn take_ready(&self) -> VecDeque<ExternalReady> {
         let mut inner = self.inner();
         std::mem::take(&mut inner.ready)
     }
@@ -3449,7 +3513,7 @@ impl ExternalWake {
 
 #[derive(Default)]
 struct ExternalWakeInner {
-    ready: VecDeque<TaskKey>,
+    ready: VecDeque<ExternalReady>,
     waiters: usize,
 }
 
@@ -4121,8 +4185,10 @@ impl Scheduler {
     fn drain_external_ready(&mut self) -> bool {
         let ready = self.external_wake.take_ready();
         let mut scheduled = false;
-        for id in ready {
-            scheduled |= self.schedule(id);
+        for ready in ready {
+            if ready.registration.is_ready() {
+                scheduled |= self.schedule(ready.task_id);
+            }
         }
         scheduled
     }
@@ -4692,6 +4758,7 @@ mod tests {
     use std::ffi::c_void;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::ptr;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::mpsc;
     use std::thread;
@@ -4783,6 +4850,11 @@ mod tests {
         }
     }
 
+    fn external_waiter_count(cx: &RuntimeContext<'_>) -> usize {
+        let external_wake = { cx.core.borrow().external_wake() };
+        external_wake.inner().waiters
+    }
+
     fn unique_temp_dir(name: &str) -> std::path::PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -4863,10 +4935,10 @@ mod tests {
         let output = runtime.block_on(|cx| {
             cx.scope(|scope| {
                 let worker = scope.spawn(|cx| {
-                    let waiter = cx
-                        .external_waiter()
+                    let registration = cx
+                        .external_wait_registration()
                         .expect("stackful coroutine should have an external waiter");
-                    assert!(waiter_tx.send(waiter).is_ok());
+                    assert!(waiter_tx.send(registration.waiter()).is_ok());
                     cx.park();
                     42
                 });
@@ -4886,10 +4958,10 @@ mod tests {
         let output = runtime.block_on(|cx| {
             cx.scope(|scope| {
                 let worker = scope.spawn(|cx| {
-                    let waiter = cx
-                        .external_waiter()
+                    let registration = cx
+                        .external_wait_registration()
                         .expect("stackful coroutine should have an external waiter");
-                    waiter.wake();
+                    registration.waiter().wake();
                     cx.park();
                     7
                 });
@@ -4915,10 +4987,10 @@ mod tests {
 
             let output = cx.scope(|scope| {
                 let worker = scope.spawn(|cx| {
-                    let waiter = cx
-                        .external_waiter()
+                    let registration = cx
+                        .external_wait_registration()
                         .expect("stackful coroutine should have an external waiter");
-                    assert!(waiter_tx.send(waiter).is_ok());
+                    assert!(waiter_tx.send(registration.waiter()).is_ok());
                     cx.park();
                     99
                 });
@@ -4932,6 +5004,93 @@ mod tests {
 
         waker.join().unwrap();
         assert_eq!(output, 99);
+    }
+
+    #[test]
+    fn stale_external_waiter_does_not_wake_reused_task_slot() {
+        let (waiter_tx, waiter_rx) = mpsc::channel::<super::ExternalWaiter>();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let first_tx = waiter_tx.clone();
+                let first = scope.spawn(move |cx| {
+                    let registration = cx
+                        .external_wait_registration()
+                        .expect("stackful coroutine should have an external waiter");
+                    first_tx
+                        .send(registration.waiter())
+                        .expect("failed to send first waiter");
+                    1
+                });
+                assert_eq!(first.join(cx), 1);
+                let stale_waiter = waiter_rx.recv().expect("missing stale waiter");
+
+                let second_tx = waiter_tx.clone();
+                let second = scope.spawn(move |cx| {
+                    let registration = cx
+                        .external_wait_registration()
+                        .expect("stackful coroutine should have an external waiter");
+                    second_tx
+                        .send(registration.waiter())
+                        .expect("failed to send second waiter");
+                    cx.park();
+                    2
+                });
+                cx.yield_now();
+                let live_waiter = waiter_rx.recv().expect("missing live waiter");
+                assert!(!stale_waiter.wake());
+                assert_eq!(second.try_join(), None);
+
+                assert!(live_waiter.wake());
+                assert_eq!(second.join(cx), 2);
+            });
+        });
+    }
+
+    #[test]
+    fn canceled_parked_task_releases_external_waiter_count() {
+        let (registered_tx, registered_rx) = mpsc::channel();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                scope.spawn(|cx| {
+                    let _registration = cx
+                        .external_wait_registration()
+                        .expect("stackful coroutine should have an external waiter");
+                    registered_tx.send(()).unwrap();
+                    cx.park();
+                });
+                cx.yield_now();
+                registered_rx.recv().unwrap();
+                assert_eq!(external_waiter_count(cx), 1);
+            });
+
+            assert_eq!(external_waiter_count(cx), 0);
+        });
+    }
+
+    #[test]
+    fn scope_exit_observes_completed_timeout_before_canceling_child() {
+        let completed = Rc::new(Cell::new(false));
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let completed = Rc::clone(&completed);
+                scope.spawn(move |cx| {
+                    cx.sleep(Duration::from_millis(25)).unwrap();
+                    completed.set(true);
+                });
+
+                cx.yield_now();
+                cx.nop().unwrap();
+                thread::sleep(Duration::from_millis(75));
+            });
+        });
+
+        assert!(completed.get());
     }
 
     #[test]
