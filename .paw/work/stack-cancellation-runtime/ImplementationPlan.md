@@ -46,7 +46,7 @@ Each phase may be split into multiple logical `jj new` changes during implementa
 - [x] **Phase 3: External Wake and Scope Quiescence** - Make cross-thread waiter cancellation and staged wake draining generation-safe.
 - [x] **Phase 4: Async I/O Ownership and Runtime Fd Handles** - Add cheap-clone fd identity and operation-owned fd/resource leases.
 - [x] **Phase 5: Detached Operation Reaping and Scope Metadata Cleanup** - Reap detached operations and bound long-lived scope/task metadata.
-- [ ] **Phase 6: Tombstone Measurement and Documentation** - Add waiter churn measurements and write as-built technical docs.
+- [x] **Phase 6: Tombstone Measurement and Documentation** - Add waiter churn measurements and write as-built technical docs.
 
 ## Phase Candidates
 
@@ -201,17 +201,17 @@ Each phase may be split into multiple logical `jj new` changes during implementa
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Tests pass: `cargo test -p kimojio-stack --all-targets --all-features`
-- [ ] Formatting passes: `cargo fmt --all --check`
-- [ ] Lint passes: `cargo clippy --all-targets -- -D warnings`
-- [ ] All-features lint passes: `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] Benchmark compiles/runs: `cargo bench -p kimojio-stack --bench runtime_baseline -- --quick`
+- [x] Tests pass: `cargo test -p kimojio-stack --all-targets --all-features`
+- [x] Formatting passes: `cargo fmt --all --check`
+- [x] Lint passes: `cargo clippy --all-targets -- -D warnings`
+- [x] All-features lint passes: `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] Benchmark compiles/runs: `cargo bench -p kimojio-stack --bench runtime_baseline -- waiters`
 
 #### Manual Verification:
-- [ ] Tombstone benchmark output is sufficient to choose or revisit compaction thresholds.
-- [ ] `Docs.md` accurately reflects the implemented behavior.
-- [ ] Crate-level API documentation for `IoFd`, `read_async`, and `write_async` reflects Phase 4 public API changes.
-- [ ] Public-facing documentation updates, if any, are consistent with existing markdown style.
+- [x] Tombstone benchmark output is sufficient to choose or revisit compaction thresholds.
+- [x] `Docs.md` accurately reflects the implemented behavior.
+- [x] Crate-level API documentation for `IoFd`, `read_async`, and `write_async` reflects Phase 4 public API changes.
+- [x] Public-facing documentation updates, if any, are consistent with existing markdown style.
 
 ---
 

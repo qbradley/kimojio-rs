@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use kimojio_stack::channel::{bounded, cross_thread, unbounded};
-use kimojio_stack::{IoFd, Mutex, Runtime, RuntimeContext, Semaphore};
+use kimojio_stack::{IoFd, Mutex, Notify, Runtime, RuntimeContext, Semaphore, Waitable};
 use rustix::pipe::pipe;
 use tokio::runtime::Builder as TokioRuntimeBuilder;
 
@@ -544,11 +544,140 @@ fn bench_io(c: &mut Criterion) {
     });
 }
 
+fn bench_waiter_tombstones(c: &mut Criterion) {
+    c.bench_function("waiters/wait_any_timeout_churn", |b| {
+        b.iter_custom(|iters| {
+            run_stackful(|cx| {
+                let notify = Notify::new();
+                cx.scope(|scope| {
+                    let worker = scope.spawn(|cx| {
+                        let notified = notify.notified();
+                        let waitables: [&dyn Waitable; 1] = [&notified];
+
+                        let start = Instant::now();
+                        for _ in 0..iters {
+                            assert!(cx.wait_any(&waitables, Some(Duration::ZERO)).is_err());
+                        }
+                        start.elapsed()
+                    });
+
+                    worker.join(cx)
+                })
+            })
+        });
+    });
+
+    c.bench_function("waiters/wait_any_cancel_timeout_churn", |b| {
+        b.iter_custom(|iters| {
+            run_stackful(|cx| {
+                let notify = Notify::new();
+                let request = Notify::new();
+                cx.scope(|scope| {
+                    let worker = scope.spawn(|cx| {
+                        let start = Instant::now();
+                        for _ in 0..iters {
+                            let notified = notify.notified();
+                            let waitables: [&dyn Waitable; 1] = [&notified];
+                            request.notify_one();
+                            assert_eq!(
+                                cx.wait_any(&waitables, Some(Duration::from_secs(3600))),
+                                Ok(0)
+                            );
+                            assert!(notified.try_wait());
+                        }
+                        start.elapsed()
+                    });
+
+                    let notifier = scope.spawn(|cx| {
+                        for _ in 0..iters {
+                            request.notified().wait(cx);
+                            notify.notify_one();
+                        }
+                    });
+
+                    let elapsed = worker.join(cx);
+                    notifier.join(cx);
+                    elapsed
+                })
+            })
+        });
+    });
+
+    for waitable_count in [8_usize, 64] {
+        let benchmark_name = format!("waiters/wait_any_timeout_queue_len_{waitable_count}");
+        c.bench_function(&benchmark_name, move |b| {
+            b.iter_custom(|iters| {
+                run_stackful(|cx| {
+                    let notifies: Vec<_> = (0..waitable_count).map(|_| Notify::new()).collect();
+                    let notified: Vec<_> = notifies.iter().map(Notify::notified).collect();
+                    let waitables: Vec<&dyn Waitable> = notified
+                        .iter()
+                        .map(|notified| notified as &dyn Waitable)
+                        .collect();
+
+                    let start = Instant::now();
+                    for _ in 0..iters {
+                        assert!(cx.wait_any(&waitables, Some(Duration::ZERO)).is_err());
+                    }
+                    start.elapsed()
+                })
+            });
+        });
+    }
+
+    c.bench_function("waiters/wake_one_after_timeout_churn", |b| {
+        b.iter_custom(|iters| {
+            run_stackful(|cx| {
+                let notify = Notify::new();
+                cx.scope(|scope| {
+                    let worker = scope.spawn(|cx| {
+                        let notified = notify.notified();
+                        let waitables: [&dyn Waitable; 1] = [&notified];
+
+                        let start = Instant::now();
+                        for _ in 0..iters {
+                            assert!(cx.wait_any(&waitables, Some(Duration::ZERO)).is_err());
+                        }
+                        notify.notify_one();
+                        start.elapsed()
+                    });
+
+                    worker.join(cx)
+                })
+            })
+        });
+    });
+
+    c.bench_function("waiters/wake_all_after_timeout_churn", |b| {
+        b.iter_custom(|iters| {
+            run_stackful(|cx| {
+                let notify = Notify::new();
+                cx.scope(|scope| {
+                    let worker = scope.spawn(|cx| {
+                        let notified = notify.notified();
+                        let waitables: [&dyn Waitable; 1] = [&notified];
+
+                        let start = Instant::now();
+                        for _ in 0..iters {
+                            assert!(cx.wait_all(&waitables, Some(Duration::ZERO)).is_err());
+                        }
+                        notify.notify_waiters();
+                        start.elapsed()
+                    });
+
+                    worker.join(cx)
+                })
+            })
+        });
+    });
+}
+
 criterion_group!(
     name = benches;
     config = Criterion::default()
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(4));
-    targets = bench_runtime, bench_scheduler, bench_sync, bench_cross_thread_channel, bench_io
+    targets = bench_runtime, bench_scheduler, bench_sync, bench_cross_thread_channel, bench_io,
+        bench_waiter_tombstones
 );
 criterion_main!(benches);
