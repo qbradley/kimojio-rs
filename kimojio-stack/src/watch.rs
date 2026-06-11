@@ -5,7 +5,7 @@ use std::cell::{Cell, Ref, RefCell};
 use std::fmt;
 use std::rc::Rc;
 
-use crate::{RuntimeContext, Waitable, Waiters};
+use crate::{RuntimeContext, WaitRegistration, Waitable, Waiters};
 
 /// Creates a watch channel that retains the latest value.
 pub fn channel<T>(value: T) -> (WatchSender<T>, WatchReceiver<T>) {
@@ -127,7 +127,8 @@ impl<T> WatchReceiver<T> {
                 return Ok(());
             }
 
-            if let Some(waiter) = cx.waiter() {
+            let registration = cx.wait_registration();
+            if let Some(waiter) = cx.waiter(&registration) {
                 self.inner.borrow_mut().waiters.push(waiter);
             }
             cx.park();
@@ -157,9 +158,9 @@ impl<T> Waitable for WatchReceiver<T> {
         inner.version != self.seen.get() || inner.senders == 0
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if !self.is_ready()
-            && let Some(waiter) = cx.waiter()
+            && let Some(waiter) = cx.waiter(registration)
         {
             self.inner.borrow_mut().waiters.push(waiter);
         }

@@ -7,7 +7,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::channel::{RecvError, SendError, TryRecvError, TrySendError};
-use crate::{RuntimeContext, Waitable, Waiters};
+use crate::{RuntimeContext, WaitRegistration, Waitable, Waiters};
 
 /// Creates a bounded channel with space for `capacity` messages.
 pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
@@ -61,7 +61,8 @@ impl<T> Sender<T> {
                 Err(TrySendError::Full(returned)) => value = returned,
             }
 
-            if let Some(waiter) = cx.waiter() {
+            let registration = cx.wait_registration();
+            if let Some(waiter) = cx.waiter(&registration) {
                 self.inner.borrow_mut().send_waiters.push(waiter);
             }
             cx.park();
@@ -99,9 +100,9 @@ impl<T> Waitable for Sender<T> {
         inner.receivers == 0 || inner.queue.len() < inner.capacity
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if !self.is_ready()
-            && let Some(waiter) = cx.waiter()
+            && let Some(waiter) = cx.waiter(registration)
         {
             self.inner.borrow_mut().send_waiters.push(waiter);
         }
@@ -144,7 +145,8 @@ impl<T> Receiver<T> {
                 Err(TryRecvError::Empty) => {}
             }
 
-            if let Some(waiter) = cx.waiter() {
+            let registration = cx.wait_registration();
+            if let Some(waiter) = cx.waiter(&registration) {
                 self.inner.borrow_mut().recv_waiters.push(waiter);
             }
             cx.park();
@@ -182,9 +184,9 @@ impl<T> Waitable for Receiver<T> {
         !inner.queue.is_empty() || inner.senders == 0
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if !self.is_ready()
-            && let Some(waiter) = cx.waiter()
+            && let Some(waiter) = cx.waiter(registration)
         {
             self.inner.borrow_mut().recv_waiters.push(waiter);
         }

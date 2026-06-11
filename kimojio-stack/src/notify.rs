@@ -4,7 +4,7 @@
 use std::cell::{Cell, RefCell};
 use std::fmt;
 
-use crate::{RuntimeContext, Waitable, Waiters};
+use crate::{RuntimeContext, WaitRegistration, Waitable, Waiters};
 
 /// A cooperative notification primitive.
 #[derive(Default)]
@@ -95,7 +95,8 @@ impl Notified<'_> {
                 return;
             }
 
-            if let Some(waiter) = cx.waiter() {
+            let registration = cx.wait_registration();
+            if let Some(waiter) = cx.waiter(&registration) {
                 self.notify.state.borrow_mut().waiters.push(waiter);
             }
             cx.park();
@@ -113,9 +114,9 @@ impl Waitable for Notified<'_> {
         state.generation != self.observed_generation || state.permits != 0
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if !self.is_ready()
-            && let Some(waiter) = cx.waiter()
+            && let Some(waiter) = cx.waiter(registration)
         {
             self.notify.state.borrow_mut().waiters.push(waiter);
         }

@@ -31,7 +31,7 @@
 use std::cell::RefCell;
 use std::fmt;
 
-use crate::{RuntimeContext, Waitable, Waiters};
+use crate::{RuntimeContext, WaitRegistration, Waitable, Waiters};
 
 /// A counting semaphore for stackful coroutines.
 pub struct Semaphore {
@@ -84,7 +84,8 @@ impl Semaphore {
                 return permit;
             }
 
-            if let Some(waiter) = cx.waiter() {
+            let registration = cx.wait_registration();
+            if let Some(waiter) = cx.waiter(&registration) {
                 self.state.borrow_mut().waiters.push(waiter);
             }
             cx.park();
@@ -101,9 +102,9 @@ impl Waitable for Semaphore {
         self.state.borrow().permits != 0
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if !self.is_ready()
-            && let Some(waiter) = cx.waiter()
+            && let Some(waiter) = cx.waiter(registration)
         {
             self.state.borrow_mut().waiters.push(waiter);
         }

@@ -7,7 +7,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::channel::{RecvError, SendError, TryRecvError};
-use crate::{RuntimeContext, Waitable, Waiters};
+use crate::{RuntimeContext, WaitRegistration, Waitable, Waiters};
 
 /// Creates an unbounded channel.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -74,7 +74,7 @@ impl<T> Waitable for Sender<T> {
         true
     }
 
-    fn add_waiter(&self, _cx: &RuntimeContext<'_>) {}
+    fn add_waiter(&self, _cx: &RuntimeContext<'_>, _registration: &WaitRegistration) {}
 }
 
 impl<T> fmt::Debug for Sender<T> {
@@ -112,7 +112,8 @@ impl<T> Receiver<T> {
                 Err(TryRecvError::Empty) => {}
             }
 
-            if let Some(waiter) = cx.waiter() {
+            let registration = cx.wait_registration();
+            if let Some(waiter) = cx.waiter(&registration) {
                 self.inner.borrow_mut().recv_waiters.push(waiter);
             }
             cx.park();
@@ -146,9 +147,9 @@ impl<T> Waitable for Receiver<T> {
         !inner.queue.is_empty() || inner.senders == 0
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if !self.is_ready()
-            && let Some(waiter) = cx.waiter()
+            && let Some(waiter) = cx.waiter(registration)
         {
             self.inner.borrow_mut().recv_waiters.push(waiter);
         }

@@ -4,7 +4,7 @@
 use std::fmt;
 use std::time::Duration;
 
-use crate::RuntimeContext;
+use crate::{RuntimeContext, WaitRegistration};
 
 /// A condition that can wake stackful coroutines when it becomes ready.
 ///
@@ -18,7 +18,7 @@ pub trait Waitable {
     fn is_ready(&self) -> bool;
 
     #[doc(hidden)]
-    fn add_waiter(&self, cx: &RuntimeContext<'_>);
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration);
 }
 
 /// Backwards-compatible marker for I/O handles.
@@ -85,11 +85,12 @@ impl RuntimeContext<'_> {
                 return Err(WaitError::TimedOut);
             }
 
+            let registration = self.wait_registration();
             for waitable in waitables {
-                waitable.add_waiter(self);
+                waitable.add_waiter(self, &registration);
             }
             if let Some(timeout) = &timeout {
-                timeout.state.add_waiter_from(self);
+                timeout.state.add_waiter_from(self, &registration);
             }
             self.park();
         }
@@ -131,11 +132,12 @@ impl RuntimeContext<'_> {
                 return Err(WaitError::TimedOut);
             }
 
+            let registration = self.wait_registration();
             for waitable in waitables {
-                waitable.add_waiter(self);
+                waitable.add_waiter(self, &registration);
             }
             if let Some(timeout) = &timeout {
-                timeout.state.add_waiter_from(self);
+                timeout.state.add_waiter_from(self, &registration);
             }
             self.park();
         }

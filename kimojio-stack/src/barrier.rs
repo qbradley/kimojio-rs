@@ -44,16 +44,18 @@ impl Barrier {
         };
 
         loop {
-            {
+            let _registration = {
                 let mut state = self.state.borrow_mut();
                 if state.generation != generation {
                     return BarrierWaitResult { leader: false };
                 }
 
-                if let Some(waiter) = cx.waiter() {
+                let registration = cx.wait_registration();
+                if let Some(waiter) = cx.waiter(&registration) {
                     state.waiters.push(waiter);
                 }
-            }
+                registration
+            };
             cx.park();
         }
     }

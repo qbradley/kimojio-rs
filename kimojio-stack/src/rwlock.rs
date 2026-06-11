@@ -5,7 +5,7 @@ use std::cell::{RefCell, UnsafeCell};
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
-use crate::{RuntimeContext, Waitable, Waiters};
+use crate::{RuntimeContext, WaitRegistration, Waitable, Waiters};
 
 /// A cooperative reader/writer lock for stackful coroutines.
 pub struct RwLock<T> {
@@ -117,7 +117,8 @@ impl<'a, T> ReadLock<'a, T> {
                 return guard;
             }
 
-            if let Some(waiter) = cx.waiter() {
+            let registration = cx.wait_registration();
+            if let Some(waiter) = cx.waiter(&registration) {
                 self.lock.state.borrow_mut().waiters.push(waiter);
             }
             cx.park();
@@ -130,9 +131,9 @@ impl<T> Waitable for ReadLock<'_, T> {
         !self.lock.state.borrow().writer
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if !self.is_ready()
-            && let Some(waiter) = cx.waiter()
+            && let Some(waiter) = cx.waiter(registration)
         {
             self.lock.state.borrow_mut().waiters.push(waiter);
         }
@@ -157,7 +158,8 @@ impl<'a, T> WriteLock<'a, T> {
                 return guard;
             }
 
-            if let Some(waiter) = cx.waiter() {
+            let registration = cx.wait_registration();
+            if let Some(waiter) = cx.waiter(&registration) {
                 self.lock.state.borrow_mut().waiters.push(waiter);
             }
             cx.park();
@@ -171,9 +173,9 @@ impl<T> Waitable for WriteLock<'_, T> {
         !state.writer && state.readers == 0
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if !self.is_ready()
-            && let Some(waiter) = cx.waiter()
+            && let Some(waiter) = cx.waiter(registration)
         {
             self.lock.state.borrow_mut().waiters.push(waiter);
         }

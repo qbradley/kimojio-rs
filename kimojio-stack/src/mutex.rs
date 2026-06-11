@@ -35,7 +35,7 @@ use std::cell::{RefCell, UnsafeCell};
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
-use crate::{RuntimeContext, Waitable, Waiters};
+use crate::{RuntimeContext, WaitRegistration, Waitable, Waiters};
 
 /// A cooperative mutex for stackful coroutines.
 pub struct Mutex<T> {
@@ -73,7 +73,8 @@ impl<T> Mutex<T> {
                 return guard;
             }
 
-            if let Some(waiter) = cx.waiter() {
+            let registration = cx.wait_registration();
+            if let Some(waiter) = cx.waiter(&registration) {
                 self.state.borrow_mut().waiters.push(waiter);
             }
             cx.park();
@@ -93,9 +94,9 @@ impl<T> Waitable for Mutex<T> {
         !self.state.borrow().locked
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if !self.is_ready()
-            && let Some(waiter) = cx.waiter()
+            && let Some(waiter) = cx.waiter(registration)
         {
             self.state.borrow_mut().waiters.push(waiter);
         }

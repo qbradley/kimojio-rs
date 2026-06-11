@@ -42,7 +42,7 @@ Each phase may be split into multiple logical `jj new` changes during implementa
 ## Phase Status
 
 - [x] **Phase 1: Generation-Safe Task Identity** - Introduce generation-checked task keys and scheduler slot reuse.
-- [ ] **Phase 2: Cancellation-Safe Local Waits** - Add private waiter registrations and invalidate stale local waits.
+- [x] **Phase 2: Cancellation-Safe Local Waits** - Add private waiter registrations and invalidate stale local waits.
 - [ ] **Phase 3: External Wake and Scope Quiescence** - Make cross-thread waiter cancellation and staged wake draining generation-safe.
 - [ ] **Phase 4: Async I/O Ownership and Runtime Fd Handles** - Add cheap-clone fd identity and operation-owned kernel resources.
 - [ ] **Phase 5: Detached Operation Reaping and Scope Metadata Cleanup** - Reap detached operations and bound long-lived scope/task metadata.
@@ -92,16 +92,16 @@ Each phase may be split into multiple logical `jj new` changes during implementa
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Tests pass: `cargo test -p kimojio-stack --all-targets --all-features`
-- [ ] Formatting passes: `cargo fmt --all --check`
-- [ ] Lint passes: `cargo clippy --all-targets -- -D warnings`
-- [ ] All-features lint passes: `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] Tests pass: `cargo test -p kimojio-stack --all-targets --all-features`
+- [x] Formatting passes: `cargo fmt --all --check`
+- [x] Lint passes: `cargo clippy --all-targets -- -D warnings`
+- [x] All-features lint passes: `cargo clippy --all-targets --all-features -- -D warnings`
 
 #### Manual Verification:
-- [ ] Timed-out and non-winning wait registrations cannot consume later wakes.
-- [ ] Canceled or unwound tasks do not remain live in local waiter queues.
-- [ ] Invalidated waiter tombstones are compacted by a provisional mechanism before known churn patterns grow without bound.
-- [ ] Local wait registration remains private and does not stabilize a public extension API.
+- [x] Timed-out and non-winning wait registrations cannot consume later wakes.
+- [x] Canceled or unwound tasks do not remain live in local waiter queues.
+- [x] Invalidated waiter tombstones are compacted by a provisional mechanism before known churn patterns grow without bound.
+- [x] Local wait registration remains private and does not stabilize a public extension API.
 
 ---
 

@@ -29,7 +29,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
-use crate::{RuntimeContext, Waitable, Waiter};
+use crate::{RuntimeContext, WaitRegistration, Waitable, Waiter};
 
 /// Creates a channel that can deliver one value.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -104,7 +104,7 @@ impl<T> Receiver<T> {
     /// Blocks cooperatively until the value is sent or the sender is dropped.
     pub fn recv(self, cx: &RuntimeContext<'_>) -> Result<T, RecvError> {
         loop {
-            {
+            let _registration = {
                 let mut inner = self.inner.borrow_mut();
                 if let Some(value) = inner.value.take() {
                     inner.receiver_alive = false;
@@ -116,8 +116,10 @@ impl<T> Receiver<T> {
                     return Err(RecvError);
                 }
 
-                inner.receiver_waiter = cx.waiter();
-            }
+                let registration = cx.wait_registration();
+                inner.receiver_waiter = cx.waiter(&registration);
+                registration
+            };
 
             cx.park();
         }
@@ -130,9 +132,9 @@ impl<T> Waitable for Receiver<T> {
         inner.value.is_some() || !inner.sender_alive
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if !self.is_ready() {
-            self.inner.borrow_mut().receiver_waiter = cx.waiter();
+            self.inner.borrow_mut().receiver_waiter = cx.waiter(registration);
         }
     }
 }

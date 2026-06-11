@@ -1884,7 +1884,8 @@ impl RuntimeContext<'_> {
                 continue;
             }
 
-            if let Some(waiter) = self.waiter() {
+            let registration = self.wait_registration();
+            if let Some(waiter) = self.waiter(&registration) {
                 state.push_waiter(waiter);
             }
             self.park();
@@ -1930,7 +1931,8 @@ impl RuntimeContext<'_> {
                 return result;
             }
 
-            state.add_waiter_from(self);
+            let registration = self.wait_registration();
+            state.add_waiter_from(self, &registration);
             self.park();
             self.resume_active_scope_panic();
         }
@@ -1942,7 +1944,8 @@ impl RuntimeContext<'_> {
                 return result;
             }
 
-            state.add_waiter_from(self);
+            let registration = self.wait_registration();
+            state.add_waiter_from(self, &registration);
             self.park();
         }
     }
@@ -1950,9 +1953,10 @@ impl RuntimeContext<'_> {
     fn cancel_and_wait_for_io_state(&self, state: &Rc<IoState>, cancel_kind: IoCancelKind) {
         let cancel_state = self.submit_cancel_for_io_state(state, cancel_kind);
         while !state.is_ready() || cancel_state.as_ref().is_some_and(|state| !state.is_ready()) {
-            state.add_waiter_from(self);
+            let registration = self.wait_registration();
+            state.add_waiter_from(self, &registration);
             if let Some(cancel_state) = &cancel_state {
-                cancel_state.add_waiter_from(self);
+                cancel_state.add_waiter_from(self, &registration);
             }
             self.park();
         }
@@ -1995,9 +1999,10 @@ impl RuntimeContext<'_> {
         while !timeout.state.is_ready()
             || cancel_state.as_ref().is_some_and(|state| !state.is_ready())
         {
-            timeout.state.add_waiter_from(self);
+            let registration = self.wait_registration();
+            timeout.state.add_waiter_from(self, &registration);
             if let Some(cancel_state) = &cancel_state {
-                cancel_state.add_waiter_from(self);
+                cancel_state.add_waiter_from(self, &registration);
             }
             self.park();
         }
@@ -2030,12 +2035,23 @@ impl RuntimeContext<'_> {
         }
     }
 
-    pub(crate) fn waiter(&self) -> Option<Waiter> {
+    pub(crate) fn wait_registration(&self) -> WaitRegistration {
+        match self.current {
+            CurrentTask::Root => WaitRegistration::root(),
+            CurrentTask::Coroutine { .. } => {
+                let token = self.core.borrow_mut().register_wait_token();
+                WaitRegistration::new(Rc::downgrade(&self.core), token)
+            }
+        }
+    }
+
+    pub(crate) fn waiter(&self, registration: &WaitRegistration) -> Option<Waiter> {
         match self.current {
             CurrentTask::Root => None,
-            CurrentTask::Coroutine { id, .. } => Some(Waiter {
+            CurrentTask::Coroutine { id, .. } => registration.token().map(|token| Waiter {
                 core: Rc::downgrade(&self.core),
                 task_id: id,
+                token,
             }),
         }
     }
@@ -2232,7 +2248,8 @@ impl<T> JoinHandle<'_, T> {
                 return result;
             }
 
-            self.state.add_waiter_from(cx);
+            let registration = cx.wait_registration();
+            self.state.add_waiter_from(cx, &registration);
             cx.park();
         }
     }
@@ -2244,7 +2261,8 @@ impl<T> JoinHandle<'_, T> {
                 return result;
             }
 
-            self.state.add_waiter_from(cx);
+            let registration = cx.wait_registration();
+            self.state.add_waiter_from(cx, &registration);
             cx.park();
         }
     }
@@ -2255,8 +2273,8 @@ impl<T> Waitable for JoinHandle<'_, T> {
         self.taken.get() || self.state.is_ready()
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
-        self.state.add_waiter_from(cx);
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
+        self.state.add_waiter_from(cx, registration);
     }
 }
 
@@ -2706,10 +2724,11 @@ impl<T, B> IoResult<T, B> {
                 return result;
             }
 
+            let registration = cx.wait_registration();
             self.state
                 .as_ref()
                 .expect("IoResult state missing")
-                .add_waiter_from(cx);
+                .add_waiter_from(cx, &registration);
             cx.park();
             cx.resume_active_scope_panic();
         }
@@ -2762,9 +2781,9 @@ impl<T, B> Waitable for IoResult<T, B> {
         self.taken || self.state.as_ref().is_none_or(|state| state.is_ready())
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if let Some(state) = &self.state {
-            state.add_waiter_from(cx);
+            state.add_waiter_from(cx, registration);
         }
     }
 }
@@ -2832,8 +2851,8 @@ impl<T> JoinState<T> {
         *self.panic_payload.borrow_mut() = Some(payload);
     }
 
-    fn add_waiter_from(&self, cx: &RuntimeContext<'_>) {
-        if let Some(waiter) = cx.waiter() {
+    fn add_waiter_from(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
+        if let Some(waiter) = cx.waiter(registration) {
             self.inner.borrow_mut().waiters.push(waiter);
         }
     }
@@ -2903,10 +2922,11 @@ impl Timeout {
                 return result;
             }
 
+            let registration = cx.wait_registration();
             self.state
                 .as_ref()
                 .expect("timeout state missing")
-                .add_waiter_from(cx);
+                .add_waiter_from(cx, &registration);
             cx.park();
             cx.resume_active_scope_panic();
         }
@@ -2943,9 +2963,10 @@ impl Timeout {
             cx.submit_cancel_for_io_state(&state, IoCancelKind::Timeout(self.user_data));
 
         while !state.is_ready() || cancel_state.as_ref().is_some_and(|state| !state.is_ready()) {
-            state.add_waiter_from(cx);
+            let registration = cx.wait_registration();
+            state.add_waiter_from(cx, &registration);
             if let Some(cancel_state) = &cancel_state {
-                cancel_state.add_waiter_from(cx);
+                cancel_state.add_waiter_from(cx, &registration);
             }
             cx.park();
         }
@@ -2986,9 +3007,9 @@ impl Waitable for Timeout {
         self.state.as_ref().is_none_or(|state| state.is_ready())
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if let Some(state) = &self.state {
-            state.add_waiter_from(cx);
+            state.add_waiter_from(cx, registration);
         }
     }
 }
@@ -3036,8 +3057,8 @@ impl IoState {
         inner.waiters.wake_all();
     }
 
-    pub(crate) fn add_waiter_from(&self, cx: &RuntimeContext<'_>) {
-        if let Some(waiter) = cx.waiter() {
+    pub(crate) fn add_waiter_from(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
+        if let Some(waiter) = cx.waiter(registration) {
             self.inner.borrow_mut().waiters.push(waiter);
         }
     }
@@ -3174,14 +3195,71 @@ struct ScopeStateInner {
 pub(crate) struct Waiter {
     core: Weak<SchedulerCell>,
     task_id: TaskKey,
+    token: WaitToken,
 }
 
 impl Waiter {
-    pub(crate) fn wake(self) {
-        if let Some(core) = self.core.upgrade() {
-            core.borrow_mut().schedule(self.task_id);
+    pub(crate) fn wake(self) -> bool {
+        self.core.upgrade().is_some_and(|core| {
+            let mut scheduler = core.borrow_mut();
+            scheduler.take_wait_token(self.token) && scheduler.schedule(self.task_id)
+        })
+    }
+
+    fn is_active(&self) -> bool {
+        self.core
+            .upgrade()
+            .is_some_and(|core| core.borrow().is_wait_token_active(self.token))
+    }
+}
+
+#[doc(hidden)]
+pub struct WaitRegistration {
+    core: Weak<SchedulerCell>,
+    token: Option<WaitToken>,
+}
+
+impl WaitRegistration {
+    fn root() -> Self {
+        Self {
+            core: Weak::new(),
+            token: None,
         }
     }
+
+    fn new(core: Weak<SchedulerCell>, token: WaitToken) -> Self {
+        Self {
+            core,
+            token: Some(token),
+        }
+    }
+
+    fn token(&self) -> Option<WaitToken> {
+        self.token
+    }
+}
+
+impl Drop for WaitRegistration {
+    fn drop(&mut self) {
+        let Some(token) = self.token.take() else {
+            return;
+        };
+        if let Some(core) = self.core.upgrade() {
+            core.borrow_mut().release_wait_token(token);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct WaitToken {
+    slot: usize,
+    generation: u64,
+}
+
+struct WaitTokenSlot {
+    generation: u64,
+    active: bool,
+    leased: bool,
 }
 
 #[allow(
@@ -3383,6 +3461,15 @@ pub(crate) struct Waiters {
 
 impl Waiters {
     pub(crate) fn push(&mut self, waiter: Waiter) {
+        if self
+            .first
+            .as_ref()
+            .is_some_and(|waiter| !waiter.is_active())
+            || self.rest.len() > 32
+        {
+            self.compact_inactive();
+        }
+
         if self.first.is_none() {
             self.first = Some(waiter);
         } else {
@@ -3401,16 +3488,37 @@ impl Waiters {
     }
 
     pub(crate) fn wake_one(&mut self) {
-        if let Some(waiter) = self.first.take() {
-            waiter.wake();
-        } else if !self.rest.is_empty() {
-            self.rest.remove(0).wake();
+        if let Some(waiter) = self.first.take()
+            && waiter.wake()
+        {
+            return;
+        }
+
+        while !self.rest.is_empty() {
+            if self.rest.remove(0).wake() {
+                return;
+            }
         }
     }
 
     pub(crate) fn clear(&mut self) {
         self.first = None;
         self.rest.clear();
+    }
+
+    fn compact_inactive(&mut self) {
+        if self
+            .first
+            .as_ref()
+            .is_some_and(|waiter| !waiter.is_active())
+        {
+            self.first = None;
+        }
+
+        self.rest.retain(Waiter::is_active);
+        if self.first.is_none() && !self.rest.is_empty() {
+            self.first = Some(self.rest.remove(0));
+        }
     }
 }
 
@@ -3644,6 +3752,8 @@ struct Scheduler {
     tasks: Vec<Option<Task>>,
     task_generations: Vec<u32>,
     free_tasks: Vec<usize>,
+    wait_tokens: Vec<WaitTokenSlot>,
+    free_wait_tokens: Vec<usize>,
     queued: Vec<bool>,
     ready: VecDeque<TaskKey>,
     ring: IoUring,
@@ -3686,6 +3796,8 @@ impl Scheduler {
             tasks: Vec::new(),
             task_generations: Vec::new(),
             free_tasks: Vec::new(),
+            wait_tokens: Vec::new(),
+            free_wait_tokens: Vec::new(),
             queued: Vec::new(),
             ready: VecDeque::new(),
             ring,
@@ -3738,6 +3850,59 @@ impl Scheduler {
         );
         self.tasks[id.index()] = Some(task);
         self.schedule(id);
+    }
+
+    fn register_wait_token(&mut self) -> WaitToken {
+        let slot = if let Some(slot) = self.free_wait_tokens.pop() {
+            slot
+        } else {
+            let slot = self.wait_tokens.len();
+            self.wait_tokens.push(WaitTokenSlot {
+                generation: 0,
+                active: false,
+                leased: false,
+            });
+            slot
+        };
+
+        let entry = &mut self.wait_tokens[slot];
+        debug_assert!(!entry.leased, "free wait token slot is still leased");
+        entry.active = true;
+        entry.leased = true;
+        WaitToken {
+            slot,
+            generation: entry.generation,
+        }
+    }
+
+    fn is_wait_token_active(&self, token: WaitToken) -> bool {
+        self.wait_tokens
+            .get(token.slot)
+            .is_some_and(|entry| entry.generation == token.generation && entry.active)
+    }
+
+    fn take_wait_token(&mut self, token: WaitToken) -> bool {
+        let Some(entry) = self.wait_tokens.get_mut(token.slot) else {
+            return false;
+        };
+        if entry.generation != token.generation || !entry.active {
+            return false;
+        }
+        entry.active = false;
+        true
+    }
+
+    fn release_wait_token(&mut self, token: WaitToken) {
+        let Some(entry) = self.wait_tokens.get_mut(token.slot) else {
+            return;
+        };
+        if entry.generation != token.generation || !entry.leased {
+            return;
+        }
+        entry.active = false;
+        entry.leased = false;
+        entry.generation = entry.generation.wrapping_add(1);
+        self.free_wait_tokens.push(token.slot);
     }
 
     fn schedule(&mut self, id: TaskKey) -> bool {
@@ -4515,13 +4680,15 @@ mod tests {
         EpollEventData, EpollEventFlags, FallocateFlags, FileAdvice, FutexWaitFlags, IoJoinError,
         IoVec, MemoryAdvice, Mode, MsgHdr, OFlags, RecvFlags, RenameFlags, ResolveFlags, Runtime,
         RuntimeConfig, RuntimeContext, SendFlags, Shutdown, SocketType, StatxFlags, TaskStackState,
-        UringSpliceFlags, Waitable, allocation_tracking, ipproto, once,
+        UringSpliceFlags, WaitError, WaitRegistration, Waitable, Waiters, allocation_tracking,
+        ipproto, once,
     };
     use rustix::event::{PollFlags, epoll};
     use rustix::fd::AsFd;
     use rustix::mm::{MapFlags, ProtFlags};
     use rustix::net;
     use rustix::pipe::pipe;
+    use std::cell::{Cell, RefCell};
     use std::ffi::c_void;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::ptr;
@@ -4548,6 +4715,71 @@ mod tests {
                 return output;
             }
             output.extend_from_slice(&buffer[..read]);
+        }
+    }
+
+    struct ManualWait {
+        ready: Cell<bool>,
+        waiters: RefCell<Waiters>,
+    }
+
+    impl ManualWait {
+        fn new() -> Self {
+            Self {
+                ready: Cell::new(false),
+                waiters: RefCell::new(Waiters::default()),
+            }
+        }
+
+        fn wait(&self, cx: &RuntimeContext<'_>) {
+            loop {
+                if self.ready.get() {
+                    return;
+                }
+
+                let registration = cx.wait_registration();
+                if let Some(waiter) = cx.waiter(&registration) {
+                    self.waiters.borrow_mut().push(waiter);
+                }
+                cx.park();
+            }
+        }
+
+        fn wake_one(&self) {
+            self.ready.set(true);
+            self.waiters.borrow_mut().wake_one();
+        }
+
+        fn waiter_slots(&self) -> usize {
+            let waiters = self.waiters.borrow();
+            usize::from(waiters.first.is_some()) + waiters.rest.len()
+        }
+
+        fn active_waiters(&self) -> usize {
+            let waiters = self.waiters.borrow();
+            waiters
+                .first
+                .as_ref()
+                .is_some_and(|waiter| waiter.is_active()) as usize
+                + waiters
+                    .rest
+                    .iter()
+                    .filter(|waiter| waiter.is_active())
+                    .count()
+        }
+    }
+
+    impl Waitable for ManualWait {
+        fn is_ready(&self) -> bool {
+            self.ready.get()
+        }
+
+        fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
+            if !self.ready.get()
+                && let Some(waiter) = cx.waiter(registration)
+            {
+                self.waiters.borrow_mut().push(waiter);
+            }
         }
     }
 
@@ -4769,8 +5001,12 @@ mod tests {
             cx.scope(|scope| {
                 let first_tx = waiter_tx.clone();
                 let first = scope.spawn(move |cx| {
+                    let registration = cx.wait_registration();
                     first_tx
-                        .send(cx.waiter().expect("stackful task should have waiter"))
+                        .send(
+                            cx.waiter(&registration)
+                                .expect("stackful task should have waiter"),
+                        )
                         .expect("failed to send first waiter");
                     1
                 });
@@ -4779,8 +5015,12 @@ mod tests {
 
                 let second_tx = waiter_tx.clone();
                 let second = scope.spawn(move |cx| {
+                    let registration = cx.wait_registration();
                     second_tx
-                        .send(cx.waiter().expect("stackful task should have waiter"))
+                        .send(
+                            cx.waiter(&registration)
+                                .expect("stackful task should have waiter"),
+                        )
                         .expect("failed to send second waiter");
                     cx.park();
                     2
@@ -4795,6 +5035,73 @@ mod tests {
                 live_waiter.wake();
                 assert_eq!(second.join(cx), 2);
             });
+        });
+    }
+
+    #[test]
+    fn timed_out_waiter_does_not_consume_later_wake() {
+        let gate = ManualWait::new();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let waitables: [&dyn Waitable; 1] = [&gate];
+            assert_eq!(
+                cx.wait_any(&waitables, Some(Duration::from_millis(1))),
+                Err(WaitError::TimedOut)
+            );
+            assert_eq!(gate.active_waiters(), 0);
+
+            cx.scope(|scope| {
+                let waiter = scope.spawn(|cx| {
+                    gate.wait(cx);
+                    7
+                });
+                cx.yield_now();
+                assert_eq!(gate.active_waiters(), 1);
+
+                gate.wake_one();
+                assert_eq!(waiter.join(cx), 7);
+            });
+        });
+    }
+
+    #[test]
+    fn canceled_parked_task_releases_active_waiter() {
+        let gate = ManualWait::new();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                scope.spawn(|cx| gate.wait(cx));
+                cx.yield_now();
+                assert_eq!(gate.active_waiters(), 1);
+            });
+
+            assert_eq!(gate.active_waiters(), 0);
+            assert!(gate.waiter_slots() <= 1);
+        });
+    }
+
+    #[test]
+    fn repeated_timeout_churn_keeps_waiter_tombstones_bounded() {
+        let gate = ManualWait::new();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let waitables: [&dyn Waitable; 1] = [&gate];
+            for _ in 0..32 {
+                assert_eq!(
+                    cx.wait_any(&waitables, Some(Duration::from_millis(1))),
+                    Err(WaitError::TimedOut)
+                );
+            }
+
+            assert_eq!(gate.active_waiters(), 0);
+            assert!(
+                gate.waiter_slots() <= 1,
+                "stale waiters should be compacted, found {} slots",
+                gate.waiter_slots()
+            );
         });
     }
 

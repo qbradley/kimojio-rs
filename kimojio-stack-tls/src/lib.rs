@@ -60,7 +60,8 @@ use std::{
 
 use foreign_types_shared::{ForeignType, ForeignTypeRef};
 use kimojio_stack::{
-    Errno, IoReadBuffer, IoResult, IoWriteBuffer, ReadOutput, RuntimeContext, Waitable, WriteOutput,
+    Errno, IoReadBuffer, IoResult, IoWriteBuffer, ReadOutput, RuntimeContext, WaitRegistration,
+    Waitable, WriteOutput,
 };
 use kimojio_tls::{Response, TlsServer, TlsServerContext, TlsServerError};
 use rustix::{fd::OwnedFd, net::Shutdown};
@@ -406,10 +407,10 @@ enum TlsPendingIo {
 }
 
 impl TlsPendingIo {
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         match self {
-            Self::Read(io) => io.add_waiter(cx),
-            Self::Write(io) => io.add_waiter(cx),
+            Self::Read(io) => io.add_waiter(cx, registration),
+            Self::Write(io) => io.add_waiter(cx, registration),
         }
     }
 
@@ -728,7 +729,7 @@ where
         self.result.borrow().is_some()
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if self.taken {
             return;
         }
@@ -737,7 +738,7 @@ where
             return;
         }
         if let Some(pending) = self.pending.borrow().as_ref() {
-            pending.add_waiter(cx);
+            pending.add_waiter(cx, registration);
         }
     }
 }
@@ -1108,7 +1109,7 @@ where
         self.result.borrow().is_some()
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>) {
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if self.taken {
             return;
         }
@@ -1117,7 +1118,7 @@ where
             return;
         }
         if let Some(pending) = self.pending.borrow().as_ref() {
-            pending.add_waiter(cx);
+            pending.add_waiter(cx, registration);
         }
     }
 }
