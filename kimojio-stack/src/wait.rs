@@ -17,6 +17,13 @@ pub trait Waitable {
     /// Returns whether this condition can be consumed without parking.
     fn is_ready(&self) -> bool;
 
+    /// Registers the current stackful coroutine for a future wake.
+    ///
+    /// This hook is public only so first-party companion crates can compose
+    /// waitable handles. Implementations must register only waiters produced from
+    /// `registration`; the runtime invalidates that token when a wait times out,
+    /// loses a `wait_any` race, or unwinds, so stale registrations cannot consume
+    /// later wakes.
     #[doc(hidden)]
     fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration);
 }

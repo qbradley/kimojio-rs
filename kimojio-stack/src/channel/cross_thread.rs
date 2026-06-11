@@ -51,6 +51,7 @@ use crate::{ExternalWaiter, RuntimeContext};
 
 const ADAPTIVE_SPIN_RETRIES: usize = 128;
 const ADAPTIVE_YIELD_RETRIES: usize = 2;
+const STACKFUL_WAITER_COMPACT_THRESHOLD: usize = 32;
 
 /// Creates a bounded cross-thread channel builder.
 pub fn bounded<T>(capacity: usize) -> Builder<T> {
@@ -1012,7 +1013,14 @@ impl WaitQueue {
     }
 
     fn push_stackful_waiter(&self, guard: &mut MutexGuard<'_, WaitState>, waiter: ExternalWaiter) {
-        self.compact_inactive_stackful_waiters_locked(guard);
+        if guard
+            .stackful_waiters
+            .front()
+            .is_some_and(|waiter| !waiter.is_active())
+            || guard.stackful_waiters.len() > STACKFUL_WAITER_COMPACT_THRESHOLD
+        {
+            self.compact_inactive_stackful_waiters_locked(guard);
+        }
         self.stackful_waiters.fetch_add(1, Ordering::AcqRel);
         guard.stackful_waiters.push_back(waiter);
     }

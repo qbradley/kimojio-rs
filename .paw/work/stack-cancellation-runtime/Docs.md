@@ -51,7 +51,7 @@ This implementation is for Linux/x86-64 io_uring-backed `kimojio-stack` runtimes
 
 Use blocking-from-coroutine APIs (`read`, `write`, `sleep`, `close`, and related methods) when the current stackful coroutine should wait for a single operation. The runtime parks only that coroutine and continues running other scoped work.
 
-For waitable async I/O, construct an `IoFd` and pass it to `read_async` or `write_async`. Complete the handle with `get`/`try_get`, wait on it through `wait_any`/`wait_all`, or call `cancel`/`detach` if the result is no longer needed.
+For waitable async I/O, construct an `IoFd` and pass it to `read_async` or `write_async` with an owned, `'static` buffer. Complete the handle with `get`/`try_get`, wait on it through `wait_any`/`wait_all`, or call `cancel`/`detach` if the result is no longer needed.
 
 ### Advanced Usage
 
@@ -60,6 +60,10 @@ Use `detach` when an operation should continue silently and the result can be di
 `RuntimeContext::io_counters` reports current detached operation count and aggregate cancellation outcomes. These counters are snapshots within one `block_on` execution and are useful for tests, diagnostics, and future runtime observability.
 
 Registered fd and buffer users can drop registered handles while async I/O is pending. The slot is retired immediately from the user perspective, but the actual unregister/reuse happens only after the in-flight operation completes.
+
+### Migration Notes
+
+This work changes several public alpha APIs. Unregistered async I/O now takes `&IoFd`; callers should convert an `OwnedFd` once with `IoFd::from_owned` and clone the `IoFd` locally for additional async operations instead of duplicating the kernel fd. Detach-capable async buffer APIs require `'static` owned buffer types so dropped handles can safely move buffers into scheduler-owned reaping state. `kimojio-stack-http` plaintext transports now store `IoFd`, so closing a plaintext transport may return `Errno::BUSY` if outstanding clones or pending operations still own the descriptor. Custom `Waitable` implementations should be treated as unstable: the registration hook is exported for first-party composite waitables, and implementations must only store waiters derived from the provided `WaitRegistration`.
 
 ## API Reference
 
@@ -118,6 +122,8 @@ The Phase 6 verification pass completed with the following results:
 ## Limitations and Future Work
 
 Waiter tombstone compaction is provisional and measurement-driven. The new benchmark group provides data for future threshold tuning, but no final production policy has been chosen.
+
+Local waiter queues currently compact when the inline waiter is inactive or when the overflow list exceeds 32 entries. Cross-thread stackful wait queues use the same provisional threshold before compacting inactive registrations during enqueue. Those constants are intentionally small enough to bound known churn tests while avoiding a full queue scan for every waiter registration; future measurements should revisit them for production workloads.
 
 `IoFd` is currently backed by `Rc<IoFdState>`, which matches the local thread-per-core runtime. If clone overhead or cache locality becomes measurable, the public type can be backed by a scheduler-owned fd table without changing callers.
 

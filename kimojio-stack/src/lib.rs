@@ -197,7 +197,7 @@
 
 use std::any::Any;
 use std::cell::{Cell, RefCell, UnsafeCell};
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::c_void;
 use std::fmt;
 use std::io;
@@ -267,6 +267,7 @@ pub use watch::{WatchReceiver, WatchSender};
 
 const DEFAULT_STACK_SIZE: usize = 64 * 1024;
 const DEFAULT_RING_ENTRIES: u32 = 128;
+const WAITER_COMPACT_THRESHOLD: usize = 32;
 
 #[cfg(test)]
 #[global_allocator]
@@ -1441,7 +1442,7 @@ impl RuntimeContext<'_> {
     /// drop the handle while the kernel operation is still pending.
     pub fn read_async<B>(&self, fd: &IoFd, mut buffer: B) -> IoResult<ReadOutput<B>, B>
     where
-        B: IoReadBuffer,
+        B: IoReadBuffer + 'static,
     {
         let len =
             u32::try_from(buffer.io_buffer_len()).expect("io_uring read length exceeds u32::MAX");
@@ -1463,7 +1464,7 @@ impl RuntimeContext<'_> {
         mut buffer: B,
     ) -> IoResult<ReadOutput<B>, B>
     where
-        B: IoReadBuffer,
+        B: IoReadBuffer + 'static,
     {
         let len =
             u32::try_from(buffer.io_buffer_len()).expect("io_uring read length exceeds u32::MAX");
@@ -1658,7 +1659,7 @@ impl RuntimeContext<'_> {
     /// drop the handle while the kernel operation is still pending.
     pub fn write_async<B>(&self, fd: &IoFd, buffer: B) -> IoResult<WriteOutput<B>, B>
     where
-        B: IoWriteBuffer,
+        B: IoWriteBuffer + 'static,
     {
         let len =
             u32::try_from(buffer.io_buffer_len()).expect("io_uring write length exceeds u32::MAX");
@@ -1680,7 +1681,7 @@ impl RuntimeContext<'_> {
         buffer: B,
     ) -> IoResult<WriteOutput<B>, B>
     where
-        B: IoWriteBuffer,
+        B: IoWriteBuffer + 'static,
     {
         let len =
             u32::try_from(buffer.io_buffer_len()).expect("io_uring write length exceeds u32::MAX");
@@ -1776,7 +1777,11 @@ impl RuntimeContext<'_> {
         self.core.borrow().io_counters()
     }
 
-    /// Attempts to cancel a pending [`IoResult`].
+    /// Attempts to cancel a pending [`IoResult`] without consuming its handle.
+    ///
+    /// Unlike [`IoResult::cancel`], this waits only for the cancel request and
+    /// leaves the result handle responsible for eventual completion, detachment,
+    /// or drop-based reaping.
     pub fn cancel_io<T, B>(&self, io: &IoResult<T, B>) -> Result<(), Errno> {
         let Some(state) = io.state.as_ref() else {
             return Ok(());
@@ -1920,13 +1925,15 @@ impl RuntimeContext<'_> {
     fn wait_for_scope(&self, state: &Rc<ScopeState>) {
         let mut cancel_requested = false;
         while state.has_remaining_tasks() {
-            if !cancel_requested && self.core.borrow().ready_len() == 0 {
-                self.prepare_scope_quiescence();
-                if self.core.borrow().ready_len() != 0 {
-                    continue;
-                }
+            self.prepare_scope_quiescence();
+            let task_ids = state.task_ids();
+            if self.core.borrow().has_ready_task(&task_ids) {
+                self.yield_now();
+                continue;
+            }
 
-                self.cancel_scope_tasks(state);
+            if !cancel_requested && !task_ids.is_empty() {
+                self.cancel_scope_tasks(task_ids);
                 cancel_requested = true;
                 continue;
             }
@@ -1939,8 +1946,7 @@ impl RuntimeContext<'_> {
         }
     }
 
-    fn cancel_scope_tasks(&self, state: &ScopeState) {
-        let task_ids = state.task_ids();
+    fn cancel_scope_tasks(&self, task_ids: Vec<TaskKey>) {
         interrupt_scheduler_tasks(&self.core, task_ids, |_| {
             Box::new(|_| panic::panic_any(TaskCanceled))
         });
@@ -2193,9 +2199,9 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
         let state = Rc::clone(&self.state);
         let task_state = Rc::clone(&state);
         let panic_payload = Rc::new(RefCell::new(None));
-        state.register_panic_payload(Rc::clone(&panic_payload));
         let task_panic_payload = Rc::clone(&panic_payload);
-        let join = Rc::new(JoinState::new(panic_payload));
+        let scope_panic_payload = Rc::clone(&panic_payload);
+        let join = Rc::new(JoinState::new(panic_payload, Rc::downgrade(&state), id));
         let task_join = Rc::clone(&join);
         let core = Rc::clone(&self.core);
         let stack =
@@ -2240,7 +2246,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
             })
         };
 
-        state.task_started(id);
+        state.task_started(id, scope_panic_payload);
         self.core.borrow_mut().insert_task(
             id,
             Task {
@@ -3017,10 +3023,16 @@ enum TaskOutcome<T> {
 struct JoinState<T> {
     inner: RefCell<JoinStateInner<T>>,
     panic_payload: Rc<RefCell<Option<PanicPayload>>>,
+    scope_state: Weak<ScopeState>,
+    task_id: TaskKey,
 }
 
 impl<T> JoinState<T> {
-    fn new(panic_payload: Rc<RefCell<Option<PanicPayload>>>) -> Self {
+    fn new(
+        panic_payload: Rc<RefCell<Option<PanicPayload>>>,
+        scope_state: Weak<ScopeState>,
+        task_id: TaskKey,
+    ) -> Self {
         Self {
             inner: RefCell::new(JoinStateInner {
                 result: None,
@@ -3028,6 +3040,8 @@ impl<T> JoinState<T> {
                 waiters: Waiters::default(),
             }),
             panic_payload,
+            scope_state,
+            task_id,
         }
     }
 
@@ -3066,6 +3080,9 @@ impl<T> JoinState<T> {
             .borrow_mut()
             .take()
             .unwrap_or_else(|| Box::new("stackful coroutine panic payload already consumed"));
+        if let Some(scope_state) = self.scope_state.upgrade() {
+            scope_state.remove_panic_payload(self.task_id, &self.panic_payload);
+        }
         panic::resume_unwind(payload);
     }
 }
@@ -3363,14 +3380,16 @@ struct ScopeState {
 }
 
 impl ScopeState {
-    fn register_panic_payload(&self, payload: Rc<RefCell<Option<PanicPayload>>>) {
-        self.inner.borrow_mut().panic_payloads.push(payload);
-    }
-
-    fn task_started(&self, id: TaskKey) {
+    fn task_started(&self, id: TaskKey, payload: Rc<RefCell<Option<PanicPayload>>>) {
         let mut inner = self.inner.borrow_mut();
         inner.remaining += 1;
-        inner.task_ids.push(id);
+        let inserted = inner.task_ids.insert(id);
+        debug_assert!(inserted, "started task was already tracked by its scope");
+        let previous = inner.panic_payloads.insert(id, payload);
+        debug_assert!(
+            previous.is_none(),
+            "started task already had a scope panic payload slot"
+        );
     }
 
     fn has_remaining_tasks(&self) -> bool {
@@ -3382,7 +3401,7 @@ impl ScopeState {
     }
 
     fn task_ids(&self) -> Vec<TaskKey> {
-        self.inner.borrow().task_ids.clone()
+        self.inner.borrow().task_ids.iter().copied().collect()
     }
 
     #[cfg(test)]
@@ -3397,7 +3416,7 @@ impl ScopeState {
 
     fn take_panic_payload(&self) -> Option<PanicPayload> {
         let inner = self.inner.borrow();
-        for payload in &inner.panic_payloads {
+        for payload in inner.panic_payloads.values() {
             if let Some(payload) = payload.borrow_mut().take() {
                 return Some(payload);
             }
@@ -3416,23 +3435,38 @@ impl ScopeState {
             .remaining
             .checked_sub(1)
             .expect("scope task count underflow");
-        if let Some(index) = inner.task_ids.iter().position(|task_id| *task_id == id) {
-            inner.task_ids.swap_remove(index);
-        } else {
-            debug_assert!(false, "finished task was not tracked by its scope");
-        }
+        let removed = inner.task_ids.remove(&id);
+        debug_assert!(removed, "finished task was not tracked by its scope");
 
-        if !keep_panic_payload
-            && let Some(index) = inner
-                .panic_payloads
-                .iter()
-                .position(|payload| Rc::ptr_eq(payload, panic_payload))
-        {
-            inner.panic_payloads.swap_remove(index);
+        if keep_panic_payload {
+            debug_assert!(
+                inner
+                    .panic_payloads
+                    .get(&id)
+                    .is_some_and(|payload| Rc::ptr_eq(payload, panic_payload)),
+                "finished task panic payload slot did not match its join state"
+            );
+        } else if let Some(removed) = inner.panic_payloads.remove(&id) {
+            debug_assert!(
+                Rc::ptr_eq(&removed, panic_payload),
+                "finished task panic payload slot did not match its join state"
+            );
+        } else {
+            debug_assert!(false, "finished task had no scope panic payload slot");
         }
 
         if inner.remaining == 0 {
             inner.waiters.wake_all();
+        }
+    }
+
+    fn remove_panic_payload(&self, id: TaskKey, panic_payload: &Rc<RefCell<Option<PanicPayload>>>) {
+        let mut inner = self.inner.borrow_mut();
+        if let Some(removed) = inner.panic_payloads.remove(&id) {
+            debug_assert!(
+                Rc::ptr_eq(&removed, panic_payload),
+                "observed task panic payload slot did not match its join state"
+            );
         }
     }
 }
@@ -3441,8 +3475,8 @@ impl ScopeState {
 struct ScopeStateInner {
     remaining: usize,
     waiters: Waiters,
-    panic_payloads: Vec<Rc<RefCell<Option<PanicPayload>>>>,
-    task_ids: Vec<TaskKey>,
+    panic_payloads: HashMap<TaskKey, Rc<RefCell<Option<PanicPayload>>>>,
+    task_ids: HashSet<TaskKey>,
 }
 
 #[derive(Clone)]
@@ -3770,7 +3804,7 @@ impl Waiters {
             .first
             .as_ref()
             .is_some_and(|waiter| !waiter.is_active())
-            || self.rest.len() > 32
+            || self.rest.len() > WAITER_COMPACT_THRESHOLD
         {
             self.compact_inactive();
         }
@@ -4247,6 +4281,13 @@ impl Scheduler {
 
     fn ready_len(&self) -> usize {
         self.ready.len()
+    }
+
+    fn has_ready_task(&self, task_ids: &[TaskKey]) -> bool {
+        task_ids
+            .iter()
+            .copied()
+            .any(|id| self.is_current_task_key(id) && self.queued[id.index()])
     }
 
     #[cfg(test)]
@@ -4881,10 +4922,13 @@ fn run_completed_io(core: &Rc<SchedulerCell>, wait: bool) -> bool {
         }
     }
 
-    let ready_detached = {
+    let ready_detached = if had_completion {
         let mut scheduler = core.borrow_mut();
         scheduler.completed_io = completed;
         scheduler.take_ready_detached_io()
+    } else {
+        core.borrow_mut().completed_io = completed;
+        Vec::new()
     };
 
     let core = Rc::downgrade(core);
@@ -5569,6 +5613,59 @@ mod tests {
 
                 gate.wake_one();
                 assert_eq!(waiter.join(cx), 7);
+            });
+        });
+    }
+
+    #[test]
+    fn wait_any_non_winning_waiter_does_not_consume_later_wake() {
+        let first = ManualWait::new();
+        let second = ManualWait::new();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let waiter = scope.spawn(|cx| {
+                    let waitables: [&dyn Waitable; 2] = [&first, &second];
+                    cx.wait_any(&waitables, None).unwrap()
+                });
+
+                cx.yield_now();
+                assert_eq!(first.active_waiters(), 1);
+                assert_eq!(second.active_waiters(), 1);
+
+                first.wake_one();
+                assert_eq!(waiter.join(cx), 0);
+                assert_eq!(second.active_waiters(), 0);
+
+                second.wake_one();
+            });
+        });
+    }
+
+    #[test]
+    fn timed_out_multi_waiters_do_not_consume_later_wakes() {
+        let first = ManualWait::new();
+        let second = ManualWait::new();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let waitables: [&dyn Waitable; 2] = [&first, &second];
+            assert_eq!(
+                cx.wait_any(&waitables, Some(Duration::from_millis(1))),
+                Err(WaitError::TimedOut)
+            );
+            assert_eq!(first.active_waiters(), 0);
+            assert_eq!(second.active_waiters(), 0);
+
+            cx.scope(|scope| {
+                let waiter = scope.spawn(|cx| {
+                    second.wait(cx);
+                    8
+                });
+                cx.yield_now();
+                second.wake_one();
+                assert_eq!(waiter.join(cx), 8);
             });
         });
     }
@@ -6410,6 +6507,33 @@ mod tests {
     }
 
     #[test]
+    fn nested_scope_cancels_blocked_child_after_ready_scope_children_park() {
+        let gate = ManualWait::new();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let parent = scope.spawn(|cx| {
+                    cx.scope(|nested| {
+                        nested.spawn(|cx| gate.wait(cx));
+                    });
+                    1
+                });
+
+                let unrelated = scope.spawn(|cx| {
+                    cx.yield_now();
+                    2
+                });
+
+                assert_eq!(parent.join(cx), 1);
+                assert_eq!(unrelated.join(cx), 2);
+            });
+        });
+
+        assert_eq!(gate.active_waiters(), 0);
+    }
+
+    #[test]
     fn dropped_io_result_is_canceled_before_block_on_returns() {
         let mut runtime = Runtime::new();
 
@@ -6495,6 +6619,10 @@ mod tests {
 
         assert_eq!(counters.detached_pending, 0);
         assert_eq!(counters.detached_total, 1);
+        assert!(
+            counters.original_completions_after_cancel >= 1,
+            "expected original CQE after cancellation, counters: {counters:?}"
+        );
         if counters.cancel_requests != 0 {
             assert_eq!(counters.cancel_completions, counters.cancel_requests);
         } else {
@@ -6551,6 +6679,30 @@ mod tests {
     }
 
     #[test]
+    fn dropped_registered_buffer_async_result_reclaims_slot_after_drain() {
+        let mut runtime = Runtime::with_registered_resources(0, 1);
+
+        runtime.block_on(|cx| {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = IoFd::from_owned(read_fd);
+            let read_buffer = cx.register_buffer(vec![0_u8]).unwrap();
+            let read = cx.read_registered_buffer_async(&read_fd, read_buffer);
+            drop(read);
+
+            assert_eq!(cx.register_buffer(vec![1_u8]).unwrap_err(), Errno::NOBUFS);
+
+            match cx.write(&write_fd, &[37]) {
+                Ok(1) | Err(Errno::PIPE) => {}
+                other => panic!("unexpected write result after dropped registered read: {other:?}"),
+            }
+            cx.close(write_fd).unwrap();
+            drain_detached_io(cx);
+
+            drop(cx.register_buffer(vec![2_u8]).unwrap());
+        });
+    }
+
+    #[test]
     fn cancellable_trait_requests_timeout_and_io_result_cancellation() {
         let mut runtime = Runtime::new();
 
@@ -6583,6 +6735,32 @@ mod tests {
             cx.scope(|scope| {
                 for _ in 0..128 {
                     scope.spawn(|_| ()).join(cx);
+                    let scope_state = cx
+                        .active_scopes
+                        .borrow()
+                        .last()
+                        .expect("scope should be active")
+                        .clone();
+                    assert_eq!(scope_state.tracked_task_count(), 0);
+                    assert_eq!(scope_state.tracked_panic_payload_count(), 0);
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn observed_child_panic_metadata_is_removed_in_long_lived_scope() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                for _ in 0..16 {
+                    let child = scope.spawn(|_| panic!("expected child panic"));
+                    assert!(
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| child.join(cx)))
+                            .is_err()
+                    );
+
                     let scope_state = cx
                         .active_scopes
                         .borrow()

@@ -42,11 +42,17 @@ impl Barrier {
 
             generation
         };
+        let mut arrival = BarrierArrival {
+            barrier: self,
+            generation,
+            active: true,
+        };
 
         loop {
             let _registration = {
                 let mut state = self.state.borrow_mut();
                 if state.generation != generation {
+                    arrival.dismiss();
                     return BarrierWaitResult { leader: false };
                 }
 
@@ -57,6 +63,34 @@ impl Barrier {
                 registration
             };
             cx.park();
+        }
+    }
+}
+
+struct BarrierArrival<'a> {
+    barrier: &'a Barrier,
+    generation: u64,
+    active: bool,
+}
+
+impl BarrierArrival<'_> {
+    fn dismiss(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for BarrierArrival<'_> {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+
+        let mut state = self.barrier.state.borrow_mut();
+        if state.generation == self.generation {
+            state.arrived = state
+                .arrived
+                .checked_sub(1)
+                .expect("barrier arrival count underflow");
         }
     }
 }
@@ -108,5 +142,29 @@ mod tests {
         });
 
         assert_eq!(leaders, 1);
+    }
+
+    #[test]
+    fn canceled_barrier_waiter_does_not_count_for_next_generation() {
+        let barrier = Barrier::new(2);
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                scope.spawn(|cx| {
+                    barrier.wait(cx);
+                });
+                cx.yield_now();
+            });
+
+            let leaders = cx.scope(|scope| {
+                let first = scope.spawn(|cx| barrier.wait(cx).is_leader() as usize);
+                let second = scope.spawn(|cx| barrier.wait(cx).is_leader() as usize);
+
+                first.join(cx) + second.join(cx)
+            });
+
+            assert_eq!(leaders, 1);
+        });
     }
 }
