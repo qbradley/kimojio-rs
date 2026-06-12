@@ -48,7 +48,10 @@ jobs:
 
     - name: Check features
       run: cargo +${{ matrix.rust }} clippy --all-targets --all-features -- -D warnings
-    
+
+    - name: Run kimojio-stack-steal all-feature tests
+      run: cargo +${{ matrix.rust }} test -p kimojio-stack-steal --all-targets --all-features
+     
   coverage:
     if: github.repository == 'Azure/kimojio-rs'
 

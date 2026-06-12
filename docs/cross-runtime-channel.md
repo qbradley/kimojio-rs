@@ -1,8 +1,8 @@
 # Cross Runtime Channel
 
 `kimojio-stack::channel::cross_thread` provides bounded in-memory channels for
-communication across kimojio-stack runtimes, OS threads, and Tokio-compatible
-async tasks.
+communication across kimojio-stack runtimes, kimojio-stack-steal workers, OS
+threads, and Tokio-compatible async tasks.
 
 Unlike the existing stackful channels, cross-runtime channels use thread-safe
 state and explicit endpoint types. Choose endpoints by where each side runs:
@@ -11,6 +11,7 @@ state and explicit endpoint types. Choose endpoints by where each side runs:
 |-------------|---------------|----------------|
 | OS thread | `ThreadSender` / `ThreadReceiver` | `send_blocking` / `recv_blocking` |
 | kimojio-stack coroutine | `StackfulSender` / `StackfulReceiver` | `send(cx, value)` / `recv(cx)` |
+| kimojio-stack-steal coroutine | `StackfulSender` / `StackfulReceiver` | `send_with(cx, value)` / `recv_with(cx)` |
 | Tokio-compatible task | `AsyncSender` / `AsyncReceiver` | `send(value).await` / `recv().await` |
 
 ## Getting Started
@@ -52,6 +53,27 @@ use kimojio_stack::channel::cross_thread;
 
 let (thread_tx, stackful_rx) = cross_thread::bounded::<u64>(64)
     .thread_to_stackful();
+```
+
+Stealing-runtime code uses the same stackful endpoints with the generic waiting
+methods:
+
+```rust,no_run
+use kimojio_stack::channel::cross_thread;
+use kimojio_stack_steal::Runtime;
+
+let (tx, rx) = cross_thread::stackful(1);
+let mut runtime = Runtime::new();
+
+runtime.block_on(|cx| {
+    cx.scope(|scope| {
+        let sender = scope.spawn_stealable(move |cx| tx.send_with(cx, 7).unwrap());
+        let receiver = scope.spawn_stealable(move |cx| rx.recv_with(cx).unwrap());
+
+        sender.join(cx);
+        assert_eq!(receiver.join(cx), 7);
+    });
+});
 ```
 
 Available builder combinations are:
@@ -111,7 +133,10 @@ Benchmark smoke coverage is available with:
 
 ```sh
 cargo bench -p kimojio-stack --bench runtime_baseline -- --test
+cargo bench -p kimojio-stack-steal --bench runtime_baseline -- --test
+cargo bench -p kimojio-stack-steal --features tokio --bench runtime_baseline -- --test
 ```
 
-The benchmark includes ready send/receive, thread ping-pong, stackful
-cross-runtime ping-pong, and Tokio-compatible ping-pong cases.
+The benchmarks include ready send/receive, thread ping-pong, stackful
+cross-runtime ping-pong, stealing-runtime channel cases, and Tokio-compatible
+ping-pong cases where the feature is enabled.

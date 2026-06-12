@@ -47,7 +47,7 @@ use std::thread;
 use crossbeam_queue::ArrayQueue;
 
 use crate::channel::{RecvError, SendError, TryRecvError, TrySendError};
-use crate::{ExternalWaiter, RuntimeContext};
+use crate::{RuntimeContext, StackfulWaitContext, StackfulWaiter};
 
 const ADAPTIVE_SPIN_RETRIES: usize = 128;
 const ADAPTIVE_YIELD_RETRIES: usize = 2;
@@ -372,6 +372,17 @@ impl<T> StackfulSender<T> {
     /// Root runtime code should use [`StackfulSender::try_send`] or spawn a
     /// coroutine before calling `send`.
     pub fn send(&self, cx: &RuntimeContext<'_>, value: T) -> Result<(), SendError<T>> {
+        self.send_with(cx, value)
+    }
+
+    /// Sends a value through a runtime-neutral stackful wait context.
+    ///
+    /// This generic method lets other stackful runtimes integrate with this
+    /// channel by implementing [`StackfulWaitContext`].
+    pub fn send_with<C>(&self, cx: &C, value: T) -> Result<(), SendError<T>>
+    where
+        C: StackfulWaitContext + ?Sized,
+    {
         let mut value = match self.inner.try_send_without_notify(value) {
             Ok(()) => {
                 self.inner.recv_wait.notify_one();
@@ -391,8 +402,8 @@ impl<T> StackfulSender<T> {
         };
 
         loop {
-            let Some(registration) = cx.external_wait_registration() else {
-                cx.park();
+            let Some(registration) = cx.stackful_wait_registration() else {
+                cx.park_stackful();
                 continue;
             };
             let waiter = registration.waiter();
@@ -413,7 +424,7 @@ impl<T> StackfulSender<T> {
 
             self.inner.send_wait.push_stackful_waiter(&mut wait, waiter);
             drop(wait);
-            cx.park();
+            cx.park_stackful();
         }
     }
 
@@ -461,6 +472,17 @@ impl<T> StackfulReceiver<T> {
     /// Root runtime code should use [`StackfulReceiver::try_recv`] or spawn a
     /// coroutine before calling `recv`.
     pub fn recv(&self, cx: &RuntimeContext<'_>) -> Result<T, RecvError> {
+        self.recv_with(cx)
+    }
+
+    /// Receives a value through a runtime-neutral stackful wait context.
+    ///
+    /// This generic method lets other stackful runtimes integrate with this
+    /// channel by implementing [`StackfulWaitContext`].
+    pub fn recv_with<C>(&self, cx: &C) -> Result<T, RecvError>
+    where
+        C: StackfulWaitContext + ?Sized,
+    {
         match self.inner.try_recv_without_notify() {
             Ok(value) => {
                 self.inner.send_wait.notify_one();
@@ -480,8 +502,8 @@ impl<T> StackfulReceiver<T> {
         }
 
         loop {
-            let Some(registration) = cx.external_wait_registration() else {
-                cx.park();
+            let Some(registration) = cx.stackful_wait_registration() else {
+                cx.park_stackful();
                 continue;
             };
             let waiter = registration.waiter();
@@ -502,7 +524,7 @@ impl<T> StackfulReceiver<T> {
 
             self.inner.recv_wait.push_stackful_waiter(&mut wait, waiter);
             drop(wait);
-            cx.park();
+            cx.park_stackful();
         }
     }
 
@@ -1012,7 +1034,11 @@ impl WaitQueue {
         assert!(previous != 0, "cross-thread wait queue count underflow");
     }
 
-    fn push_stackful_waiter(&self, guard: &mut MutexGuard<'_, WaitState>, waiter: ExternalWaiter) {
+    fn push_stackful_waiter(
+        &self,
+        guard: &mut MutexGuard<'_, WaitState>,
+        waiter: Box<dyn StackfulWaiter>,
+    ) {
         if guard
             .stackful_waiters
             .front()
@@ -1139,7 +1165,7 @@ impl WaitQueue {
 
     fn compact_inactive_stackful_waiters_locked(&self, guard: &mut MutexGuard<'_, WaitState>) {
         let before = guard.stackful_waiters.len();
-        guard.stackful_waiters.retain(ExternalWaiter::is_active);
+        guard.stackful_waiters.retain(|waiter| waiter.is_active());
         let removed = before - guard.stackful_waiters.len();
         if removed != 0 {
             let previous = self.stackful_waiters.fetch_sub(removed, Ordering::AcqRel);
@@ -1156,7 +1182,7 @@ impl WaitQueue {
         let stackful_removed = stackful_waiters.len();
         let stackful = stackful_waiters
             .into_iter()
-            .filter(ExternalWaiter::mark_ready)
+            .filter(|waiter| waiter.mark_ready())
             .collect::<VecDeque<_>>();
         if stackful_removed != 0 {
             let previous = self
@@ -1204,7 +1230,7 @@ impl WaitQueue {
 #[derive(Default)]
 struct WaitState {
     generation: u64,
-    stackful_waiters: VecDeque<ExternalWaiter>,
+    stackful_waiters: VecDeque<Box<dyn StackfulWaiter>>,
     async_waiters: VecDeque<AsyncWaiter>,
 }
 
@@ -1214,14 +1240,14 @@ struct AsyncWaiter {
 }
 
 enum WakeOne {
-    Stackful(ExternalWaiter),
+    Stackful(Box<dyn StackfulWaiter>),
     Async(Waker),
     Thread,
     None,
 }
 
 struct WakeAll {
-    stackful: VecDeque<ExternalWaiter>,
+    stackful: VecDeque<Box<dyn StackfulWaiter>>,
     async_wakers: Vec<Waker>,
     notify_threads: bool,
 }
@@ -1470,6 +1496,18 @@ mod tests {
     }
 
     #[test]
+    fn cross_runtime_channel_generic_stackful_context_methods() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let (tx, rx) = cross_thread::stackful(1);
+
+            tx.send_with(cx, 7).unwrap();
+            assert_eq!(rx.recv_with(cx), Ok(7));
+        });
+    }
+
+    #[test]
     fn cross_runtime_channel_stackful_sender_waits_for_thread_receiver() {
         let (tx, rx) = cross_thread::bounded(1).stackful_to_thread();
         tx.try_send(1).unwrap();
@@ -1676,7 +1714,7 @@ mod tests {
         let wait_queue = super::WaitQueue::default();
         {
             let mut wait = wait_queue.lock();
-            wait_queue.push_stackful_waiter(&mut wait, registration.waiter());
+            wait_queue.push_stackful_waiter(&mut wait, Box::new(registration.waiter()));
         }
 
         let waiter = match wait_queue.advance_generation_and_pop_wake() {

@@ -4,13 +4,13 @@ A thread-per-core Linux io_uring async runtime for Rust optimized for latency.
 
 [Documentation](https://docs.rs/crate/kimojio/latest)
 
-Kimojio uses a single-threaded, cooperatively scheduled runtime. Task scheduling is fast and consistent because tasks do not migrate between threads. This design works well for I/O-bound workloads with fine-grained tasks and minimal CPU-bound work.
+The core `kimojio` runtime uses a single-threaded, cooperatively scheduled runtime. Task scheduling is fast and consistent because tasks do not migrate between threads. This design works well for I/O-bound workloads with fine-grained tasks and minimal CPU-bound work.
 
 Disk I/O in Kimojio is handled through io_uring, allowing asynchronous operations without relying on additional background threads. In some cases, the kernel may introduce a helper thread, but this is not part of the runtime itself.
 
-Because Kimojio does not include automatic load balancing, developers have full control over concurrency and task distribution. This reduces implicit synchronization overhead but requires manual handling if multi-threaded execution is needed.
+Because the core `kimojio` runtime does not include automatic load balancing, developers have full control over concurrency and task distribution. This reduces implicit synchronization overhead but requires manual handling if multi-threaded execution is needed.
 
-Key characteristics:
+Core runtime characteristics:
 
 - Single-threaded, cooperative scheduling.
 - Consistent task scheduling overhead.
@@ -42,6 +42,13 @@ operation families, retry behavior, and integration-test gates.
 [stack-http-grpc-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-http-grpc.md
 [stack-opentelemetry-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-opentelemetry.md
 [stack-storage-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-storage.md
+
+## Stackful Work-Stealing Runtime
+
+`kimojio-stack-steal` is an experimental multi-worker stackful runtime with
+explicit work-stealing policies and explicit ring handles for I/O. See the
+[Stackful Work-Stealing Runtime Guide](docs/stack-steal.md) for usage,
+limitations, and benchmark commands.
 
 ## Getting Started
 

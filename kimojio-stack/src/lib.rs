@@ -171,10 +171,12 @@
 //!
 //! # Allocation model
 //!
-//! Setup paths allocate: the runtime owns scheduler containers and io_uring, each
-//! spawned coroutine allocates a guarded stack and join state, and channels own
-//! their shared state. These allocations are expected and bounded by runtime
-//! structure.
+//! Setup paths allocate: the runtime owns scheduler containers and io_uring,
+//! initial coroutine spawns allocate guarded stacks and join state, and channels
+//! own their shared state. Completed coroutine stacks are retained in a bounded
+//! runtime-local cache so hot spawn paths can reuse guard-protected stacks
+//! without paying `mmap`, `mprotect`, and `munmap` per short-lived coroutine.
+//! These allocations are expected and bounded by runtime structure.
 //!
 //! Hot I/O paths are designed to avoid Rust heap allocation after warmup. The
 //! scheduler reuses I/O operation state through an internal pool, reuses
@@ -252,6 +254,7 @@ pub mod channel;
 pub mod mutex;
 pub mod notify;
 pub mod once;
+pub mod runtime_api;
 pub mod rwlock;
 pub mod semaphore;
 pub mod wait;
@@ -260,6 +263,11 @@ pub mod watch;
 pub use barrier::{Barrier, BarrierWaitResult};
 pub use mutex::{Mutex, MutexGuard};
 pub use notify::{Notified, Notify};
+pub use runtime_api::{
+    IoRuntime, RuntimeCapabilities, RuntimeCapability, RuntimeFamily, RuntimeIoError, StackRuntime,
+    StackRuntimeContext, StackfulWaitContext, StackfulWaitRegistration, StackfulWaiter,
+    UnsupportedCapability,
+};
 pub use rwlock::{ReadLock, RwLock, RwLockReadGuard, RwLockWriteGuard, WriteLock};
 pub use semaphore::{Semaphore, SemaphorePermit};
 pub use wait::{IoHandle, IoJoinError, WaitError, Waitable};
@@ -267,6 +275,7 @@ pub use watch::{WatchReceiver, WatchSender};
 
 const DEFAULT_STACK_SIZE: usize = 64 * 1024;
 const DEFAULT_RING_ENTRIES: u32 = 128;
+const DEFAULT_STACK_CACHE_CAPACITY: usize = 1024;
 const WAITER_COMPACT_THRESHOLD: usize = 32;
 
 #[cfg(test)]
@@ -475,6 +484,11 @@ pub struct Runtime {
 pub struct RuntimeConfig {
     /// Usable stack bytes for each stackful coroutine.
     pub stack_size: usize,
+    /// Maximum completed coroutine stacks retained for reuse by this runtime.
+    ///
+    /// Reusing guarded stacks keeps hot spawn paths from paying `mmap`,
+    /// `mprotect`, and `munmap` on every short-lived coroutine.
+    pub max_cached_stacks: usize,
     /// Number of entries in the io_uring submission queue.
     pub ring_entries: u32,
     /// Policy controlling how often the scheduler enters the ring.
@@ -491,6 +505,7 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             stack_size: DEFAULT_STACK_SIZE,
+            max_cached_stacks: DEFAULT_STACK_CACHE_CAPACITY,
             ring_entries: DEFAULT_RING_ENTRIES,
             ring_enter_policy: RingEnterPolicy::default(),
             busy_poll: BusyPoll::default(),
@@ -733,6 +748,16 @@ impl RuntimeContext<'_> {
     #[cfg(test)]
     fn scheduler_task_slots(&self) -> usize {
         self.core.borrow().task_slot_len()
+    }
+
+    #[cfg(test)]
+    fn cached_stack_count(&self) -> usize {
+        self.core.borrow().cached_stack_count()
+    }
+
+    #[cfg(test)]
+    fn reused_stack_count(&self) -> usize {
+        self.core.borrow().reused_stack_count()
     }
 
     /// Cooperatively yields the current stackful coroutine.
@@ -2204,8 +2229,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
         let join = Rc::new(JoinState::new(panic_payload, Rc::downgrade(&state), id));
         let task_join = Rc::clone(&join);
         let core = Rc::clone(&self.core);
-        let stack =
-            DefaultStack::new(stack_size).expect("failed to allocate stackful coroutine stack");
+        let stack = self.core.borrow_mut().acquire_stack(stack_size);
         let stack_tracker = StackTracker::new(&stack);
 
         let coroutine: Coroutine<ResumeAction, Suspend, ()> = unsafe {
@@ -3872,6 +3896,70 @@ struct Task {
     stack: StackTracker,
 }
 
+impl Task {
+    fn into_finished_stack(self) -> DefaultStack {
+        self.coroutine.into_stack()
+    }
+}
+
+struct StackPool {
+    capacity: usize,
+    stacks: Vec<CachedStack>,
+    #[cfg(test)]
+    reused: usize,
+}
+
+struct CachedStack {
+    size: usize,
+    stack: DefaultStack,
+}
+
+impl StackPool {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            stacks: Vec::new(),
+            #[cfg(test)]
+            reused: 0,
+        }
+    }
+
+    fn acquire(&mut self, stack_size: usize) -> DefaultStack {
+        if let Some(index) = self
+            .stacks
+            .iter()
+            .position(|stack| stack.size == stack_size)
+        {
+            #[cfg(test)]
+            {
+                self.reused += 1;
+            }
+            self.stacks.swap_remove(index).stack
+        } else {
+            DefaultStack::new(stack_size).expect("failed to allocate stackful coroutine stack")
+        }
+    }
+
+    fn recycle(&mut self, stack: DefaultStack) {
+        if self.stacks.len() < self.capacity {
+            self.stacks.push(CachedStack {
+                size: StackTracker::new(&stack).size,
+                stack,
+            });
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.stacks.len()
+    }
+
+    #[cfg(test)]
+    fn reused(&self) -> usize {
+        self.reused
+    }
+}
+
 enum ResumeAction {
     Run,
     Interrupt(TaskInterruptFn),
@@ -4099,6 +4187,7 @@ struct Scheduler {
     probe: Probe,
     registered_file_free: Vec<u32>,
     registered_buffer_free: Vec<u16>,
+    stack_pool: StackPool,
     io_state_pool: Vec<Rc<IoState>>,
     completed_io: Vec<CompletedIo>,
     detached_io: Vec<DetachedIo>,
@@ -4145,6 +4234,7 @@ impl Scheduler {
             probe,
             registered_file_free: (0..config.registered_file_slots).rev().collect(),
             registered_buffer_free: (0..config.registered_buffer_slots).rev().collect(),
+            stack_pool: StackPool::new(config.max_cached_stacks),
             io_state_pool: Vec::with_capacity(config.ring_entries as usize),
             completed_io: Vec::with_capacity(config.ring_entries as usize),
             detached_io: Vec::new(),
@@ -4183,6 +4273,10 @@ impl Scheduler {
             slot,
             generation: self.task_generations[slot],
         }
+    }
+
+    fn acquire_stack(&mut self, stack_size: usize) -> DefaultStack {
+        self.stack_pool.acquire(stack_size)
     }
 
     fn insert_task(&mut self, id: TaskKey, task: Task) {
@@ -4295,6 +4389,16 @@ impl Scheduler {
         self.tasks.len()
     }
 
+    #[cfg(test)]
+    fn cached_stack_count(&self) -> usize {
+        self.stack_pool.len()
+    }
+
+    #[cfg(test)]
+    fn reused_stack_count(&self) -> usize {
+        self.stack_pool.reused()
+    }
+
     fn is_current_task_key(&self, id: TaskKey) -> bool {
         self.task_generations
             .get(id.index())
@@ -4323,7 +4427,7 @@ impl Scheduler {
         }
     }
 
-    fn finish_task(&mut self, id: TaskKey) {
+    fn finish_task(&mut self, id: TaskKey, task: Task) {
         if !self.is_current_task_key(id) {
             return;
         }
@@ -4333,6 +4437,7 @@ impl Scheduler {
         self.queued[slot] = false;
         self.task_generations[slot] = self.task_generations[slot].wrapping_add(1);
         self.free_tasks.push(slot);
+        self.stack_pool.recycle(task.into_finished_stack());
     }
 
     fn is_empty(&self) -> bool {
@@ -4411,7 +4516,7 @@ impl Scheduler {
                     self.restore_task(id, task);
                 }
                 CoroutineResult::Return(()) => {
-                    self.finish_task(id);
+                    self.finish_task(id, task);
                 }
             }
         }
@@ -4824,7 +4929,7 @@ fn run_one(core: &Rc<SchedulerCell>) -> bool {
             scheduler.restore_task(id, task);
         }
         CoroutineResult::Return(()) => {
-            scheduler.finish_task(id);
+            scheduler.finish_task(id, task);
         }
     }
 
@@ -4859,7 +4964,7 @@ where
                 scheduler.restore_task(id, task);
             }
             CoroutineResult::Return(()) => {
-                scheduler.finish_task(id);
+                scheduler.finish_task(id, task);
             }
         }
     }
@@ -5098,9 +5203,10 @@ mod tests {
         AddressFamily, AtFlags, BusyPoll, Cancellable, DEFAULT_STACK_SIZE, EpollCtlOp, EpollEvent,
         EpollEventData, EpollEventFlags, Errno, FallocateFlags, FileAdvice, FutexWaitFlags, IoFd,
         IoJoinError, IoReadBuffer, IoVec, MemoryAdvice, Mode, MsgHdr, OFlags, RecvFlags,
-        RenameFlags, ResolveFlags, Runtime, RuntimeConfig, RuntimeContext, SendFlags, Shutdown,
-        SocketType, StatxFlags, TaskStackState, UringSpliceFlags, WaitError, WaitRegistration,
-        Waitable, Waiters, allocation_tracking, ipproto, once,
+        RenameFlags, ResolveFlags, Runtime, RuntimeCapabilities, RuntimeCapability, RuntimeConfig,
+        RuntimeContext, RuntimeFamily, SendFlags, Shutdown, SocketType, StatxFlags, TaskStackState,
+        UringSpliceFlags, WaitError, WaitRegistration, Waitable, Waiters, allocation_tracking,
+        ipproto, once,
     };
     use rustix::event::{PollFlags, epoll};
     use rustix::fd::AsFd;
@@ -5136,6 +5242,23 @@ mod tests {
             }
             output.extend_from_slice(&buffer[..read]);
         }
+    }
+
+    #[test]
+    fn runtime_context_reports_explicit_capabilities() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            assert_eq!(cx.runtime_family(), RuntimeFamily::Stack);
+            assert!(cx.supports(RuntimeCapability::StackfulWait));
+            assert!(!cx.supports(RuntimeCapability::ExplicitRingIo));
+
+            let error = cx
+                .require_capability(RuntimeCapability::ExplicitRingIo)
+                .unwrap_err();
+            assert_eq!(error.capability(), "explicit-ring-io");
+            assert_eq!(error.family(), RuntimeFamily::Stack);
+        });
     }
 
     struct DropCountingReadBuffer {
@@ -5542,6 +5665,33 @@ mod tests {
         });
 
         assert_eq!(slots, 1);
+    }
+
+    #[test]
+    fn completed_coroutine_stacks_are_reused_after_spawn_churn() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            max_cached_stacks: 1,
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            assert_eq!(cx.cached_stack_count(), 0);
+            assert_eq!(cx.reused_stack_count(), 0);
+
+            cx.scope(|scope| {
+                let worker = scope.spawn(|_| 1);
+                assert_eq!(worker.join(cx), 1);
+            });
+            assert_eq!(cx.cached_stack_count(), 1);
+            assert_eq!(cx.reused_stack_count(), 0);
+
+            cx.scope(|scope| {
+                let worker = scope.spawn(|_| 2);
+                assert_eq!(worker.join(cx), 2);
+            });
+            assert_eq!(cx.cached_stack_count(), 1);
+            assert_eq!(cx.reused_stack_count(), 1);
+        });
     }
 
     #[test]

@@ -4,6 +4,7 @@ members = [
     "kimojio",
     "kimojio-macros",
     "kimojio-stack",
+    "kimojio-stack-steal",
     "kimojio-stack-grpc",
     "kimojio-stack-http",
     "kimojio-stack-opentelemetry",
@@ -31,6 +32,7 @@ cc = "1"
 criterion = { version = "0.8", default-features = false }
 corosensei = "0.3.4"
 crossbeam-queue = "0.3"
+crossbeam-deque = "0.8"
 foreign-types-shared = "0.1"
 futures = "0.3"
 hpack = "0.3"
@@ -48,6 +50,7 @@ kimojio-stack-grpc = { path = "kimojio-stack-grpc", version = "0.0.1-alpha.0" }
 kimojio-stack-http = { path = "kimojio-stack-http", version = "0.0.1-alpha.0" }
 kimojio-stack-opentelemetry = { path = "kimojio-stack-opentelemetry", version = "0.0.1-alpha.0" }
 kimojio-stack = { path = "kimojio-stack", version = "0.0.1-alpha.0" }
+kimojio-stack-steal = { path = "kimojio-stack-steal", version = "0.0.1-alpha.0" }
 kimojio-stack-storage = { path = "kimojio-stack-storage", version = "0.0.1-alpha.0" }
 kimojio-stack-tls = { path = "kimojio-stack-tls", version = "0.0.1-alpha.0" }
 kimojio-tls = { path = "kimojio-tls", version = "0.16.5" }
