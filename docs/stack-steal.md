@@ -7,6 +7,11 @@ eligible work run on a worker pool with configurable stealing policies.
 The crate is currently workspace-private (`publish = false`) because it depends
 on new, unpublished `kimojio-stack` runtime API exports.
 
+The shared `kimojio-stack::runtime_api` traits added for this proof are alpha
+release surface, not a stable downstream contract. Before publishing a runtime
+that depends on them, the shared API needs an explicit version/release decision
+and release notes for any breaking alpha changes.
+
 Use local or pinned spawns for non-`Send` state. Use stealable spawns for work
 that may run on another worker:
 
@@ -35,10 +40,12 @@ assert_eq!(value, 42);
 
 The runtime exposes I/O through explicit ring handles instead of implicit context
 methods. Worker-local rings enforce owner-worker and runtime-instance use, while
-shared rings are cloneable and synchronized for cross-worker use. Shared rings
-are currently a proof-layer implementation: each shared ring owns one helper OS
-thread, has a bounded request queue, and should not be treated as the final
-high-performance shared io_uring architecture.
+shared rings are cloneable and synchronized for cross-worker use. The root
+`block_on` context is not a worker; use `RuntimeContext::current_worker()` or
+`RuntimeContext::execution_place()` when code needs to distinguish root from
+worker-pool execution. Shared rings are currently a proof-layer implementation:
+each shared ring owns one helper OS thread, has a bounded request queue, and
+should not be treated as the final high-performance shared io_uring architecture.
 
 Each worker thread owns a worker-local stackful scheduler. Stealing moves
 eligible queued jobs before they start running; already-running stackful
@@ -60,6 +67,15 @@ Use the `scheduler/raw_*` benchmarks to measure queue mechanics without stack
 allocation, task allocation, joins, or OS wakeups. Use the
 `scheduler/spawn_stealable_*` benchmarks for full runtime handoff costs.
 
+## Performance Gate Status
+
+The current implementation includes benchmark smoke coverage and local
+measurements, but it does **not** yet satisfy the release performance gate from
+the stack-steal specification. The required documented-machine run must report
+median and p99 values for local scheduling, steal transfer/resume, and worker
+scaling. Until that report exists, the release-mode median/p99 threshold work is
+a failing performance investigation item, not a passed acceptance criterion.
+
 The crate is a foundation for future runtime-generic stack HTTP, gRPC, TLS,
 storage, and telemetry libraries. Those downstream crates have not been migrated
 to the stealing runtime yet.
@@ -69,11 +85,15 @@ to the stealing runtime yet.
 - Live migration of already-running stackful continuations is not implemented.
 - Stealable work requires `Send + 'static`; use local or pinned spawns for
   non-`Send` state.
+- Queue saturation for `spawn_stealable` is currently reported when the returned
+  handle is joined, by resuming a rejection panic payload. A fallible
+  backpressure-oriented spawn API is future work.
 - Shared-ring I/O is a safe proof layer with a helper thread and bounded queue,
   not the final high-performance shared io_uring design.
 - Downstream stack HTTP, gRPC, TLS, storage, and telemetry crates are not
   runtime-generic yet.
 - The crate is not publishable until the shared `kimojio-stack` runtime API is
   versioned and released first.
-- Release-mode median and p99 threshold investigation remains deferred until it
-  can be run on a documented benchmark machine.
+- Release-mode median/p99 threshold validation is currently a failing
+  performance investigation item until it is run on a documented benchmark
+  machine and compared against the spec thresholds.

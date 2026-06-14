@@ -27,6 +27,16 @@ impl StackRuntimeContext for RuntimeContext<'_> {
 
     fn spawn_scoped<F, T>(&self, f: F) -> T
     where
+        F: for<'cx> FnOnce(&Self::ChildContext<'cx>) -> T,
+    {
+        self.scope(|scope| {
+            let handle = scope.spawn_local(move |cx| f(cx));
+            handle.join(self)
+        })
+    }
+
+    fn spawn_stealable_scoped<F, T>(&self, f: F) -> T
+    where
         F: for<'cx> FnOnce(&Self::ChildContext<'cx>) -> T + Send + 'static,
         T: Send + 'static,
     {

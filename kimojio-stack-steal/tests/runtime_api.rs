@@ -17,13 +17,21 @@ where
     runtime.block_on(|cx| {
         assert!(cx.supports(RuntimeCapability::StackfulWait));
         cx.yield_now();
+        let borrowed = 41;
         assert_eq!(
             cx.spawn_scoped(|child| {
                 child.yield_now();
                 child.sleep_for(Duration::from_millis(0)).unwrap();
-                42
+                borrowed + 1
             }),
             42
+        );
+        assert_eq!(
+            cx.spawn_stealable_scoped(|child| {
+                child.yield_now();
+                7
+            }),
+            7
         );
         cx.sleep_for(Duration::from_millis(0)).unwrap();
 

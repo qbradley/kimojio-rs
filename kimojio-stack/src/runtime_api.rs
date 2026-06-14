@@ -1,6 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Experimental runtime-neutral stackful capability traits.
+//!
+//! This module is an alpha compatibility surface used to prove that
+//! `kimojio-stack` and companion runtimes can share stackful wait, scoped spawn,
+//! and minimal I/O capability contracts. It is not a stable downstream API yet;
+//! release notes must call out any breaking changes while the surface is being
+//! shaped.
+
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
@@ -135,11 +143,26 @@ pub trait StackRuntimeContext: StackfulWaitContext {
     /// Cooperatively yields the current stackful task.
     fn yield_now(&self);
 
-    /// Spawns one scoped stackful task with its child context, waits for it, and returns its result.
+    /// Spawns one local scoped stackful task with its child context, waits for it, and returns its
+    /// result.
+    ///
+    /// This preserves the local scoped semantics of `kimojio-stack`: implementations may keep the
+    /// child on the current worker/thread and may support borrowed, non-`Send` captures.
     fn spawn_scoped<F, T>(&self, f: F) -> T
     where
+        F: for<'cx> FnOnce(&Self::ChildContext<'cx>) -> T;
+
+    /// Spawns one stealable/offload-eligible stackful task, waits for it, and returns its result.
+    ///
+    /// Runtime adapters that can execute work on another worker should map this to their explicit
+    /// cross-worker spawn path. Single-threaded adapters may execute it as local scoped work.
+    fn spawn_stealable_scoped<F, T>(&self, f: F) -> T
+    where
         F: for<'cx> FnOnce(&Self::ChildContext<'cx>) -> T + Send + 'static,
-        T: Send + 'static;
+        T: Send + 'static,
+    {
+        self.spawn_scoped(f)
+    }
 }
 
 /// Minimal runtime-neutral I/O surface shared by stack runtime adapters.
@@ -244,8 +267,7 @@ impl StackRuntimeContext for RuntimeContext<'_> {
 
     fn spawn_scoped<F, T>(&self, f: F) -> T
     where
-        F: for<'cx> FnOnce(&Self::ChildContext<'cx>) -> T + Send + 'static,
-        T: Send + 'static,
+        F: for<'cx> FnOnce(&Self::ChildContext<'cx>) -> T,
     {
         self.scope(|scope| {
             let handle = scope.spawn(move |cx| f(cx));

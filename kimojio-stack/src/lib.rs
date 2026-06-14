@@ -480,7 +480,12 @@ pub struct Runtime {
 }
 
 /// Runtime configuration.
+///
+/// This alpha API is non-exhaustive so runtime-owned tuning knobs can grow
+/// without forcing downstream struct-literal updates. Use
+/// `RuntimeConfig::default()` with field update syntax.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct RuntimeConfig {
     /// Usable stack bytes for each stackful coroutine.
     pub stack_size: usize,

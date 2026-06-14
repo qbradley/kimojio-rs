@@ -73,7 +73,7 @@ use std::num::NonZeroUsize;
 use std::panic::{self, AssertUnwindSafe};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread::{self, JoinHandle as ThreadJoinHandle};
 use std::time::{Duration, Instant};
 
@@ -109,9 +109,24 @@ pub struct WorkerId(usize);
 
 impl WorkerId {
     /// Returns this worker's zero-based index.
+    ///
+    /// Values returned by [`RuntimeContext::current_worker`] are always valid
+    /// zero-based worker indices. [`RuntimeContext::worker_id`] is retained for
+    /// compatibility and may return an internal root sentinel when called from a
+    /// multi-worker root context; prefer [`RuntimeContext::current_worker`] or
+    /// [`RuntimeContext::execution_place`] for new code.
     pub fn index(self) -> usize {
         self.0
     }
+}
+
+/// Identifies whether a runtime context is executing on the root thread or a worker.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ExecutionPlace {
+    /// The root `block_on` context, not a worker-pool worker.
+    Root,
+    /// A worker-pool worker with a zero-based worker id.
+    Worker(WorkerId),
 }
 
 thread_local! {
@@ -337,6 +352,7 @@ impl Runtime {
                 runtime_id: self.id,
                 worker: WorkerId(0),
                 steal_runtime: None,
+                active_steal_scope: None,
                 shared_ring_queue_capacity: self.config.max_shared_ring_queue_len,
             };
             main(&cx)
@@ -363,6 +379,7 @@ impl Runtime {
                     runtime_id: self.id,
                     worker: WorkerId(NO_WORKER),
                     steal_runtime: Some(Arc::clone(&runtime)),
+                    active_steal_scope: None,
                     shared_ring_queue_capacity: self.config.max_shared_ring_queue_len,
                 };
                 main(&cx)
@@ -377,11 +394,10 @@ impl Runtime {
     }
 
     fn inner_runtime(&self) -> kimojio_stack::Runtime {
-        kimojio_stack::Runtime::with_config(kimojio_stack::RuntimeConfig {
-            stack_size: self.config.stack_size,
-            max_cached_stacks: self.config.max_cached_stacks_per_worker,
-            ..kimojio_stack::RuntimeConfig::default()
-        })
+        let mut config = kimojio_stack::RuntimeConfig::default();
+        config.stack_size = self.config.stack_size;
+        config.max_cached_stacks = self.config.max_cached_stacks_per_worker;
+        kimojio_stack::Runtime::with_config(config)
     }
 }
 
@@ -397,6 +413,7 @@ pub struct RuntimeContext<'cx> {
     runtime_id: RuntimeId,
     worker: WorkerId,
     steal_runtime: Option<Arc<MultiRuntime>>,
+    active_steal_scope: Option<Arc<StealScopeState>>,
     shared_ring_queue_capacity: usize,
 }
 
@@ -415,6 +432,7 @@ impl RuntimeContext<'_> {
                     runtime_id: self.runtime_id,
                     worker: self.worker,
                     steal_runtime: self.steal_runtime.clone(),
+                    active_steal_scope: self.active_steal_scope.clone(),
                     steal_scope,
                     shared_ring_queue_capacity: self.shared_ring_queue_capacity,
                 };
@@ -428,7 +446,8 @@ impl RuntimeContext<'_> {
             // pointer after the inner scope returns.
             unsafe { steal_scope.as_ref().borrow_mut().take() }
         }) {
-            steal_scope.wait_with(self);
+            let cancel_immediately = !matches!(output, Ok(Ok(_)));
+            steal_scope.wait_with(self, cancel_immediately);
             if output.as_ref().is_ok_and(|output| output.is_ok()) {
                 steal_scope.resume_unobserved_panic();
             }
@@ -450,7 +469,25 @@ impl RuntimeContext<'_> {
         self.inner.park_stackful();
     }
 
+    /// Returns where this context is executing.
+    pub fn execution_place(&self) -> ExecutionPlace {
+        self.current_worker()
+            .map_or(ExecutionPlace::Root, ExecutionPlace::Worker)
+    }
+
     /// Returns the worker currently executing this context.
+    ///
+    /// Returns `None` for the root `block_on` context in multi-worker mode.
+    pub fn current_worker(&self) -> Option<WorkerId> {
+        (self.worker.index() != NO_WORKER).then_some(self.worker)
+    }
+
+    /// Returns the worker currently executing this context.
+    ///
+    /// Prefer [`RuntimeContext::current_worker`] or
+    /// [`RuntimeContext::execution_place`] for new code. In multi-worker mode,
+    /// the root `block_on` context is not a worker and this compatibility method
+    /// returns an internal sentinel value that must not be used as an array index.
     pub fn worker_id(&self) -> WorkerId {
         self.worker
     }
@@ -628,6 +665,14 @@ impl Ring {
     pub fn sleep(&self, cx: &RuntimeContext<'_>, duration: Duration) -> Result<(), RingError> {
         self.timeout(cx, duration)?.wait(cx)
     }
+
+    #[cfg(test)]
+    fn shared_active_timeout_count(&self) -> Option<usize> {
+        match &self.inner {
+            RingInner::Shared(shared) => Some(shared.core.active_timeout_count()),
+            RingInner::WorkerLocal { .. } => None,
+        }
+    }
 }
 
 impl fmt::Debug for Ring {
@@ -703,7 +748,12 @@ impl RingTimeout {
         };
         match inner {
             RingTimeoutInner::Local(timeout) => timeout.wait(cx.inner).map_err(RingError::from),
-            RingTimeoutInner::Shared(state) => wait_shared_operation(state, cx),
+            RingTimeoutInner::Shared(state) => {
+                let mut cancel_on_unwind = SharedWaitCancelGuard::new(&state);
+                let result = wait_shared_operation(state, cx);
+                cancel_on_unwind.disarm();
+                result
+            }
         }
     }
 
@@ -715,6 +765,30 @@ impl RingTimeout {
         match inner {
             RingTimeoutInner::Local(mut timeout) => timeout.cancel(),
             RingTimeoutInner::Shared(state) => state.cancel(),
+        }
+    }
+}
+
+struct SharedWaitCancelGuard {
+    state: Option<Arc<SharedOpState>>,
+}
+
+impl SharedWaitCancelGuard {
+    fn new(state: &Arc<SharedOpState>) -> Self {
+        Self {
+            state: Some(Arc::clone(state)),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.state = None;
+    }
+}
+
+impl Drop for SharedWaitCancelGuard {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.take() {
+            state.cancel();
         }
     }
 }
@@ -785,11 +859,44 @@ impl RuntimeCapabilities for RuntimeContext<'_> {
 
 impl StackfulWaitContext for RuntimeContext<'_> {
     fn stackful_wait_registration(&self) -> Option<Box<dyn StackfulWaitRegistration + '_>> {
-        self.inner.stackful_wait_registration()
+        let registration = self.inner.stackful_wait_registration()?;
+        if let Some(scope) = &self.active_steal_scope {
+            Some(Box::new(StealWaitRegistration {
+                inner: registration,
+                scope: Arc::clone(scope),
+            }))
+        } else {
+            Some(registration)
+        }
     }
 
     fn park_stackful(&self) {
         self.inner.park_stackful();
+        if self
+            .active_steal_scope
+            .as_ref()
+            .is_some_and(|scope| scope.is_cancel_requested())
+        {
+            panic::panic_any(StealTaskCanceled);
+        }
+    }
+}
+
+struct StealWaitRegistration<'registration> {
+    inner: Box<dyn StackfulWaitRegistration + 'registration>,
+    scope: Arc<StealScopeState>,
+}
+
+impl StackfulWaitRegistration for StealWaitRegistration<'_> {
+    fn waiter(&self) -> Box<dyn StackfulWaiter> {
+        let waiter = self.inner.waiter();
+        if !self.scope.push_cancel_waiter(self.inner.waiter()) {
+            let immediate_wake = self.inner.waiter();
+            if immediate_wake.mark_ready() {
+                immediate_wake.wake_ready();
+            }
+        }
+        waiter
     }
 }
 
@@ -807,6 +914,7 @@ pub struct Scope<'scope, 'env: 'scope> {
     runtime_id: RuntimeId,
     worker: WorkerId,
     steal_runtime: Option<Arc<MultiRuntime>>,
+    active_steal_scope: Option<Arc<StealScopeState>>,
     steal_scope: Option<NonNull<RefCell<Option<Arc<StealScopeState>>>>>,
     shared_ring_queue_capacity: usize,
 }
@@ -835,6 +943,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                 let runtime_id = self.runtime_id;
                 let worker = self.worker;
                 let steal_runtime = self.steal_runtime.clone();
+                let active_steal_scope = self.active_steal_scope.clone();
                 let shared_ring_queue_capacity = self.shared_ring_queue_capacity;
                 move |inner| {
                     let cx = RuntimeContext {
@@ -842,6 +951,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                         runtime_id,
                         worker,
                         steal_runtime,
+                        active_steal_scope,
                         shared_ring_queue_capacity,
                     };
                     f(&cx)
@@ -860,6 +970,18 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
     }
 
     /// Spawns work that satisfies the stealing eligibility boundary.
+    ///
+    /// Stealable work may execute on another worker and must therefore be
+    /// `Send + 'static`. Work that captures borrowed or non-`Send` state should
+    /// use [`Scope::spawn_local`] or [`Scope::spawn_pinned`].
+    ///
+    /// # Queue saturation
+    ///
+    /// This first API reports worker-pool shutdown or queue saturation through
+    /// the returned [`JoinHandle`]: joining the handle resumes a panic payload
+    /// describing the rejection. Use `Runtime::metrics().rejected_tasks` after
+    /// `block_on` to inspect rejected submissions. A future fallible spawn API
+    /// should expose this as recoverable backpressure instead of panic payloads.
     pub fn spawn_stealable<F, T>(&self, f: F) -> JoinHandle<'scope, T>
     where
         F: FnOnce(&RuntimeContext<'_>) -> T + Send + 'static,
@@ -881,6 +1003,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
 
         let join_for_job = Arc::clone(&join);
         let scope_for_job = Arc::clone(&steal_scope);
+        let active_scope_for_job = Arc::clone(&steal_scope);
         let owner = self.worker;
         let submitted = runtime.submit(
             owner,
@@ -888,12 +1011,16 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                 let result = panic::catch_unwind(AssertUnwindSafe(|| f(cx)));
                 match result {
                     Ok(value) => join_for_job.complete(StealOutcome::Value(value)),
+                    Err(payload) if payload.is::<StealTaskCanceled>() => {
+                        join_for_job.complete(StealOutcome::Canceled);
+                    }
                     Err(payload) => {
                         join_for_job.complete(StealOutcome::Panicked(payload));
                     }
                 }
                 scope_for_job.complete_one();
             }),
+            Some(active_scope_for_job),
         );
 
         if let Err(error) = submitted {
@@ -923,6 +1050,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                 let runtime_id = self.runtime_id;
                 let worker = self.worker;
                 let steal_runtime = self.steal_runtime.clone();
+                let active_steal_scope = self.active_steal_scope.clone();
                 let shared_ring_queue_capacity = self.shared_ring_queue_capacity;
                 move |inner| {
                     let cx = RuntimeContext {
@@ -930,6 +1058,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                         runtime_id,
                         worker,
                         steal_runtime,
+                        active_steal_scope,
                         shared_ring_queue_capacity,
                     };
                     f(&cx)
@@ -998,6 +1127,12 @@ impl<T> JoinHandle<'_, T> {
     }
 
     /// Waits for the stackful coroutine to finish and returns its result.
+    ///
+    /// # Panics
+    ///
+    /// Resumes any panic payload from the spawned coroutine. For handles returned
+    /// by [`Scope::spawn_stealable`], this also includes scheduler rejection
+    /// payloads for worker-pool shutdown or queue saturation in the current API.
     pub fn join(self, cx: &RuntimeContext<'_>) -> T {
         match self {
             Self {
@@ -1064,13 +1199,13 @@ impl SharedRing {
     }
 
     fn submit_nop(&self) -> Result<RingTimeout, RingError> {
-        let state = Arc::new(SharedOpState::new());
+        let state = Arc::new(SharedOpState::new(&self.core));
         self.core.submit(SharedRequest::Nop(Arc::clone(&state)))?;
         Ok(RingTimeout::shared(state))
     }
 
     fn submit_timeout(&self, duration: Duration) -> Result<RingTimeout, RingError> {
-        let state = Arc::new(SharedOpState::new());
+        let state = Arc::new(SharedOpState::new(&self.core));
         let deadline = Instant::now()
             .checked_add(duration)
             .ok_or(RingError::DurationOutOfRange)?;
@@ -1201,6 +1336,9 @@ impl SharedRingCore {
             };
 
             if self.closed.load(Ordering::Acquire) {
+                if let Some(request) = request {
+                    request.complete(Err(RingError::Closed));
+                }
                 let queued = {
                     let mut queue = self.queue.lock().expect("shared ring queue mutex poisoned");
                     std::mem::take(&mut *queue)
@@ -1260,6 +1398,14 @@ impl SharedRingCore {
         }
     }
 
+    #[cfg(test)]
+    fn active_timeout_count(&self) -> usize {
+        self.active_timeouts
+            .lock()
+            .expect("shared ring active timeout mutex poisoned")
+            .len()
+    }
+
     fn has_ready_timeout(timeouts: &[ActiveTimeout]) -> bool {
         let now = Instant::now();
         timeouts
@@ -1314,10 +1460,11 @@ fn acquire_shared_ring_slot() -> Result<(), RingError> {
 struct SharedOpState {
     inner: Mutex<SharedOpInner>,
     ready: Condvar,
+    core: Weak<SharedRingCore>,
 }
 
 impl SharedOpState {
-    fn new() -> Self {
+    fn new(core: &Arc<SharedRingCore>) -> Self {
         Self {
             inner: Mutex::new(SharedOpInner {
                 result: None,
@@ -1326,6 +1473,7 @@ impl SharedOpState {
                 waiters: StackfulWaiters::default(),
             }),
             ready: Condvar::new(),
+            core: Arc::downgrade(core),
         }
     }
 
@@ -1368,6 +1516,9 @@ impl SharedOpState {
             std::mem::take(&mut inner.waiters)
         };
         self.ready.notify_all();
+        if let Some(core) = self.core.upgrade() {
+            core.ready.notify_all();
+        }
         waiters.wake_all();
     }
 
@@ -1386,6 +1537,8 @@ struct SharedOpInner {
 
 type Job = Box<dyn for<'cx> FnOnce(&RuntimeContext<'cx>) + Send + 'static>;
 type PanicPayload = Box<dyn Any + Send + 'static>;
+
+struct StealTaskCanceled;
 
 trait StealPanicSource: Send + Sync {
     fn take_unobserved_panic(&self) -> Option<PanicPayload>;
@@ -1457,11 +1610,16 @@ enum SubmitError {
 struct QueuedJob {
     owner: WorkerId,
     job: Job,
+    active_steal_scope: Option<Arc<StealScopeState>>,
 }
 
 impl QueuedJob {
-    fn new(owner: WorkerId, job: Job) -> Self {
-        Self { owner, job }
+    fn new(owner: WorkerId, job: Job, active_steal_scope: Option<Arc<StealScopeState>>) -> Self {
+        Self {
+            owner,
+            job,
+            active_steal_scope,
+        }
     }
 }
 
@@ -1543,6 +1701,16 @@ impl Drop for CurrentWorkerGuard {
     }
 }
 
+struct ActiveJobGuard<'runtime> {
+    runtime: &'runtime MultiRuntime,
+}
+
+impl Drop for ActiveJobGuard<'_> {
+    fn drop(&mut self) {
+        self.runtime.release_active();
+    }
+}
+
 struct MultiRuntime {
     runtime_id: RuntimeId,
     config: RuntimeConfig,
@@ -1550,6 +1718,7 @@ struct MultiRuntime {
     global: Injector<QueuedJob>,
     local_depths: Vec<AtomicUsize>,
     global_depth: AtomicUsize,
+    active_jobs: AtomicUsize,
     wake_lock: Mutex<()>,
     wake: Condvar,
     shutdown: AtomicBool,
@@ -1570,6 +1739,7 @@ impl MultiRuntime {
             global: Injector::new(),
             local_depths: (0..worker_count).map(|_| AtomicUsize::new(0)).collect(),
             global_depth: AtomicUsize::new(0),
+            active_jobs: AtomicUsize::new(0),
             wake_lock: Mutex::new(()),
             wake: Condvar::new(),
             shutdown: AtomicBool::new(false),
@@ -1577,11 +1747,22 @@ impl MultiRuntime {
         }
     }
 
-    fn submit(&self, owner: WorkerId, job: Job) -> Result<(), SubmitError> {
+    fn submit(
+        &self,
+        owner: WorkerId,
+        job: Job,
+        active_steal_scope: Option<Arc<StealScopeState>>,
+    ) -> Result<(), SubmitError> {
         if self.shutdown.load(Ordering::Acquire) {
             self.metrics.rejected_tasks.fetch_add(1, Ordering::Relaxed);
             drop(job);
             return Err(SubmitError::ShuttingDown);
+        }
+
+        if self.reserve_active().is_none() {
+            self.metrics.rejected_tasks.fetch_add(1, Ordering::Relaxed);
+            drop(job);
+            return Err(SubmitError::QueueFull);
         }
 
         let owner = if owner.index() == NO_WORKER {
@@ -1591,13 +1772,14 @@ impl MultiRuntime {
         };
         let submitted_from_owner_worker = self.config.steal_policy != StealPolicy::Disabled
             && CURRENT_WORKER.with(|current| current.get()) == Some(owner);
-        let job = QueuedJob::new(WorkerId(owner), job);
+        let job = QueuedJob::new(WorkerId(owner), job, active_steal_scope);
         let result = if submitted_from_owner_worker {
             self.submit_local_current(owner, job)
         } else {
             self.submit_global(job)
         };
         if let Err(job) = result {
+            self.release_active();
             self.metrics.rejected_tasks.fetch_add(1, Ordering::Relaxed);
             drop(job);
             return Err(SubmitError::QueueFull);
@@ -1647,7 +1829,7 @@ impl MultiRuntime {
     }
 
     fn release_local(&self, worker: usize, count: usize) {
-        self.local_depths[worker].fetch_sub(count, Ordering::Relaxed);
+        Self::release_depth(&self.local_depths[worker], count);
     }
 
     fn reserve_global(&self) -> Option<usize> {
@@ -1655,7 +1837,22 @@ impl MultiRuntime {
     }
 
     fn release_global(&self) {
-        self.global_depth.fetch_sub(1, Ordering::Relaxed);
+        Self::release_depth(&self.global_depth, 1);
+    }
+
+    fn reserve_active(&self) -> Option<usize> {
+        Self::reserve_depth(&self.active_jobs, self.active_job_limit())
+    }
+
+    fn release_active(&self) {
+        Self::release_depth(&self.active_jobs, 1);
+    }
+
+    fn active_job_limit(&self) -> usize {
+        self.config
+            .max_worker_queue_len
+            .saturating_mul(self.stealers.len())
+            .saturating_add(self.config.max_global_queue_len)
     }
 
     fn reserve_depth(counter: &AtomicUsize, limit: usize) -> Option<usize> {
@@ -1677,13 +1874,26 @@ impl MultiRuntime {
         }
     }
 
+    fn release_depth(counter: &AtomicUsize, count: usize) {
+        let mut current = counter.load(Ordering::Relaxed);
+        loop {
+            let next = current
+                .checked_sub(count)
+                .expect("queue depth accounting underflow");
+            match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => return,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
     fn worker_loop(self: &Arc<Self>, worker: WorkerId, local_queue: CrossbeamWorker<QueuedJob>) {
         let _current_worker = CurrentWorkerGuard::enter(worker, &local_queue);
-        let mut inner = kimojio_stack::Runtime::with_config(kimojio_stack::RuntimeConfig {
-            stack_size: self.config.stack_size,
-            max_cached_stacks: self.config.max_cached_stacks_per_worker,
-            ..kimojio_stack::RuntimeConfig::default()
-        });
+        let mut inner_config = kimojio_stack::RuntimeConfig::default();
+        inner_config.stack_size = self.config.stack_size;
+        inner_config.max_cached_stacks = self.config.max_cached_stacks_per_worker;
+        let mut inner = kimojio_stack::Runtime::with_config(inner_config);
         inner.block_on(|root| {
             root.scope(|scope| {
                 let mut idle_iterations = 0_usize;
@@ -1691,7 +1901,11 @@ impl MultiRuntime {
                     let spawned =
                         if let Some(ready) = self.take_job(worker, &local_queue, idle_iterations) {
                             idle_iterations = 0;
-                            let QueuedJob { owner, job } = ready.queued;
+                            let QueuedJob {
+                                owner,
+                                job,
+                                active_steal_scope,
+                            } = ready.queued;
                             self.metrics
                                 .record_execution(owner, worker, ready.stolen_from);
                             let runtime = Arc::clone(self);
@@ -1704,13 +1918,16 @@ impl MultiRuntime {
                                     runtime_id,
                                     worker,
                                     steal_runtime: Some(runtime),
+                                    active_steal_scope,
                                     shared_ring_queue_capacity,
                                 };
-                                job(&cx);
                                 let runtime = cx
                                     .steal_runtime
                                     .as_ref()
                                     .expect("worker context missing runtime");
+                                let active_job = ActiveJobGuard { runtime };
+                                job(&cx);
+                                drop(active_job);
                                 runtime
                                     .metrics
                                     .completed_tasks
@@ -1866,22 +2083,28 @@ impl MultiRuntime {
         let victim_depth = self.local_depths[victim].load(Ordering::Acquire);
         let batch = (victim_depth / 2).max(1).min(max_batch);
         let mut first = None;
-        let mut extras = 0;
         for _ in 0..batch {
+            let reserved_extra_depth = if first.is_some() {
+                self.reserve_local(worker)
+            } else {
+                None
+            };
+            if first.is_some() && reserved_extra_depth.is_none() {
+                break;
+            }
             let Some(job) = self.steal_one_from(victim) else {
+                if reserved_extra_depth.is_some() {
+                    self.release_local(worker, 1);
+                }
                 break;
             };
             if first.is_none() {
                 first = Some(job);
             } else {
                 local_queue.push(job);
-                extras += 1;
+                self.metrics
+                    .record_local_queue_depth(reserved_extra_depth.expect("missing reservation"));
             }
-        }
-
-        if extras != 0 {
-            let depth = self.local_depths[worker].fetch_add(extras, Ordering::Relaxed) + extras;
-            self.metrics.record_local_queue_depth(depth);
         }
         first
     }
@@ -2023,6 +2246,36 @@ impl StealScopeState {
         inner.panic_sources.push(panic_source);
     }
 
+    fn push_cancel_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+        let mut inner = self.inner.lock().expect("scope pending mutex poisoned");
+        if inner.cancel_requested {
+            false
+        } else {
+            inner.cancel_waiters.push(waiter);
+            true
+        }
+    }
+
+    fn is_cancel_requested(&self) -> bool {
+        self.inner
+            .lock()
+            .expect("scope pending mutex poisoned")
+            .cancel_requested
+    }
+
+    fn request_cancel(&self) {
+        let waiters = {
+            let mut inner = self.inner.lock().expect("scope pending mutex poisoned");
+            if inner.cancel_requested {
+                StackfulWaiters::default()
+            } else {
+                inner.cancel_requested = true;
+                std::mem::take(&mut inner.cancel_waiters)
+            }
+        };
+        waiters.wake_all();
+    }
+
     fn complete_one(&self) {
         let (waiters, notify) = {
             let mut inner = self.inner.lock().expect("scope pending mutex poisoned");
@@ -2042,11 +2295,25 @@ impl StealScopeState {
         }
     }
 
-    fn wait_with(&self, cx: &RuntimeContext<'_>) {
+    fn wait_with(&self, cx: &RuntimeContext<'_>, cancel_immediately: bool) {
+        let mut cancel_requested = cancel_immediately;
+        if cancel_requested {
+            self.request_cancel();
+        }
         loop {
             let mut inner = self.inner.lock().expect("scope pending mutex poisoned");
             if inner.pending == 0 {
                 return;
+            }
+            if !cancel_requested {
+                let (guard, _) = self
+                    .pending_ready
+                    .wait_timeout(inner, Duration::from_millis(1))
+                    .expect("scope pending mutex poisoned");
+                drop(guard);
+                cancel_requested = true;
+                self.request_cancel();
+                continue;
             }
             if let Some(registration) = cx.stackful_wait_registration() {
                 inner.waiters.push(registration.waiter());
@@ -2071,6 +2338,8 @@ impl StealScopeState {
 struct StealScopeInner {
     pending: usize,
     waiters: StackfulWaiters,
+    cancel_waiters: StackfulWaiters,
+    cancel_requested: bool,
     panic_sources: PanicSources,
 }
 
@@ -2095,6 +2364,9 @@ impl<T> StealJoinState<T> {
     fn complete(&self, outcome: StealOutcome<T>) {
         let waiters = {
             let mut inner = self.inner.lock().expect("steal join mutex poisoned");
+            if inner.outcome.is_some() {
+                return;
+            }
             inner.outcome = Some(outcome);
             std::mem::take(&mut inner.waiters)
         };
@@ -2117,6 +2389,9 @@ impl<T> StealJoinState<T> {
 
         match outcome {
             StealOutcome::Value(value) => Some(value),
+            StealOutcome::Canceled => {
+                panic!("stealable coroutine canceled before JoinHandle joined")
+            }
             StealOutcome::Panicked(payload) => panic::resume_unwind(payload),
         }
     }
@@ -2167,6 +2442,7 @@ struct StealJoinInner<T> {
 
 enum StealOutcome<T> {
     Value(T),
+    Canceled,
     Panicked(PanicPayload),
 }
 
@@ -2269,7 +2545,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use kimojio_stack::Runtime as StackRuntime;
     use kimojio_stack::channel::cross_thread;
@@ -2280,13 +2556,25 @@ mod tests {
     };
 
     use super::{
-        NO_WORKER, Ring, RingError, RingInner, RingMode, Runtime, RuntimeConfig, StealPolicy,
-        WorkerId,
+        ExecutionPlace, NO_WORKER, Ring, RingError, RingInner, RingMode, Runtime, RuntimeConfig,
+        StealPolicy, WorkerId,
     };
 
     struct WaitProbe<'cx, 'a> {
         cx: &'a super::RuntimeContext<'cx>,
         parked: &'a AtomicBool,
+    }
+
+    fn wait_until(cx: &super::RuntimeContext<'_>, mut condition: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !condition() {
+            assert!(
+                Instant::now() < deadline,
+                "condition was not met before timeout"
+            );
+            cx.yield_now();
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 
     impl RuntimeCapabilities for WaitProbe<'_, '_> {
@@ -2399,10 +2687,13 @@ mod tests {
         let value = Rc::new(Cell::new(0));
 
         let output = runtime.block_on(|cx| {
+            assert_eq!(cx.current_worker(), None);
+            assert_eq!(cx.execution_place(), ExecutionPlace::Root);
             cx.scope(|scope| {
                 let value = Rc::clone(&value);
                 let handle = scope.spawn_local(move |cx| {
                     value.set(7);
+                    assert_eq!(cx.current_worker(), None);
                     cx.worker_id()
                 });
                 handle.join(cx)
@@ -2411,6 +2702,28 @@ mod tests {
 
         assert_eq!(output, WorkerId(NO_WORKER));
         assert_eq!(value.get(), 7);
+    }
+
+    #[test]
+    fn worker_context_reports_explicit_execution_place() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            assert_eq!(cx.current_worker(), None);
+            assert_eq!(cx.execution_place(), ExecutionPlace::Root);
+            cx.scope(|scope| {
+                let handle = scope.spawn_stealable(|cx| {
+                    let worker = cx.current_worker().expect("stealable work runs on worker");
+                    assert!(worker.index() < 2);
+                    assert_eq!(cx.execution_place(), ExecutionPlace::Worker(worker));
+                });
+                handle.join(cx);
+            });
+        });
     }
 
     #[test]
@@ -2728,6 +3041,52 @@ mod tests {
     }
 
     #[test]
+    fn scope_exit_cancels_blocked_stealable_child() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+        let (_tx, rx) = cross_thread::bounded::<u8>(1).stackful();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let _blocked = scope.spawn_stealable(move |cx| {
+                    let _ = rx.recv_with(cx);
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn parent_panic_cancels_blocked_stealable_child_before_resuming() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+        let (_tx, rx) = cross_thread::bounded::<u8>(1).stackful();
+
+        let result = panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.block_on(|cx| {
+                cx.scope(|scope| {
+                    let _blocked = scope.spawn_stealable(move |cx| {
+                        let _ = rx.recv_with(cx);
+                    });
+                    panic!("parent failed");
+                });
+            });
+        }));
+
+        let error = result.expect_err("parent panic should resume");
+        assert!(
+            error
+                .downcast_ref::<&'static str>()
+                .is_some_and(|message| *message == "parent failed")
+        );
+    }
+
+    #[test]
     fn unjoined_stolen_task_panic_propagates_at_scope_exit() {
         let result = panic::catch_unwind(|| {
             let mut runtime = Runtime::with_config(RuntimeConfig {
@@ -2948,25 +3307,58 @@ mod tests {
 
     #[test]
     fn full_global_queue_rejects_stealable_spawn() {
-        let result = panic::catch_unwind(|| {
-            let mut runtime = Runtime::with_config(RuntimeConfig {
-                workers: NonZeroUsize::new(2).unwrap(),
-                steal_policy: StealPolicy::steal_one(),
-                max_global_queue_len: 0,
-                ..RuntimeConfig::default()
-            });
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            max_global_queue_len: 0,
+            ..RuntimeConfig::default()
+        });
+        let result = panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             runtime.block_on(|cx| {
                 cx.scope(|scope| {
                     let handle = scope.spawn_stealable(|_| 1);
                     handle.join(cx);
                 });
             });
-        });
+        }));
 
         let error = result.expect_err("full queue should reject stealable spawn");
         assert!(error.downcast_ref::<&'static str>().is_some_and(
             |message| *message == "stealable task rejected because runtime queue is full"
         ));
+        assert_eq!(runtime.metrics().rejected_tasks, 1);
+        assert_eq!(runtime.metrics().completed_tasks, 0);
+    }
+
+    #[test]
+    fn active_stealable_jobs_are_admission_limited() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            max_worker_queue_len: 0,
+            max_global_queue_len: 1,
+            ..RuntimeConfig::default()
+        });
+
+        let result = panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.block_on(|cx| {
+                cx.scope(|scope| {
+                    let first = scope.spawn_stealable(|_| {
+                        std::thread::sleep(Duration::from_millis(10));
+                    });
+                    let rejected = scope.spawn_stealable(|_| ());
+                    rejected.join(cx);
+                    first.join(cx);
+                });
+            });
+        }));
+
+        let error = result.expect_err("second active job should be rejected");
+        assert!(error.downcast_ref::<&'static str>().is_some_and(
+            |message| *message == "stealable task rejected because runtime queue is full"
+        ));
+        assert_eq!(runtime.metrics().rejected_tasks, 1);
+        assert_eq!(runtime.metrics().completed_tasks, 1);
     }
 
     #[test]
@@ -2979,6 +3371,45 @@ mod tests {
         runtime.block_on(|cx| {
             let ring = cx.create_shared_ring();
             assert_eq!(ring.nop(cx), Err(RingError::QueueFull));
+        });
+    }
+
+    #[test]
+    fn canceled_shared_timeout_cleans_up_without_later_submission() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let mut timeout = ring.timeout(cx, Duration::from_secs(3600)).unwrap();
+            wait_until(cx, || ring.shared_active_timeout_count() == Some(1));
+            timeout.cancel();
+            wait_until(cx, || ring.shared_active_timeout_count() == Some(0));
+        });
+    }
+
+    #[test]
+    fn shared_ring_close_wakes_pending_stealable_timeout() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let worker_ring = ring.clone();
+            cx.scope(|scope| {
+                let handle = scope.spawn_stealable(move |cx| {
+                    let timeout = worker_ring
+                        .timeout(cx, Duration::from_secs(3600))
+                        .expect("timeout should submit");
+                    drop(worker_ring);
+                    timeout.wait(cx)
+                });
+                wait_until(cx, || ring.shared_active_timeout_count() == Some(1));
+                drop(ring);
+                assert_eq!(handle.join(cx), Err(RingError::Closed));
+            });
         });
     }
 
