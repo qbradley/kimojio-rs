@@ -336,6 +336,20 @@ fn bench_io(c: &mut Criterion) {
         });
     });
 
+    c.bench_function("io_uring/no_payload_nop_dispatch", |b| {
+        b.iter_custom(|iters| {
+            run_stackful(|cx| {
+                cx.submit_no_payload_nop().wait(cx).unwrap();
+
+                let start = Instant::now();
+                for _ in 0..iters {
+                    cx.submit_no_payload_nop().wait(cx).unwrap();
+                }
+                start.elapsed()
+            })
+        });
+    });
+
     c.bench_function("io_uring/pipe_write_read", |b| {
         b.iter_custom(|iters| {
             run_stackful(|cx| {

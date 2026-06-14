@@ -14,9 +14,16 @@
 //! Instead, code creates [`Ring`] handles with [`RuntimeContext::create_ring`],
 //! [`RuntimeContext::create_worker_ring`], or
 //! [`RuntimeContext::create_shared_ring`]. This keeps worker-local versus shared
-//! I/O costs visible to the application. Shared rings are currently a proof-layer
-//! implementation with one helper OS thread per shared ring and a bounded request
-//! queue; they are not the final high-performance shared io_uring design.
+//! I/O costs visible to the application. Shared rings submit through runtime
+//! workers instead of hiding a helper OS thread per ring; the current shared
+//! operation surface is limited to no-op and timeout operations while the
+//! submission, completion, and cancellation architecture is shaped.
+//! Shared rings are runtime-affine. In multi-worker runtimes, each shared ring
+//! is assigned a real owner worker and routed through that worker's embedded
+//! io_uring scheduler. In single-worker runtimes, shared rings are driven by the
+//! owning stack runtime directly. Worker-local rings require an actual worker
+//! context and cannot be created from the root `block_on` context of a
+//! multi-worker runtime.
 //!
 //! # Example
 //!
@@ -72,6 +79,7 @@ use std::hint;
 use std::num::NonZeroUsize;
 use std::panic::{self, AssertUnwindSafe};
 use std::ptr::NonNull;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread::{self, JoinHandle as ThreadJoinHandle};
@@ -80,8 +88,9 @@ use std::time::{Duration, Instant};
 use crossbeam_deque::{Injector, Steal, Stealer, Worker as CrossbeamWorker};
 pub use kimojio_stack::StackUsage;
 use kimojio_stack::{
-    Errno, RuntimeCapabilities, RuntimeCapability, RuntimeFamily, StackfulWaitContext,
-    StackfulWaitRegistration, StackfulWaiter, UnsupportedCapability,
+    Errno, NoPayloadIo, RuntimeCapabilities, RuntimeCapability, RuntimeFamily, SchedulerWake,
+    StackfulWaitContext, StackfulWaitRegistration, StackfulWaiter, UnsupportedCapability,
+    WaitRegistration, Waitable,
 };
 
 pub mod runtime_api;
@@ -89,10 +98,7 @@ pub mod runtime_api;
 const NO_WORKER: usize = usize::MAX;
 const DEFAULT_QUEUE_CAPACITY: usize = 1024;
 const DEFAULT_SHARED_RING_QUEUE_CAPACITY: usize = 1024;
-const MAX_LIVE_SHARED_RINGS: usize = 1024;
-
 static NEXT_RUNTIME_ID: AtomicUsize = AtomicUsize::new(1);
-static LIVE_SHARED_RINGS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct RuntimeId(usize);
@@ -156,7 +162,8 @@ pub struct RuntimeConfig {
     pub max_worker_queue_len: usize,
     /// Maximum queued stealable jobs in the global injector queue.
     pub max_global_queue_len: usize,
-    /// Maximum queued requests per shared ring helper.
+    /// Maximum queued requests per shared ring and pending shared-ring driver
+    /// commands per worker.
     pub max_shared_ring_queue_len: usize,
 }
 
@@ -346,6 +353,7 @@ impl Runtime {
         F: FnOnce(&RuntimeContext<'_>) -> T,
     {
         let mut inner = self.inner_runtime();
+        let local_shared_operations = Rc::new(LocalSharedOperations::default());
         let output = inner.block_on(|inner| {
             let cx = RuntimeContext {
                 inner,
@@ -353,9 +361,15 @@ impl Runtime {
                 worker: WorkerId(0),
                 steal_runtime: None,
                 active_steal_scope: None,
+                local_shared_operations: Some(Rc::clone(&local_shared_operations)),
                 shared_ring_queue_capacity: self.config.max_shared_ring_queue_len,
             };
-            main(&cx)
+            let output = panic::catch_unwind(AssertUnwindSafe(|| main(&cx)));
+            local_shared_operations.close_all();
+            match output {
+                Ok(output) => output,
+                Err(payload) => panic::resume_unwind(payload),
+            }
         });
         self.last_metrics = RuntimeMetrics {
             worker_count: 1,
@@ -380,6 +394,7 @@ impl Runtime {
                     worker: WorkerId(NO_WORKER),
                     steal_runtime: Some(Arc::clone(&runtime)),
                     active_steal_scope: None,
+                    local_shared_operations: None,
                     shared_ring_queue_capacity: self.config.max_shared_ring_queue_len,
                 };
                 main(&cx)
@@ -414,6 +429,7 @@ pub struct RuntimeContext<'cx> {
     worker: WorkerId,
     steal_runtime: Option<Arc<MultiRuntime>>,
     active_steal_scope: Option<Arc<StealScopeState>>,
+    local_shared_operations: Option<Rc<LocalSharedOperations>>,
     shared_ring_queue_capacity: usize,
 }
 
@@ -433,6 +449,7 @@ impl RuntimeContext<'_> {
                     worker: self.worker,
                     steal_runtime: self.steal_runtime.clone(),
                     active_steal_scope: self.active_steal_scope.clone(),
+                    local_shared_operations: self.local_shared_operations.clone(),
                     steal_scope,
                     shared_ring_queue_capacity: self.shared_ring_queue_capacity,
                 };
@@ -508,35 +525,52 @@ impl RuntimeContext<'_> {
             RingMode::WorkerLocal => Ring {
                 inner: RingInner::WorkerLocal {
                     runtime_id: self.runtime_id,
-                    owner: self.worker,
+                    owner: self.current_worker().ok_or(RingError::NoCurrentWorker)?,
                 },
             },
             RingMode::Shared => Ring {
-                inner: RingInner::Shared(SharedRing::new(self.shared_ring_queue_capacity)?),
+                inner: RingInner::Shared(SharedRing::new(
+                    self.shared_ring_queue_capacity,
+                    self.shared_ring_driver(),
+                )?),
             },
         })
+    }
+
+    fn shared_ring_driver(&self) -> SharedRingDriver {
+        if let Some(runtime) = &self.steal_runtime {
+            let owner = self
+                .current_worker()
+                .unwrap_or_else(|| runtime.next_shared_ring_owner());
+            SharedRingDriver::Multi {
+                runtime: Arc::clone(runtime),
+                owner,
+            }
+        } else {
+            SharedRingDriver::Local {
+                runtime_id: self.runtime_id,
+            }
+        }
     }
 
     /// Creates a ring handle pinned to the current worker.
     pub fn create_worker_ring(&self) -> Ring {
         self.create_ring(RingMode::WorkerLocal)
-            .expect("worker-local ring creation cannot fail")
+            .expect("worker-local ring creation requires a worker context")
     }
 
     /// Creates a synchronized ring handle that may be cloned across workers.
     ///
-    /// The current shared-ring implementation is a proof layer. Each shared
-    /// ring owns one helper OS thread, closes when the final handle is dropped,
-    /// and rejects submissions once its bounded queue is full.
+    /// Shared rings close when the final handle is dropped and reject
+    /// submissions once their bounded queue is full.
     ///
     /// # Panics
     ///
-    /// Panics if the process-level shared ring helper limit has been reached.
-    /// Use [`RuntimeContext::create_ring`] with [`RingMode::Shared`] to handle
-    /// that condition as a [`RingError`].
+    /// Panics if shared ring creation fails. Use [`RuntimeContext::create_ring`]
+    /// with [`RingMode::Shared`] to handle creation errors as a [`RingError`].
     pub fn create_shared_ring(&self) -> Ring {
         self.create_ring(RingMode::Shared)
-            .expect("shared ring helper limit reached")
+            .expect("shared ring creation failed")
     }
 }
 
@@ -552,6 +586,9 @@ pub enum RingMode {
 /// Error returned by explicit ring-handle operations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RingError {
+    /// A worker-local ring was requested from a context that is not running on a
+    /// worker.
+    NoCurrentWorker,
     /// A worker-local ring was used from a different worker.
     WrongWorker {
         /// Worker that owns the ring.
@@ -559,11 +596,11 @@ pub enum RingError {
         /// Worker that attempted the operation.
         current: WorkerId,
     },
-    /// A worker-local ring was used from a different runtime instance.
+    /// A ring was used from a different runtime instance.
     WrongRuntime,
     /// The runtime or ring queue is at its configured capacity.
     QueueFull,
-    /// The process-level shared ring helper limit has been reached.
+    /// A runtime-level shared ring resource limit has been reached.
     ResourceLimit,
     /// The requested duration cannot be represented by this platform's clock.
     DurationOutOfRange,
@@ -584,15 +621,18 @@ impl From<Errno> for RingError {
 impl fmt::Display for RingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NoCurrentWorker => {
+                f.write_str("worker-local ring requested outside a worker context")
+            }
             Self::WrongWorker { owner, current } => write!(
                 f,
                 "ring is owned by worker {} but was used from worker {}",
                 owner.index(),
                 current.index()
             ),
-            Self::WrongRuntime => f.write_str("worker-local ring belongs to a different runtime"),
+            Self::WrongRuntime => f.write_str("ring belongs to a different runtime"),
             Self::QueueFull => f.write_str("ring queue is full"),
-            Self::ResourceLimit => f.write_str("shared ring helper limit reached"),
+            Self::ResourceLimit => f.write_str("shared ring resource limit reached"),
             Self::DurationOutOfRange => f.write_str("duration is outside the supported range"),
             Self::Closed => f.write_str("ring is closed"),
             Self::Canceled => f.write_str("ring operation was canceled"),
@@ -642,7 +682,7 @@ impl Ring {
                 ensure_owner(*runtime_id, *owner, cx)?;
                 cx.inner.nop().map_err(RingError::from)
             }
-            RingInner::Shared(shared) => shared.submit_nop()?.wait(cx),
+            RingInner::Shared(shared) => shared.submit_nop(cx)?.wait(cx),
         }
     }
 
@@ -657,7 +697,7 @@ impl Ring {
                 ensure_owner(*runtime_id, *owner, cx)?;
                 RingTimeout::local(cx.inner.timeout(duration))
             }
-            RingInner::Shared(shared) => shared.submit_timeout(duration)?,
+            RingInner::Shared(shared) => shared.submit_timeout(cx, duration)?,
         })
     }
 
@@ -667,9 +707,28 @@ impl Ring {
     }
 
     #[cfg(test)]
-    fn shared_active_timeout_count(&self) -> Option<usize> {
+    fn shared_submitted_operation_count(&self) -> Option<usize> {
         match &self.inner {
-            RingInner::Shared(shared) => Some(shared.core.active_timeout_count()),
+            RingInner::Shared(shared) => Some(shared.core.submitted_operation_count()),
+            RingInner::WorkerLocal { .. } => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn shared_driver_owner(&self) -> Option<WorkerId> {
+        match &self.inner {
+            RingInner::Shared(shared) => match &shared.driver {
+                SharedRingDriver::Local { .. } => None,
+                SharedRingDriver::Multi { owner, .. } => Some(*owner),
+            },
+            RingInner::WorkerLocal { .. } => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn shared_test_counters(&self) -> Option<SharedRingTestCounterSnapshot> {
+        match &self.inner {
+            RingInner::Shared(shared) => Some(shared.core.test_counters()),
             RingInner::WorkerLocal { .. } => None,
         }
     }
@@ -709,6 +768,7 @@ pub struct RingTimeout {
 
 enum RingTimeoutInner {
     Local(kimojio_stack::Timeout),
+    SharedLocalDriver(LocalSharedOperationHandle),
     Shared(Arc<SharedOpState>),
 }
 
@@ -725,6 +785,12 @@ impl RingTimeout {
         }
     }
 
+    fn shared_local_driver(operation: LocalSharedOperationHandle) -> Self {
+        Self {
+            inner: Some(RingTimeoutInner::SharedLocalDriver(operation)),
+        }
+    }
+
     /// Returns the completed timeout result if it is already ready.
     pub fn try_wait(&mut self) -> Option<Result<(), RingError>> {
         match self.inner.as_mut()? {
@@ -732,6 +798,13 @@ impl RingTimeout {
                 let result = timeout.try_wait()?.map_err(RingError::from);
                 self.inner = None;
                 Some(result)
+            }
+            RingTimeoutInner::SharedLocalDriver(operation) => {
+                if let Some(result) = operation.try_wait() {
+                    self.inner = None;
+                    return Some(result);
+                }
+                None
             }
             RingTimeoutInner::Shared(state) => {
                 let result = state.try_take()?;
@@ -748,6 +821,7 @@ impl RingTimeout {
         };
         match inner {
             RingTimeoutInner::Local(timeout) => timeout.wait(cx.inner).map_err(RingError::from),
+            RingTimeoutInner::SharedLocalDriver(operation) => operation.wait(cx),
             RingTimeoutInner::Shared(state) => {
                 let mut cancel_on_unwind = SharedWaitCancelGuard::new(&state);
                 let result = wait_shared_operation(state, cx);
@@ -764,7 +838,128 @@ impl RingTimeout {
         };
         match inner {
             RingTimeoutInner::Local(mut timeout) => timeout.cancel(),
-            RingTimeoutInner::Shared(state) => state.cancel(),
+            RingTimeoutInner::SharedLocalDriver(operation) => operation.cancel(),
+            RingTimeoutInner::Shared(state) => {
+                state.cancel();
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct LocalSharedOperations {
+    operations: RefCell<Vec<LocalSharedOperationHandle>>,
+}
+
+impl LocalSharedOperations {
+    fn register(&self, operation: LocalSharedOperationHandle) {
+        let mut operations = self.operations.borrow_mut();
+        operations.retain(|operation| !operation.is_retired());
+        operations.push(operation);
+    }
+
+    fn close_all(&self) {
+        for operation in self.operations.borrow_mut().drain(..) {
+            operation.close();
+        }
+    }
+}
+
+#[derive(Clone)]
+struct LocalSharedOperationHandle {
+    state: Arc<SharedOpState>,
+    io: Rc<RefCell<Option<NoPayloadIo>>>,
+}
+
+impl LocalSharedOperationHandle {
+    fn new(state: Arc<SharedOpState>, io: NoPayloadIo) -> Self {
+        Self {
+            state,
+            io: Rc::new(RefCell::new(Some(io))),
+        }
+    }
+
+    fn try_wait(&self) -> Option<Result<(), RingError>> {
+        if let Some(result) = self.state.try_take() {
+            self.cancel_io();
+            return Some(result);
+        }
+
+        let mut io_slot = self.io.borrow_mut();
+        let io = io_slot.as_mut()?;
+        if let Some(result) = io.try_wait() {
+            self.state.complete(result.map_err(RingError::from));
+            *io_slot = None;
+            return Some(
+                self.state
+                    .try_take()
+                    .expect("local shared operation completed without result"),
+            );
+        }
+        None
+    }
+
+    fn wait(&self, cx: &RuntimeContext<'_>) -> Result<(), RingError> {
+        let mut cancel_on_unwind = LocalSharedWaitCancelGuard::new(self.clone());
+        loop {
+            if let Some(result) = self.try_wait() {
+                cancel_on_unwind.disarm();
+                return result;
+            }
+
+            let io = self.io.borrow();
+            if let Some(io) = io.as_ref() {
+                let waitables: [&dyn Waitable; 2] = [io, &*self.state];
+                cx.inner
+                    .wait_any(&waitables, None)
+                    .expect("wait_any with non-empty waitable list cannot fail");
+            } else {
+                cx.inner.yield_now();
+            }
+        }
+    }
+
+    fn cancel(&self) {
+        self.state.cancel();
+        self.cancel_io();
+    }
+
+    fn close(&self) {
+        self.state.close();
+        self.cancel_io();
+    }
+
+    fn is_retired(&self) -> bool {
+        self.state.is_terminal() && self.io.borrow().is_none()
+    }
+
+    fn cancel_io(&self) {
+        if let Some(mut io) = self.io.borrow_mut().take() {
+            io.cancel();
+        }
+    }
+}
+
+struct LocalSharedWaitCancelGuard {
+    operation: Option<LocalSharedOperationHandle>,
+}
+
+impl LocalSharedWaitCancelGuard {
+    fn new(operation: LocalSharedOperationHandle) -> Self {
+        Self {
+            operation: Some(operation),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.operation = None;
+    }
+}
+
+impl Drop for LocalSharedWaitCancelGuard {
+    fn drop(&mut self) {
+        if let Some(operation) = self.operation.take() {
+            operation.cancel();
         }
     }
 }
@@ -915,6 +1110,7 @@ pub struct Scope<'scope, 'env: 'scope> {
     worker: WorkerId,
     steal_runtime: Option<Arc<MultiRuntime>>,
     active_steal_scope: Option<Arc<StealScopeState>>,
+    local_shared_operations: Option<Rc<LocalSharedOperations>>,
     steal_scope: Option<NonNull<RefCell<Option<Arc<StealScopeState>>>>>,
     shared_ring_queue_capacity: usize,
 }
@@ -944,6 +1140,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                 let worker = self.worker;
                 let steal_runtime = self.steal_runtime.clone();
                 let active_steal_scope = self.active_steal_scope.clone();
+                let local_shared_operations = self.local_shared_operations.clone();
                 let shared_ring_queue_capacity = self.shared_ring_queue_capacity;
                 move |inner| {
                     let cx = RuntimeContext {
@@ -952,6 +1149,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                         worker,
                         steal_runtime,
                         active_steal_scope,
+                        local_shared_operations,
                         shared_ring_queue_capacity,
                     };
                     f(&cx)
@@ -1051,6 +1249,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                 let worker = self.worker;
                 let steal_runtime = self.steal_runtime.clone();
                 let active_steal_scope = self.active_steal_scope.clone();
+                let local_shared_operations = self.local_shared_operations.clone();
                 let shared_ring_queue_capacity = self.shared_ring_queue_capacity;
                 move |inner| {
                     let cx = RuntimeContext {
@@ -1059,6 +1258,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                         worker,
                         steal_runtime,
                         active_steal_scope,
+                        local_shared_operations,
                         shared_ring_queue_capacity,
                     };
                     f(&cx)
@@ -1184,36 +1384,79 @@ impl<T> fmt::Debug for JoinHandle<'_, T> {
 
 struct SharedRing {
     core: Arc<SharedRingCore>,
+    driver: SharedRingDriver,
 }
 
 impl SharedRing {
-    fn new(queue_capacity: usize) -> Result<Self, RingError> {
-        acquire_shared_ring_slot()?;
-        let core = Arc::new(SharedRingCore::new(queue_capacity));
-        let worker_core = Arc::clone(&core);
-        thread::spawn(move || {
-            let _slot = SharedRingSlot;
-            worker_core.run();
-        });
-        Ok(Self { core })
+    fn new(queue_capacity: usize, driver: SharedRingDriver) -> Result<Self, RingError> {
+        let core = Arc::new(SharedRingCore::new(queue_capacity, driver.wake_handle()));
+        Ok(Self { core, driver })
     }
 
-    fn submit_nop(&self) -> Result<RingTimeout, RingError> {
+    fn submit_nop(&self, cx: &RuntimeContext<'_>) -> Result<RingTimeout, RingError> {
         let state = Arc::new(SharedOpState::new(&self.core));
-        self.core.submit(SharedRequest::Nop(Arc::clone(&state)))?;
-        Ok(RingTimeout::shared(state))
+        self.submit_operation(cx, SharedOperationKind::Nop, state, None)
     }
 
-    fn submit_timeout(&self, duration: Duration) -> Result<RingTimeout, RingError> {
+    fn submit_timeout(
+        &self,
+        cx: &RuntimeContext<'_>,
+        duration: Duration,
+    ) -> Result<RingTimeout, RingError> {
         let state = Arc::new(SharedOpState::new(&self.core));
         let deadline = Instant::now()
             .checked_add(duration)
             .ok_or(RingError::DurationOutOfRange)?;
-        self.core.submit(SharedRequest::Timeout {
-            deadline,
-            state: Arc::clone(&state),
-        })?;
-        Ok(RingTimeout::shared(state))
+        self.submit_operation(
+            cx,
+            SharedOperationKind::Timeout { deadline },
+            state,
+            Some(duration),
+        )
+    }
+
+    fn submit_operation(
+        &self,
+        cx: &RuntimeContext<'_>,
+        kind: SharedOperationKind,
+        state: Arc<SharedOpState>,
+        local_timeout_duration: Option<Duration>,
+    ) -> Result<RingTimeout, RingError> {
+        match &self.driver {
+            SharedRingDriver::Local { runtime_id } => {
+                if *runtime_id != cx.runtime_id {
+                    state.complete(Err(RingError::WrongRuntime));
+                    return Err(RingError::WrongRuntime);
+                }
+                self.core
+                    .submit_local(Arc::clone(&state), SharedOpRoute::local())?;
+                let io = match kind {
+                    SharedOperationKind::Nop => cx.inner.submit_no_payload_nop(),
+                    SharedOperationKind::Timeout { .. } => cx.inner.submit_no_payload_timeout(
+                        local_timeout_duration
+                            .expect("local shared timeout operation missing original duration"),
+                    ),
+                };
+                let operation = LocalSharedOperationHandle::new(state, io);
+                if let Some(local_shared_operations) = &cx.local_shared_operations {
+                    local_shared_operations.register(operation.clone());
+                }
+                Ok(RingTimeout::shared_local_driver(operation))
+            }
+            SharedRingDriver::Multi { runtime, owner } => {
+                self.core.submit_queued(
+                    SharedOperation::new(kind, Arc::clone(&state)),
+                    SharedOpRoute::worker(*owner),
+                )?;
+                if let Err(error) = runtime.submit_shared_ring(*owner, &self.core) {
+                    if matches!(error, RingError::QueueFull) {
+                        self.core.reject_queued(RingError::QueueFull);
+                    }
+                    return Err(error);
+                }
+                Ok(RingTimeout::shared(state))
+            }
+        }
     }
 }
 
@@ -1222,6 +1465,7 @@ impl Clone for SharedRing {
         self.core.handle_count.fetch_add(1, Ordering::AcqRel);
         Self {
             core: Arc::clone(&self.core),
+            driver: self.driver.clone(),
         }
     }
 }
@@ -1236,46 +1480,134 @@ impl Drop for SharedRing {
     }
 }
 
+#[derive(Clone)]
+enum SharedRingDriver {
+    Local {
+        runtime_id: RuntimeId,
+    },
+    Multi {
+        runtime: Arc<MultiRuntime>,
+        owner: WorkerId,
+    },
+}
+
+impl SharedRingDriver {
+    fn wake_handle(&self) -> SharedRingWake {
+        match self {
+            Self::Local { .. } => SharedRingWake::Local,
+            Self::Multi { runtime, owner } => SharedRingWake::Multi {
+                runtime: Arc::downgrade(runtime),
+                owner: *owner,
+            },
+        }
+    }
+}
+
+#[derive(Clone)]
+enum SharedRingWake {
+    Local,
+    Multi {
+        runtime: Weak<MultiRuntime>,
+        owner: WorkerId,
+    },
+}
+
+impl SharedRingWake {
+    fn wake(&self) {
+        match self {
+            Self::Local => {}
+            Self::Multi { runtime, owner } => {
+                if let Some(runtime) = runtime.upgrade() {
+                    runtime.wake_worker(*owner);
+                }
+            }
+        }
+    }
+}
+
 struct SharedRingCore {
-    queue: Mutex<VecDeque<SharedRequest>>,
-    active_timeouts: Mutex<Vec<Arc<SharedOpState>>>,
-    ready: Condvar,
+    queue: Mutex<VecDeque<SharedOperation>>,
+    submitted_operations: Mutex<Vec<Arc<SharedOpState>>>,
     closed: AtomicBool,
+    driver_queued: AtomicBool,
     handle_count: AtomicUsize,
     queue_capacity: usize,
+    wake: SharedRingWake,
+    #[cfg(test)]
+    test_counters: SharedRingTestCounters,
 }
 
 impl SharedRingCore {
-    fn new(queue_capacity: usize) -> Self {
+    fn new(queue_capacity: usize, wake: SharedRingWake) -> Self {
         Self {
             queue: Mutex::new(VecDeque::with_capacity(queue_capacity)),
-            active_timeouts: Mutex::new(Vec::with_capacity(queue_capacity)),
-            ready: Condvar::new(),
+            submitted_operations: Mutex::new(Vec::with_capacity(queue_capacity)),
             closed: AtomicBool::new(false),
+            driver_queued: AtomicBool::new(false),
             handle_count: AtomicUsize::new(1),
             queue_capacity,
+            wake,
+            #[cfg(test)]
+            test_counters: SharedRingTestCounters::new(),
         }
     }
 
-    fn submit(&self, request: SharedRequest) -> Result<(), RingError> {
+    fn submit_local(
+        &self,
+        state: Arc<SharedOpState>,
+        route: SharedOpRoute,
+    ) -> Result<(), RingError> {
         if self.closed.load(Ordering::Acquire) {
-            request.complete(Err(RingError::Closed));
+            state.close();
+            return Err(RingError::Closed);
+        }
+        if self.queue_capacity == 0 {
+            state.complete(Err(RingError::QueueFull));
+            return Err(RingError::QueueFull);
+        }
+        if !state.mark_queued(route) {
+            return Err(state.terminal_error().unwrap_or(RingError::Canceled));
+        }
+        if !state.mark_submitted(route) {
+            return Err(state.terminal_error().unwrap_or(RingError::Canceled));
+        }
+        if !self.register_submitted(&state) {
+            return Err(state.terminal_error().unwrap_or(RingError::Closed));
+        }
+        #[cfg(test)]
+        self.test_counters.record_accepted();
+        #[cfg(test)]
+        self.test_counters.record_driver_submission();
+        Ok(())
+    }
+
+    fn submit_queued(
+        &self,
+        operation: SharedOperation,
+        route: SharedOpRoute,
+    ) -> Result<(), RingError> {
+        if self.closed.load(Ordering::Acquire) {
+            operation.close();
             return Err(RingError::Closed);
         }
 
         let mut queue = self.queue.lock().expect("shared ring queue mutex poisoned");
         if self.closed.load(Ordering::Acquire) {
             drop(queue);
-            request.complete(Err(RingError::Closed));
+            operation.close();
             return Err(RingError::Closed);
         }
         if queue.len() >= self.queue_capacity {
             drop(queue);
-            request.complete(Err(RingError::QueueFull));
+            operation.complete(Err(RingError::QueueFull));
             return Err(RingError::QueueFull);
         }
-        queue.push_back(request);
-        self.ready.notify_one();
+        if !operation.mark_queued(route) {
+            return Err(operation.terminal_error().unwrap_or(RingError::Canceled));
+        }
+        queue.push_back(operation);
+        #[cfg(test)]
+        self.test_counters.record_accepted();
         Ok(())
     }
 
@@ -1287,179 +1619,270 @@ impl SharedRingCore {
             let mut queue = self.queue.lock().expect("shared ring queue mutex poisoned");
             std::mem::take(&mut *queue)
         };
-        for request in queued {
-            request.complete(Err(RingError::Closed));
+        for operation in queued {
+            operation.close();
         }
-        let active = {
-            let mut active = self
-                .active_timeouts
+        let submitted = {
+            let mut submitted = self
+                .submitted_operations
                 .lock()
-                .expect("shared ring active timeout mutex poisoned");
-            std::mem::take(&mut *active)
+                .expect("shared ring submitted operation mutex poisoned");
+            std::mem::take(&mut *submitted)
         };
-        for state in active {
-            state.complete(Err(RingError::Closed));
+        for state in submitted {
+            state.close();
         }
-        self.ready.notify_all();
+        self.wake.wake();
     }
 
-    fn run(self: Arc<Self>) {
-        let mut timeouts = Vec::with_capacity(self.queue_capacity);
-        loop {
-            self.complete_ready_timeouts(&mut timeouts);
-
-            let request = {
-                let mut queue = self.queue.lock().expect("shared ring queue mutex poisoned");
-                loop {
-                    if let Some(request) = queue.pop_front() {
-                        break Some(request);
-                    }
-                    if self.closed.load(Ordering::Acquire) {
-                        break None;
-                    }
-                    if Self::has_ready_timeout(&timeouts) {
-                        break None;
-                    }
-                    if let Some(duration) = Self::next_timeout_wait(&timeouts) {
-                        let (next_queue, _) = self
-                            .ready
-                            .wait_timeout(queue, duration)
-                            .expect("shared ring queue mutex poisoned");
-                        queue = next_queue;
-                    } else {
-                        queue = self
-                            .ready
-                            .wait(queue)
-                            .expect("shared ring queue mutex poisoned");
-                    }
-                }
-            };
-
-            if self.closed.load(Ordering::Acquire) {
-                if let Some(request) = request {
-                    request.complete(Err(RingError::Closed));
-                }
-                let queued = {
-                    let mut queue = self.queue.lock().expect("shared ring queue mutex poisoned");
-                    std::mem::take(&mut *queue)
-                };
-                for request in queued {
-                    request.complete(Err(RingError::Closed));
-                }
-                for timeout in timeouts.drain(..) {
-                    timeout.state.complete(Err(RingError::Closed));
-                }
-                return;
-            }
-
-            let Some(request) = request else {
-                continue;
-            };
-
-            match request {
-                SharedRequest::Nop(state) => state.complete(Ok(())),
-                SharedRequest::Timeout { deadline, state } => {
-                    self.active_timeouts
-                        .lock()
-                        .expect("shared ring active timeout mutex poisoned")
-                        .push(Arc::clone(&state));
-                    timeouts.push(ActiveTimeout { deadline, state });
-                }
-            }
-        }
+    fn wake_driver(&self) {
+        self.wake.wake();
     }
 
-    fn complete_ready_timeouts(&self, timeouts: &mut Vec<ActiveTimeout>) {
-        let now = Instant::now();
-        let mut index = 0;
-        while index < timeouts.len() {
-            let timeout = &timeouts[index];
-            if timeout.state.is_canceled_or_finished() {
-                timeout.state.complete(Err(RingError::Canceled));
-                self.remove_active_timeout(&timeout.state);
-                timeouts.swap_remove(index);
-            } else if now >= timeout.deadline {
-                timeout.state.complete(Ok(()));
-                self.remove_active_timeout(&timeout.state);
-                timeouts.swap_remove(index);
-            } else {
-                index += 1;
-            }
-        }
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
     }
 
-    fn remove_active_timeout(&self, state: &Arc<SharedOpState>) {
-        let mut active = self
-            .active_timeouts
+    fn register_submitted(&self, state: &Arc<SharedOpState>) -> bool {
+        if self.closed.load(Ordering::Acquire) {
+            state.close();
+            return false;
+        }
+
+        let mut submitted = self
+            .submitted_operations
             .lock()
-            .expect("shared ring active timeout mutex poisoned");
-        if let Some(index) = active.iter().position(|active| Arc::ptr_eq(active, state)) {
-            active.swap_remove(index);
+            .expect("shared ring submitted operation mutex poisoned");
+        if self.closed.load(Ordering::Acquire) {
+            drop(submitted);
+            state.close();
+            return false;
         }
+        if submitted.len() >= self.queue_capacity {
+            drop(submitted);
+            state.complete(Err(RingError::QueueFull));
+            return false;
+        }
+        let state_inner = state.inner.lock().expect("shared operation mutex poisoned");
+        if state_inner.lifecycle.is_terminal() {
+            return false;
+        }
+        submitted.push(Arc::clone(state));
+        drop(state_inner);
+        true
+    }
+
+    fn mark_driver_queued(&self) -> bool {
+        !self.driver_queued.swap(true, Ordering::AcqRel)
+    }
+
+    fn clear_driver_queued(&self) {
+        self.driver_queued.store(false, Ordering::Release);
+    }
+
+    fn unregister_submitted_ptr(&self, state: &SharedOpState) {
+        let state = state as *const SharedOpState;
+        let mut submitted = self
+            .submitted_operations
+            .lock()
+            .expect("shared ring submitted operation mutex poisoned");
+        if let Some(index) = submitted
+            .iter()
+            .position(|active| Arc::as_ptr(active) == state)
+        {
+            submitted.swap_remove(index);
+        }
+    }
+
+    fn reject_queued(&self, error: RingError) {
+        let queued = {
+            let mut queue = self.queue.lock().expect("shared ring queue mutex poisoned");
+            std::mem::take(&mut *queue)
+        };
+        for operation in queued {
+            operation.complete(Err(error));
+        }
+    }
+
+    fn pop_queued(&self) -> Option<SharedOperation> {
+        self.queue
+            .lock()
+            .expect("shared ring queue mutex poisoned")
+            .pop_front()
     }
 
     #[cfg(test)]
-    fn active_timeout_count(&self) -> usize {
-        self.active_timeouts
+    fn submitted_operation_count(&self) -> usize {
+        self.submitted_operations
             .lock()
-            .expect("shared ring active timeout mutex poisoned")
+            .expect("shared ring submitted operation mutex poisoned")
             .len()
     }
 
-    fn has_ready_timeout(timeouts: &[ActiveTimeout]) -> bool {
-        let now = Instant::now();
-        timeouts
-            .iter()
-            .any(|timeout| timeout.state.is_canceled_or_finished() || now >= timeout.deadline)
+    #[cfg(test)]
+    fn test_counters(&self) -> SharedRingTestCounterSnapshot {
+        self.test_counters.snapshot()
     }
 
-    fn next_timeout_wait(timeouts: &[ActiveTimeout]) -> Option<Duration> {
-        let next = timeouts.iter().map(|timeout| timeout.deadline).min()?;
-        Some(next.saturating_duration_since(Instant::now()))
+    #[cfg(test)]
+    fn pop_queued_for_test(&self) -> Option<SharedOperation> {
+        self.pop_queued()
+    }
+
+    #[cfg(test)]
+    fn record_terminal_for_test(&self, lifecycle: SharedOpLifecycle) {
+        self.test_counters.record_terminal(lifecycle);
+    }
+
+    #[cfg(test)]
+    fn record_driver_submission_for_test(&self) {
+        self.test_counters.record_driver_submission();
+    }
+
+    #[cfg(test)]
+    fn record_driver_retired_for_test(&self) {
+        self.test_counters.record_driver_retired();
     }
 }
 
-enum SharedRequest {
-    Nop(Arc<SharedOpState>),
-    Timeout {
-        deadline: Instant,
-        state: Arc<SharedOpState>,
-    },
+#[cfg(test)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct SharedRingTestCounterSnapshot {
+    accepted: usize,
+    driver_submitted: usize,
+    driver_retired: usize,
+    completed: usize,
+    canceled: usize,
+    closed: usize,
+    rejected: usize,
+    cleaned_up: usize,
+    driver_threads: Vec<thread::ThreadId>,
 }
 
-impl SharedRequest {
-    fn complete(self, result: Result<(), RingError>) {
-        match self {
-            Self::Nop(state) | Self::Timeout { state, .. } => state.complete(result),
+#[cfg(test)]
+struct SharedRingTestCounters {
+    accepted: AtomicUsize,
+    driver_submitted: AtomicUsize,
+    driver_retired: AtomicUsize,
+    completed: AtomicUsize,
+    canceled: AtomicUsize,
+    closed: AtomicUsize,
+    rejected: AtomicUsize,
+    cleaned_up: AtomicUsize,
+    driver_threads: Mutex<Vec<thread::ThreadId>>,
+}
+
+#[cfg(test)]
+impl SharedRingTestCounters {
+    fn new() -> Self {
+        Self {
+            accepted: AtomicUsize::new(0),
+            driver_submitted: AtomicUsize::new(0),
+            driver_retired: AtomicUsize::new(0),
+            completed: AtomicUsize::new(0),
+            canceled: AtomicUsize::new(0),
+            closed: AtomicUsize::new(0),
+            rejected: AtomicUsize::new(0),
+            cleaned_up: AtomicUsize::new(0),
+            driver_threads: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn record_accepted(&self) {
+        self.accepted.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_driver_submission(&self) {
+        self.driver_submitted.fetch_add(1, Ordering::Relaxed);
+        self.driver_threads
+            .lock()
+            .expect("shared ring test counter mutex poisoned")
+            .push(thread::current().id());
+    }
+
+    fn record_driver_retired(&self) {
+        self.driver_retired.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_terminal(&self, lifecycle: SharedOpLifecycle) {
+        match lifecycle {
+            SharedOpLifecycle::Completed => {
+                self.completed.fetch_add(1, Ordering::Relaxed);
+            }
+            SharedOpLifecycle::Canceled => {
+                self.canceled.fetch_add(1, Ordering::Relaxed);
+            }
+            SharedOpLifecycle::Closed => {
+                self.closed.fetch_add(1, Ordering::Relaxed);
+            }
+            SharedOpLifecycle::Rejected => {
+                self.rejected.fetch_add(1, Ordering::Relaxed);
+            }
+            SharedOpLifecycle::Created
+            | SharedOpLifecycle::Queued(_)
+            | SharedOpLifecycle::Submitted(_) => {}
+        }
+        self.cleaned_up.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> SharedRingTestCounterSnapshot {
+        SharedRingTestCounterSnapshot {
+            accepted: self.accepted.load(Ordering::Relaxed),
+            driver_submitted: self.driver_submitted.load(Ordering::Relaxed),
+            driver_retired: self.driver_retired.load(Ordering::Relaxed),
+            completed: self.completed.load(Ordering::Relaxed),
+            canceled: self.canceled.load(Ordering::Relaxed),
+            closed: self.closed.load(Ordering::Relaxed),
+            rejected: self.rejected.load(Ordering::Relaxed),
+            cleaned_up: self.cleaned_up.load(Ordering::Relaxed),
+            driver_threads: self
+                .driver_threads
+                .lock()
+                .expect("shared ring test counter mutex poisoned")
+                .clone(),
         }
     }
 }
 
-struct ActiveTimeout {
-    deadline: Instant,
+struct SharedOperation {
+    kind: SharedOperationKind,
     state: Arc<SharedOpState>,
 }
 
-struct SharedRingSlot;
+impl SharedOperation {
+    fn new(kind: SharedOperationKind, state: Arc<SharedOpState>) -> Self {
+        Self { kind, state }
+    }
 
-impl Drop for SharedRingSlot {
-    fn drop(&mut self) {
-        LIVE_SHARED_RINGS.fetch_sub(1, Ordering::AcqRel);
+    fn mark_queued(&self, route: SharedOpRoute) -> bool {
+        self.state.mark_queued(route)
+    }
+
+    #[cfg(test)]
+    fn mark_submitted(&self, route: SharedOpRoute) -> bool {
+        self.state.mark_submitted(route)
+    }
+
+    fn complete(&self, result: Result<(), RingError>) -> bool {
+        self.state.complete(result)
+    }
+
+    fn close(&self) -> bool {
+        self.state.close()
+    }
+
+    fn terminal_error(&self) -> Option<RingError> {
+        self.state.terminal_error()
     }
 }
 
-fn acquire_shared_ring_slot() -> Result<(), RingError> {
-    LIVE_SHARED_RINGS
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-            (current < MAX_LIVE_SHARED_RINGS).then_some(current + 1)
-        })
-        .map(|_| ())
-        .map_err(|_| RingError::ResourceLimit)
+enum SharedOperationKind {
+    Nop,
+    Timeout { deadline: Instant },
 }
 
 struct SharedOpState {
     inner: Mutex<SharedOpInner>,
-    ready: Condvar,
     core: Weak<SharedRingCore>,
 }
 
@@ -1468,31 +1891,26 @@ impl SharedOpState {
         Self {
             inner: Mutex::new(SharedOpInner {
                 result: None,
-                finished: false,
-                cancel_requested: false,
+                lifecycle: SharedOpLifecycle::Created,
                 waiters: StackfulWaiters::default(),
+                #[cfg(test)]
+                resource: None,
             }),
-            ready: Condvar::new(),
             core: Arc::downgrade(core),
         }
     }
 
     fn try_take(&self) -> Option<Result<(), RingError>> {
         let mut inner = self.inner.lock().expect("shared operation mutex poisoned");
-        if !inner.finished {
+        if !inner.lifecycle.is_terminal() {
             return None;
         }
-        Some(
-            inner
-                .result
-                .take()
-                .expect("shared operation result already taken"),
-        )
+        inner.result.take()
     }
 
     fn add_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
         let mut inner = self.inner.lock().expect("shared operation mutex poisoned");
-        if inner.finished {
+        if inner.lifecycle.is_terminal() {
             false
         } else {
             inner.waiters.push(waiter);
@@ -1500,39 +1918,216 @@ impl SharedOpState {
         }
     }
 
-    fn cancel(&self) {
-        self.complete(Err(RingError::Canceled));
+    fn mark_queued(&self, route: SharedOpRoute) -> bool {
+        let mut inner = self.inner.lock().expect("shared operation mutex poisoned");
+        if inner.lifecycle.is_terminal() {
+            false
+        } else {
+            inner.lifecycle = SharedOpLifecycle::Queued(route);
+            true
+        }
     }
 
-    fn complete(&self, result: Result<(), RingError>) {
+    fn mark_submitted(&self, route: SharedOpRoute) -> bool {
+        let mut inner = self.inner.lock().expect("shared operation mutex poisoned");
+        if inner.lifecycle.is_terminal() {
+            false
+        } else {
+            inner.lifecycle = SharedOpLifecycle::Submitted(route);
+            true
+        }
+    }
+
+    fn cancel(&self) -> bool {
+        self.finish(Err(RingError::Canceled), SharedOpLifecycle::Canceled, true)
+    }
+
+    fn close(&self) -> bool {
+        self.finish(Err(RingError::Closed), SharedOpLifecycle::Closed, true)
+    }
+
+    fn complete(&self, result: Result<(), RingError>) -> bool {
+        self.finish_completion(result, true)
+    }
+
+    fn complete_from_driver(&self, result: Result<(), RingError>) -> bool {
+        self.finish_completion(result, false)
+    }
+
+    fn finish_completion(&self, result: Result<(), RingError>, wake_driver: bool) -> bool {
+        let lifecycle = match result {
+            Err(RingError::Canceled) => SharedOpLifecycle::Canceled,
+            Err(RingError::Closed) => SharedOpLifecycle::Closed,
+            Err(RingError::QueueFull) => SharedOpLifecycle::Rejected,
+            Ok(()) | Err(_) => SharedOpLifecycle::Completed,
+        };
+        self.finish(result, lifecycle, wake_driver)
+    }
+
+    fn finish(
+        &self,
+        result: Result<(), RingError>,
+        lifecycle: SharedOpLifecycle,
+        wake_driver: bool,
+    ) -> bool {
+        #[cfg(test)]
+        let resource;
         let waiters = {
             let mut inner = self.inner.lock().expect("shared operation mutex poisoned");
-            if inner.finished {
-                return;
+            if inner.lifecycle.is_terminal() {
+                return false;
             }
-            inner.finished = true;
-            inner.cancel_requested = matches!(result, Err(RingError::Canceled));
+            inner.lifecycle = lifecycle;
             inner.result = Some(result);
+            #[cfg(test)]
+            {
+                resource = inner.resource.take();
+            }
             std::mem::take(&mut inner.waiters)
         };
-        self.ready.notify_all();
+        #[cfg(test)]
+        drop(resource);
         if let Some(core) = self.core.upgrade() {
-            core.ready.notify_all();
+            #[cfg(test)]
+            core.record_terminal_for_test(lifecycle);
+            core.unregister_submitted_ptr(self);
+            if wake_driver {
+                core.wake_driver();
+            }
         }
         waiters.wake_all();
+        true
     }
 
-    fn is_canceled_or_finished(&self) -> bool {
+    #[cfg(test)]
+    fn attach_test_resource(&self, resource: SharedOpTestResource) {
+        let mut inner = self.inner.lock().expect("shared operation mutex poisoned");
+        assert!(
+            !inner.lifecycle.is_terminal(),
+            "shared test resource must be attached before terminal completion"
+        );
+        assert!(
+            inner.resource.replace(resource).is_none(),
+            "shared test resource already attached"
+        );
+    }
+
+    fn is_terminal(&self) -> bool {
         let inner = self.inner.lock().expect("shared operation mutex poisoned");
-        inner.cancel_requested || inner.finished
+        inner.lifecycle.is_terminal()
+    }
+
+    fn terminal_error(&self) -> Option<RingError> {
+        let inner = self.inner.lock().expect("shared operation mutex poisoned");
+        match inner.result {
+            Some(Err(error)) if inner.lifecycle.is_terminal() => Some(error),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn lifecycle_for_test(&self) -> SharedOpLifecycle {
+        self.inner
+            .lock()
+            .expect("shared operation mutex poisoned")
+            .lifecycle
+    }
+
+    #[cfg(test)]
+    fn record_driver_retired_for_test(&self) {
+        if let Some(core) = self.core.upgrade() {
+            core.record_driver_retired_for_test();
+        }
+    }
+}
+
+impl Waitable for SharedOpState {
+    fn is_ready(&self) -> bool {
+        self.is_terminal()
+    }
+
+    fn add_waiter(&self, cx: &kimojio_stack::RuntimeContext<'_>, registration: &WaitRegistration) {
+        if let Some(waiter) = registration.external_waiter(cx) {
+            self.add_waiter(waiter);
+        }
     }
 }
 
 struct SharedOpInner {
     result: Option<Result<(), RingError>>,
-    finished: bool,
-    cancel_requested: bool,
+    lifecycle: SharedOpLifecycle,
     waiters: StackfulWaiters,
+    #[cfg(test)]
+    resource: Option<SharedOpTestResource>,
+}
+
+#[cfg(test)]
+struct SharedOpTestResource {
+    drops: Arc<AtomicUsize>,
+}
+
+#[cfg(test)]
+impl SharedOpTestResource {
+    fn new(drops: Arc<AtomicUsize>) -> Self {
+        Self { drops }
+    }
+}
+
+#[cfg(test)]
+impl Drop for SharedOpTestResource {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
+enum SharedOpLifecycle {
+    Created,
+    Queued(SharedOpRoute),
+    Submitted(SharedOpRoute),
+    Completed,
+    Closed,
+    Canceled,
+    Rejected,
+}
+
+impl SharedOpLifecycle {
+    fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Closed | Self::Canceled | Self::Rejected
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
+struct SharedOpRoute {
+    owner_worker: Option<WorkerId>,
+    driver: SharedOpDriver,
+}
+
+impl SharedOpRoute {
+    fn local() -> Self {
+        Self {
+            owner_worker: None,
+            driver: SharedOpDriver::Local,
+        }
+    }
+
+    fn worker(owner: WorkerId) -> Self {
+        Self {
+            owner_worker: Some(owner),
+            driver: SharedOpDriver::Worker,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SharedOpDriver {
+    Local,
+    Worker,
 }
 
 type Job = Box<dyn for<'cx> FnOnce(&RuntimeContext<'cx>) + Send + 'static>;
@@ -1662,7 +2257,7 @@ impl WorkerPool {
 
     fn shutdown(self) -> RuntimeMetrics {
         self.runtime.shutdown.store(true, Ordering::Release);
-        self.runtime.wake_all();
+        self.runtime.wake_all_workers();
         for handle in self.handles {
             handle.join().expect("worker thread panicked");
         }
@@ -1711,11 +2306,32 @@ impl Drop for ActiveJobGuard<'_> {
     }
 }
 
+struct SchedulerWakeGuard<'runtime> {
+    runtime: &'runtime MultiRuntime,
+    worker: WorkerId,
+}
+
+impl Drop for SchedulerWakeGuard<'_> {
+    fn drop(&mut self) {
+        *self.runtime.scheduler_wakes[self.worker.index()]
+            .lock()
+            .expect("scheduler wake mutex poisoned") = None;
+    }
+}
+
+struct ActiveSharedOperation {
+    state: Arc<SharedOpState>,
+    io: NoPayloadIo,
+}
+
 struct MultiRuntime {
     runtime_id: RuntimeId,
     config: RuntimeConfig,
     stealers: Vec<Stealer<QueuedJob>>,
     global: Injector<QueuedJob>,
+    shared_ring_queues: Vec<Mutex<VecDeque<Arc<SharedRingCore>>>>,
+    scheduler_wakes: Vec<Mutex<Option<SchedulerWake>>>,
+    next_shared_ring_worker: AtomicUsize,
     local_depths: Vec<AtomicUsize>,
     global_depth: AtomicUsize,
     active_jobs: AtomicUsize,
@@ -1737,6 +2353,11 @@ impl MultiRuntime {
             config,
             stealers,
             global: Injector::new(),
+            shared_ring_queues: (0..worker_count)
+                .map(|_| Mutex::new(VecDeque::with_capacity(config.max_shared_ring_queue_len)))
+                .collect(),
+            scheduler_wakes: (0..worker_count).map(|_| Mutex::new(None)).collect(),
+            next_shared_ring_worker: AtomicUsize::new(0),
             local_depths: (0..worker_count).map(|_| AtomicUsize::new(0)).collect(),
             global_depth: AtomicUsize::new(0),
             active_jobs: AtomicUsize::new(0),
@@ -1745,6 +2366,64 @@ impl MultiRuntime {
             shutdown: AtomicBool::new(false),
             metrics: MultiMetrics::new(worker_count),
         }
+    }
+
+    fn next_shared_ring_owner(&self) -> WorkerId {
+        let worker = self.next_shared_ring_worker.fetch_add(1, Ordering::Relaxed);
+        WorkerId(worker % self.stealers.len())
+    }
+
+    fn submit_shared_ring(
+        &self,
+        owner: WorkerId,
+        core: &Arc<SharedRingCore>,
+    ) -> Result<(), RingError> {
+        if self.shutdown.load(Ordering::Acquire) {
+            core.close();
+            return Err(RingError::Closed);
+        }
+
+        let owner = owner.index();
+        debug_assert!(
+            owner < self.shared_ring_queues.len(),
+            "shared ring owner worker out of range"
+        );
+        if !core.mark_driver_queued() {
+            self.wake_worker(WorkerId(owner));
+            return Ok(());
+        }
+
+        let mut queue = self.shared_ring_queues[owner]
+            .lock()
+            .expect("shared ring command queue mutex poisoned");
+        if queue.len() >= self.config.max_shared_ring_queue_len {
+            core.clear_driver_queued();
+            return Err(RingError::QueueFull);
+        }
+        queue.push_back(Arc::clone(core));
+        drop(queue);
+        self.wake_worker(WorkerId(owner));
+        Ok(())
+    }
+
+    fn wake_worker(&self, worker: WorkerId) {
+        if let Some(wake) = self.scheduler_wakes[worker.index()]
+            .lock()
+            .expect("scheduler wake mutex poisoned")
+            .as_ref()
+        {
+            wake.wake();
+        }
+        self.wake_all();
+    }
+
+    fn wake_all_workers(&self) {
+        for wake in &self.scheduler_wakes {
+            if let Some(wake) = wake.lock().expect("scheduler wake mutex poisoned").as_ref() {
+                wake.wake();
+            }
+        }
+        self.wake_all();
     }
 
     fn submit(
@@ -1888,6 +2567,112 @@ impl MultiRuntime {
         }
     }
 
+    fn install_scheduler_wake(
+        &self,
+        worker: WorkerId,
+        wake: SchedulerWake,
+    ) -> SchedulerWakeGuard<'_> {
+        *self.scheduler_wakes[worker.index()]
+            .lock()
+            .expect("scheduler wake mutex poisoned") = Some(wake);
+        SchedulerWakeGuard {
+            runtime: self,
+            worker,
+        }
+    }
+
+    fn drain_shared_ring_commands(
+        &self,
+        worker: WorkerId,
+        root: &kimojio_stack::RuntimeContext<'_>,
+        active: &mut Vec<ActiveSharedOperation>,
+    ) -> bool {
+        let cores = {
+            let mut queue = self.shared_ring_queues[worker.index()]
+                .lock()
+                .expect("shared ring command queue mutex poisoned");
+            std::mem::take(&mut *queue)
+        };
+        let mut made_progress = false;
+        for core in cores {
+            core.clear_driver_queued();
+            while let Some(operation) = core.pop_queued() {
+                made_progress = true;
+                if self.shutdown.load(Ordering::Acquire) || core.is_closed() {
+                    operation.close();
+                    continue;
+                }
+
+                let SharedOperation { kind, state } = operation;
+                if !state.mark_submitted(SharedOpRoute::worker(worker)) {
+                    continue;
+                }
+                if !core.register_submitted(&state) {
+                    continue;
+                }
+
+                let io = match kind {
+                    SharedOperationKind::Nop => root.submit_no_payload_nop(),
+                    SharedOperationKind::Timeout { deadline } => root.submit_no_payload_timeout(
+                        deadline.saturating_duration_since(Instant::now()),
+                    ),
+                };
+                #[cfg(test)]
+                core.record_driver_submission_for_test();
+                active.push(ActiveSharedOperation { state, io });
+            }
+        }
+        made_progress
+    }
+
+    fn close_worker_shared_operations(
+        &self,
+        worker: WorkerId,
+        active: &mut Vec<ActiveSharedOperation>,
+    ) {
+        let cores = {
+            let mut queue = self.shared_ring_queues[worker.index()]
+                .lock()
+                .expect("shared ring command queue mutex poisoned");
+            std::mem::take(&mut *queue)
+        };
+        for core in cores {
+            core.clear_driver_queued();
+            core.close();
+        }
+        for mut operation in active.drain(..) {
+            operation.state.close();
+            operation.io.cancel();
+        }
+    }
+
+    fn poll_active_shared_operations(active: &mut Vec<ActiveSharedOperation>) -> bool {
+        let mut made_progress = false;
+        let mut index = 0;
+        while index < active.len() {
+            if active[index].state.is_terminal() {
+                #[cfg(test)]
+                active[index].state.record_driver_retired_for_test();
+                active.swap_remove(index);
+                made_progress = true;
+                continue;
+            }
+
+            if let Some(result) = active[index].io.try_wait() {
+                active[index]
+                    .state
+                    .complete_from_driver(result.map_err(RingError::from));
+                #[cfg(test)]
+                active[index].state.record_driver_retired_for_test();
+                active.swap_remove(index);
+                made_progress = true;
+            } else {
+                index += 1;
+            }
+        }
+        made_progress
+    }
+
     fn worker_loop(self: &Arc<Self>, worker: WorkerId, local_queue: CrossbeamWorker<QueuedJob>) {
         let _current_worker = CurrentWorkerGuard::enter(worker, &local_queue);
         let mut inner_config = kimojio_stack::RuntimeConfig::default();
@@ -1895,12 +2680,23 @@ impl MultiRuntime {
         inner_config.max_cached_stacks = self.config.max_cached_stacks_per_worker;
         let mut inner = kimojio_stack::Runtime::with_config(inner_config);
         inner.block_on(|root| {
+            let _scheduler_wake =
+                self.install_scheduler_wake(worker, root.internal_scheduler_wake());
             root.scope(|scope| {
+                let mut active_shared = Vec::new();
                 let mut idle_iterations = 0_usize;
                 loop {
+                    if self.shutdown.load(Ordering::Acquire) {
+                        self.close_worker_shared_operations(worker, &mut active_shared);
+                        break;
+                    }
+
+                    let mut made_progress =
+                        self.drain_shared_ring_commands(worker, root, &mut active_shared);
+                    made_progress |= Self::poll_active_shared_operations(&mut active_shared);
+
                     let spawned =
                         if let Some(ready) = self.take_job(worker, &local_queue, idle_iterations) {
-                            idle_iterations = 0;
                             let QueuedJob {
                                 owner,
                                 job,
@@ -1919,6 +2715,7 @@ impl MultiRuntime {
                                     worker,
                                     steal_runtime: Some(runtime),
                                     active_steal_scope,
+                                    local_shared_operations: None,
                                     shared_ring_queue_capacity,
                                 };
                                 let runtime = cx
@@ -1938,14 +2735,19 @@ impl MultiRuntime {
                         } else {
                             false
                         };
+                    made_progress |= spawned;
 
                     root.yield_now();
+                    made_progress |= Self::poll_active_shared_operations(&mut active_shared);
 
-                    if self.shutdown.load(Ordering::Acquire) && !spawned {
+                    if self.shutdown.load(Ordering::Acquire) {
+                        self.close_worker_shared_operations(worker, &mut active_shared);
                         break;
                     }
 
-                    if !spawned {
+                    if made_progress {
+                        idle_iterations = 0;
+                    } else if active_shared.is_empty() {
                         idle_iterations = idle_iterations.wrapping_add(1);
                         let guard = self.wake_lock.lock().expect("worker wake mutex poisoned");
                         let _guard = self
@@ -2542,7 +3344,7 @@ mod tests {
     use std::panic;
     use std::rc::Rc;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -2556,8 +3358,10 @@ mod tests {
     };
 
     use super::{
-        ExecutionPlace, NO_WORKER, Ring, RingError, RingInner, RingMode, Runtime, RuntimeConfig,
-        StealPolicy, WorkerId,
+        CrossbeamWorker, ExecutionPlace, MultiRuntime, NO_WORKER, Ring, RingError, RingInner,
+        RingMode, Runtime, RuntimeConfig, RuntimeId, SharedOpLifecycle, SharedOpRoute,
+        SharedOpState, SharedOpTestResource, SharedOperation, SharedOperationKind, SharedRingCore,
+        SharedRingWake, StealPolicy, WorkerId,
     };
 
     struct WaitProbe<'cx, 'a> {
@@ -2987,23 +3791,8 @@ mod tests {
             });
             runtime.block_on(|cx| {
                 cx.scope(|scope| {
-                    let handle = scope.spawn_stealable(|cx| {
-                        let owner = cx.worker_id();
-                        cx.scope(|scope| {
-                            let handles = (0..64)
-                                .map(|_| {
-                                    scope.spawn_stealable(move |cx| {
-                                        if cx.worker_id() != owner {
-                                            panic!("stolen task failed");
-                                        }
-                                        std::thread::sleep(Duration::from_millis(2));
-                                    })
-                                })
-                                .collect::<Vec<_>>();
-                            for handle in handles {
-                                handle.join(cx);
-                            }
-                        })
+                    let handle = scope.spawn_stealable(|_| {
+                        panic!("stolen task failed");
                     });
                     handle.join(cx);
                 });
@@ -3193,7 +3982,20 @@ mod tests {
     }
 
     #[test]
-    fn worker_ring_created_in_root_rejects_worker_pool_use() {
+    fn single_worker_shared_ring_rejects_cross_runtime_use() {
+        let ring = {
+            let mut runtime = Runtime::new();
+            runtime.block_on(|cx| cx.create_shared_ring())
+        };
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            assert_eq!(ring.nop(cx), Err(RingError::WrongRuntime));
+        });
+    }
+
+    #[test]
+    fn worker_ring_creation_from_multi_root_is_rejected() {
         let mut runtime = Runtime::with_config(RuntimeConfig {
             workers: NonZeroUsize::new(2).unwrap(),
             steal_policy: StealPolicy::steal_one(),
@@ -3201,17 +4003,10 @@ mod tests {
         });
 
         runtime.block_on(|cx| {
-            let ring = cx.create_worker_ring();
-            cx.scope(|scope| {
-                let handle = scope.spawn_stealable(move |cx| ring.nop(cx));
-                match handle.join(cx) {
-                    Err(RingError::WrongWorker { owner, current }) => {
-                        assert_eq!(owner, WorkerId(NO_WORKER));
-                        assert!(current.index() < 2);
-                    }
-                    other => panic!("unexpected ring result: {other:?}"),
-                }
-            });
+            assert_eq!(
+                cx.create_ring(RingMode::WorkerLocal).err(),
+                Some(RingError::NoCurrentWorker)
+            );
         });
     }
 
@@ -3244,6 +4039,448 @@ mod tests {
                 handle.join(cx);
             });
         });
+    }
+
+    #[test]
+    fn shared_operation_terminal_result_is_published_once() {
+        let core = Arc::new(SharedRingCore::new(8, SharedRingWake::Local));
+        let state = Arc::new(SharedOpState::new(&core));
+
+        assert_eq!(state.lifecycle_for_test(), SharedOpLifecycle::Created);
+        assert!(state.complete(Ok(())));
+        assert!(!state.cancel());
+        assert!(!state.close());
+        assert_eq!(state.try_take(), Some(Ok(())));
+        assert!(!state.complete(Err(RingError::Closed)));
+    }
+
+    #[test]
+    fn shared_operation_close_before_submit_completes_queued_request() {
+        let core = Arc::new(SharedRingCore::new(8, SharedRingWake::Local));
+        let state = Arc::new(SharedOpState::new(&core));
+
+        core.submit_queued(
+            SharedOperation::new(SharedOperationKind::Nop, Arc::clone(&state)),
+            SharedOpRoute::worker(WorkerId(0)),
+        )
+        .unwrap();
+        assert_eq!(
+            state.lifecycle_for_test(),
+            SharedOpLifecycle::Queued(SharedOpRoute::worker(WorkerId(0)))
+        );
+
+        core.close();
+        assert_eq!(state.try_take(), Some(Err(RingError::Closed)));
+        let counters = core.test_counters();
+        assert_eq!(counters.accepted, 1);
+        assert_eq!(counters.closed, 1);
+        assert_eq!(counters.cleaned_up, 1);
+    }
+
+    #[test]
+    fn shared_operation_cancel_before_submit_wins_late_driver_completion() {
+        let core = Arc::new(SharedRingCore::new(8, SharedRingWake::Local));
+        let state = Arc::new(SharedOpState::new(&core));
+
+        core.submit_queued(
+            SharedOperation::new(SharedOperationKind::Nop, Arc::clone(&state)),
+            SharedOpRoute::worker(WorkerId(0)),
+        )
+        .unwrap();
+        assert!(state.cancel());
+
+        let operation = core.pop_queued_for_test().expect("queued operation");
+        assert!(!operation.mark_submitted(SharedOpRoute::worker(WorkerId(0))));
+        assert!(!operation.complete(Ok(())));
+        assert_eq!(state.try_take(), Some(Err(RingError::Canceled)));
+    }
+
+    #[test]
+    fn shared_operation_repeated_cancel_close_and_complete_are_idempotent() {
+        let core = Arc::new(SharedRingCore::new(8, SharedRingWake::Local));
+        let state = Arc::new(SharedOpState::new(&core));
+
+        assert!(state.cancel());
+        assert!(!state.cancel());
+        assert!(!state.close());
+        assert!(!state.complete(Ok(())));
+        assert_eq!(state.try_take(), Some(Err(RingError::Canceled)));
+    }
+
+    #[test]
+    fn shared_ring_submitted_operations_are_capacity_bounded() {
+        let core = Arc::new(SharedRingCore::new(1, SharedRingWake::Local));
+        let first = Arc::new(SharedOpState::new(&core));
+        let second = Arc::new(SharedOpState::new(&core));
+
+        assert!(first.mark_submitted(SharedOpRoute::local()));
+        assert!(core.register_submitted(&first));
+        assert!(second.mark_submitted(SharedOpRoute::local()));
+        assert!(!core.register_submitted(&second));
+        assert_eq!(second.try_take(), Some(Err(RingError::QueueFull)));
+
+        first.cancel();
+    }
+
+    #[test]
+    fn shared_ring_late_submitted_registration_rejects_terminal_operation() {
+        let core = Arc::new(SharedRingCore::new(1, SharedRingWake::Local));
+        let state = Arc::new(SharedOpState::new(&core));
+
+        assert!(state.mark_submitted(SharedOpRoute::worker(WorkerId(0))));
+        assert!(state.cancel());
+        assert!(!core.register_submitted(&state));
+        assert_eq!(core.submitted_operation_count(), 0);
+        assert_eq!(state.try_take(), Some(Err(RingError::Canceled)));
+    }
+
+    #[test]
+    fn shared_ring_driver_commands_are_deduplicated_and_bounded() {
+        let worker = CrossbeamWorker::new_fifo();
+        let runtime = MultiRuntime::with_runtime_id(
+            RuntimeConfig {
+                workers: NonZeroUsize::new(1).unwrap(),
+                max_shared_ring_queue_len: 1,
+                ..RuntimeConfig::default()
+            },
+            RuntimeId(1),
+            vec![worker.stealer()],
+        );
+        let first = Arc::new(SharedRingCore::new(1, SharedRingWake::Local));
+        let second = Arc::new(SharedRingCore::new(1, SharedRingWake::Local));
+
+        assert_eq!(runtime.submit_shared_ring(WorkerId(0), &first), Ok(()));
+        assert_eq!(runtime.submit_shared_ring(WorkerId(0), &first), Ok(()));
+        assert_eq!(
+            runtime.shared_ring_queues[0]
+                .lock()
+                .expect("shared ring command queue mutex poisoned")
+                .len(),
+            1
+        );
+        assert_eq!(
+            runtime.submit_shared_ring(WorkerId(0), &second),
+            Err(RingError::QueueFull)
+        );
+    }
+
+    #[test]
+    fn shared_operation_resource_owner_survives_until_terminal_cleanup() {
+        let core = Arc::new(SharedRingCore::new(8, SharedRingWake::Local));
+        let state = Arc::new(SharedOpState::new(&core));
+        let drops = Arc::new(AtomicUsize::new(0));
+
+        state.attach_test_resource(SharedOpTestResource::new(Arc::clone(&drops)));
+        assert_eq!(drops.load(Ordering::Acquire), 0);
+        assert!(state.cancel());
+        assert_eq!(drops.load(Ordering::Acquire), 1);
+        assert!(!state.close());
+        assert_eq!(drops.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn shared_operation_dropped_handle_cleans_submitted_timeout() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let timeout = ring.timeout(cx, Duration::from_secs(3600)).unwrap();
+            wait_until(cx, || ring.shared_submitted_operation_count() == Some(1));
+            drop(timeout);
+            wait_until(cx, || ring.shared_submitted_operation_count() == Some(0));
+        });
+    }
+
+    #[test]
+    fn single_worker_shared_ring_uses_local_driver() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            assert_eq!(ring.shared_driver_owner(), None);
+            ring.nop(cx).unwrap();
+            ring.sleep(cx, Duration::from_millis(1)).unwrap();
+        });
+    }
+
+    #[test]
+    fn multi_root_shared_ring_selects_real_owner_worker() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let owner = ring
+                .shared_driver_owner()
+                .expect("multi-worker shared ring should have an owner");
+            assert_ne!(owner, WorkerId(NO_WORKER));
+            assert!(owner.index() < 2);
+            ring.nop(cx).unwrap();
+        });
+    }
+
+    #[test]
+    fn multi_root_shared_ring_long_timeout_does_not_block_later_nop() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let mut timeout = ring.timeout(cx, Duration::from_secs(3600)).unwrap();
+            wait_until(cx, || ring.shared_submitted_operation_count() == Some(1));
+            ring.nop(cx).unwrap();
+            timeout.cancel();
+        });
+    }
+
+    #[test]
+    fn shared_rings_route_through_worker_threads_not_per_ring_helpers() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        let driver_thread_count = runtime.block_on(|cx| {
+            let rings = (0..16).map(|_| cx.create_shared_ring()).collect::<Vec<_>>();
+            for ring in &rings {
+                ring.nop(cx).unwrap();
+            }
+            rings
+                .into_iter()
+                .flat_map(|ring| ring.shared_test_counters().unwrap().driver_threads)
+                .collect::<HashSet<_>>()
+                .len()
+        });
+
+        assert!(
+            driver_thread_count <= 2,
+            "shared rings should be driven by configured workers, not one helper thread per ring"
+        );
+    }
+
+    #[test]
+    fn shared_ring_constructor_does_not_spawn_helper_threads() {
+        let source = include_str!("lib.rs");
+        let start = source.find("impl SharedRing {").unwrap();
+        let end = start
+            + source[start..]
+                .find("impl Clone for SharedRing")
+                .expect("SharedRing impl should be followed by Clone impl");
+        let shared_ring_impl = &source[start..end];
+
+        assert!(
+            !shared_ring_impl.contains("thread::spawn"),
+            "SharedRing construction must not reintroduce a per-ring helper thread"
+        );
+    }
+
+    #[test]
+    fn shared_ring_operations_complete_from_multiple_worker_contexts() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(4).unwrap(),
+            steal_policy: StealPolicy::steal_half(),
+            ..RuntimeConfig::default()
+        });
+
+        let workers = runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            cx.scope(|scope| {
+                let handles = (0..64)
+                    .map(|_| {
+                        let ring = ring.clone();
+                        scope.spawn_stealable(move |cx| {
+                            std::thread::sleep(Duration::from_millis(1));
+                            ring.nop(cx).unwrap();
+                            ring.sleep(cx, Duration::ZERO).unwrap();
+                            cx.current_worker()
+                                .expect("stealable task should run on a worker")
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join(cx))
+                    .collect::<HashSet<_>>()
+            })
+        });
+
+        assert!(
+            workers.len() >= 2,
+            "expected shared ring submissions from at least two workers, got {workers:?}"
+        );
+    }
+
+    #[test]
+    fn shared_ring_test_counters_track_completion_cancellation_and_cleanup() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            ring.nop(cx).unwrap();
+            let mut timeout = ring.timeout(cx, Duration::from_secs(3600)).unwrap();
+            wait_until(cx, || ring.shared_submitted_operation_count() == Some(1));
+            timeout.cancel();
+            wait_until(cx, || ring.shared_submitted_operation_count() == Some(0));
+
+            let counters = ring.shared_test_counters().unwrap();
+            assert_eq!(counters.accepted, 2);
+            assert_eq!(counters.driver_submitted, 2);
+            assert_eq!(counters.driver_retired, 0);
+            assert_eq!(counters.completed, 1);
+            assert_eq!(counters.canceled, 1);
+            assert_eq!(counters.closed, 0);
+            assert_eq!(counters.rejected, 0);
+            assert_eq!(counters.cleaned_up, 2);
+        });
+    }
+
+    #[test]
+    fn multi_worker_shared_timeout_cancel_retires_owner_driver_operation() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let mut timeout = ring.timeout(cx, Duration::from_secs(3600)).unwrap();
+            wait_until(cx, || ring.shared_submitted_operation_count() == Some(1));
+            timeout.cancel();
+            wait_until(cx, || {
+                ring.shared_test_counters()
+                    .is_some_and(|counters| counters.driver_retired == 1)
+            });
+
+            let counters = ring.shared_test_counters().unwrap();
+            assert_eq!(ring.shared_submitted_operation_count(), Some(0));
+            assert_eq!(counters.canceled, 1);
+            assert_eq!(counters.cleaned_up, 1);
+        });
+    }
+
+    #[test]
+    fn scope_exit_cancels_stealable_child_waiting_on_shared_ring_timeout() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let waiting = Arc::new(AtomicBool::new(false));
+            cx.scope(|scope| {
+                let child_ring = ring.clone();
+                let child_waiting = Arc::clone(&waiting);
+                scope.spawn_stealable(move |cx| {
+                    let timeout = child_ring.timeout(cx, Duration::from_secs(3600)).unwrap();
+                    child_waiting.store(true, Ordering::Release);
+                    let _ = timeout.wait(cx);
+                });
+                wait_until(cx, || waiting.load(Ordering::Acquire));
+            });
+            wait_until(cx, || ring.shared_submitted_operation_count() == Some(0));
+        });
+    }
+
+    #[test]
+    fn shared_ring_parent_panic_cancels_stealable_child_waiting_on_timeout() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        let result = panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.block_on(|cx| {
+                let ring = cx.create_shared_ring();
+                let waiting = Arc::new(AtomicBool::new(false));
+                cx.scope(|scope| {
+                    let child_ring = ring.clone();
+                    let child_waiting = Arc::clone(&waiting);
+                    scope.spawn_stealable(move |cx| {
+                        let timeout = child_ring.timeout(cx, Duration::from_secs(3600)).unwrap();
+                        child_waiting.store(true, Ordering::Release);
+                        let _ = timeout.wait(cx);
+                    });
+                    wait_until(cx, || waiting.load(Ordering::Acquire));
+                    panic!("parent failed while child waited on shared ring");
+                });
+            });
+        }));
+
+        let payload = result.expect_err("parent panic should propagate");
+        assert!(
+            payload.downcast_ref::<&'static str>().is_some_and(
+                |message| *message == "parent failed while child waited on shared ring"
+            )
+        );
+    }
+
+    #[test]
+    fn shared_ring_runtime_shutdown_closes_pending_timeout() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        let (_ring, mut timeout) = runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let timeout = ring.timeout(cx, Duration::from_secs(3600)).unwrap();
+            wait_until(cx, || ring.shared_submitted_operation_count() == Some(1));
+            (ring, timeout)
+        });
+
+        assert_eq!(timeout.try_wait(), Some(Err(RingError::Closed)));
+    }
+
+    #[test]
+    fn single_worker_shared_ring_runtime_shutdown_closes_pending_timeout_without_waiting() {
+        let mut runtime = Runtime::new();
+        let started = Instant::now();
+
+        let (_ring, mut timeout) = runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let timeout = ring.timeout(cx, Duration::from_secs(3600)).unwrap();
+            wait_until(cx, || ring.shared_submitted_operation_count() == Some(1));
+            (ring, timeout)
+        });
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "block_on should not wait for escaped local shared timeouts to expire"
+        );
+        assert_eq!(timeout.try_wait(), Some(Err(RingError::Closed)));
+    }
+
+    #[test]
+    fn single_worker_final_shared_ring_drop_closes_pending_timeout_without_waiting() {
+        let mut runtime = Runtime::new();
+        let started = Instant::now();
+
+        let mut timeout = runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let timeout = ring.timeout(cx, Duration::from_secs(3600)).unwrap();
+            wait_until(cx, || ring.shared_submitted_operation_count() == Some(1));
+            drop(ring);
+            timeout
+        });
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "dropping the final ring handle should not leave local driver I/O draining"
+        );
+        assert_eq!(timeout.try_wait(), Some(Err(RingError::Closed)));
     }
 
     #[test]
@@ -3371,6 +4608,11 @@ mod tests {
         runtime.block_on(|cx| {
             let ring = cx.create_shared_ring();
             assert_eq!(ring.nop(cx), Err(RingError::QueueFull));
+            let counters = ring.shared_test_counters().unwrap();
+            assert_eq!(counters.accepted, 0);
+            assert_eq!(counters.driver_submitted, 0);
+            assert_eq!(counters.rejected, 1);
+            assert_eq!(counters.cleaned_up, 1);
         });
     }
 
@@ -3381,9 +4623,9 @@ mod tests {
         runtime.block_on(|cx| {
             let ring = cx.create_shared_ring();
             let mut timeout = ring.timeout(cx, Duration::from_secs(3600)).unwrap();
-            wait_until(cx, || ring.shared_active_timeout_count() == Some(1));
+            wait_until(cx, || ring.shared_submitted_operation_count() == Some(1));
             timeout.cancel();
-            wait_until(cx, || ring.shared_active_timeout_count() == Some(0));
+            wait_until(cx, || ring.shared_submitted_operation_count() == Some(0));
         });
     }
 
@@ -3406,7 +4648,7 @@ mod tests {
                     drop(worker_ring);
                     timeout.wait(cx)
                 });
-                wait_until(cx, || ring.shared_active_timeout_count() == Some(1));
+                wait_until(cx, || ring.shared_submitted_operation_count() == Some(1));
                 drop(ring);
                 assert_eq!(handle.join(cx), Err(RingError::Closed));
             });

@@ -4,13 +4,15 @@
 the structured concurrency model of `kimojio-stack`, but lets explicitly
 eligible work run on a worker pool with configurable stealing policies.
 
-The crate is currently workspace-private (`publish = false`) because it depends
-on new, unpublished `kimojio-stack` runtime API exports.
+The stack runtime crates are currently workspace-private (`publish = false`)
+because `kimojio-stack-steal` depends on new, unpublished `kimojio-stack`
+runtime API exports.
 
-The shared `kimojio-stack::runtime_api` traits added for this proof are alpha
-release surface, not a stable downstream contract. Before publishing a runtime
-that depends on them, the shared API needs an explicit version/release decision
-and release notes for any breaking alpha changes.
+The shared `kimojio-stack::runtime_api` traits and hidden companion-runtime hooks
+used by this crate are alpha release surface, not a stable downstream contract.
+Before publishing a runtime that depends on them, the shared API needs an
+explicit version/release decision and release notes for any breaking alpha
+changes.
 
 Use local or pinned spawns for non-`Send` state. Use stealable spawns for work
 that may run on another worker:
@@ -39,13 +41,18 @@ assert_eq!(value, 42);
 ```
 
 The runtime exposes I/O through explicit ring handles instead of implicit context
-methods. Worker-local rings enforce owner-worker and runtime-instance use, while
-shared rings are cloneable and synchronized for cross-worker use. The root
-`block_on` context is not a worker; use `RuntimeContext::current_worker()` or
-`RuntimeContext::execution_place()` when code needs to distinguish root from
-worker-pool execution. Shared rings are currently a proof-layer implementation:
-each shared ring owns one helper OS thread, has a bounded request queue, and
-should not be treated as the final high-performance shared io_uring architecture.
+methods. Worker-local rings enforce owner-worker and runtime-instance use and
+cannot be created from the root `block_on` context of a multi-worker runtime.
+Shared rings are cloneable and synchronized for cross-worker use, but remain
+runtime-affine. The root `block_on` context is not a worker; use
+`RuntimeContext::current_worker()` or `RuntimeContext::execution_place()` when
+code needs to distinguish root from worker-pool execution. Shared rings route
+no-op and timeout/sleep operations through runtime-owned io_uring schedulers
+instead of a ring-owned helper thread. Single-worker runtimes drive shared
+operations locally; multi-worker runtimes assign each shared ring to a real
+owner worker and use bounded per-ring queues, bounded submitted-operation
+tracking, deduplicated pending worker commands, and worker wakeups for
+submission and completion routing.
 
 Each worker thread owns a worker-local stackful scheduler. Stealing moves
 eligible queued jobs before they start running; already-running stackful
@@ -66,6 +73,9 @@ cargo bench -p kimojio-stack-steal --features tokio --bench runtime_baseline
 Use the `scheduler/raw_*` benchmarks to measure queue mechanics without stack
 allocation, task allocation, joins, or OS wakeups. Use the
 `scheduler/spawn_stealable_*` benchmarks for full runtime handoff costs.
+Ring benchmarks separate `ring/owned_worker_local_*` from
+`ring/shared_worker_owned_*` so worker-local io_uring costs are not conflated
+with shared-ring routing and synchronization costs.
 
 ## Performance Gate Status
 
@@ -88,8 +98,11 @@ to the stealing runtime yet.
 - Queue saturation for `spawn_stealable` is currently reported when the returned
   handle is joined, by resuming a rejection panic payload. A fallible
   backpressure-oriented spawn API is future work.
-- Shared-ring I/O is a safe proof layer with a helper thread and bounded queue,
-  not the final high-performance shared io_uring design.
+- Shared-ring I/O currently supports no-op and timeout/sleep only. Read/write,
+  accept/connect, send/recv, and registered-resource operations are future work.
+- Shared-ring completion currently polls active shared operations in the owner
+  worker loop; lower-overhead completion fanout remains an optimization item if
+  benchmarks show it is needed.
 - Downstream stack HTTP, gRPC, TLS, storage, and telemetry crates are not
   runtime-generic yet.
 - The crate is not publishable until the shared `kimojio-stack` runtime API is

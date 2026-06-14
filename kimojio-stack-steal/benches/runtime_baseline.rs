@@ -161,7 +161,7 @@ fn runtime_baseline(c: &mut Criterion) {
         black_box(runtime.metrics());
     });
 
-    c.bench_function("ring/local_nop", |b| {
+    c.bench_function("ring/owned_worker_local_nop", |b| {
         let mut runtime = Runtime::new();
         runtime.block_on(|cx| {
             let ring = cx.create_ring(RingMode::WorkerLocal).unwrap();
@@ -169,16 +169,32 @@ fn runtime_baseline(c: &mut Criterion) {
         });
     });
 
-    c.bench_function("ring/shared_nop", |b| {
+    c.bench_function("ring/owned_worker_local_timeout_zero", |b| {
         let mut runtime = Runtime::new();
+        runtime.block_on(|cx| {
+            let ring = cx.create_ring(RingMode::WorkerLocal).unwrap();
+            b.iter(|| ring.sleep(cx, Duration::from_millis(0)).unwrap());
+        });
+    });
+
+    c.bench_function("ring/shared_worker_owned_nop", |b| {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
         runtime.block_on(|cx| {
             let ring = cx.create_shared_ring();
             b.iter(|| ring.nop(cx).unwrap());
         });
     });
 
-    c.bench_function("ring/shared_timeout_zero", |b| {
-        let mut runtime = Runtime::new();
+    c.bench_function("ring/shared_worker_owned_timeout_zero", |b| {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
         runtime.block_on(|cx| {
             let ring = cx.create_shared_ring();
             b.iter(|| ring.sleep(cx, Duration::from_millis(0)).unwrap());

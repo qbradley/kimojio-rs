@@ -77,6 +77,13 @@
 //! releasing that borrow, completions are applied to their operation state and
 //! waiters are woken.
 //!
+//! Companion runtimes use hidden unstable no-payload I/O hooks to submit
+//! scheduler-owned no-op and timeout operations without a user buffer. These
+//! handles reuse normal `IoState` lifecycle, waiter, cancellation, detach, and
+//! recycle paths; they do not create a second scheduler or allow nested
+//! scheduler driving. A hidden scheduler wake handle only interrupts the root
+//! io_uring wait so the flat scheduler loop can observe external work.
+//!
 //! # I/O APIs
 //!
 //! [`RuntimeContext::read`], [`RuntimeContext::write`],
@@ -795,10 +802,58 @@ impl RuntimeContext<'_> {
         self.core.borrow_mut().dump_stacks()
     }
 
+    /// Returns an unstable internal wake handle for companion runtimes.
+    ///
+    /// This is hidden from the public API docs because it exists to let runtime
+    /// integration code interrupt this runtime's root io_uring wait without
+    /// registering a stackful waiter. Calling the handle only wakes the root
+    /// wait path; companion runtimes must still let this scheduler drive
+    /// completions from its normal root loop.
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn internal_scheduler_wake(&self) -> SchedulerWake {
+        let external_wake = self.core.borrow().external_wake();
+        SchedulerWake::new(external_wake)
+    }
+
     /// Submits an io_uring no-op and waits for its completion.
     pub fn nop(&self) -> Result<(), Errno> {
         self.submit_and_wait_for_io(opcode::Nop::new().build())
             .map(|_| ())
+    }
+
+    /// Submits an unstable internal no-payload io_uring no-op without waiting.
+    ///
+    /// The returned handle owns normal scheduler operation state and must be
+    /// waited, canceled, or detached so the state can be recycled after the CQE
+    /// is reaped.
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn submit_no_payload_nop(&self) -> NoPayloadIo {
+        let state = self.acquire_io_state();
+        let user_data = self.submit_io_state(opcode::Nop::new().build(), Rc::clone(&state));
+        NoPayloadIo::new(
+            Rc::downgrade(&self.core),
+            state,
+            IoCancelKind::Async(user_data),
+            NoPayloadResultKind::Unit,
+        )
+    }
+
+    /// Submits an unstable internal no-payload io_uring timeout without waiting.
+    ///
+    /// The returned handle follows the same timeout result, cancellation, and
+    /// recycling rules as public timeout operations, but carries no user payload.
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn submit_no_payload_timeout(&self, duration: Duration) -> NoPayloadIo {
+        let timeout = self.submit_timeout(duration);
+        NoPayloadIo::new(
+            Rc::downgrade(&self.core),
+            timeout.state,
+            IoCancelKind::Timeout(timeout.user_data),
+            NoPayloadResultKind::Timeout,
+        )
     }
 
     /// Parks the current stackful coroutine until `duration` has elapsed.
@@ -3278,6 +3333,202 @@ fn timeout_result(result: KernelIoResult) -> Result<(), Errno> {
     }
 }
 
+/// Unstable internal handle that can interrupt a root scheduler io_uring wait.
+#[doc(hidden)]
+#[allow(dead_code)]
+pub struct SchedulerWake {
+    external_wake: Arc<ExternalWake>,
+}
+
+impl SchedulerWake {
+    fn new(external_wake: Arc<ExternalWake>) -> Self {
+        external_wake.register_driver_waker();
+        Self { external_wake }
+    }
+
+    /// Signals the associated runtime's scheduler wake source.
+    #[doc(hidden)]
+    pub fn wake(&self) {
+        self.external_wake.driver_wake();
+    }
+}
+
+impl Clone for SchedulerWake {
+    fn clone(&self) -> Self {
+        Self::new(Arc::clone(&self.external_wake))
+    }
+}
+
+impl Drop for SchedulerWake {
+    fn drop(&mut self) {
+        self.external_wake.unregister_driver_waker();
+    }
+}
+
+impl fmt::Debug for SchedulerWake {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SchedulerWake").finish_non_exhaustive()
+    }
+}
+
+/// Unstable internal waitable operation for no-payload io_uring work.
+#[doc(hidden)]
+#[must_use = "no-payload I/O should be waited on, canceled, or detached"]
+#[allow(dead_code)]
+pub struct NoPayloadIo {
+    core: Weak<SchedulerCell>,
+    state: Option<Rc<IoState>>,
+    cancel_kind: IoCancelKind,
+    result_kind: NoPayloadResultKind,
+}
+
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+enum NoPayloadResultKind {
+    Unit,
+    Timeout,
+}
+
+impl NoPayloadIo {
+    fn new(
+        core: Weak<SchedulerCell>,
+        state: Rc<IoState>,
+        cancel_kind: IoCancelKind,
+        result_kind: NoPayloadResultKind,
+    ) -> Self {
+        Self {
+            core,
+            state: Some(state),
+            cancel_kind,
+            result_kind,
+        }
+    }
+
+    /// Returns the completed result if the operation is ready.
+    #[doc(hidden)]
+    pub fn try_wait(&mut self) -> Option<Result<(), Errno>> {
+        let result = self.state.as_ref()?.take_result()?;
+        let state = self.state.take().expect("no-payload state missing");
+        recycle_io_state(&self.core, state);
+        Some(self.result_kind.map(result))
+    }
+
+    /// Waits until the operation completes.
+    #[doc(hidden)]
+    pub fn wait(mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+        loop {
+            if let Some(result) = self.try_wait() {
+                return result;
+            }
+
+            let registration = cx.wait_registration();
+            self.state
+                .as_ref()
+                .expect("no-payload state missing")
+                .add_waiter_from(cx, &registration);
+            cx.park();
+            cx.resume_active_scope_panic();
+        }
+    }
+
+    /// Requests cancellation without waiting for completion.
+    #[doc(hidden)]
+    pub fn cancel(&mut self) {
+        self.detach_pending(true);
+    }
+
+    /// Detaches this operation without requesting cancellation.
+    #[doc(hidden)]
+    pub fn detach(mut self) {
+        self.detach_pending(false);
+    }
+
+    /// Cancels this operation and waits for the cancel request to complete.
+    #[doc(hidden)]
+    pub fn cancel_and_wait(mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+        let Some(state) = self.state.take() else {
+            return Ok(());
+        };
+
+        if state.is_ready() {
+            cx.recycle_io_state(state);
+            return Ok(());
+        }
+
+        let cancel_state = cx.submit_cancel_for_io_state(&state, self.cancel_kind);
+        while !state.is_ready() || cancel_state.as_ref().is_some_and(|state| !state.is_ready()) {
+            let registration = cx.wait_registration();
+            state.add_waiter_from(cx, &registration);
+            if let Some(cancel_state) = &cancel_state {
+                cancel_state.add_waiter_from(cx, &registration);
+            }
+            cx.park();
+        }
+
+        let cancel_result = cancel_state
+            .as_ref()
+            .and_then(|state| state.take_result())
+            .unwrap_or(Ok(0));
+        cx.recycle_io_state(state);
+        if let Some(cancel_state) = cancel_state {
+            cx.recycle_io_state(cancel_state);
+        }
+        cancel_result.map(|_| ())
+    }
+
+    fn detach_pending(&mut self, cancel: bool) {
+        let Some(state) = self.state.take() else {
+            return;
+        };
+
+        if state.is_ready() {
+            recycle_io_state(&self.core, state);
+            return;
+        }
+
+        detach_io_state(&self.core, state, cancel.then_some(self.cancel_kind), None);
+    }
+}
+
+impl Waitable for NoPayloadIo {
+    fn is_ready(&self) -> bool {
+        self.state.as_ref().is_none_or(|state| state.is_ready())
+    }
+
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
+        if let Some(state) = &self.state {
+            state.add_waiter_from(cx, registration);
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl NoPayloadResultKind {
+    fn map(self, result: KernelIoResult) -> Result<(), Errno> {
+        match self {
+            Self::Unit => result.map(|_| ()),
+            Self::Timeout => timeout_result(result),
+        }
+    }
+}
+
+impl fmt::Debug for NoPayloadIo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NoPayloadIo")
+            .field(
+                "ready",
+                &self.state.as_ref().is_none_or(|state| state.is_ready()),
+            )
+            .finish()
+    }
+}
+
+impl Drop for NoPayloadIo {
+    fn drop(&mut self) {
+        self.detach_pending(true);
+    }
+}
+
 pub(crate) struct IoState {
     inner: RefCell<IoStateInner>,
 }
@@ -3534,6 +3785,7 @@ impl Waiter {
 pub struct WaitRegistration {
     core: Weak<SchedulerCell>,
     token: Option<WaitToken>,
+    external: RefCell<Option<ExternalWaitRegistration>>,
 }
 
 impl WaitRegistration {
@@ -3541,6 +3793,7 @@ impl WaitRegistration {
         Self {
             core: Weak::new(),
             token: None,
+            external: RefCell::new(None),
         }
     }
 
@@ -3548,11 +3801,28 @@ impl WaitRegistration {
         Self {
             core,
             token: Some(token),
+            external: RefCell::new(None),
         }
     }
 
     fn token(&self) -> Option<WaitToken> {
         self.token
+    }
+
+    /// Returns a stackful waiter tied to this registration for first-party
+    /// external wait queues.
+    #[doc(hidden)]
+    pub fn external_waiter(
+        &self,
+        cx: &RuntimeContext<'_>,
+    ) -> Option<Box<dyn StackfulWaiter + 'static>> {
+        let mut external = self.external.borrow_mut();
+        if external.is_none() {
+            *external = cx.external_wait_registration();
+        }
+        external
+            .as_ref()
+            .map(|registration| Box::new(registration.waiter()) as Box<dyn StackfulWaiter>)
     }
 }
 
@@ -3737,6 +4007,39 @@ impl ExternalWake {
         self.signal();
     }
 
+    #[allow(dead_code)]
+    fn register_driver_waker(&self) {
+        let mut inner = self.inner();
+        inner.driver_wakers = inner
+            .driver_wakers
+            .checked_add(1)
+            .expect("external driver waker count overflow");
+        drop(inner);
+        self.signal();
+    }
+
+    #[allow(dead_code)]
+    fn unregister_driver_waker(&self) {
+        let mut inner = self.inner();
+        inner.driver_wakers = inner
+            .driver_wakers
+            .checked_sub(1)
+            .expect("external driver waker count underflow");
+        drop(inner);
+        self.signal();
+    }
+
+    #[allow(dead_code)]
+    fn driver_wake(&self) {
+        let mut inner = self.inner();
+        inner.driver_wakes = inner
+            .driver_wakes
+            .checked_add(1)
+            .expect("external driver wake count overflow");
+        drop(inner);
+        self.signal();
+    }
+
     fn wake_task(&self, ready: ExternalReady) {
         let mut inner = self.inner();
         inner.waiters = inner
@@ -3756,6 +4059,21 @@ impl ExternalWake {
     fn has_waiters_or_ready(&self) -> bool {
         let inner = self.inner();
         inner.waiters != 0 || !inner.ready.is_empty()
+    }
+
+    fn has_io_wake_interest(&self) -> bool {
+        let inner = self.inner();
+        inner.waiters != 0
+            || inner.driver_wakers != 0
+            || inner.driver_wakes != 0
+            || !inner.ready.is_empty()
+    }
+
+    fn take_driver_wakes(&self) -> bool {
+        let mut inner = self.inner();
+        let has_driver_wakes = inner.driver_wakes != 0;
+        inner.driver_wakes = 0;
+        has_driver_wakes
     }
 
     fn wake_fd(&self) -> &OwnedFd {
@@ -3819,6 +4137,8 @@ impl ExternalWake {
 struct ExternalWakeInner {
     ready: VecDeque<ExternalReady>,
     waiters: usize,
+    driver_wakers: usize,
+    driver_wakes: usize,
 }
 
 #[derive(Default)]
@@ -4625,8 +4945,8 @@ impl Scheduler {
         Arc::clone(&self.external_wake)
     }
 
-    fn has_external_waiters_or_ready(&self) -> bool {
-        self.external_wake.has_waiters_or_ready()
+    fn has_external_io_wake_interest(&self) -> bool {
+        self.external_wake.has_io_wake_interest()
     }
 
     fn drain_external_ready(&mut self) -> bool {
@@ -4646,16 +4966,20 @@ impl Scheduler {
         finished_wake_io || scheduled
     }
 
+    fn take_external_driver_wakes(&mut self) -> bool {
+        self.external_wake.take_driver_wakes()
+    }
+
     fn arm_external_wake_io(&mut self) -> bool {
         if self.external_wake_io.is_some()
-            || !self.external_wake.has_waiters_or_ready()
+            || !self.external_wake.has_io_wake_interest()
             || !self.supports_opcode(opcode::PollAdd::CODE)
         {
             return false;
         }
 
         self.external_wake.drain_signal();
-        if self.drain_external_ready() {
+        if self.external_wake.take_driver_wakes() || self.drain_external_ready() {
             return true;
         }
 
@@ -4872,7 +5196,7 @@ fn drive_scheduler(core: &Rc<SchedulerCell>) -> bool {
         (scheduler.in_flight_io != 0, scheduler.should_busy_poll_io())
     };
     if should_wait_for_io {
-        if core.borrow().has_external_waiters_or_ready() {
+        if core.borrow().has_external_io_wake_interest() {
             if run_completed_io(core, false) {
                 let mut scheduler = core.borrow_mut();
                 scheduler.finish_external_wake_io();
@@ -4885,6 +5209,9 @@ fn drive_scheduler(core: &Rc<SchedulerCell>) -> bool {
                 if scheduler.prepare_external_wake() {
                     return true;
                 }
+                if scheduler.take_external_driver_wakes() {
+                    return true;
+                }
                 if scheduler.arm_external_wake_io() {
                     return true;
                 }
@@ -4892,8 +5219,10 @@ fn drive_scheduler(core: &Rc<SchedulerCell>) -> bool {
             run_completed_io(core, !busy_poll_io);
             let scheduled = {
                 let mut scheduler = core.borrow_mut();
-                scheduler.finish_external_wake_io();
-                scheduler.drain_external_ready()
+                let finished_wake_io = scheduler.finish_external_wake_io();
+                let driver_wake = scheduler.take_external_driver_wakes();
+                let scheduled = scheduler.drain_external_ready();
+                finished_wake_io || driver_wake || scheduled
             };
             let completed = run_completed_io(core, false);
             scheduled || completed || core.borrow().in_flight_io != 0
@@ -5525,6 +5854,71 @@ mod tests {
 
         waker.join().unwrap();
         assert_eq!(output, 99);
+    }
+
+    #[test]
+    fn scheduler_wake_interrupts_root_io_wait_without_external_waiter() {
+        let (start_tx, start_rx) = mpsc::channel();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let wake = cx.internal_scheduler_wake();
+            let waker_wake = wake.clone();
+            let waker = thread::spawn(move || {
+                start_rx.recv().unwrap();
+                thread::sleep(Duration::from_millis(20));
+                waker_wake.wake();
+            });
+            let timeout = cx.submit_no_payload_timeout(Duration::from_secs(1));
+            let started = Instant::now();
+            start_tx.send(()).unwrap();
+            cx.yield_now();
+            assert!(started.elapsed() < Duration::from_millis(500));
+            timeout.cancel_and_wait(cx).unwrap();
+            waker.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn scheduler_wake_delivered_before_io_wait_is_observed() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let wake = cx.internal_scheduler_wake();
+            let timeout = cx.submit_no_payload_timeout(Duration::from_secs(1));
+            wake.wake();
+            let started = Instant::now();
+            cx.yield_now();
+            assert!(started.elapsed() < Duration::from_millis(500));
+            timeout.cancel_and_wait(cx).unwrap();
+        });
+    }
+
+    #[test]
+    fn no_payload_nop_and_timeout_complete() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.submit_no_payload_nop().wait(cx).unwrap();
+            cx.submit_no_payload_timeout(Duration::ZERO)
+                .wait(cx)
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn no_payload_cancel_and_drop_reclaim_state() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let timeout = cx.submit_no_payload_timeout(Duration::from_secs(60));
+            timeout.cancel_and_wait(cx).unwrap();
+
+            let dropped = cx.submit_no_payload_timeout(Duration::from_secs(60));
+            drop(dropped);
+            drain_detached_io(cx);
+            assert_eq!(cx.io_counters().detached_pending, 0);
+        });
     }
 
     #[test]
