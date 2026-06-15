@@ -32,6 +32,21 @@ and the connection should reject the wrong negotiated protocol. Plaintext-only
 users can disable HTTP default features to avoid the TLS/OpenSSL dependency
 surface.
 
+`StackTransport` is the stack-core compatibility alias for
+`RuntimeStackTransport<IoFd>`. The HTTP/1.1 client and server connection types
+also have runtime-generic forms that work with any socket handle implementing the
+shared `kimojio-stack::runtime_api` socket contract. This keeps runtime choice
+explicit: stack-core callers can use the existing names, while companion runtime
+adapters such as `kimojio-stack-steal` can pass their own socket handles without
+adding helper threads, mandatory dynamic dispatch, or a second HTTP runtime
+trait.
+
+Transport I/O deadlines are transport-local. Plaintext deadlines use runtime
+socket async handles, TLS deadlines use generic TLS async handles, and both wait
+on a runtime-neutral timer handle instead of zero-duration polling. Stalled
+TLS reads/writes can be canceled and drained on both stack-core and
+`kimojio-stack-steal` before the transport is closed.
+
 ## HTTP usage
 
 Use protocol-specific connections when the protocol is known:
@@ -42,6 +57,15 @@ Use protocol-specific connections when the protocol is known:
 Use `client::ClientConnection` or `server::ServerConnection` when code wants a
 single protocol-neutral wrapper around an already-selected HTTP/1.1 or HTTP/2
 connection.
+
+Current runtime-agnostic status:
+
+| Layer | Status |
+|-------|--------|
+| HTTP/1.1 plaintext/TLS | Runtime-generic over `RuntimeStackTransport<S>` |
+| HTTP/2 | Stack-core concrete connection types |
+| Protocol-neutral HTTP wrappers | Stack-core concrete enums |
+| gRPC | Stack-core concrete HTTP/2 boundary |
 
 Bodies are represented by `Body` and bounded by `BodyLimits`. Parser and
 connection limits live in `HttpConfig`, including header, body, frame, and read
@@ -67,6 +91,11 @@ Generated client/server stubs are intentionally deferred. The initial API keeps
 method paths, metadata, message limits, and transports explicit until the
 stackful transport and service model are proven without adding hidden runtime
 or allocation costs.
+
+The gRPC runtime migration boundary is the owned HTTP/2 client or server
+connection supplied by the caller. When HTTP/2 grows generic connection wrappers,
+gRPC can parameterize over those same types rather than introducing a separate
+gRPC runtime trait or hidden dispatch layer.
 
 `UnaryClient::call` and `UnaryServer::serve_one` are sequential convenience
 helpers for unary RPCs. `UnaryClient::call_server_streaming` returns a

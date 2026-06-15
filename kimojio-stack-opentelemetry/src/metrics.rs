@@ -7,6 +7,8 @@
 //! Histograms and summaries are recognized by [`MetricShape`] but return
 //! [`ErrorKind::Unsupported`](crate::ErrorKind::Unsupported) until a caller-facing
 //! allocation and aggregation model is added.
+//! Export runtime behavior is delegated to the shared unary export client; this
+//! module only builds OTLP metric messages and applies local size limits.
 //!
 //! ```
 //! use kimojio_stack_opentelemetry::{

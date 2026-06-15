@@ -13,6 +13,17 @@
 //! unary OTLP export requests over `kimojio-stack-grpc`; traces, automatic
 //! instrumentation, periodic export, and retry policy are left to higher layers.
 //!
+//! # Runtime and instrumentation readiness
+//!
+//! OpenTelemetry inherits its runtime boundary from gRPC, which in turn owns a
+//! `kimojio-stack-http` HTTP/2 connection. Runtime-agnostic export should follow
+//! that existing chain once generic HTTP/2/gRPC wrappers exist; this crate should
+//! not add another runtime trait. Runtime operation instrumentation, if added,
+//! should attach at explicit shared-contract events such as capability checks,
+//! socket submission/completion, wait registration, cancellation, close, and
+//! adapter error mapping. With instrumentation disabled, those hooks must not
+//! require dynamic dispatch, allocation, background work, or helper threads.
+//!
 //! # Encoding a log batch
 //!
 //! ```
@@ -431,6 +442,14 @@ mod tests {
             error.to_string(),
             "OpenTelemetry export size limit exceeded: limit 8, actual 9"
         );
+    }
+
+    #[test]
+    fn runtime_migration_boundary_reuses_grpc_client_config() {
+        let config = ExportClientConfig::default();
+        let grpc = config.grpc();
+
+        assert_eq!(grpc.max_message_len, config.max_message_len);
     }
 }
 

@@ -6,6 +6,8 @@
 //! Block operations are the simplest durable object path: uploads require a
 //! replayable body with a known length, downloads stream success body chunks to a
 //! caller sink, and deletes classify missing objects as [`DeleteOutcome::NotFound`].
+//! They use the storage [`Transport`](crate::Transport) boundary and do not
+//! require direct file or disk runtime capabilities for the HTTP+TLS path.
 //!
 //! ```
 //! use kimojio_stack_storage::{

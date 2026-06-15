@@ -7,6 +7,8 @@
 //! [`LogBatch`]. Empty batches complete locally without sending a request. A
 //! receiver may accept the request but report rejected records through
 //! [`LogsExportResult`]; callers decide whether that partial success is fatal.
+//! Export runtime behavior is delegated to the shared unary export client; this
+//! module only builds OTLP log messages and applies local size limits.
 //!
 //! ```no_run
 //! use kimojio_stack::RuntimeContext;

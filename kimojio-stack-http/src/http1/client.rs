@@ -2,23 +2,26 @@
 // Licensed under the MIT License.
 
 use http::{Request, Response};
-use kimojio_stack::RuntimeContext;
+use kimojio_stack::{IoFd, RuntimeSocket};
 use std::time::Instant;
 
-use crate::{Body, Error, HttpConfig, StackTransport};
+use crate::{Body, Error, HttpConfig, HttpRuntime, RuntimeStackTransport};
 
 use super::codec;
 
 /// Low-level HTTP/1.1 client connection over a stackful transport.
-pub struct ClientConnection {
-    transport: StackTransport,
+pub struct RuntimeClientConnection<S> {
+    transport: RuntimeStackTransport<S>,
     config: HttpConfig,
     read_buf: Vec<u8>,
 }
 
-impl ClientConnection {
+/// Stack-core HTTP/1.1 client compatibility alias.
+pub type ClientConnection = RuntimeClientConnection<IoFd>;
+
+impl<S> RuntimeClientConnection<S> {
     /// Creates an HTTP/1.1 client over an already-connected transport.
-    pub fn new(transport: StackTransport, config: HttpConfig) -> Self {
+    pub fn new(transport: RuntimeStackTransport<S>, config: HttpConfig) -> Self {
         Self {
             transport,
             config,
@@ -36,11 +39,11 @@ impl ClientConnection {
     /// Connection-close semantics are derived from the request and response
     /// headers. If the peer indicates close-after-response, the write side is
     /// shut down before returning.
-    pub fn send(
-        &mut self,
-        cx: &RuntimeContext<'_>,
-        request: &Request<Body>,
-    ) -> Result<Response<Body>, Error> {
+    pub fn send<R>(&mut self, cx: &R, request: &Request<Body>) -> Result<Response<Body>, Error>
+    where
+        R: HttpRuntime<S>,
+        S: RuntimeSocket,
+    {
         codec::write_request_head_and_body(cx, &mut self.transport, request)?;
         let response = codec::read_response(
             cx,
@@ -58,13 +61,15 @@ impl ClientConnection {
     /// Sends one request and delivers response body chunks incrementally.
     ///
     /// The returned response has an empty body.
-    pub fn send_with_body_chunks<F>(
+    pub fn send_with_body_chunks<R, F>(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &R,
         request: &http::Request<crate::Body>,
         on_chunk: F,
     ) -> Result<http::Response<crate::Body>, crate::Error>
     where
+        R: HttpRuntime<S>,
+        S: RuntimeSocket,
         F: FnMut(bytes::Bytes) -> Result<(), crate::Error>,
     {
         codec::write_request_head_and_body(cx, &mut self.transport, request)?;
@@ -86,14 +91,16 @@ impl ClientConnection {
     ///
     /// Return `false` from `on_headers` to drain the response body without
     /// invoking `on_chunk`.
-    pub fn send_with_body_chunks_after_headers<H, F>(
+    pub fn send_with_body_chunks_after_headers<R, H, F>(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &R,
         request: &http::Request<crate::Body>,
         on_headers: H,
         on_chunk: F,
     ) -> Result<http::Response<crate::Body>, crate::Error>
     where
+        R: HttpRuntime<S>,
+        S: RuntimeSocket,
         H: FnMut(&http::Response<crate::Body>) -> Result<bool, crate::Error>,
         F: FnMut(bytes::Bytes) -> Result<(), crate::Error>,
     {
@@ -114,7 +121,11 @@ impl ClientConnection {
     }
 
     /// Closes the underlying transport.
-    pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
+    pub fn close<R>(self, cx: &R) -> Result<(), Error>
+    where
+        R: HttpRuntime<S>,
+        S: RuntimeSocket,
+    {
         self.transport.close(cx)
     }
 }

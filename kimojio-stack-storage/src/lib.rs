@@ -54,6 +54,15 @@
 //! Transport implementations should deliver success body chunks incrementally
 //! through `execute_with_body_chunks`; error bodies are diagnostics, not success
 //! payloads.
+//!
+//! # Runtime migration boundary
+//!
+//! Storage operations are already runtime-independent above [`Transport`]. The
+//! current stack HTTP adapter is concrete because the protocol-neutral HTTP
+//! client is still concrete; once HTTP exposes generic client wrappers, storage
+//! can make the adapter generic over that client/runtime socket type. Direct
+//! file or disk I/O is not part of this HTTP+TLS migration and should be added as
+//! a separate shared runtime capability if storage needs it later.
 
 pub mod archive;
 pub mod auth;

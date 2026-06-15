@@ -8,6 +8,14 @@
 //! single attempt: converting request parts to HTTP, applying deadlines,
 //! streaming success body chunks, and returning diagnostics on failure.
 //!
+//! # Runtime migration boundary
+//!
+//! [`Transport`] remains the storage-facing boundary. `StackHttpTransport`
+//! currently wraps the concrete protocol-neutral stack HTTP client; after HTTP
+//! client wrappers become runtime-generic, this adapter can become generic over
+//! the shared runtime socket contract without changing request construction,
+//! retry classification, or diagnostics.
+//!
 //! ```
 //! use kimojio_stack_storage::{OperationClass, RequestParts, ReplayBody};
 //!
@@ -386,6 +394,14 @@ mod tests {
 
         assert_eq!(response.status, 200);
         assert_eq!(response.diagnostics.operation(), OperationClass::Metadata);
+    }
+
+    #[test]
+    fn runtime_migration_boundary_is_transport_attempt_trait() {
+        fn accepts_storage_boundary<T: Transport>(_transport: &mut T) {}
+
+        let mut transport = FakeTransport;
+        accepts_storage_boundary(&mut transport);
     }
 
     #[test]

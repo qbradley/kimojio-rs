@@ -271,9 +271,10 @@ pub use barrier::{Barrier, BarrierWaitResult};
 pub use mutex::{Mutex, MutexGuard};
 pub use notify::{Notified, Notify};
 pub use runtime_api::{
-    IoRuntime, RuntimeCapabilities, RuntimeCapability, RuntimeFamily, RuntimeIoError, StackRuntime,
-    StackRuntimeContext, StackfulWaitContext, StackfulWaitRegistration, StackfulWaiter,
-    UnsupportedCapability,
+    IoRuntime, RuntimeCapabilities, RuntimeCapability, RuntimeFamily, RuntimeIoError,
+    RuntimeReadResult, RuntimeSocket, RuntimeWaitError, RuntimeWaitable, RuntimeWaitableAdapter,
+    RuntimeWriteResult, SocketIoRuntime, StackRuntime, StackRuntimeContext, StackfulWaitContext,
+    StackfulWaitRegistration, StackfulWaiter, UnsupportedCapability,
 };
 pub use rwlock::{ReadLock, RwLock, RwLockReadGuard, RwLockWriteGuard, WriteLock};
 pub use semaphore::{Semaphore, SemaphorePermit};
@@ -853,6 +854,95 @@ impl RuntimeContext<'_> {
             timeout.state,
             IoCancelKind::Timeout(timeout.user_data),
             NoPayloadResultKind::Timeout,
+        )
+    }
+
+    /// Submits an unstable internal read operation without waiting.
+    ///
+    /// # Safety
+    ///
+    /// `buffer` must point to writable memory of at least `len` bytes. The
+    /// descriptor and buffer must remain valid until the returned handle
+    /// completes. If the operation is canceled, detached, or dropped before
+    /// completion, callers must use [`RawIo::cancel_with_payload`] or
+    /// [`RawIo::detach_with_payload`] so the descriptor/buffer owner is retained
+    /// until the kernel completion is reaped; bare cancellation/detach/drop of a
+    /// pending raw read is rejected to prevent the kernel from writing through a
+    /// freed pointer.
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub unsafe fn submit_raw_read(&self, fd: &impl AsFd, buffer: *mut u8, len: usize) -> RawIo {
+        let len = u32::try_from(len).expect("io_uring read length exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::Read::new(Fd(fd), buffer, len)
+            .offset(u64::MAX)
+            .build();
+        self.submit_raw_io(entry, true, true)
+    }
+
+    /// Submits an unstable internal write operation without waiting.
+    ///
+    /// # Safety
+    ///
+    /// `buffer` must point to readable memory of at least `len` bytes. The
+    /// descriptor and buffer must remain valid until the returned handle
+    /// completes. If the operation is canceled, detached, or dropped before
+    /// completion, callers must use [`RawIo::cancel_with_payload`] or
+    /// [`RawIo::detach_with_payload`] so the descriptor/buffer owner is retained
+    /// until the kernel completion is reaped; bare cancellation/detach/drop of a
+    /// pending raw write is rejected to prevent the kernel from reading through a
+    /// freed pointer.
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub unsafe fn submit_raw_write(&self, fd: &impl AsFd, buffer: *const u8, len: usize) -> RawIo {
+        let len = u32::try_from(len).expect("io_uring write length exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::Write::new(Fd(fd), buffer, len)
+            .offset(u64::MAX)
+            .build();
+        self.submit_raw_io(entry, true, true)
+    }
+
+    /// Submits an unstable internal shutdown operation without waiting.
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn submit_raw_shutdown(&self, fd: &impl AsFd, how: Shutdown) -> RawIo {
+        let fd = fd.as_fd().as_raw_fd();
+        self.submit_raw_io(
+            opcode::Shutdown::new(Fd(fd), how as i32).build(),
+            false,
+            true,
+        )
+    }
+
+    /// Submits an unstable internal close operation without waiting.
+    ///
+    /// The returned raw close handle is detach-on-drop: once the [`OwnedFd`] has
+    /// been consumed by the close SQE, dropping or canceling the handle does not
+    /// issue async-cancel, because a canceled close would leave no Rust owner for
+    /// the still-open descriptor.
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn submit_raw_close(&self, fd: OwnedFd) -> RawIo {
+        let fd = ManuallyDrop::new(fd);
+        let fd = fd.as_fd().as_raw_fd();
+        self.submit_raw_io(opcode::Close::new(Fd(fd)).build(), false, false)
+    }
+
+    fn submit_raw_io(
+        &self,
+        entry: impl Into<Sqe>,
+        requires_payload_on_detach: bool,
+        cancelable: bool,
+    ) -> RawIo {
+        let state = self.acquire_io_state();
+        let user_data = self.submit_io_state(entry, Rc::clone(&state));
+        RawIo::new(
+            Rc::downgrade(&self.core),
+            state,
+            IoCancelKind::Async(user_data),
+            requires_payload_on_detach,
+            cancelable,
         )
     }
 
@@ -1886,6 +1976,33 @@ impl RuntimeContext<'_> {
         let Some(cancel_state) =
             self.submit_cancel_for_io_state(state, IoCancelKind::Async(user_data))
         else {
+            return Ok(());
+        };
+        let result = self.wait_for_io_state_without_scope_panic(&cancel_state);
+        self.recycle_io_state(cancel_state);
+        result.map(|_| ())
+    }
+
+    /// Attempts to cancel a pending internal [`RawIo`] without consuming its handle.
+    #[doc(hidden)]
+    pub fn cancel_raw_io(&self, io: &RawIo) -> Result<(), Errno> {
+        if !io.cancelable {
+            return Ok(());
+        }
+
+        let Some(state) = io.state.as_ref() else {
+            return Ok(());
+        };
+
+        if !self
+            .core
+            .borrow()
+            .supports_opcode(opcode::AsyncCancel::CODE)
+        {
+            return Err(Errno::OPNOTSUPP);
+        }
+
+        let Some(cancel_state) = self.submit_cancel_for_io_state(state, io.cancel_kind) else {
             return Ok(());
         };
         let result = self.wait_for_io_state_without_scope_panic(&cancel_state);
@@ -3072,7 +3189,7 @@ impl<T, B> Waitable for IoResult<T, B> {
 impl<T, B> fmt::Debug for IoResult<T, B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("IoResult")
-            .field("ready", &self.is_ready())
+            .field("ready", &Waitable::is_ready(self))
             .field("taken", &self.taken)
             .finish()
     }
@@ -3312,10 +3429,23 @@ impl Waitable for Timeout {
     }
 }
 
+impl RuntimeWaitable for Timeout {
+    fn is_ready(&self) -> bool {
+        Waitable::is_ready(self)
+    }
+
+    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+        let Some(state) = &self.state else {
+            return false;
+        };
+        state.add_stackful_waiter(waiter)
+    }
+}
+
 impl fmt::Debug for Timeout {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Timeout")
-            .field("ready", &self.is_ready())
+            .field("ready", &Waitable::is_ready(self))
             .finish()
     }
 }
@@ -3502,6 +3632,185 @@ impl Waitable for NoPayloadIo {
     }
 }
 
+impl RuntimeWaitable for NoPayloadIo {
+    fn is_ready(&self) -> bool {
+        Waitable::is_ready(self)
+    }
+
+    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+        let Some(state) = &self.state else {
+            return false;
+        };
+        state.add_stackful_waiter(waiter)
+    }
+}
+
+/// Unstable internal waitable operation that returns the raw io_uring result.
+#[doc(hidden)]
+#[must_use = "raw I/O should be waited on, canceled, or detached"]
+#[allow(dead_code)]
+pub struct RawIo {
+    core: Weak<SchedulerCell>,
+    state: Option<Rc<IoState>>,
+    cancel_kind: IoCancelKind,
+    requires_payload_on_detach: bool,
+    cancelable: bool,
+}
+
+impl RawIo {
+    fn new(
+        core: Weak<SchedulerCell>,
+        state: Rc<IoState>,
+        cancel_kind: IoCancelKind,
+        requires_payload_on_detach: bool,
+        cancelable: bool,
+    ) -> Self {
+        Self {
+            core,
+            state: Some(state),
+            cancel_kind,
+            requires_payload_on_detach,
+            cancelable,
+        }
+    }
+
+    /// Returns the completed raw result if the operation is ready.
+    #[doc(hidden)]
+    pub fn try_wait(&mut self) -> Option<Result<u32, Errno>> {
+        let result = self.state.as_ref()?.take_result()?;
+        let state = self.state.take().expect("raw I/O state missing");
+        recycle_io_state(&self.core, state);
+        Some(result)
+    }
+
+    /// Waits until the operation completes.
+    #[doc(hidden)]
+    pub fn wait(mut self, cx: &RuntimeContext<'_>) -> Result<u32, Errno> {
+        loop {
+            if let Some(result) = self.try_wait() {
+                return result;
+            }
+
+            let registration = cx.wait_registration();
+            self.state
+                .as_ref()
+                .expect("raw I/O state missing")
+                .add_waiter_from(cx, &registration);
+            cx.park();
+            cx.resume_active_scope_panic();
+        }
+    }
+
+    /// Requests cancellation without waiting for completion.
+    ///
+    /// Pending raw read/write operations submitted with borrowed pointers must
+    /// use [`RawIo::cancel_with_payload`] instead so their descriptor/buffer
+    /// owner stays alive until the kernel completion is reaped.
+    #[doc(hidden)]
+    pub fn cancel(&mut self) {
+        self.detach_pending(true);
+    }
+
+    /// Requests cancellation while retaining `payload` until the operation is reaped.
+    #[doc(hidden)]
+    pub fn cancel_with_payload<B>(&mut self, payload: B)
+    where
+        B: 'static,
+    {
+        self.detach_pending_with_buffer(true, Some(DetachedBuffer::new(payload)));
+    }
+
+    /// Detaches this operation without requesting cancellation.
+    ///
+    /// Pending raw read/write operations submitted with borrowed pointers must
+    /// use [`RawIo::detach_with_payload`] instead so their descriptor/buffer
+    /// owner stays alive until the kernel completion is reaped.
+    #[doc(hidden)]
+    pub fn detach(mut self) {
+        self.detach_pending(false);
+    }
+
+    /// Detaches while retaining `payload` until the operation is reaped.
+    #[doc(hidden)]
+    pub fn detach_with_payload<B>(mut self, payload: B)
+    where
+        B: 'static,
+    {
+        self.detach_pending_with_buffer(false, Some(DetachedBuffer::new(payload)));
+    }
+
+    fn detach_pending(&mut self, cancel: bool) {
+        self.detach_pending_with_buffer(cancel, None);
+    }
+
+    fn detach_pending_with_buffer(&mut self, cancel: bool, buffer: Option<DetachedBuffer>) {
+        assert!(
+            !self.requires_payload_on_detach
+                || buffer.is_some()
+                || self.state.as_ref().is_none_or(|state| state.is_ready()),
+            "pending raw read/write cancellation or detach requires payload retention"
+        );
+
+        let Some(state) = self.state.take() else {
+            return;
+        };
+
+        if state.is_ready() {
+            recycle_io_state(&self.core, state);
+            return;
+        }
+
+        detach_io_state(
+            &self.core,
+            state,
+            (cancel && self.cancelable).then_some(self.cancel_kind),
+            buffer,
+        );
+    }
+}
+
+impl Waitable for RawIo {
+    fn is_ready(&self) -> bool {
+        self.state.as_ref().is_none_or(|state| state.is_ready())
+    }
+
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
+        if let Some(state) = &self.state {
+            state.add_waiter_from(cx, registration);
+        }
+    }
+}
+
+impl RuntimeWaitable for RawIo {
+    fn is_ready(&self) -> bool {
+        Waitable::is_ready(self)
+    }
+
+    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+        let Some(state) = &self.state else {
+            return false;
+        };
+        state.add_stackful_waiter(waiter)
+    }
+}
+
+impl fmt::Debug for RawIo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawIo")
+            .field(
+                "ready",
+                &self.state.as_ref().is_none_or(|state| state.is_ready()),
+            )
+            .finish()
+    }
+}
+
+impl Drop for RawIo {
+    fn drop(&mut self) {
+        self.detach_pending(true);
+    }
+}
+
 #[allow(dead_code)]
 impl NoPayloadResultKind {
     fn map(self, result: KernelIoResult) -> Result<(), Errno> {
@@ -3549,11 +3858,22 @@ impl IoState {
         inner.result = Some(result);
         inner.registered_resources.complete_all();
         inner.waiters.wake_all();
+        inner.stackful_waiters.wake_all();
     }
 
     pub(crate) fn add_waiter_from(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
         if let Some(waiter) = cx.waiter(registration) {
             self.inner.borrow_mut().waiters.push(waiter);
+        }
+    }
+
+    pub(crate) fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+        let mut inner = self.inner.borrow_mut();
+        if inner.result.is_some() {
+            false
+        } else {
+            inner.stackful_waiters.push(waiter);
+            true
         }
     }
 
@@ -3623,6 +3943,7 @@ impl IoState {
 struct IoStateInner {
     result: Option<KernelIoResult>,
     waiters: Waiters,
+    stackful_waiters: StackfulWaiters,
     timeout: Option<Timespec>,
     io_fd: Option<IoFd>,
     registered_resources: RegisteredResources,
@@ -3635,6 +3956,7 @@ impl IoStateInner {
         Self {
             result: None,
             waiters: Waiters::default(),
+            stackful_waiters: StackfulWaiters::default(),
             timeout: None,
             io_fd: None,
             registered_resources: RegisteredResources::new(),
@@ -3646,11 +3968,71 @@ impl IoStateInner {
     fn reset_for_reuse(&mut self) {
         self.result = None;
         self.waiters.clear();
+        self.stackful_waiters.clear();
         self.timeout = None;
         self.io_fd = None;
         self.registered_resources.clear();
         self.cancel_requested = false;
         self.cancel_operation = false;
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct StackfulWaiters {
+    first: Option<Box<dyn StackfulWaiter>>,
+    rest: Vec<Box<dyn StackfulWaiter>>,
+}
+
+impl StackfulWaiters {
+    pub(crate) fn push(&mut self, waiter: Box<dyn StackfulWaiter>) {
+        if self
+            .first
+            .as_ref()
+            .is_some_and(|waiter| !waiter.is_active())
+            || self.rest.len() > WAITER_COMPACT_THRESHOLD
+        {
+            self.compact_inactive();
+        }
+
+        if self.first.is_none() {
+            self.first = Some(waiter);
+        } else {
+            self.rest.push(waiter);
+        }
+    }
+
+    pub(crate) fn wake_all(&mut self) {
+        if let Some(waiter) = self.first.take()
+            && waiter.mark_ready()
+        {
+            waiter.wake_ready();
+        }
+
+        for waiter in self.rest.drain(..) {
+            if waiter.mark_ready() {
+                waiter.wake_ready();
+            }
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.first = None;
+        self.rest.clear();
+    }
+
+    fn compact_inactive(&mut self) {
+        if self
+            .first
+            .as_ref()
+            .is_some_and(|waiter| !waiter.is_active())
+        {
+            self.first = None;
+        }
+
+        self.rest.retain(|waiter| waiter.is_active());
+        if self.first.is_none() && !self.rest.is_empty() {
+            self.first = Some(self.rest.remove(0));
+        }
     }
 }
 
@@ -5536,9 +5918,11 @@ mod tests {
     use super::{
         AddressFamily, AtFlags, BusyPoll, Cancellable, DEFAULT_STACK_SIZE, EpollCtlOp, EpollEvent,
         EpollEventData, EpollEventFlags, Errno, FallocateFlags, FileAdvice, FutexWaitFlags, IoFd,
-        IoJoinError, IoReadBuffer, IoVec, MemoryAdvice, Mode, MsgHdr, OFlags, RecvFlags,
+        IoJoinError, IoReadBuffer, IoRuntime, IoVec, MemoryAdvice, Mode, MsgHdr, OFlags, RecvFlags,
         RenameFlags, ResolveFlags, Runtime, RuntimeCapabilities, RuntimeCapability, RuntimeConfig,
-        RuntimeContext, RuntimeFamily, SendFlags, Shutdown, SocketType, StatxFlags, TaskStackState,
+        RuntimeContext, RuntimeFamily, RuntimeIoError, RuntimeSocket, RuntimeWaitError,
+        RuntimeWaitable, RuntimeWaitableAdapter, SendFlags, Shutdown, SocketIoRuntime, SocketType,
+        StackfulWaitContext, StackfulWaiter, StackfulWaiters, StatxFlags, TaskStackState,
         UringSpliceFlags, WaitError, WaitRegistration, Waitable, Waiters, allocation_tracking,
         ipproto, once,
     };
@@ -5585,13 +5969,96 @@ mod tests {
         runtime.block_on(|cx| {
             assert_eq!(cx.runtime_family(), RuntimeFamily::Stack);
             assert!(cx.supports(RuntimeCapability::StackfulWait));
+            assert!(cx.supports(RuntimeCapability::SocketIo));
             assert!(!cx.supports(RuntimeCapability::ExplicitRingIo));
+            cx.require_socket_io().unwrap();
 
             let error = cx
                 .require_capability(RuntimeCapability::ExplicitRingIo)
                 .unwrap_err();
             assert_eq!(error.capability(), "explicit-ring-io");
             assert_eq!(error.family(), RuntimeFamily::Stack);
+        });
+    }
+
+    struct NoSocketIoRuntime;
+
+    struct NoSocketSleep;
+
+    impl RuntimeWaitable for NoSocketSleep {
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        fn add_stackful_waiter(&self, _waiter: Box<dyn StackfulWaiter>) -> bool {
+            false
+        }
+    }
+
+    impl RuntimeCapabilities for NoSocketIoRuntime {
+        fn runtime_family(&self) -> RuntimeFamily {
+            RuntimeFamily::Other("no-socket-io-test")
+        }
+
+        fn supports(&self, capability: RuntimeCapability) -> bool {
+            matches!(capability, RuntimeCapability::StackfulWait)
+        }
+    }
+
+    impl IoRuntime for NoSocketIoRuntime {
+        type Sleep = NoSocketSleep;
+
+        fn sleep_async(&self, _duration: Duration) -> Result<Self::Sleep, RuntimeIoError> {
+            Ok(NoSocketSleep)
+        }
+
+        fn sleep_for(&self, _duration: Duration) -> Result<(), RuntimeIoError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn socket_io_requirement_reports_unsupported_capability() {
+        let runtime = NoSocketIoRuntime;
+
+        let error = runtime.require_socket_io().unwrap_err();
+        assert_eq!(error.capability(), "socket-io");
+        assert_eq!(error.family(), RuntimeFamily::Other("no-socket-io-test"));
+    }
+
+    #[test]
+    fn runtime_socket_io_contract_maps_to_stack_io() {
+        let (read_fd, write_fd) = pipe().unwrap();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let read_fd = SocketIoRuntime::socket_from_owned_fd(cx, read_fd).unwrap();
+            let write_fd = SocketIoRuntime::socket_from_owned_fd(cx, write_fd).unwrap();
+
+            assert!(RuntimeSocket::as_stack_io_fd(&read_fd).is_some());
+
+            assert_eq!(SocketIoRuntime::write(cx, &write_fd, b"hi").unwrap(), 2);
+
+            let mut read_buf = [0_u8; 2];
+            assert_eq!(
+                SocketIoRuntime::read(cx, &read_fd, &mut read_buf).unwrap(),
+                2
+            );
+            assert_eq!(&read_buf, b"hi");
+
+            let read = SocketIoRuntime::read_async(cx, &read_fd, vec![0_u8; 2]).unwrap();
+            let write = SocketIoRuntime::write_async(cx, &write_fd, b"ok".to_vec()).unwrap();
+
+            let written = write.get(cx).unwrap();
+            assert_eq!(written.bytes, 2);
+            assert_eq!(written.buffer, b"ok");
+
+            let read = read.get(cx).unwrap();
+            assert_eq!(read.bytes, 2);
+            assert_eq!(&read.buffer[..read.bytes], b"ok");
+
+            SocketIoRuntime::close(cx, read_fd).unwrap();
+            SocketIoRuntime::close(cx, write_fd).unwrap();
         });
     }
 
@@ -5698,6 +6165,222 @@ mod tests {
                 self.waiters.borrow_mut().push(waiter);
             }
         }
+    }
+
+    struct ManualRuntimeWait {
+        ready: Cell<bool>,
+        waiters: RefCell<StackfulWaiters>,
+        registrations: Cell<usize>,
+    }
+
+    impl ManualRuntimeWait {
+        fn new(ready: bool) -> Self {
+            Self {
+                ready: Cell::new(ready),
+                waiters: RefCell::new(StackfulWaiters::default()),
+                registrations: Cell::new(0),
+            }
+        }
+
+        fn wake_all(&self) {
+            self.ready.set(true);
+            self.waiters.borrow_mut().wake_all();
+        }
+    }
+
+    impl RuntimeWaitable for ManualRuntimeWait {
+        fn is_ready(&self) -> bool {
+            self.ready.get()
+        }
+
+        fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+            self.registrations.set(self.registrations.get() + 1);
+            if self.ready.get() {
+                false
+            } else {
+                self.waiters.borrow_mut().push(waiter);
+                true
+            }
+        }
+    }
+
+    struct ReadyDuringRuntimeRegistration {
+        ready: Cell<bool>,
+        registrations: Cell<usize>,
+    }
+
+    impl ReadyDuringRuntimeRegistration {
+        fn new() -> Self {
+            Self {
+                ready: Cell::new(false),
+                registrations: Cell::new(0),
+            }
+        }
+    }
+
+    impl RuntimeWaitable for ReadyDuringRuntimeRegistration {
+        fn is_ready(&self) -> bool {
+            self.ready.get()
+        }
+
+        fn add_stackful_waiter(&self, _waiter: Box<dyn StackfulWaiter>) -> bool {
+            self.registrations.set(self.registrations.get() + 1);
+            self.ready.set(true);
+            false
+        }
+    }
+
+    struct NoStackfulWaitContext;
+
+    impl RuntimeCapabilities for NoStackfulWaitContext {
+        fn runtime_family(&self) -> RuntimeFamily {
+            RuntimeFamily::Other("no-stackful-wait-test")
+        }
+
+        fn supports(&self, _capability: RuntimeCapability) -> bool {
+            false
+        }
+    }
+
+    impl StackfulWaitContext for NoStackfulWaitContext {
+        fn stackful_wait_registration(
+            &self,
+        ) -> Option<Box<dyn super::StackfulWaitRegistration + '_>> {
+            None
+        }
+
+        fn park_stackful(&self) {
+            panic!("unsupported context must not park");
+        }
+    }
+
+    #[test]
+    fn runtime_wait_ready_before_registration_does_not_require_stackful_context() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let waitable = ManualRuntimeWait::new(true);
+            cx.wait_stackful(&waitable).unwrap();
+            assert_eq!(waitable.registrations.get(), 0);
+        });
+    }
+
+    #[test]
+    fn runtime_wait_pending_root_context_reports_no_stackful_context() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let waitable = ManualRuntimeWait::new(false);
+            assert_eq!(
+                cx.wait_stackful(&waitable),
+                Err(RuntimeWaitError::NoStackfulContext {
+                    family: RuntimeFamily::Stack,
+                })
+            );
+            assert_eq!(waitable.registrations.get(), 0);
+        });
+    }
+
+    #[test]
+    fn runtime_wait_pending_unsupported_context_reports_capability_error() {
+        let waitable = ManualRuntimeWait::new(false);
+        let context = NoStackfulWaitContext;
+
+        let error = context.wait_stackful(&waitable).unwrap_err();
+        match error {
+            RuntimeWaitError::Unsupported(error) => {
+                assert_eq!(error.capability(), "stackful-wait");
+                assert_eq!(
+                    error.family(),
+                    RuntimeFamily::Other("no-stackful-wait-test")
+                );
+            }
+            other => panic!("unexpected runtime wait error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn runtime_wait_parks_and_wakes_stackful_task() {
+        let waitable = ManualRuntimeWait::new(false);
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let worker = scope.spawn(|cx| {
+                    cx.wait_stackful(&waitable).unwrap();
+                    42
+                });
+
+                while waitable.registrations.get() == 0 {
+                    cx.yield_now();
+                }
+                waitable.wake_all();
+
+                assert_eq!(worker.join(cx), 42);
+            });
+        });
+    }
+
+    #[test]
+    fn runtime_wait_any_rechecks_ready_before_registration_race() {
+        let race = ReadyDuringRuntimeRegistration::new();
+        let pending = ManualRuntimeWait::new(false);
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let worker = scope.spawn(|cx| cx.wait_any_stackful(&[&race, &pending]).unwrap());
+
+                while pending.registrations.get() == 0 {
+                    cx.yield_now();
+                }
+
+                pending.wake_all();
+                assert_eq!(worker.join(cx), 0);
+            });
+        });
+        assert_eq!(race.registrations.get(), 1);
+    }
+
+    #[test]
+    fn runtime_waitable_adapter_preserves_stack_core_timeout_waits() {
+        let waitable = ManualRuntimeWait::new(false);
+        let adapter = RuntimeWaitableAdapter::new(&waitable);
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let waitables: [&dyn Waitable; 1] = [&adapter];
+            assert_eq!(
+                cx.wait_all(&waitables, Some(Duration::from_millis(1))),
+                Err(WaitError::TimedOut)
+            );
+        });
+    }
+
+    #[test]
+    fn runtime_waitable_adapter_wakes_ready_before_registration_race() {
+        let race = ReadyDuringRuntimeRegistration::new();
+        let adapter = RuntimeWaitableAdapter::new(&race);
+        let pending = ManualWait::new();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let worker = scope.spawn(|cx| {
+                    let waitables: [&dyn Waitable; 2] = [&adapter, &pending];
+                    cx.wait_any(&waitables, Some(Duration::from_millis(10)))
+                        .unwrap()
+                });
+
+                while pending.waiter_slots() == 0 {
+                    cx.yield_now();
+                }
+                pending.wake_one();
+
+                assert_eq!(worker.join(cx), 0);
+            });
+        });
+        assert_eq!(race.registrations.get(), 1);
     }
 
     fn external_waiter_count(cx: &RuntimeContext<'_>) -> usize {

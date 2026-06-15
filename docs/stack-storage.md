@@ -21,6 +21,14 @@ Storage operations are expressed as `RequestParts` and executed by a `Transport`
 `kimojio-stack-http` client connection. Tests and applications can also provide
 custom transports.
 
+The storage runtime migration boundary is `Transport`. Storage request builders,
+retry classification, diagnostics, and body replay are already independent of a
+concrete runtime; the current stack HTTP adapter remains concrete because the
+protocol-neutral HTTP client is still concrete. Future migration should make that
+adapter generic over the shared stack socket contract after generic HTTP client
+wrappers exist. Direct file or disk I/O is outside the HTTP+TLS migration and
+should be added later as a separate shared runtime capability if needed.
+
 Important behavior:
 
 - Request bodies use `ReplayBody` so retry eligibility is visible.
@@ -31,9 +39,9 @@ Important behavior:
 - Service error bodies are drained but not delivered to success sinks.
 - Connected plaintext transport deadlines are stored on the transport, not in a
   global or task-global state.
-- TLS transport deadlines currently perform expired-deadline pre-checks only;
-  stalled TLS I/O timeout enforcement is deferred with connector/TLS timeout
-  support.
+- TLS transport deadlines are also transport-local and use the shared HTTP/TLS
+  active timeout path once a connected transport exists. Endpoint dialing,
+  signing, and connector-level timeout policy remain future work.
 
 ## Operation families
 
@@ -76,7 +84,7 @@ Optional gates:
 ## Current limitations
 
 - Endpoint dialing and request signing are not implemented yet.
-- Stalled TLS read/write timeout enforcement is not implemented yet.
+- Endpoint connector timeout policy is not implemented yet.
 - Archive compression/decompression is represented through metadata integration
   points; codecs are caller-owned.
 - The API is intentionally low-level. Higher-level conveniences can be layered

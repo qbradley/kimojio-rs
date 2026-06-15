@@ -185,7 +185,10 @@ fn runtime_baseline(c: &mut Criterion) {
         });
         runtime.block_on(|cx| {
             let ring = cx.create_shared_ring();
-            b.iter(|| ring.nop(cx).unwrap());
+            cx.scope(|scope| {
+                let bench = scope.spawn(|cx| b.iter(|| ring.nop(cx).unwrap()));
+                bench.join(cx);
+            });
         });
     });
 
@@ -197,7 +200,11 @@ fn runtime_baseline(c: &mut Criterion) {
         });
         runtime.block_on(|cx| {
             let ring = cx.create_shared_ring();
-            b.iter(|| ring.sleep(cx, Duration::from_millis(0)).unwrap());
+            cx.scope(|scope| {
+                let bench =
+                    scope.spawn(|cx| b.iter(|| ring.sleep(cx, Duration::from_millis(0)).unwrap()));
+                bench.join(cx);
+            });
         });
     });
 

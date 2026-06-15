@@ -8,9 +8,9 @@
 //! [`crate::http1::ClientConnection`] or [`crate::http1::ServerConnection`].
 
 use bytes::Bytes;
-use kimojio_stack::RuntimeContext;
+use kimojio_stack::RuntimeSocket;
 
-use crate::{Body, BodyBuilder, BodyLimits, Error, LimitKind, StackTransport};
+use crate::{Body, BodyBuilder, BodyLimits, Error, HttpRuntime, LimitKind, RuntimeStackTransport};
 
 /// HTTP/1.1 body framing strategy for a message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,13 +26,17 @@ pub enum BodyKind {
 }
 
 /// Reads and buffers a body according to `kind`.
-pub fn read_body(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub fn read_body<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     kind: BodyKind,
     limits: BodyLimits,
-) -> Result<Body, Error> {
+) -> Result<Body, Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     match kind {
         BodyKind::Empty => Ok(Body::empty()),
         BodyKind::ContentLength(len) => read_content_length(cx, transport, read_buf, len, limits),
@@ -42,15 +46,17 @@ pub fn read_body(
 }
 
 /// Reads a body incrementally according to `kind`.
-pub fn read_body_chunks<F>(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub fn read_body_chunks<R, S, F>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     kind: BodyKind,
     limits: BodyLimits,
     mut on_chunk: F,
 ) -> Result<(), Error>
 where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
     F: FnMut(Bytes) -> Result<(), Error>,
 {
     match kind {
@@ -65,13 +71,17 @@ where
 }
 
 /// Drains a body without delivering bytes to a caller sink.
-pub fn drain_body(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub fn drain_body<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     kind: BodyKind,
     limits: BodyLimits,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     match kind {
         BodyKind::Empty => Ok(()),
         BodyKind::ContentLength(len) => {
@@ -97,26 +107,32 @@ pub fn write_body(buf: &mut Vec<u8>, body: &Body, chunked: bool) {
     }
 }
 
-fn read_content_length(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+fn read_content_length<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     len: usize,
     limits: BodyLimits,
-) -> Result<Body, Error> {
+) -> Result<Body, Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     limits.check_body_len(len)?;
     let bytes = read_exact_bytes(cx, transport, read_buf, len)?;
     Body::from_bytes(bytes, limits)
 }
 
-fn read_content_length_chunks<F>(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+fn read_content_length_chunks<R, S, F>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     len: usize,
     on_chunk: &mut F,
 ) -> Result<(), Error>
 where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
     F: FnMut(Bytes) -> Result<(), Error>,
 {
     let mut remaining = len;
@@ -138,12 +154,16 @@ where
     Ok(())
 }
 
-fn read_chunked(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+fn read_chunked<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     limits: BodyLimits,
-) -> Result<Body, Error> {
+) -> Result<Body, Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let mut body = BodyBuilder::new(limits);
     let mut total_len = 0_usize;
     loop {
@@ -169,14 +189,16 @@ fn read_chunked(
     }
 }
 
-fn read_chunked_chunks<F>(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+fn read_chunked_chunks<R, S, F>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     limits: BodyLimits,
     on_chunk: &mut F,
 ) -> Result<(), Error>
 where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
     F: FnMut(Bytes) -> Result<(), Error>,
 {
     let mut total_len = 0_usize;
@@ -202,12 +224,16 @@ where
     }
 }
 
-fn read_to_eof(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+fn read_to_eof<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     limits: BodyLimits,
-) -> Result<Body, Error> {
+) -> Result<Body, Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let mut body = BodyBuilder::new(limits);
     if !read_buf.is_empty() {
         body.append(read_buf)?;
@@ -224,14 +250,16 @@ fn read_to_eof(
     }
 }
 
-fn read_to_eof_chunks<F>(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+fn read_to_eof_chunks<R, S, F>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     limits: BodyLimits,
     on_chunk: &mut F,
 ) -> Result<(), Error>
 where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
     F: FnMut(Bytes) -> Result<(), Error>,
 {
     let mut total_len = 0_usize;
@@ -253,12 +281,16 @@ where
     }
 }
 
-fn read_exact_bytes(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+fn read_exact_bytes<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     len: usize,
-) -> Result<Bytes, Error> {
+) -> Result<Bytes, Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let mut bytes = Vec::with_capacity(len);
     let buffered = read_buf.len().min(len);
     bytes.extend_from_slice(&read_buf[..buffered]);
@@ -277,12 +309,16 @@ fn read_exact_bytes(
     Ok(Bytes::from(bytes))
 }
 
-fn drain_chunked(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+fn drain_chunked<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     limits: BodyLimits,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let mut total_len = 0_usize;
     loop {
         let line = read_line(cx, transport, read_buf, 1024)?;
@@ -306,12 +342,16 @@ fn drain_chunked(
     }
 }
 
-fn drain_exact(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+fn drain_exact<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     mut len: usize,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let mut buf = [0_u8; 16 * 1024];
     while len != 0 {
         let amount = len.min(buf.len());
@@ -321,12 +361,16 @@ fn drain_exact(
     Ok(())
 }
 
-fn drain_to_eof(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+fn drain_to_eof<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     limits: BodyLimits,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let mut total_len = read_buf.len();
     limits.check_body_len(total_len)?;
     read_buf.clear();
@@ -341,12 +385,16 @@ fn drain_to_eof(
     }
 }
 
-fn read_exact_into(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+fn read_exact_into<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     mut out: &mut [u8],
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let buffered = read_buf.len().min(out.len());
     out[..buffered].copy_from_slice(&read_buf[..buffered]);
     read_buf.drain(..buffered);
@@ -362,12 +410,16 @@ fn read_exact_into(
     Ok(())
 }
 
-fn read_line(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+fn read_line<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     limit: usize,
-) -> Result<Vec<u8>, Error> {
+) -> Result<Vec<u8>, Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     loop {
         if let Some(pos) = find_crlf(read_buf) {
             let mut line = read_buf.drain(..pos + 2).collect::<Vec<_>>();

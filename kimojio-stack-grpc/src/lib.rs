@@ -66,6 +66,15 @@
 //! [`client::ServerStreamingResponse`] borrows its [`UnaryClient`] mutably for
 //! the life of the stream; use separate HTTP/2 connections when concurrent
 //! streaming RPCs are needed.
+//!
+//! # Runtime migration boundary
+//!
+//! The runtime boundary for this crate is intentionally the HTTP/2 connection:
+//! [`UnaryClient`] owns a `kimojio-stack-http` client connection and
+//! [`UnaryServer`] serves a `kimojio-stack-http` server connection supplied by
+//! the caller. When HTTP/2 grows generic runtime connection types, gRPC can
+//! parameterize over those same types without adding a second runtime abstraction
+//! or a hidden dispatch layer.
 
 pub mod client;
 pub mod codec;
@@ -1588,6 +1597,15 @@ mod tests {
                 )
                 .unwrap_err()
         })
+    }
+
+    #[test]
+    fn runtime_migration_boundary_is_http2_connection() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let http_client = h2::ClientConnection::new(client_transport, HttpConfig::default());
+        let _grpc_client = UnaryClient::new(http_client, ClientConfig::default());
+        let _http_server = h2::ServerConnection::new(server_transport, HttpConfig::default());
+        let _grpc_server = UnaryServer::new(ServerConfig::default());
     }
 
     fn valid_raw_request(body: Body) -> Request<Body> {

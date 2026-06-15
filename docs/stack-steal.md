@@ -54,6 +54,18 @@ owner worker and use bounded per-ring queues, bounded submitted-operation
 tracking, deduplicated pending worker commands, and worker wakeups for
 submission and completion routing.
 
+The runtime also implements the shared `kimojio-stack::runtime_api` socket I/O
+contract used by the runtime-agnostic HTTP/1.1+TLS slice. Worker code routes
+socket operations through worker-local rings, while root/non-worker code uses
+shared rings. Runtime-neutral cancellation requests leave result handles
+drainable, so HTTP/TLS timeout paths can cancel pending shared socket operations,
+drain worker-owned state, and then close/reclaim sockets without hiding ownership
+costs.
+Pending shared-ring waits must run from a spawned stackful context that can
+register an external waiter. Root `block_on` code may create shared rings and
+submit work for routing, but waiting for a pending shared result from root returns
+a clear no-stackful-context error instead of falling back to OS-thread sleeps.
+
 Each worker thread owns a worker-local stackful scheduler. Stealing moves
 eligible queued jobs before they start running; already-running stackful
 continuations do not migrate between workers.
@@ -86,9 +98,10 @@ median and p99 values for local scheduling, steal transfer/resume, and worker
 scaling. Until that report exists, the release-mode median/p99 threshold work is
 a failing performance investigation item, not a passed acceptance criterion.
 
-The crate is a foundation for future runtime-generic stack HTTP, gRPC, TLS,
-storage, and telemetry libraries. Those downstream crates have not been migrated
-to the stealing runtime yet.
+The crate is a foundation for runtime-generic stack HTTP, gRPC, TLS, storage,
+and telemetry libraries. The first migrated downstream slice is HTTP/1.1 over
+plaintext/TLS; HTTP/2, gRPC, storage, and telemetry are still compatibility and
+readiness targets.
 
 ## Limitations and Future Work
 
@@ -98,13 +111,16 @@ to the stealing runtime yet.
 - Queue saturation for `spawn_stealable` is currently reported when the returned
   handle is joined, by resuming a rejection panic payload. A fallible
   backpressure-oriented spawn API is future work.
-- Shared-ring I/O currently supports no-op and timeout/sleep only. Read/write,
-  accept/connect, send/recv, and registered-resource operations are future work.
+- Shared-ring I/O currently supports no-op, timeout/sleep, and the socket
+  read/write/shutdown/close lifecycle used by the HTTP+TLS migration. Broader
+  accept/connect, send/recv, registered-resource, file, and storage operations
+  are future work.
 - Shared-ring completion currently polls active shared operations in the owner
   worker loop; lower-overhead completion fanout remains an optimization item if
   benchmarks show it is needed.
-- Downstream stack HTTP, gRPC, TLS, storage, and telemetry crates are not
-  runtime-generic yet.
+- Downstream HTTP/1.1+TLS has a runtime-generic slice with runtime-neutral async
+  wait and active TLS deadlines. HTTP/2, gRPC, storage, and telemetry are not
+  fully runtime-generic yet.
 - The crate is not publishable until the shared `kimojio-stack` runtime API is
   versioned and released first.
 - Release-mode median/p99 threshold validation is currently a failing

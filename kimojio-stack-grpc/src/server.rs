@@ -31,6 +31,13 @@ impl Default for ServerConfig {
 
 /// Stackful gRPC server that dispatches incoming requests to registered unary and
 /// server-streaming handlers over an HTTP/2 connection.
+///
+/// # Runtime migration boundary
+///
+/// The server dispatch table is independent of socket or ring ownership. Runtime
+/// I/O enters only through the `h2::ServerConnection` argument to
+/// [`serve_one`](Self::serve_one), so the generic HTTP/2 server connection can be
+/// adopted here without introducing a separate gRPC runtime trait.
 pub struct UnaryServer {
     handlers: BTreeMap<String, Box<dyn MethodHandler>>,
     config: ServerConfig,

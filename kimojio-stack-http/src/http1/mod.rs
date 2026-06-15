@@ -6,8 +6,8 @@ pub mod client;
 pub mod codec;
 pub mod server;
 
-pub use client::ClientConnection;
-pub use server::ServerConnection;
+pub use client::{ClientConnection, RuntimeClientConnection};
+pub use server::{RuntimeServerConnection, ServerConnection};
 
 /// HTTP/1.1 connection configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -87,6 +87,12 @@ pub struct ServerStreamingResponse<'a, M> {
 /// The client name is historical: it supports both unary calls and
 /// server-streaming calls. It owns the HTTP/2 connection and does not perform
 /// background reads, retries, or automatic reconnects.
+///
+/// # Runtime migration boundary
+///
+/// Runtime-specific I/O is contained in the owned HTTP/2 connection. A future
+/// generic HTTP/2 connection can replace the concrete `h2::ClientConnection`
+/// field without changing gRPC framing, metadata, or status handling.
 pub struct UnaryClient {
     http: h2::ClientConnection,
     config: ClientConfig,

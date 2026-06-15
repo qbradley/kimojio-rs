@@ -1,6 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Shared OTLP unary export client.
+//!
+//! Runtime I/O is inherited from the contained gRPC unary client and its HTTP/2
+//! connection. This module intentionally adds no runtime instrumentation hooks or
+//! hidden background export machinery; future hooks should be optional and attach
+//! below this layer at the shared runtime socket contract.
+
 use kimojio_stack_grpc::ClientConfig;
 use kimojio_stack_grpc::{Metadata, UnaryClient};
 use kimojio_stack_http::{HttpConfig, StackTransport, h2};

@@ -6,7 +6,10 @@
 //! Page writes and clears require 512-byte alignment. Ambiguous write failures
 //! are not directly retried by [`RetryPolicy`](crate::RetryPolicy); use
 //! [`classify_page_write_failure`] or [`classify_sequence_number_failure`] to
-//! decide whether to refresh properties before attempting recovery.
+//! decide whether to refresh properties before attempting recovery. Page storage
+//! currently travels through the storage [`Transport`](crate::Transport)
+//! boundary; direct file or disk runtime capabilities are intentionally separate
+//! future work.
 //!
 //! ```
 //! use kimojio_stack_storage::{PageRange, PAGE_ALIGNMENT};

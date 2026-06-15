@@ -16,14 +16,21 @@
 //! [`RuntimeContext::create_shared_ring`]. This keeps worker-local versus shared
 //! I/O costs visible to the application. Shared rings submit through runtime
 //! workers instead of hiding a helper OS thread per ring; the current shared
-//! operation surface is limited to no-op and timeout operations while the
-//! submission, completion, and cancellation architecture is shaped.
+//! operation surface includes no-op, timeout, and socket read/write lifecycle
+//! operations while broader file/storage I/O remains outside this crate's first
+//! downstream migration slice.
+//! Runtime-neutral socket cancellation requests keep result handles drainable, so
+//! downstream HTTP/TLS timeout paths can cancel pending shared operations, let
+//! worker-owned state retire, and then close/reclaim sockets explicitly.
 //! Shared rings are runtime-affine. In multi-worker runtimes, each shared ring
 //! is assigned a real owner worker and routed through that worker's embedded
 //! io_uring scheduler. In single-worker runtimes, shared rings are driven by the
 //! owning stack runtime directly. Worker-local rings require an actual worker
 //! context and cannot be created from the root `block_on` context of a
-//! multi-worker runtime.
+//! multi-worker runtime. Pending shared-ring waits require a spawned stackful
+//! context that can register an external waiter; root `block_on` code may create
+//! and submit shared operations, but waiting for pending results from root returns
+//! a clear no-stackful-context error instead of sleeping an OS thread.
 //!
 //! # Example
 //!
@@ -77,6 +84,7 @@ use std::error::Error;
 use std::fmt;
 use std::hint;
 use std::num::NonZeroUsize;
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::panic::{self, AssertUnwindSafe};
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -88,10 +96,12 @@ use std::time::{Duration, Instant};
 use crossbeam_deque::{Injector, Steal, Stealer, Worker as CrossbeamWorker};
 pub use kimojio_stack::StackUsage;
 use kimojio_stack::{
-    Errno, NoPayloadIo, RuntimeCapabilities, RuntimeCapability, RuntimeFamily, SchedulerWake,
-    StackfulWaitContext, StackfulWaitRegistration, StackfulWaiter, UnsupportedCapability,
-    WaitRegistration, Waitable,
+    Errno, IoReadBuffer, IoRuntime, IoWriteBuffer, NoPayloadIo, RawIo, ReadOutput,
+    RuntimeCapabilities, RuntimeCapability, RuntimeFamily, RuntimeIoError, RuntimeWaitable,
+    SchedulerWake, StackfulWaitContext, StackfulWaitRegistration, StackfulWaiter,
+    UnsupportedCapability, WaitRegistration, Waitable, WriteOutput,
 };
+use rustix::net::Shutdown;
 
 pub mod runtime_api;
 
@@ -598,12 +608,17 @@ pub enum RingError {
     },
     /// A ring was used from a different runtime instance.
     WrongRuntime,
+    /// A pending shared-ring operation was waited from a context that cannot
+    /// register and park a stackful coroutine.
+    NoStackfulContext,
     /// The runtime or ring queue is at its configured capacity.
     QueueFull,
     /// A runtime-level shared ring resource limit has been reached.
     ResourceLimit,
     /// The requested duration cannot be represented by this platform's clock.
     DurationOutOfRange,
+    /// A descriptor close was requested while other handles still reference it.
+    FdInUse,
     /// The shared ring was closed before the operation completed.
     Closed,
     /// The operation was canceled before completion.
@@ -631,9 +646,13 @@ impl fmt::Display for RingError {
                 current.index()
             ),
             Self::WrongRuntime => f.write_str("ring belongs to a different runtime"),
+            Self::NoStackfulContext => {
+                f.write_str("pending shared-ring operation requires a stackful wait context")
+            }
             Self::QueueFull => f.write_str("ring queue is full"),
             Self::ResourceLimit => f.write_str("shared ring resource limit reached"),
             Self::DurationOutOfRange => f.write_str("duration is outside the supported range"),
+            Self::FdInUse => f.write_str("descriptor still has cloned or pending handles"),
             Self::Closed => f.write_str("ring is closed"),
             Self::Canceled => f.write_str("ring operation was canceled"),
             Self::Io(error) => write!(f, "io_uring operation failed: {error}"),
@@ -647,6 +666,47 @@ impl Error for RingError {}
 #[derive(Clone)]
 pub struct Ring {
     inner: RingInner,
+}
+
+/// Socket/file descriptor handle used by [`Ring`] socket operations.
+///
+/// The handle clones by incrementing a userspace reference count, not by calling
+/// `dup(2)`. Pending shared-ring operations clone it so the descriptor remains
+/// open until the worker-owned io_uring completion is reaped.
+#[derive(Clone)]
+pub struct RingFd {
+    fd: Arc<OwnedFd>,
+}
+
+impl RingFd {
+    /// Takes ownership of `fd` for ring socket I/O.
+    pub fn from_owned(fd: OwnedFd) -> Self {
+        Self { fd: Arc::new(fd) }
+    }
+
+    /// Converts back into the owned fd when no clones or pending operations exist.
+    pub fn into_owned(self) -> Result<OwnedFd, Self> {
+        match Arc::try_unwrap(self.fd) {
+            Ok(fd) => Ok(fd),
+            Err(fd) => Err(Self { fd }),
+        }
+    }
+
+    fn strong_count(&self) -> usize {
+        Arc::strong_count(&self.fd)
+    }
+}
+
+impl AsFd for RingFd {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.fd.as_fd()
+    }
+}
+
+impl fmt::Debug for RingFd {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RingFd").finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone)]
@@ -706,6 +766,118 @@ impl Ring {
         self.timeout(cx, duration)?.wait(cx)
     }
 
+    /// Reads from `fd` into `buf`.
+    pub fn read(
+        &self,
+        cx: &RuntimeContext<'_>,
+        fd: &RingFd,
+        buf: &mut [u8],
+    ) -> Result<usize, RingError> {
+        match &self.inner {
+            RingInner::WorkerLocal { runtime_id, owner } => {
+                ensure_owner(*runtime_id, *owner, cx)?;
+                cx.inner.read(fd, buf).map_err(RingError::from)
+            }
+            RingInner::Shared(_) => {
+                let read = self.read_async(cx, fd, vec![0_u8; buf.len()])?.get(cx)?;
+                let bytes = read.bytes;
+                buf[..bytes].copy_from_slice(&read.buffer[..bytes]);
+                Ok(bytes)
+            }
+        }
+    }
+
+    /// Writes `buf` to `fd`.
+    pub fn write(
+        &self,
+        cx: &RuntimeContext<'_>,
+        fd: &RingFd,
+        buf: &[u8],
+    ) -> Result<usize, RingError> {
+        match &self.inner {
+            RingInner::WorkerLocal { runtime_id, owner } => {
+                ensure_owner(*runtime_id, *owner, cx)?;
+                cx.inner.write(fd, buf).map_err(RingError::from)
+            }
+            RingInner::Shared(_) => self
+                .write_async(cx, fd, buf.to_vec())?
+                .get(cx)
+                .map(|output| output.bytes),
+        }
+    }
+
+    /// Starts a read into an owned buffer.
+    pub fn read_async<B>(
+        &self,
+        cx: &RuntimeContext<'_>,
+        fd: &RingFd,
+        mut buffer: B,
+    ) -> Result<RingReadResult<B>, RingError>
+    where
+        B: IoReadBuffer + Send + 'static,
+    {
+        Ok(match &self.inner {
+            RingInner::WorkerLocal { runtime_id, owner } => {
+                ensure_owner(*runtime_id, *owner, cx)?;
+                let len = buffer.io_buffer_len();
+                let ptr = buffer.io_buffer_mut_ptr();
+                let io = unsafe { cx.inner.submit_raw_read(fd, ptr, len) };
+                RingIoResult::local(io, fd.clone(), buffer, read_output::<B>)
+            }
+            RingInner::Shared(shared) => shared.submit_read(cx, fd.clone(), buffer)?,
+        })
+    }
+
+    /// Starts a write from an owned buffer.
+    pub fn write_async<B>(
+        &self,
+        cx: &RuntimeContext<'_>,
+        fd: &RingFd,
+        buffer: B,
+    ) -> Result<RingWriteResult<B>, RingError>
+    where
+        B: IoWriteBuffer + Send + 'static,
+    {
+        Ok(match &self.inner {
+            RingInner::WorkerLocal { runtime_id, owner } => {
+                ensure_owner(*runtime_id, *owner, cx)?;
+                let len = buffer.io_buffer_len();
+                let ptr = buffer.io_buffer_ptr();
+                let io = unsafe { cx.inner.submit_raw_write(fd, ptr, len) };
+                RingIoResult::local(io, fd.clone(), buffer, write_output::<B>)
+            }
+            RingInner::Shared(shared) => shared.submit_write(cx, fd.clone(), buffer)?,
+        })
+    }
+
+    /// Shuts down part or all of a connected socket.
+    pub fn shutdown(
+        &self,
+        cx: &RuntimeContext<'_>,
+        fd: &RingFd,
+        how: Shutdown,
+    ) -> Result<(), RingError> {
+        match &self.inner {
+            RingInner::WorkerLocal { runtime_id, owner } => {
+                ensure_owner(*runtime_id, *owner, cx)?;
+                cx.inner.shutdown(fd, how).map_err(RingError::from)
+            }
+            RingInner::Shared(shared) => shared.submit_shutdown(cx, fd.clone(), how)?.wait(cx),
+        }
+    }
+
+    /// Closes `fd` through this ring.
+    pub fn close(&self, cx: &RuntimeContext<'_>, fd: RingFd) -> Result<(), RingError> {
+        match &self.inner {
+            RingInner::WorkerLocal { runtime_id, owner } => {
+                ensure_owner(*runtime_id, *owner, cx)?;
+                let fd = fd.into_owned().map_err(|_| RingError::FdInUse)?;
+                cx.inner.close(fd).map_err(RingError::from)
+            }
+            RingInner::Shared(shared) => shared.submit_close(cx, fd)?.wait(cx),
+        }
+    }
+
     #[cfg(test)]
     fn shared_submitted_operation_count(&self) -> Option<usize> {
         match &self.inner {
@@ -731,6 +903,302 @@ impl Ring {
             RingInner::Shared(shared) => Some(shared.core.test_counters()),
             RingInner::WorkerLocal { .. } => None,
         }
+    }
+}
+
+/// Waitable result for an owned-buffer ring read.
+pub type RingReadResult<B> = RingIoResult<ReadOutput<B>, B>;
+
+/// Waitable result for an owned-buffer ring write.
+pub type RingWriteResult<B> = RingIoResult<WriteOutput<B>, B>;
+
+/// Waitable result for an owned-buffer ring I/O operation.
+#[must_use = "ring I/O results should be completed with get, try_get, or cancel"]
+pub struct RingIoResult<T, B: 'static> {
+    inner: Option<RingIoResultInner<B>>,
+    output: fn(B, u32) -> T,
+}
+
+enum RingIoResultInner<B: 'static> {
+    Local(LocalBufferOperation<B>),
+    Shared(SharedBufferOperation<B>),
+}
+
+impl<T, B> RingIoResult<T, B>
+where
+    B: 'static,
+{
+    fn local(io: RawIo, fd: RingFd, buffer: B, output: fn(B, u32) -> T) -> Self {
+        Self {
+            inner: Some(RingIoResultInner::Local(LocalBufferOperation {
+                io,
+                fd: Some(fd),
+                buffer: Some(buffer),
+            })),
+            output,
+        }
+    }
+
+    fn shared(
+        state: Arc<SharedOpState>,
+        buffer: Arc<Mutex<Option<B>>>,
+        fd: RingFd,
+        ring: SharedRing,
+        output: fn(B, u32) -> T,
+    ) -> Self {
+        Self {
+            inner: Some(RingIoResultInner::Shared(SharedBufferOperation {
+                state,
+                buffer,
+                fd,
+                _ring: ring,
+            })),
+            output,
+        }
+    }
+
+    /// Returns the completed result if the operation is ready.
+    pub fn try_get(&mut self) -> Option<Result<T, RingError>> {
+        let inner = self.inner.as_mut()?;
+        let result = match inner {
+            RingIoResultInner::Local(operation) => operation.try_get(),
+            RingIoResultInner::Shared(operation) => operation.try_get(),
+        }?;
+        self.inner = None;
+        Some(result.map(|(bytes, buffer)| (self.output)(buffer, bytes)))
+    }
+
+    /// Waits for the operation to complete.
+    pub fn get(mut self, cx: &RuntimeContext<'_>) -> Result<T, RingError> {
+        loop {
+            if let Some(result) = self.try_get() {
+                return result;
+            }
+
+            match self.inner.as_ref().expect("ring I/O result missing") {
+                RingIoResultInner::Local(_) => {
+                    cx.inner
+                        .wait_all(&[&self as &dyn Waitable], None)
+                        .expect("wait_all with non-empty waitable list cannot fail");
+                }
+                RingIoResultInner::Shared(operation) => {
+                    wait_until_shared_state_ready(&operation.state, cx)?;
+                }
+            }
+        }
+    }
+
+    /// Requests cancellation without waiting for completion.
+    pub fn cancel(&mut self) {
+        let Some(inner) = self.inner.take() else {
+            return;
+        };
+        match inner {
+            RingIoResultInner::Local(mut operation) => operation.cancel(),
+            RingIoResultInner::Shared(operation) => operation.cancel(),
+        }
+    }
+
+    fn request_cancel(&mut self, cx: &RuntimeContext<'_>) -> Result<(), RingError> {
+        let Some(inner) = self.inner.as_mut() else {
+            return Ok(());
+        };
+        match inner {
+            RingIoResultInner::Local(operation) => operation.request_cancel(cx),
+            RingIoResultInner::Shared(operation) => operation.request_cancel(cx),
+        }
+    }
+}
+
+impl<T, B> Waitable for RingIoResult<T, B>
+where
+    B: 'static,
+{
+    fn is_ready(&self) -> bool {
+        match self.inner.as_ref() {
+            None => true,
+            Some(RingIoResultInner::Local(operation)) => Waitable::is_ready(&operation.io),
+            Some(RingIoResultInner::Shared(operation)) => operation.state.is_terminal(),
+        }
+    }
+
+    fn add_waiter(&self, cx: &kimojio_stack::RuntimeContext<'_>, registration: &WaitRegistration) {
+        match self.inner.as_ref() {
+            None => {}
+            Some(RingIoResultInner::Local(operation)) => operation.io.add_waiter(cx, registration),
+            Some(RingIoResultInner::Shared(operation)) => {
+                Waitable::add_waiter(&*operation.state, cx, registration);
+            }
+        }
+    }
+}
+
+impl<T, B> RuntimeWaitable for RingIoResult<T, B>
+where
+    B: 'static,
+{
+    fn is_ready(&self) -> bool {
+        Waitable::is_ready(self)
+    }
+
+    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+        match self.inner.as_ref() {
+            None => false,
+            Some(RingIoResultInner::Local(operation)) => operation.io.add_stackful_waiter(waiter),
+            Some(RingIoResultInner::Shared(operation)) => operation.state.add_waiter(waiter),
+        }
+    }
+}
+
+impl<T, B> fmt::Debug for RingIoResult<T, B>
+where
+    B: 'static,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RingIoResult")
+            .field("ready", &Waitable::is_ready(self))
+            .finish()
+    }
+}
+
+impl<T, B> Drop for RingIoResult<T, B>
+where
+    B: 'static,
+{
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+struct LocalBufferOperation<B> {
+    io: RawIo,
+    fd: Option<RingFd>,
+    buffer: Option<B>,
+}
+
+impl<B> LocalBufferOperation<B>
+where
+    B: 'static,
+{
+    fn try_get(&mut self) -> Option<Result<(u32, B), RingError>> {
+        let result = self.io.try_wait()?.map_err(RingError::from);
+        match result {
+            Ok(bytes) => {
+                let buffer = self
+                    .buffer
+                    .take()
+                    .expect("local ring I/O completed without buffer");
+                Some(Ok((bytes, buffer)))
+            }
+            Err(error) => {
+                drop(self.buffer.take());
+                Some(Err(error))
+            }
+        }
+    }
+
+    fn cancel(&mut self) {
+        match (self.fd.take(), self.buffer.take()) {
+            (Some(fd), Some(buffer)) => self.io.cancel_with_payload((fd, buffer)),
+            (fd, buffer) => {
+                drop(fd);
+                drop(buffer);
+                self.io.cancel();
+            }
+        }
+    }
+
+    fn request_cancel(&mut self, cx: &RuntimeContext<'_>) -> Result<(), RingError> {
+        if !Waitable::is_ready(&self.io) {
+            cx.inner.cancel_raw_io(&self.io).map_err(RingError::from)?;
+        }
+        Ok(())
+    }
+}
+
+struct SharedBufferOperation<B> {
+    state: Arc<SharedOpState>,
+    buffer: Arc<Mutex<Option<B>>>,
+    fd: RingFd,
+    _ring: SharedRing,
+}
+
+impl<B> SharedBufferOperation<B> {
+    fn try_get(&self) -> Option<Result<(u32, B), RingError>> {
+        let result = self.state.try_take()?;
+        match result {
+            Ok(bytes) => {
+                let buffer = self
+                    .buffer
+                    .lock()
+                    .expect("shared ring I/O buffer mutex poisoned")
+                    .take()
+                    .expect("shared ring I/O completed without buffer");
+                Some(Ok((bytes, buffer)))
+            }
+            Err(error) => {
+                drop(
+                    self.buffer
+                        .lock()
+                        .expect("shared ring I/O buffer mutex poisoned")
+                        .take(),
+                );
+                Some(Err(error))
+            }
+        }
+    }
+
+    fn cancel(&self) {
+        self.state.cancel();
+        drop(
+            self.buffer
+                .lock()
+                .expect("shared ring I/O buffer mutex poisoned")
+                .take(),
+        );
+    }
+
+    fn request_cancel(&mut self, cx: &RuntimeContext<'_>) -> Result<(), RingError> {
+        self.state.cancel();
+        wait_for_fd_clone_release(cx, &self.fd, 2)
+    }
+}
+
+fn read_output<B>(buffer: B, bytes: u32) -> ReadOutput<B> {
+    ReadOutput {
+        bytes: bytes as usize,
+        buffer,
+    }
+}
+
+fn write_output<B>(buffer: B, bytes: u32) -> WriteOutput<B> {
+    WriteOutput {
+        bytes: bytes as usize,
+        buffer,
+    }
+}
+
+fn wait_for_fd_clone_release(
+    cx: &RuntimeContext<'_>,
+    fd: &RingFd,
+    retained_count: usize,
+) -> Result<(), RingError> {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while fd.strong_count() > retained_count {
+        if Instant::now() >= deadline {
+            return Err(RingError::FdInUse);
+        }
+        IoRuntime::sleep_for(cx, Duration::ZERO).map_err(ring_error_from_runtime_io)?;
+        thread::sleep(Duration::from_micros(50));
+    }
+    Ok(())
+}
+
+fn ring_error_from_runtime_io(error: RuntimeIoError) -> RingError {
+    match error {
+        RuntimeIoError::Io(error) => RingError::Io(error),
+        RuntimeIoError::Unsupported(_) => RingError::Canceled,
+        RuntimeIoError::Other(_) => RingError::Canceled,
     }
 }
 
@@ -809,7 +1277,7 @@ impl RingTimeout {
             RingTimeoutInner::Shared(state) => {
                 let result = state.try_take()?;
                 self.inner = None;
-                Some(result)
+                Some(result.map(|_| ()))
             }
         }
     }
@@ -846,6 +1314,28 @@ impl RingTimeout {
     }
 }
 
+impl RuntimeWaitable for RingTimeout {
+    fn is_ready(&self) -> bool {
+        match self.inner.as_ref() {
+            None => true,
+            Some(RingTimeoutInner::Local(timeout)) => RuntimeWaitable::is_ready(timeout),
+            Some(RingTimeoutInner::SharedLocalDriver(operation)) => operation.is_wait_ready(),
+            Some(RingTimeoutInner::Shared(state)) => state.is_terminal(),
+        }
+    }
+
+    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+        match self.inner.as_ref() {
+            None => false,
+            Some(RingTimeoutInner::Local(timeout)) => timeout.add_stackful_waiter(waiter),
+            Some(RingTimeoutInner::SharedLocalDriver(operation)) => {
+                operation.add_stackful_waiter(waiter)
+            }
+            Some(RingTimeoutInner::Shared(state)) => state.add_waiter(waiter),
+        }
+    }
+}
+
 #[derive(Default)]
 struct LocalSharedOperations {
     operations: RefCell<Vec<LocalSharedOperationHandle>>,
@@ -868,32 +1358,37 @@ impl LocalSharedOperations {
 #[derive(Clone)]
 struct LocalSharedOperationHandle {
     state: Arc<SharedOpState>,
-    io: Rc<RefCell<Option<NoPayloadIo>>>,
+    io: Rc<RefCell<Option<ActiveUnitIo>>>,
+    fd: Rc<RefCell<Option<RingFd>>>,
 }
 
 impl LocalSharedOperationHandle {
-    fn new(state: Arc<SharedOpState>, io: NoPayloadIo) -> Self {
+    fn new(state: Arc<SharedOpState>, io: ActiveUnitIo, fd: Option<RingFd>) -> Self {
         Self {
             state,
             io: Rc::new(RefCell::new(Some(io))),
+            fd: Rc::new(RefCell::new(fd)),
         }
     }
 
     fn try_wait(&self) -> Option<Result<(), RingError>> {
         if let Some(result) = self.state.try_take() {
             self.cancel_io();
-            return Some(result);
+            return Some(result.map(|_| ()));
         }
 
         let mut io_slot = self.io.borrow_mut();
         let io = io_slot.as_mut()?;
         if let Some(result) = io.try_wait() {
-            self.state.complete(result.map_err(RingError::from));
+            self.state
+                .complete(result.map(|_| 0).map_err(RingError::from));
             *io_slot = None;
+            *self.fd.borrow_mut() = None;
             return Some(
                 self.state
                     .try_take()
-                    .expect("local shared operation completed without result"),
+                    .expect("local shared operation completed without result")
+                    .map(|_| ()),
             );
         }
         None
@@ -919,6 +1414,22 @@ impl LocalSharedOperationHandle {
         }
     }
 
+    fn is_wait_ready(&self) -> bool {
+        self.state.is_terminal() || self.io.borrow().as_ref().is_some_and(Waitable::is_ready)
+    }
+
+    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+        if self.state.is_terminal() {
+            return false;
+        }
+
+        if let Some(io) = self.io.borrow().as_ref() {
+            RuntimeWaitable::add_stackful_waiter(io, waiter)
+        } else {
+            self.state.add_waiter(waiter)
+        }
+    }
+
     fn cancel(&self) {
         self.state.cancel();
         self.cancel_io();
@@ -930,12 +1441,82 @@ impl LocalSharedOperationHandle {
     }
 
     fn is_retired(&self) -> bool {
-        self.state.is_terminal() && self.io.borrow().is_none()
+        self.state.is_terminal() && self.io.borrow().is_none() && self.fd.borrow().is_none()
     }
 
     fn cancel_io(&self) {
+        let fd = self.fd.borrow_mut().take();
         if let Some(mut io) = self.io.borrow_mut().take() {
-            io.cancel();
+            if let Some(fd) = fd {
+                io.cancel_with_payload(fd);
+            } else {
+                io.cancel();
+            }
+        } else {
+            drop(fd);
+        }
+    }
+}
+
+enum ActiveUnitIo {
+    NoPayload(NoPayloadIo),
+    Raw(RawIo),
+}
+
+impl ActiveUnitIo {
+    fn try_wait(&mut self) -> Option<Result<u32, Errno>> {
+        match self {
+            Self::NoPayload(io) => io.try_wait().map(|result| result.map(|_| 0)),
+            Self::Raw(io) => io.try_wait(),
+        }
+    }
+
+    fn cancel(&mut self) {
+        match self {
+            Self::NoPayload(io) => io.cancel(),
+            Self::Raw(io) => io.cancel(),
+        }
+    }
+
+    fn cancel_with_payload<B>(&mut self, payload: B)
+    where
+        B: 'static,
+    {
+        match self {
+            Self::NoPayload(io) => {
+                drop(payload);
+                io.cancel();
+            }
+            Self::Raw(io) => io.cancel_with_payload(payload),
+        }
+    }
+}
+
+impl Waitable for ActiveUnitIo {
+    fn is_ready(&self) -> bool {
+        match self {
+            Self::NoPayload(io) => Waitable::is_ready(io),
+            Self::Raw(io) => Waitable::is_ready(io),
+        }
+    }
+
+    fn add_waiter(&self, cx: &kimojio_stack::RuntimeContext<'_>, registration: &WaitRegistration) {
+        match self {
+            Self::NoPayload(io) => io.add_waiter(cx, registration),
+            Self::Raw(io) => io.add_waiter(cx, registration),
+        }
+    }
+}
+
+impl RuntimeWaitable for ActiveUnitIo {
+    fn is_ready(&self) -> bool {
+        Waitable::is_ready(self)
+    }
+
+    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+        match self {
+            Self::NoPayload(io) => RuntimeWaitable::add_stackful_waiter(io, waiter),
+            Self::Raw(io) => RuntimeWaitable::add_stackful_waiter(io, waiter),
         }
     }
 }
@@ -1006,19 +1587,33 @@ fn wait_shared_operation(
     state: Arc<SharedOpState>,
     cx: &RuntimeContext<'_>,
 ) -> Result<(), RingError> {
+    wait_shared_operation_value(state, cx).map(|_| ())
+}
+
+fn wait_shared_operation_value(
+    state: Arc<SharedOpState>,
+    cx: &RuntimeContext<'_>,
+) -> Result<u32, RingError> {
     loop {
         if let Some(result) = state.try_take() {
             return result;
         }
 
-        if let Some(registration) = cx.stackful_wait_registration() {
-            if state.add_waiter(registration.waiter()) {
-                cx.park_stackful();
-            }
-        } else {
-            cx.yield_now();
-            thread::sleep(Duration::from_micros(50));
+        wait_until_shared_state_ready(&state, cx)?;
+    }
+}
+
+fn wait_until_shared_state_ready(
+    state: &Arc<SharedOpState>,
+    cx: &RuntimeContext<'_>,
+) -> Result<(), RingError> {
+    if let Some(registration) = cx.stackful_wait_registration() {
+        if state.add_waiter(registration.waiter()) {
+            cx.park_stackful();
         }
+        Ok(())
+    } else {
+        Err(RingError::NoStackfulContext)
     }
 }
 
@@ -1030,7 +1625,9 @@ impl RuntimeCapabilities for RuntimeContext<'_> {
     fn supports(&self, capability: RuntimeCapability) -> bool {
         matches!(
             capability,
-            RuntimeCapability::StackfulWait | RuntimeCapability::ExplicitRingIo
+            RuntimeCapability::StackfulWait
+                | RuntimeCapability::ExplicitRingIo
+                | RuntimeCapability::SocketIo
         )
     }
 
@@ -1045,6 +1642,7 @@ impl RuntimeCapabilities for RuntimeContext<'_> {
                 match capability {
                     RuntimeCapability::StackfulWait => "stackful-wait",
                     RuntimeCapability::ExplicitRingIo => "explicit-ring-io",
+                    RuntimeCapability::SocketIo => "socket-io",
                 },
                 self.runtime_family(),
             ))
@@ -1415,6 +2013,118 @@ impl SharedRing {
         )
     }
 
+    fn submit_read<B>(
+        &self,
+        cx: &RuntimeContext<'_>,
+        fd: RingFd,
+        mut buffer: B,
+    ) -> Result<RingReadResult<B>, RingError>
+    where
+        B: IoReadBuffer + Send + 'static,
+    {
+        match &self.driver {
+            SharedRingDriver::Local { runtime_id } => {
+                if *runtime_id != cx.runtime_id {
+                    return Err(RingError::WrongRuntime);
+                }
+                let len = buffer.io_buffer_len();
+                let ptr = buffer.io_buffer_mut_ptr();
+                let io = unsafe { cx.inner.submit_raw_read(&fd, ptr, len) };
+                Ok(RingIoResult::local(io, fd, buffer, read_output::<B>))
+            }
+            SharedRingDriver::Multi { runtime, owner } => {
+                let state = Arc::new(SharedOpState::new(&self.core));
+                let buffer = Arc::new(Mutex::new(Some(buffer)));
+                let result_fd = fd.clone();
+                self.core.submit_queued(
+                    SharedOperation::buffer(Box::new(QueuedReadOperation {
+                        state: Arc::clone(&state),
+                        fd,
+                        buffer: Arc::clone(&buffer),
+                    })),
+                    SharedOpRoute::worker(*owner),
+                )?;
+                if let Err(error) = runtime.submit_shared_ring(*owner, &self.core) {
+                    if matches!(error, RingError::QueueFull) {
+                        self.core.reject_queued(RingError::QueueFull);
+                    }
+                    return Err(error);
+                }
+                Ok(RingIoResult::shared(
+                    state,
+                    buffer,
+                    result_fd,
+                    self.clone(),
+                    read_output::<B>,
+                ))
+            }
+        }
+    }
+
+    fn submit_write<B>(
+        &self,
+        cx: &RuntimeContext<'_>,
+        fd: RingFd,
+        buffer: B,
+    ) -> Result<RingWriteResult<B>, RingError>
+    where
+        B: IoWriteBuffer + Send + 'static,
+    {
+        match &self.driver {
+            SharedRingDriver::Local { runtime_id } => {
+                if *runtime_id != cx.runtime_id {
+                    return Err(RingError::WrongRuntime);
+                }
+                let len = buffer.io_buffer_len();
+                let ptr = buffer.io_buffer_ptr();
+                let io = unsafe { cx.inner.submit_raw_write(&fd, ptr, len) };
+                Ok(RingIoResult::local(io, fd, buffer, write_output::<B>))
+            }
+            SharedRingDriver::Multi { runtime, owner } => {
+                let state = Arc::new(SharedOpState::new(&self.core));
+                let buffer = Arc::new(Mutex::new(Some(buffer)));
+                let result_fd = fd.clone();
+                self.core.submit_queued(
+                    SharedOperation::buffer(Box::new(QueuedWriteOperation {
+                        state: Arc::clone(&state),
+                        fd,
+                        buffer: Arc::clone(&buffer),
+                    })),
+                    SharedOpRoute::worker(*owner),
+                )?;
+                if let Err(error) = runtime.submit_shared_ring(*owner, &self.core) {
+                    if matches!(error, RingError::QueueFull) {
+                        self.core.reject_queued(RingError::QueueFull);
+                    }
+                    return Err(error);
+                }
+                Ok(RingIoResult::shared(
+                    state,
+                    buffer,
+                    result_fd,
+                    self.clone(),
+                    write_output::<B>,
+                ))
+            }
+        }
+    }
+
+    fn submit_shutdown(
+        &self,
+        cx: &RuntimeContext<'_>,
+        fd: RingFd,
+        how: Shutdown,
+    ) -> Result<RingTimeout, RingError> {
+        let state = Arc::new(SharedOpState::new(&self.core));
+        self.submit_operation(cx, SharedOperationKind::Shutdown { fd, how }, state, None)
+    }
+
+    fn submit_close(&self, cx: &RuntimeContext<'_>, fd: RingFd) -> Result<RingTimeout, RingError> {
+        let fd = fd.into_owned().map_err(|_| RingError::FdInUse)?;
+        let state = Arc::new(SharedOpState::new(&self.core));
+        self.submit_operation(cx, SharedOperationKind::Close { fd: Some(fd) }, state, None)
+    }
+
     fn submit_operation(
         &self,
         cx: &RuntimeContext<'_>,
@@ -1430,14 +2140,33 @@ impl SharedRing {
                 }
                 self.core
                     .submit_local(Arc::clone(&state), SharedOpRoute::local())?;
-                let io = match kind {
-                    SharedOperationKind::Nop => cx.inner.submit_no_payload_nop(),
-                    SharedOperationKind::Timeout { .. } => cx.inner.submit_no_payload_timeout(
-                        local_timeout_duration
-                            .expect("local shared timeout operation missing original duration"),
+                let (io, fd) = match kind {
+                    SharedOperationKind::Nop => (
+                        ActiveUnitIo::NoPayload(cx.inner.submit_no_payload_nop()),
+                        None,
+                    ),
+                    SharedOperationKind::Timeout { .. } => (
+                        ActiveUnitIo::NoPayload(
+                            cx.inner
+                                .submit_no_payload_timeout(local_timeout_duration.expect(
+                                    "local shared timeout operation missing original duration",
+                                )),
+                        ),
+                        None,
+                    ),
+                    SharedOperationKind::Shutdown { fd, how } => (
+                        ActiveUnitIo::Raw(cx.inner.submit_raw_shutdown(&fd, how)),
+                        Some(fd),
+                    ),
+                    SharedOperationKind::Close { fd } => (
+                        ActiveUnitIo::Raw(
+                            cx.inner
+                                .submit_raw_close(fd.expect("shared close operation missing fd")),
+                        ),
+                        None,
                     ),
                 };
-                let operation = LocalSharedOperationHandle::new(state, io);
+                let operation = LocalSharedOperationHandle::new(state, io, fd);
                 if let Some(local_shared_operations) = &cx.local_shared_operations {
                     local_shared_operations.register(operation.clone());
                 }
@@ -1445,7 +2174,7 @@ impl SharedRing {
             }
             SharedRingDriver::Multi { runtime, owner } => {
                 self.core.submit_queued(
-                    SharedOperation::new(kind, Arc::clone(&state)),
+                    SharedOperation::unit(kind, Arc::clone(&state)),
                     SharedOpRoute::worker(*owner),
                 )?;
                 if let Err(error) = runtime.submit_shared_ring(*owner, &self.core) {
@@ -1844,41 +2573,187 @@ impl SharedRingTestCounters {
     }
 }
 
-struct SharedOperation {
-    kind: SharedOperationKind,
-    state: Arc<SharedOpState>,
+enum SharedOperation {
+    Unit {
+        kind: SharedOperationKind,
+        state: Arc<SharedOpState>,
+    },
+    Buffer(Box<dyn QueuedSharedBufferOperation>),
 }
 
 impl SharedOperation {
-    fn new(kind: SharedOperationKind, state: Arc<SharedOpState>) -> Self {
-        Self { kind, state }
+    fn unit(kind: SharedOperationKind, state: Arc<SharedOpState>) -> Self {
+        Self::Unit { kind, state }
+    }
+
+    fn buffer(operation: Box<dyn QueuedSharedBufferOperation>) -> Self {
+        Self::Buffer(operation)
+    }
+
+    fn state(&self) -> &Arc<SharedOpState> {
+        match self {
+            Self::Unit { state, .. } => state,
+            Self::Buffer(operation) => operation.state(),
+        }
     }
 
     fn mark_queued(&self, route: SharedOpRoute) -> bool {
-        self.state.mark_queued(route)
+        self.state().mark_queued(route)
     }
 
     #[cfg(test)]
     fn mark_submitted(&self, route: SharedOpRoute) -> bool {
-        self.state.mark_submitted(route)
+        self.state().mark_submitted(route)
     }
 
-    fn complete(&self, result: Result<(), RingError>) -> bool {
-        self.state.complete(result)
+    fn complete(&self, result: Result<u32, RingError>) -> bool {
+        self.state().complete(result)
     }
 
     fn close(&self) -> bool {
-        self.state.close()
+        self.state().close()
     }
 
     fn terminal_error(&self) -> Option<RingError> {
-        self.state.terminal_error()
+        self.state().terminal_error()
     }
 }
 
 enum SharedOperationKind {
     Nop,
     Timeout { deadline: Instant },
+    Shutdown { fd: RingFd, how: Shutdown },
+    Close { fd: Option<OwnedFd> },
+}
+
+trait QueuedSharedBufferOperation: Send {
+    fn state(&self) -> &Arc<SharedOpState>;
+    fn start(self: Box<Self>, root: &kimojio_stack::RuntimeContext<'_>) -> ActiveSharedOperation;
+}
+
+struct QueuedReadOperation<B> {
+    state: Arc<SharedOpState>,
+    fd: RingFd,
+    buffer: Arc<Mutex<Option<B>>>,
+}
+
+struct QueuedWriteOperation<B> {
+    state: Arc<SharedOpState>,
+    fd: RingFd,
+    buffer: Arc<Mutex<Option<B>>>,
+}
+
+impl<B> QueuedSharedBufferOperation for QueuedReadOperation<B>
+where
+    B: IoReadBuffer + Send + 'static,
+{
+    fn state(&self) -> &Arc<SharedOpState> {
+        &self.state
+    }
+
+    fn start(self: Box<Self>, root: &kimojio_stack::RuntimeContext<'_>) -> ActiveSharedOperation {
+        let mut buffer = self
+            .buffer
+            .lock()
+            .expect("shared ring read buffer mutex poisoned")
+            .take()
+            .expect("shared ring read submitted without buffer");
+        let len = buffer.io_buffer_len();
+        let ptr = buffer.io_buffer_mut_ptr();
+        let io = unsafe { root.submit_raw_read(&self.fd, ptr, len) };
+        ActiveSharedOperation::Buffer(Box::new(ActiveBufferOperation {
+            state: self.state,
+            io,
+            fd: Some(self.fd),
+            buffer: Some(buffer),
+            buffer_slot: self.buffer,
+        }))
+    }
+}
+
+impl<B> QueuedSharedBufferOperation for QueuedWriteOperation<B>
+where
+    B: IoWriteBuffer + Send + 'static,
+{
+    fn state(&self) -> &Arc<SharedOpState> {
+        &self.state
+    }
+
+    fn start(self: Box<Self>, root: &kimojio_stack::RuntimeContext<'_>) -> ActiveSharedOperation {
+        let buffer = self
+            .buffer
+            .lock()
+            .expect("shared ring write buffer mutex poisoned")
+            .take()
+            .expect("shared ring write submitted without buffer");
+        let len = buffer.io_buffer_len();
+        let ptr = buffer.io_buffer_ptr();
+        let io = unsafe { root.submit_raw_write(&self.fd, ptr, len) };
+        ActiveSharedOperation::Buffer(Box::new(ActiveBufferOperation {
+            state: self.state,
+            io,
+            fd: Some(self.fd),
+            buffer: Some(buffer),
+            buffer_slot: self.buffer,
+        }))
+    }
+}
+
+trait ActiveSharedBufferOperation {
+    fn state(&self) -> &Arc<SharedOpState>;
+    fn cancel(&mut self);
+    fn poll(&mut self) -> bool;
+}
+
+struct ActiveBufferOperation<B> {
+    state: Arc<SharedOpState>,
+    io: RawIo,
+    fd: Option<RingFd>,
+    buffer: Option<B>,
+    buffer_slot: Arc<Mutex<Option<B>>>,
+}
+
+impl<B> ActiveSharedBufferOperation for ActiveBufferOperation<B>
+where
+    B: Send + 'static,
+{
+    fn state(&self) -> &Arc<SharedOpState> {
+        &self.state
+    }
+
+    fn cancel(&mut self) {
+        match (self.fd.take(), self.buffer.take()) {
+            (Some(fd), Some(buffer)) => self.io.cancel_with_payload((fd, buffer)),
+            (fd, buffer) => {
+                drop(fd);
+                drop(buffer);
+                self.io.cancel();
+            }
+        }
+    }
+
+    fn poll(&mut self) -> bool {
+        if self.state.is_terminal() {
+            self.cancel();
+            return true;
+        }
+
+        if let Some(result) = self.io.try_wait() {
+            let buffer = self
+                .buffer
+                .take()
+                .expect("active shared ring I/O completed without buffer");
+            *self
+                .buffer_slot
+                .lock()
+                .expect("shared ring active buffer mutex poisoned") = Some(buffer);
+            self.state
+                .complete_from_driver(result.map_err(RingError::from));
+            return true;
+        }
+
+        false
+    }
 }
 
 struct SharedOpState {
@@ -1900,7 +2775,7 @@ impl SharedOpState {
         }
     }
 
-    fn try_take(&self) -> Option<Result<(), RingError>> {
+    fn try_take(&self) -> Option<Result<u32, RingError>> {
         let mut inner = self.inner.lock().expect("shared operation mutex poisoned");
         if !inner.lifecycle.is_terminal() {
             return None;
@@ -1946,27 +2821,27 @@ impl SharedOpState {
         self.finish(Err(RingError::Closed), SharedOpLifecycle::Closed, true)
     }
 
-    fn complete(&self, result: Result<(), RingError>) -> bool {
+    fn complete(&self, result: Result<u32, RingError>) -> bool {
         self.finish_completion(result, true)
     }
 
-    fn complete_from_driver(&self, result: Result<(), RingError>) -> bool {
+    fn complete_from_driver(&self, result: Result<u32, RingError>) -> bool {
         self.finish_completion(result, false)
     }
 
-    fn finish_completion(&self, result: Result<(), RingError>, wake_driver: bool) -> bool {
+    fn finish_completion(&self, result: Result<u32, RingError>, wake_driver: bool) -> bool {
         let lifecycle = match result {
             Err(RingError::Canceled) => SharedOpLifecycle::Canceled,
             Err(RingError::Closed) => SharedOpLifecycle::Closed,
             Err(RingError::QueueFull) => SharedOpLifecycle::Rejected,
-            Ok(()) | Err(_) => SharedOpLifecycle::Completed,
+            Ok(_) | Err(_) => SharedOpLifecycle::Completed,
         };
         self.finish(result, lifecycle, wake_driver)
     }
 
     fn finish(
         &self,
-        result: Result<(), RingError>,
+        result: Result<u32, RingError>,
         lifecycle: SharedOpLifecycle,
         wake_driver: bool,
     ) -> bool {
@@ -2054,7 +2929,7 @@ impl Waitable for SharedOpState {
 }
 
 struct SharedOpInner {
-    result: Option<Result<(), RingError>>,
+    result: Option<Result<u32, RingError>>,
     lifecycle: SharedOpLifecycle,
     waiters: StackfulWaiters,
     #[cfg(test)]
@@ -2319,9 +3194,59 @@ impl Drop for SchedulerWakeGuard<'_> {
     }
 }
 
-struct ActiveSharedOperation {
-    state: Arc<SharedOpState>,
-    io: NoPayloadIo,
+enum ActiveSharedOperation {
+    Unit {
+        state: Arc<SharedOpState>,
+        io: ActiveUnitIo,
+        fd: Option<RingFd>,
+    },
+    Buffer(Box<dyn ActiveSharedBufferOperation>),
+}
+
+impl ActiveSharedOperation {
+    fn state(&self) -> &Arc<SharedOpState> {
+        match self {
+            Self::Unit { state, .. } => state,
+            Self::Buffer(operation) => operation.state(),
+        }
+    }
+
+    fn cancel(&mut self) {
+        match self {
+            Self::Unit { io, fd, .. } => {
+                if let Some(fd) = fd.take() {
+                    io.cancel_with_payload(fd);
+                } else {
+                    io.cancel();
+                }
+            }
+            Self::Buffer(operation) => operation.cancel(),
+        }
+    }
+
+    fn poll(&mut self) -> bool {
+        match self {
+            Self::Unit { state, io, fd } => {
+                if state.is_terminal() {
+                    if let Some(fd) = fd.take() {
+                        io.cancel_with_payload(fd);
+                    } else {
+                        io.cancel();
+                    }
+                    return true;
+                }
+
+                if let Some(result) = io.try_wait() {
+                    state.complete_from_driver(result.map_err(RingError::from));
+                    *fd = None;
+                    return true;
+                }
+
+                false
+            }
+            Self::Buffer(operation) => operation.poll(),
+        }
+    }
 }
 
 struct MultiRuntime {
@@ -2603,23 +3528,46 @@ impl MultiRuntime {
                     continue;
                 }
 
-                let SharedOperation { kind, state } = operation;
-                if !state.mark_submitted(SharedOpRoute::worker(worker)) {
+                if !operation
+                    .state()
+                    .mark_submitted(SharedOpRoute::worker(worker))
+                {
                     continue;
                 }
-                if !core.register_submitted(&state) {
+                if !core.register_submitted(operation.state()) {
                     continue;
                 }
 
-                let io = match kind {
-                    SharedOperationKind::Nop => root.submit_no_payload_nop(),
-                    SharedOperationKind::Timeout { deadline } => root.submit_no_payload_timeout(
-                        deadline.saturating_duration_since(Instant::now()),
-                    ),
+                let active_operation = match operation {
+                    SharedOperation::Unit { kind, state } => {
+                        let (io, fd) = match kind {
+                            SharedOperationKind::Nop => {
+                                (ActiveUnitIo::NoPayload(root.submit_no_payload_nop()), None)
+                            }
+                            SharedOperationKind::Timeout { deadline } => (
+                                ActiveUnitIo::NoPayload(root.submit_no_payload_timeout(
+                                    deadline.saturating_duration_since(Instant::now()),
+                                )),
+                                None,
+                            ),
+                            SharedOperationKind::Shutdown { fd, how } => (
+                                ActiveUnitIo::Raw(root.submit_raw_shutdown(&fd, how)),
+                                Some(fd),
+                            ),
+                            SharedOperationKind::Close { fd } => (
+                                ActiveUnitIo::Raw(root.submit_raw_close(
+                                    fd.expect("shared close operation missing fd"),
+                                )),
+                                None,
+                            ),
+                        };
+                        ActiveSharedOperation::Unit { state, io, fd }
+                    }
+                    SharedOperation::Buffer(operation) => operation.start(root),
                 };
                 #[cfg(test)]
                 core.record_driver_submission_for_test();
-                active.push(ActiveSharedOperation { state, io });
+                active.push(active_operation);
             }
         }
         made_progress
@@ -2641,8 +3589,8 @@ impl MultiRuntime {
             core.close();
         }
         for mut operation in active.drain(..) {
-            operation.state.close();
-            operation.io.cancel();
+            operation.state().close();
+            operation.cancel();
         }
     }
 
@@ -2650,20 +3598,9 @@ impl MultiRuntime {
         let mut made_progress = false;
         let mut index = 0;
         while index < active.len() {
-            if active[index].state.is_terminal() {
+            if active[index].poll() {
                 #[cfg(test)]
-                active[index].state.record_driver_retired_for_test();
-                active.swap_remove(index);
-                made_progress = true;
-                continue;
-            }
-
-            if let Some(result) = active[index].io.try_wait() {
-                active[index]
-                    .state
-                    .complete_from_driver(result.map_err(RingError::from));
-                #[cfg(test)]
-                active[index].state.record_driver_retired_for_test();
+                active[index].state().record_driver_retired_for_test();
                 active.swap_remove(index);
                 made_progress = true;
             } else {
@@ -3341,6 +4278,7 @@ mod tests {
     use std::cell::Cell;
     use std::collections::HashSet;
     use std::num::NonZeroUsize;
+    use std::os::fd::AsRawFd;
     use std::panic;
     use std::rc::Rc;
     use std::sync::Arc;
@@ -3353,13 +4291,15 @@ mod tests {
     use kimojio_stack::channel::cross_thread;
     use kimojio_stack::channel::{RecvError, SendError};
     use kimojio_stack::{
-        RuntimeCapabilities, RuntimeCapability, RuntimeFamily, StackfulWaitContext,
-        StackfulWaitRegistration,
+        IoReadBuffer, IoWriteBuffer, RuntimeCapabilities, RuntimeCapability, RuntimeFamily,
+        StackfulWaitContext, StackfulWaitRegistration,
     };
+    use rustix::net::{AddressFamily, Shutdown, SocketFlags, SocketType, socketpair};
+    use rustix::pipe::pipe;
 
     use super::{
-        CrossbeamWorker, ExecutionPlace, MultiRuntime, NO_WORKER, Ring, RingError, RingInner,
-        RingMode, Runtime, RuntimeConfig, RuntimeId, SharedOpLifecycle, SharedOpRoute,
+        CrossbeamWorker, ExecutionPlace, MultiRuntime, NO_WORKER, Ring, RingError, RingFd,
+        RingInner, RingMode, Runtime, RuntimeConfig, RuntimeId, SharedOpLifecycle, SharedOpRoute,
         SharedOpState, SharedOpTestResource, SharedOperation, SharedOperationKind, SharedRingCore,
         SharedRingWake, StealPolicy, WorkerId,
     };
@@ -3379,6 +4319,91 @@ mod tests {
             cx.yield_now();
             thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    struct DropCountingReadBuffer {
+        bytes: Vec<u8>,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl DropCountingReadBuffer {
+        fn new(len: usize, drops: Arc<AtomicUsize>) -> Self {
+            Self {
+                bytes: vec![0; len],
+                drops,
+            }
+        }
+    }
+
+    impl Drop for DropCountingReadBuffer {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    unsafe impl IoReadBuffer for DropCountingReadBuffer {
+        fn io_buffer_mut_ptr(&mut self) -> *mut u8 {
+            self.bytes.as_mut_ptr()
+        }
+
+        fn io_buffer_len(&self) -> usize {
+            self.bytes.len()
+        }
+    }
+
+    struct DropCountingWriteBuffer {
+        bytes: Vec<u8>,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl DropCountingWriteBuffer {
+        fn new(len: usize, drops: Arc<AtomicUsize>) -> Self {
+            Self {
+                bytes: vec![b'x'; len],
+                drops,
+            }
+        }
+    }
+
+    impl Drop for DropCountingWriteBuffer {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    unsafe impl IoWriteBuffer for DropCountingWriteBuffer {
+        fn io_buffer_ptr(&self) -> *const u8 {
+            self.bytes.as_ptr()
+        }
+
+        fn io_buffer_len(&self) -> usize {
+            self.bytes.len()
+        }
+    }
+
+    fn fill_pipe(write_fd: &impl AsRawFd) {
+        let raw_fd = write_fd.as_raw_fd();
+        let flags = unsafe { libc::fcntl(raw_fd, libc::F_GETFL) };
+        assert!(flags >= 0, "F_GETFL failed");
+        let set_nonblocking =
+            unsafe { libc::fcntl(raw_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+        assert!(set_nonblocking >= 0, "F_SETFL O_NONBLOCK failed");
+
+        let chunk = [0_u8; 4096];
+        loop {
+            let written = unsafe { libc::write(raw_fd, chunk.as_ptr().cast(), chunk.len()) };
+            if written >= 0 {
+                continue;
+            }
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EAGAIN) {
+                break;
+            }
+            panic!("pipe fill write failed: {error}");
+        }
+
+        let restore = unsafe { libc::fcntl(raw_fd, libc::F_SETFL, flags) };
+        assert!(restore >= 0, "F_SETFL restore failed");
     }
 
     impl RuntimeCapabilities for WaitProbe<'_, '_> {
@@ -3969,6 +4994,221 @@ mod tests {
     }
 
     #[test]
+    fn worker_ring_socket_read_write_and_async_handles_complete() {
+        let (read_fd, write_fd) = pipe().unwrap();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_worker_ring();
+            let read_fd = RingFd::from_owned(read_fd);
+            let write_fd = RingFd::from_owned(write_fd);
+
+            assert_eq!(ring.write(cx, &write_fd, b"ab").unwrap(), 2);
+            let mut buffer = [0_u8; 2];
+            assert_eq!(ring.read(cx, &read_fd, &mut buffer).unwrap(), 2);
+            assert_eq!(&buffer, b"ab");
+
+            let read = ring.read_async(cx, &read_fd, vec![0_u8; 2]).unwrap();
+            let write = ring.write_async(cx, &write_fd, b"cd".to_vec()).unwrap();
+
+            let written = write.get(cx).unwrap();
+            assert_eq!(written.bytes, 2);
+            assert_eq!(written.buffer, b"cd");
+
+            let read = read.get(cx).unwrap();
+            assert_eq!(read.bytes, 2);
+            assert_eq!(&read.buffer[..read.bytes], b"cd");
+
+            ring.close(cx, read_fd).unwrap();
+            ring.close(cx, write_fd).unwrap();
+        });
+    }
+
+    #[test]
+    fn worker_ring_dropped_pending_read_retains_buffer_until_reap() {
+        let (read_fd, _write_fd) = pipe().unwrap();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_worker_ring();
+            let read_fd = RingFd::from_owned(read_fd);
+            let read = ring
+                .read_async(
+                    cx,
+                    &read_fd,
+                    DropCountingReadBuffer::new(1, Arc::clone(&drops)),
+                )
+                .unwrap();
+
+            drop(read);
+            assert_eq!(drops.load(Ordering::Acquire), 0);
+            wait_until(cx, || drops.load(Ordering::Acquire) == 1);
+        });
+    }
+
+    #[test]
+    fn worker_ring_canceled_pending_write_retains_buffer_until_reap() {
+        let (read_fd, write_fd) = pipe().unwrap();
+        fill_pipe(&write_fd);
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_worker_ring();
+            let _read_fd = RingFd::from_owned(read_fd);
+            let write_fd = RingFd::from_owned(write_fd);
+            let mut write = ring
+                .write_async(
+                    cx,
+                    &write_fd,
+                    DropCountingWriteBuffer::new(1, Arc::clone(&drops)),
+                )
+                .unwrap();
+
+            write.cancel();
+            assert_eq!(drops.load(Ordering::Acquire), 0);
+            wait_until(cx, || drops.load(Ordering::Acquire) == 1);
+        });
+    }
+
+    #[test]
+    fn multi_root_shared_ring_socket_read_write_routes_through_worker_driver() {
+        let (read_fd, write_fd) = pipe().unwrap();
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let shared_io = scope.spawn(move |cx| {
+                    let ring = cx.create_shared_ring();
+                    let read_fd = RingFd::from_owned(read_fd);
+                    let write_fd = RingFd::from_owned(write_fd);
+
+                    let read = ring.read_async(cx, &read_fd, vec![0_u8; 2]).unwrap();
+                    let write = ring.write_async(cx, &write_fd, b"xy".to_vec()).unwrap();
+
+                    let written = write.get(cx).unwrap();
+                    assert_eq!(written.bytes, 2);
+                    assert_eq!(written.buffer, b"xy");
+
+                    let read = read.get(cx).unwrap();
+                    assert_eq!(read.bytes, 2);
+                    assert_eq!(&read.buffer[..read.bytes], b"xy");
+
+                    let counters = ring.shared_test_counters().unwrap();
+                    assert_eq!(counters.accepted, 2);
+                    assert_eq!(counters.completed, 2);
+                    assert!(counters.driver_submitted >= 2);
+
+                    ring.close(cx, read_fd).unwrap();
+                    ring.close(cx, write_fd).unwrap();
+                });
+                shared_io.join(cx);
+            });
+        });
+    }
+
+    #[test]
+    fn shared_ring_dropped_pending_read_retains_buffer_until_reap() {
+        let (read_fd, _write_fd) = pipe().unwrap();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let read_fd = RingFd::from_owned(read_fd);
+            let read = ring
+                .read_async(
+                    cx,
+                    &read_fd,
+                    DropCountingReadBuffer::new(1, Arc::clone(&drops)),
+                )
+                .unwrap();
+
+            wait_until(cx, || {
+                ring.shared_test_counters().unwrap().driver_submitted == 1
+            });
+            drop(read);
+            assert_eq!(drops.load(Ordering::Acquire), 0);
+            wait_until(cx, || drops.load(Ordering::Acquire) == 1);
+        });
+    }
+
+    #[test]
+    fn shared_ring_canceled_pending_write_retains_buffer_until_reap() {
+        let (read_fd, write_fd) = pipe().unwrap();
+        fill_pipe(&write_fd);
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let _read_fd = RingFd::from_owned(read_fd);
+            let write_fd = RingFd::from_owned(write_fd);
+            let mut write = ring
+                .write_async(
+                    cx,
+                    &write_fd,
+                    DropCountingWriteBuffer::new(1, Arc::clone(&drops)),
+                )
+                .unwrap();
+
+            wait_until(cx, || {
+                ring.shared_test_counters().unwrap().driver_submitted == 1
+            });
+            write.cancel();
+            assert_eq!(drops.load(Ordering::Acquire), 0);
+            wait_until(cx, || drops.load(Ordering::Acquire) == 1);
+        });
+    }
+
+    #[test]
+    fn multi_root_shared_ring_socket_shutdown_routes_through_worker_driver() {
+        let (left_fd, right_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let shared_shutdown = scope.spawn(move |cx| {
+                    let ring = cx.create_shared_ring();
+                    let left_fd = RingFd::from_owned(left_fd);
+                    let right_fd = RingFd::from_owned(right_fd);
+
+                    ring.shutdown(cx, &left_fd, Shutdown::Write).unwrap();
+                    let mut buffer = [0_u8; 1];
+                    assert_eq!(ring.read(cx, &right_fd, &mut buffer).unwrap(), 0);
+
+                    ring.close(cx, left_fd).unwrap();
+                    ring.close(cx, right_fd).unwrap();
+                });
+                shared_shutdown.join(cx);
+            });
+        });
+    }
+
+    #[test]
     fn worker_ring_rejects_cross_runtime_use() {
         let ring = {
             let mut runtime = Runtime::new();
@@ -4047,10 +5287,10 @@ mod tests {
         let state = Arc::new(SharedOpState::new(&core));
 
         assert_eq!(state.lifecycle_for_test(), SharedOpLifecycle::Created);
-        assert!(state.complete(Ok(())));
+        assert!(state.complete(Ok(0)));
         assert!(!state.cancel());
         assert!(!state.close());
-        assert_eq!(state.try_take(), Some(Ok(())));
+        assert_eq!(state.try_take(), Some(Ok(0)));
         assert!(!state.complete(Err(RingError::Closed)));
     }
 
@@ -4060,7 +5300,7 @@ mod tests {
         let state = Arc::new(SharedOpState::new(&core));
 
         core.submit_queued(
-            SharedOperation::new(SharedOperationKind::Nop, Arc::clone(&state)),
+            SharedOperation::unit(SharedOperationKind::Nop, Arc::clone(&state)),
             SharedOpRoute::worker(WorkerId(0)),
         )
         .unwrap();
@@ -4083,7 +5323,7 @@ mod tests {
         let state = Arc::new(SharedOpState::new(&core));
 
         core.submit_queued(
-            SharedOperation::new(SharedOperationKind::Nop, Arc::clone(&state)),
+            SharedOperation::unit(SharedOperationKind::Nop, Arc::clone(&state)),
             SharedOpRoute::worker(WorkerId(0)),
         )
         .unwrap();
@@ -4091,7 +5331,7 @@ mod tests {
 
         let operation = core.pop_queued_for_test().expect("queued operation");
         assert!(!operation.mark_submitted(SharedOpRoute::worker(WorkerId(0))));
-        assert!(!operation.complete(Ok(())));
+        assert!(!operation.complete(Ok(0)));
         assert_eq!(state.try_take(), Some(Err(RingError::Canceled)));
     }
 
@@ -4103,7 +5343,7 @@ mod tests {
         assert!(state.cancel());
         assert!(!state.cancel());
         assert!(!state.close());
-        assert!(!state.complete(Ok(())));
+        assert!(!state.complete(Ok(0)));
         assert_eq!(state.try_take(), Some(Err(RingError::Canceled)));
     }
 
@@ -4218,7 +5458,10 @@ mod tests {
                 .expect("multi-worker shared ring should have an owner");
             assert_ne!(owner, WorkerId(NO_WORKER));
             assert!(owner.index() < 2);
-            ring.nop(cx).unwrap();
+            cx.scope(|scope| {
+                let nop = scope.spawn(move |cx| ring.nop(cx).unwrap());
+                nop.join(cx);
+            });
         });
     }
 
@@ -4234,8 +5477,30 @@ mod tests {
             let ring = cx.create_shared_ring();
             let mut timeout = ring.timeout(cx, Duration::from_secs(3600)).unwrap();
             wait_until(cx, || ring.shared_submitted_operation_count() == Some(1));
-            ring.nop(cx).unwrap();
+            cx.scope(|scope| {
+                let nop = scope.spawn({
+                    let ring = ring.clone();
+                    move |cx| ring.nop(cx).unwrap()
+                });
+                nop.join(cx);
+            });
             timeout.cancel();
+        });
+    }
+
+    #[test]
+    fn multi_root_pending_shared_timeout_wait_requires_stackful_context() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let timeout = ring.timeout(cx, Duration::from_secs(60)).unwrap();
+
+            assert_eq!(timeout.wait(cx), Err(RingError::NoStackfulContext));
         });
     }
 
@@ -4249,14 +5514,19 @@ mod tests {
 
         let driver_thread_count = runtime.block_on(|cx| {
             let rings = (0..16).map(|_| cx.create_shared_ring()).collect::<Vec<_>>();
-            for ring in &rings {
-                ring.nop(cx).unwrap();
-            }
-            rings
-                .into_iter()
-                .flat_map(|ring| ring.shared_test_counters().unwrap().driver_threads)
-                .collect::<HashSet<_>>()
-                .len()
+            cx.scope(|scope| {
+                let nops = scope.spawn(move |cx| {
+                    for ring in &rings {
+                        ring.nop(cx).unwrap();
+                    }
+                    rings
+                        .into_iter()
+                        .flat_map(|ring| ring.shared_test_counters().unwrap().driver_threads)
+                        .collect::<HashSet<_>>()
+                        .len()
+                });
+                nops.join(cx)
+            })
         });
 
         assert!(

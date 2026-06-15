@@ -1,11 +1,19 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::os::fd::OwnedFd;
 use std::time::Duration;
 
-use kimojio_stack::{IoRuntime, RuntimeIoError, StackRuntime, StackRuntimeContext};
+use kimojio_stack::{
+    IoReadBuffer, IoRuntime, IoWriteBuffer, RuntimeIoError, RuntimeReadResult, RuntimeSocket,
+    RuntimeWriteResult, SocketIoRuntime, StackRuntime, StackRuntimeContext,
+};
+use rustix::net::Shutdown;
 
-use crate::{RingError, RingMode, Runtime, RuntimeContext};
+use crate::{
+    RingError, RingFd, RingMode, RingReadResult, RingTimeout, RingWriteResult, Runtime,
+    RuntimeContext,
+};
 
 impl StackRuntime for Runtime {
     type Context<'cx> = RuntimeContext<'cx>;
@@ -48,6 +56,19 @@ impl StackRuntimeContext for RuntimeContext<'_> {
 }
 
 impl IoRuntime for RuntimeContext<'_> {
+    type Sleep = RingTimeout;
+
+    fn sleep_async(&self, duration: Duration) -> Result<Self::Sleep, RuntimeIoError> {
+        let mode = if self.current_worker().is_some() {
+            RingMode::WorkerLocal
+        } else {
+            RingMode::Shared
+        };
+        self.create_ring(mode)
+            .and_then(|ring| ring.timeout(self, duration))
+            .map_err(runtime_io_error)
+    }
+
     fn sleep_for(&self, duration: Duration) -> Result<(), RuntimeIoError> {
         let mode = if self.current_worker().is_some() {
             RingMode::WorkerLocal
@@ -61,6 +82,131 @@ impl IoRuntime for RuntimeContext<'_> {
     }
 }
 
+impl RuntimeSocket for RingFd {}
+
+impl<B> RuntimeReadResult<B> for RingReadResult<B>
+where
+    B: IoReadBuffer + Send + 'static,
+{
+    type Output = kimojio_stack::ReadOutput<B>;
+
+    fn try_get(&mut self) -> Option<Result<Self::Output, RuntimeIoError>> {
+        RingReadResult::try_get(self).map(|result| result.map_err(runtime_io_error))
+    }
+
+    fn cancel(&mut self) -> Result<(), RuntimeIoError> {
+        RingReadResult::cancel(self);
+        Ok(())
+    }
+}
+
+impl<B> RuntimeWriteResult<B> for RingWriteResult<B>
+where
+    B: IoWriteBuffer + Send + 'static,
+{
+    type Output = kimojio_stack::WriteOutput<B>;
+
+    fn try_get(&mut self) -> Option<Result<Self::Output, RuntimeIoError>> {
+        RingWriteResult::try_get(self).map(|result| result.map_err(runtime_io_error))
+    }
+
+    fn cancel(&mut self) -> Result<(), RuntimeIoError> {
+        RingWriteResult::cancel(self);
+        Ok(())
+    }
+}
+
+impl SocketIoRuntime for RuntimeContext<'_> {
+    type Socket = RingFd;
+    type ReadResult<B>
+        = RingReadResult<B>
+    where
+        B: IoReadBuffer + Send + 'static;
+    type WriteResult<B>
+        = RingWriteResult<B>
+    where
+        B: IoWriteBuffer + Send + 'static;
+
+    fn socket_from_owned_fd(&self, fd: OwnedFd) -> Result<Self::Socket, RuntimeIoError> {
+        Ok(RingFd::from_owned(fd))
+    }
+
+    fn read(&self, fd: &Self::Socket, buf: &mut [u8]) -> Result<usize, RuntimeIoError> {
+        self.socket_ring()
+            .and_then(|ring| ring.read(self, fd, buf))
+            .map_err(runtime_io_error)
+    }
+
+    fn write(&self, fd: &Self::Socket, buf: &[u8]) -> Result<usize, RuntimeIoError> {
+        self.socket_ring()
+            .and_then(|ring| ring.write(self, fd, buf))
+            .map_err(runtime_io_error)
+    }
+
+    fn read_async<B>(
+        &self,
+        fd: &Self::Socket,
+        buffer: B,
+    ) -> Result<Self::ReadResult<B>, RuntimeIoError>
+    where
+        B: IoReadBuffer + Send + 'static,
+    {
+        self.socket_ring()
+            .and_then(|ring| ring.read_async(self, fd, buffer))
+            .map_err(runtime_io_error)
+    }
+
+    fn write_async<B>(
+        &self,
+        fd: &Self::Socket,
+        buffer: B,
+    ) -> Result<Self::WriteResult<B>, RuntimeIoError>
+    where
+        B: IoWriteBuffer + Send + 'static,
+    {
+        self.socket_ring()
+            .and_then(|ring| ring.write_async(self, fd, buffer))
+            .map_err(runtime_io_error)
+    }
+
+    fn cancel_read<B>(&self, read: &mut Self::ReadResult<B>) -> Result<(), RuntimeIoError>
+    where
+        B: IoReadBuffer + Send + 'static,
+    {
+        read.request_cancel(self).map_err(runtime_io_error)
+    }
+
+    fn cancel_write<B>(&self, write: &mut Self::WriteResult<B>) -> Result<(), RuntimeIoError>
+    where
+        B: IoWriteBuffer + Send + 'static,
+    {
+        write.request_cancel(self).map_err(runtime_io_error)
+    }
+
+    fn shutdown(&self, fd: &Self::Socket, how: Shutdown) -> Result<(), RuntimeIoError> {
+        self.socket_ring()
+            .and_then(|ring| ring.shutdown(self, fd, how))
+            .map_err(runtime_io_error)
+    }
+
+    fn close(&self, fd: Self::Socket) -> Result<(), RuntimeIoError> {
+        self.socket_ring()
+            .and_then(|ring| ring.close(self, fd))
+            .map_err(runtime_io_error)
+    }
+}
+
+impl RuntimeContext<'_> {
+    fn socket_ring(&self) -> Result<crate::Ring, RingError> {
+        let mode = if self.current_worker().is_some() {
+            RingMode::WorkerLocal
+        } else {
+            RingMode::Shared
+        };
+        self.create_ring(mode)
+    }
+}
+
 fn runtime_io_error(error: RingError) -> RuntimeIoError {
     match error {
         RingError::Io(error) => RuntimeIoError::Io(error),
@@ -71,9 +217,15 @@ fn runtime_io_error(error: RingError) -> RuntimeIoError {
             RuntimeIoError::Other("worker-local ring used from a different worker")
         }
         RingError::WrongRuntime => RuntimeIoError::Other("ring used from a different runtime"),
+        RingError::NoStackfulContext => {
+            RuntimeIoError::Other("pending shared-ring operation requires a stackful wait context")
+        }
         RingError::QueueFull => RuntimeIoError::Other("ring queue is full"),
         RingError::ResourceLimit => RuntimeIoError::Other("shared ring resource limit reached"),
         RingError::DurationOutOfRange => RuntimeIoError::Other("duration is out of range"),
+        RingError::FdInUse => {
+            RuntimeIoError::Other("descriptor still has cloned or pending handles")
+        }
         RingError::Closed => RuntimeIoError::Other("ring is closed"),
         RingError::Canceled => RuntimeIoError::Other("ring operation was canceled"),
     }

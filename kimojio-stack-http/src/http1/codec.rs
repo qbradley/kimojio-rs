@@ -12,9 +12,9 @@ use http::{
     HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri, Version,
     header::{CONNECTION, CONTENT_LENGTH, TRANSFER_ENCODING, UPGRADE},
 };
-use kimojio_stack::RuntimeContext;
+use kimojio_stack::RuntimeSocket;
 
-use crate::{Body, BodyLimits, Error, HttpConfig, LimitKind, StackTransport};
+use crate::{Body, BodyLimits, Error, HttpConfig, HttpRuntime, LimitKind, RuntimeStackTransport};
 
 use super::body::{BodyKind, drain_body, read_body, read_body_chunks, write_body};
 
@@ -37,12 +37,16 @@ pub struct IncomingResponse {
 }
 
 /// Reads one request, returning `Ok(None)` after clean peer EOF.
-pub fn read_request(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub fn read_request<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     config: HttpConfig,
-) -> Result<Option<IncomingRequest>, Error> {
+) -> Result<Option<IncomingRequest>, Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let Some(head) = read_head(cx, transport, read_buf, config)? else {
         return Ok(None);
     };
@@ -99,13 +103,17 @@ pub fn read_request(
 }
 
 /// Reads one response and buffers its body.
-pub fn read_response(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub fn read_response<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     config: HttpConfig,
     request_method: &Method,
-) -> Result<IncomingResponse, Error> {
+) -> Result<IncomingResponse, Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let Some(head) = read_head(cx, transport, read_buf, config)? else {
         return Err(Error::Eof);
     };
@@ -155,15 +163,17 @@ pub fn read_response(
 }
 
 /// Reads one response and streams its body to `on_chunk`.
-pub fn read_response_with_body_chunks<F>(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub fn read_response_with_body_chunks<R, S, F>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     config: HttpConfig,
     request_method: &Method,
     on_chunk: F,
 ) -> Result<IncomingResponse, Error>
 where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
     F: FnMut(bytes::Bytes) -> Result<(), Error>,
 {
     read_response_with_body_chunks_after_headers(
@@ -178,9 +188,9 @@ where
 }
 
 /// Reads one response, exposes headers, then optionally streams body chunks.
-pub fn read_response_with_body_chunks_after_headers<H, F>(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub fn read_response_with_body_chunks_after_headers<R, S, H, F>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     config: HttpConfig,
     request_method: &Method,
@@ -188,6 +198,8 @@ pub fn read_response_with_body_chunks_after_headers<H, F>(
     mut on_chunk: F,
 ) -> Result<IncomingResponse, Error>
 where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
     H: FnMut(&Response<Body>) -> Result<bool, Error>,
     F: FnMut(bytes::Bytes) -> Result<(), Error>,
 {
@@ -252,22 +264,30 @@ where
 }
 
 /// Serializes and writes a complete request.
-pub fn write_request(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub fn write_request<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     request: &Request<Body>,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let mut bytes = Vec::new();
     write_request_to_vec(&mut bytes, request)?;
     transport.write_all(cx, &bytes)
 }
 
 /// Writes request head and body with fewer intermediate body copies.
-pub fn write_request_head_and_body(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub fn write_request_head_and_body<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     request: &Request<Body>,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let mut head = Vec::new();
     let target = request
         .uri()
@@ -327,11 +347,15 @@ pub fn write_request_to_vec(bytes: &mut Vec<u8>, request: &Request<Body>) -> Res
 }
 
 /// Serializes and writes a complete response.
-pub fn write_response(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub fn write_response<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     response: &Response<Body>,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let mut bytes = Vec::new();
     write_response_to_vec(&mut bytes, response)?;
     transport.write_all(cx, &bytes)
@@ -350,12 +374,16 @@ pub fn write_response_to_vec(bytes: &mut Vec<u8>, response: &Response<Body>) -> 
     write_headers_and_body(bytes, response.headers(), response.body())
 }
 
-fn read_head(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+fn read_head<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     read_buf: &mut Vec<u8>,
     config: HttpConfig,
-) -> Result<Option<Vec<u8>>, Error> {
+) -> Result<Option<Vec<u8>>, Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let limit = config
         .max_start_line_len
         .saturating_add(config.max_header_bytes);

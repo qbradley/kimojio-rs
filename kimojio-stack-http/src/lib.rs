@@ -21,7 +21,13 @@
 //! - [`h2`] exposes HTTP/2 stream IDs, trailers, flow-control aware response
 //!   streaming, and request multiplexing primitives.
 //! - [`transport`] adapts plaintext sockets and, with the `tls` feature, stack
-//!   TLS streams to a common read/write surface.
+//!   TLS streams to a common read/write surface. [`RuntimeStackTransport`] is
+//!   generic over the runtime socket handle; [`StackTransport`] preserves the
+//!   existing stack-core `IoFd` API.
+//!   Transport deadlines use runtime async socket handles for plaintext and
+//!   generic async TLS handles for TLS. They wait on the pending operation and a
+//!   runtime-neutral timer waitable, so active read/write timeouts can cancel and
+//!   drain before close without zero-duration polling loops.
 //!
 //! # Example
 //!
@@ -71,7 +77,7 @@ pub use body::{Body, BodyBuilder, BodyLimits};
 pub use config::HttpConfig;
 pub use error::{Error, ErrorKind, LimitKind};
 pub use headers::{Headers, Trailers};
-pub use transport::StackTransport;
+pub use transport::{HttpRuntime, RuntimeStackTransport, StackTransport};
 
 #[cfg(test)]
 #[global_allocator]
@@ -181,10 +187,23 @@ mod allocation_tracking {
 
 #[cfg(test)]
 mod tests {
-    use std::{hint::black_box, time::Duration};
+    use std::{
+        hint::black_box,
+        marker::PhantomData,
+        num::NonZeroUsize,
+        os::fd::{AsFd, BorrowedFd, OwnedFd},
+        time::Duration,
+    };
 
     use http::{HeaderName, HeaderValue, header::CONTENT_TYPE};
-    use kimojio_stack::{Errno, Runtime};
+    use kimojio_stack::{
+        Errno, IoReadBuffer, IoRuntime, ReadOutput, Runtime, RuntimeCapabilities,
+        RuntimeCapability, RuntimeContext, RuntimeFamily, RuntimeIoError, RuntimeReadResult,
+        RuntimeSocket, RuntimeWaitable, RuntimeWriteResult, SocketIoRuntime, StackfulWaitContext,
+        StackfulWaitRegistration, StackfulWaiter, UnsupportedCapability, WaitRegistration,
+        Waitable, WriteOutput,
+    };
+    use kimojio_stack_steal::{Runtime as StealRuntime, RuntimeConfig as StealRuntimeConfig};
     use kimojio_stack_tls::TlsContext;
     use openssl::{
         asn1::Asn1Time,
@@ -198,8 +217,8 @@ mod tests {
     use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 
     use super::{
-        Body, BodyLimits, Headers, HttpConfig, StackTransport, Trailers, allocation_tracking, h2,
-        http1,
+        Body, BodyLimits, Headers, HttpConfig, RuntimeStackTransport, StackTransport, Trailers,
+        allocation_tracking, h2, http1,
     };
 
     const TLS_BUFFER_SIZE: usize = 16 * 1024;
@@ -251,6 +270,239 @@ mod tests {
             StackTransport::plaintext(client_fd),
             StackTransport::plaintext(server_fd),
         )
+    }
+
+    #[derive(Clone, Copy)]
+    enum TlsTransportPath {
+        StackCoreWrappers,
+        RuntimeAgnostic,
+    }
+
+    fn server_tls_transport(
+        cx: &RuntimeContext<'_>,
+        context: &TlsContext,
+        fd: OwnedFd,
+        path: TlsTransportPath,
+    ) -> StackTransport {
+        match path {
+            TlsTransportPath::StackCoreWrappers => {
+                StackTransport::tls(context.server(cx, TLS_BUFFER_SIZE, fd).unwrap())
+            }
+            TlsTransportPath::RuntimeAgnostic => RuntimeStackTransport::tls_stream(
+                context
+                    .server_with_runtime(cx, TLS_BUFFER_SIZE, fd)
+                    .unwrap(),
+            ),
+        }
+    }
+
+    fn client_tls_transport(
+        cx: &RuntimeContext<'_>,
+        context: &TlsContext,
+        fd: OwnedFd,
+        path: TlsTransportPath,
+    ) -> StackTransport {
+        match path {
+            TlsTransportPath::StackCoreWrappers => StackTransport::tls(
+                context
+                    .client(cx, TLS_BUFFER_SIZE, fd, "localhost")
+                    .unwrap(),
+            ),
+            TlsTransportPath::RuntimeAgnostic => RuntimeStackTransport::tls_stream(
+                context
+                    .client_with_runtime(cx, TLS_BUFFER_SIZE, fd, "localhost")
+                    .unwrap(),
+            ),
+        }
+    }
+
+    struct UnsupportedRuntime;
+
+    struct UnsupportedSocket(OwnedFd);
+
+    struct UnsupportedSleep;
+
+    impl RuntimeWaitable for UnsupportedSleep {
+        fn is_ready(&self) -> bool {
+            false
+        }
+
+        fn add_stackful_waiter(&self, _waiter: Box<dyn StackfulWaiter>) -> bool {
+            false
+        }
+    }
+
+    impl AsFd for UnsupportedSocket {
+        fn as_fd(&self) -> BorrowedFd<'_> {
+            self.0.as_fd()
+        }
+    }
+
+    impl RuntimeSocket for UnsupportedSocket {}
+
+    struct UnsupportedRead<B>(PhantomData<B>);
+
+    impl<B> Waitable for UnsupportedRead<B> {
+        fn is_ready(&self) -> bool {
+            false
+        }
+
+        fn add_waiter(&self, _cx: &RuntimeContext<'_>, _registration: &WaitRegistration) {}
+    }
+
+    impl<B> RuntimeWaitable for UnsupportedRead<B> {
+        fn is_ready(&self) -> bool {
+            Waitable::is_ready(self)
+        }
+
+        fn add_stackful_waiter(&self, _waiter: Box<dyn StackfulWaiter>) -> bool {
+            false
+        }
+    }
+
+    impl<B> RuntimeReadResult<B> for UnsupportedRead<B>
+    where
+        B: IoReadBuffer + Send + 'static,
+    {
+        type Output = ReadOutput<B>;
+
+        fn try_get(&mut self) -> Option<Result<Self::Output, RuntimeIoError>> {
+            None
+        }
+
+        fn cancel(&mut self) -> Result<(), RuntimeIoError> {
+            Err(unsupported_socket_io())
+        }
+    }
+
+    struct UnsupportedWrite<B>(PhantomData<B>);
+
+    impl<B> Waitable for UnsupportedWrite<B> {
+        fn is_ready(&self) -> bool {
+            false
+        }
+
+        fn add_waiter(&self, _cx: &RuntimeContext<'_>, _registration: &WaitRegistration) {}
+    }
+
+    impl<B> RuntimeWaitable for UnsupportedWrite<B> {
+        fn is_ready(&self) -> bool {
+            Waitable::is_ready(self)
+        }
+
+        fn add_stackful_waiter(&self, _waiter: Box<dyn StackfulWaiter>) -> bool {
+            false
+        }
+    }
+
+    impl<B> RuntimeWriteResult<B> for UnsupportedWrite<B>
+    where
+        B: kimojio_stack::IoWriteBuffer + Send + 'static,
+    {
+        type Output = WriteOutput<B>;
+
+        fn try_get(&mut self) -> Option<Result<Self::Output, RuntimeIoError>> {
+            None
+        }
+
+        fn cancel(&mut self) -> Result<(), RuntimeIoError> {
+            Err(unsupported_socket_io())
+        }
+    }
+
+    fn unsupported_socket_io() -> RuntimeIoError {
+        RuntimeIoError::Unsupported(UnsupportedCapability::new(
+            "socket-io",
+            RuntimeFamily::Other("unsupported-test"),
+        ))
+    }
+
+    impl RuntimeCapabilities for UnsupportedRuntime {
+        fn runtime_family(&self) -> RuntimeFamily {
+            RuntimeFamily::Other("unsupported-test")
+        }
+
+        fn supports(&self, _capability: RuntimeCapability) -> bool {
+            false
+        }
+    }
+
+    impl IoRuntime for UnsupportedRuntime {
+        type Sleep = UnsupportedSleep;
+
+        fn sleep_async(&self, _duration: Duration) -> Result<Self::Sleep, RuntimeIoError> {
+            Err(unsupported_socket_io())
+        }
+
+        fn sleep_for(&self, _duration: Duration) -> Result<(), RuntimeIoError> {
+            Err(unsupported_socket_io())
+        }
+    }
+
+    impl StackfulWaitContext for UnsupportedRuntime {
+        fn stackful_wait_registration(&self) -> Option<Box<dyn StackfulWaitRegistration + '_>> {
+            None
+        }
+
+        fn park_stackful(&self) {}
+    }
+
+    impl SocketIoRuntime for UnsupportedRuntime {
+        type Socket = UnsupportedSocket;
+        type ReadResult<B>
+            = UnsupportedRead<B>
+        where
+            B: IoReadBuffer + Send + 'static;
+        type WriteResult<B>
+            = UnsupportedWrite<B>
+        where
+            B: kimojio_stack::IoWriteBuffer + Send + 'static;
+
+        fn socket_from_owned_fd(&self, fd: OwnedFd) -> Result<Self::Socket, RuntimeIoError> {
+            Ok(UnsupportedSocket(fd))
+        }
+
+        fn read(&self, _fd: &Self::Socket, _buf: &mut [u8]) -> Result<usize, RuntimeIoError> {
+            Err(unsupported_socket_io())
+        }
+
+        fn write(&self, _fd: &Self::Socket, _buf: &[u8]) -> Result<usize, RuntimeIoError> {
+            Err(unsupported_socket_io())
+        }
+
+        fn read_async<B>(
+            &self,
+            _fd: &Self::Socket,
+            _buffer: B,
+        ) -> Result<Self::ReadResult<B>, RuntimeIoError>
+        where
+            B: IoReadBuffer + Send + 'static,
+        {
+            Err(unsupported_socket_io())
+        }
+
+        fn write_async<B>(
+            &self,
+            _fd: &Self::Socket,
+            _buffer: B,
+        ) -> Result<Self::WriteResult<B>, RuntimeIoError>
+        where
+            B: kimojio_stack::IoWriteBuffer + Send + 'static,
+        {
+            Err(unsupported_socket_io())
+        }
+
+        fn shutdown(
+            &self,
+            _fd: &Self::Socket,
+            _how: rustix::net::Shutdown,
+        ) -> Result<(), RuntimeIoError> {
+            Err(unsupported_socket_io())
+        }
+
+        fn close(&self, _fd: Self::Socket) -> Result<(), RuntimeIoError> {
+            Err(unsupported_socket_io())
+        }
     }
 
     #[test]
@@ -334,14 +586,19 @@ mod tests {
         let mut runtime = Runtime::new();
 
         runtime.block_on(|cx| {
-            let mut transport = StackTransport::plaintext(client_fd);
-            transport.set_io_timeout(Some(Duration::from_millis(1)));
-            let mut received = [0_u8; 1];
-            let error = transport.read(cx, &mut received).unwrap_err();
+            cx.scope(|scope| {
+                let timeout = scope.spawn(move |cx| {
+                    let mut transport = StackTransport::plaintext(client_fd);
+                    transport.set_io_timeout(Some(Duration::from_millis(1)));
+                    let mut received = [0_u8; 1];
+                    let error = transport.read(cx, &mut received).unwrap_err();
 
-            assert_eq!(error, super::Error::Io(Errno::TIME));
-            transport.close(cx).unwrap();
-            cx.close(server_fd).unwrap();
+                    assert_eq!(error, super::Error::Io(Errno::TIME));
+                    transport.close(cx).unwrap();
+                    cx.close(server_fd).unwrap();
+                });
+                timeout.join(cx);
+            });
         });
     }
 
@@ -396,6 +653,94 @@ mod tests {
                 timed.join(cx);
                 normal_server.join(cx);
                 assert_eq!(normal_client.join(cx), b'x');
+            });
+        });
+    }
+
+    #[test]
+    fn runtime_agnostic_transport_reports_unsupported_socket_io() {
+        let (fd, _peer) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+        let runtime = UnsupportedRuntime;
+        let mut transport = RuntimeStackTransport::plaintext_socket(
+            SocketIoRuntime::socket_from_owned_fd(&runtime, fd).unwrap(),
+        );
+        let mut received = [0_u8; 1];
+
+        assert_eq!(
+            transport.read(&runtime, &mut received).unwrap_err(),
+            super::Error::Unsupported("runtime does not support socket I/O")
+        );
+    }
+
+    #[test]
+    fn runtime_agnostic_plaintext_timeout_cancel_and_close_runs_on_stack_runtime() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let timeout = scope.spawn(|cx| {
+                    let (read_fd, peer_fd) = socketpair(
+                        AddressFamily::UNIX,
+                        SocketType::STREAM,
+                        SocketFlags::empty(),
+                        None,
+                    )
+                    .unwrap();
+                    let read_fd = cx.socket_from_owned_fd(read_fd).unwrap();
+                    let peer_fd = cx.socket_from_owned_fd(peer_fd).unwrap();
+                    let mut transport = RuntimeStackTransport::plaintext_socket(read_fd);
+                    transport.set_io_timeout(Some(Duration::from_millis(1)));
+                    let mut received = [0_u8; 1];
+
+                    assert_eq!(
+                        transport.read(cx, &mut received).unwrap_err(),
+                        super::Error::Io(Errno::TIME)
+                    );
+                    transport.close(cx).unwrap();
+                    SocketIoRuntime::close(cx, peer_fd).unwrap();
+                });
+                timeout.join(cx);
+            });
+        });
+    }
+
+    #[test]
+    fn runtime_agnostic_plaintext_timeout_cancel_and_close_runs_on_stealing_runtime() {
+        let mut runtime = StealRuntime::with_config(StealRuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            ..StealRuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let timeout = scope.spawn(|cx| {
+                    let (read_fd, peer_fd) = socketpair(
+                        AddressFamily::UNIX,
+                        SocketType::STREAM,
+                        SocketFlags::empty(),
+                        None,
+                    )
+                    .unwrap();
+                    let read_fd = cx.socket_from_owned_fd(read_fd).unwrap();
+                    let peer_fd = cx.socket_from_owned_fd(peer_fd).unwrap();
+                    let mut transport = RuntimeStackTransport::plaintext_socket(read_fd);
+                    transport.set_io_timeout(Some(Duration::from_millis(1)));
+                    let mut received = [0_u8; 1];
+
+                    assert_eq!(
+                        transport.read(cx, &mut received).unwrap_err(),
+                        super::Error::Io(Errno::TIME)
+                    );
+                    transport.close(cx).unwrap();
+                    SocketIoRuntime::close(cx, peer_fd).unwrap();
+                });
+                timeout.join(cx);
             });
         });
     }
@@ -540,6 +885,100 @@ mod tests {
             counts.allocated_or_reallocated_bytes() <= 512 * 1024,
             "{counts:?}"
         );
+    }
+
+    #[test]
+    fn allocation_runtime_agnostic_http1_tls_portability_layer_no_extra_allocations() {
+        let concrete = measure_http1_tls_allocations(TlsTransportPath::StackCoreWrappers);
+        let runtime_agnostic = measure_http1_tls_allocations(TlsTransportPath::RuntimeAgnostic);
+
+        assert!(
+            runtime_agnostic.allocating_operations() <= concrete.allocating_operations() + 32,
+            "concrete={concrete:?} runtime_agnostic={runtime_agnostic:?}"
+        );
+        assert!(
+            runtime_agnostic.allocated_or_reallocated_bytes()
+                <= concrete.allocated_or_reallocated_bytes() + 32 * 1024,
+            "concrete={concrete:?} runtime_agnostic={runtime_agnostic:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_agnostic_portability_surface_avoids_dyn_heap_and_helper_threads() {
+        let surfaces = [
+            ("transport", include_str!("transport.rs")),
+            ("tls", include_str!("tls.rs")),
+            ("http1/client", include_str!("http1/client.rs")),
+            ("http1/server", include_str!("http1/server.rs")),
+        ];
+
+        for (name, source) in surfaces {
+            assert!(!source.contains("Box<dyn"), "{name} contains Box<dyn");
+            assert!(!source.contains("Arc<dyn"), "{name} contains Arc<dyn");
+            assert!(!source.contains("Box::new"), "{name} contains Box::new");
+            assert!(
+                !source.contains("thread::spawn"),
+                "{name} spawns helper threads"
+            );
+            assert!(
+                !source.contains("helper thread"),
+                "{name} references helper threads"
+            );
+        }
+    }
+
+    fn measure_http1_tls_allocations(
+        path: TlsTransportPath,
+    ) -> allocation_tracking::AllocationCounts {
+        const WARMUP_ROUNDS: u64 = 1;
+        const MEASURED_ROUNDS: u64 = 2;
+
+        let (server_ctx, client_ctx) = make_contexts();
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+        let request = request("/allocation-runtime-agnostic-tls", b"ping");
+        let response = response(b"pong");
+
+        Runtime::new().block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let transport = server_tls_transport(cx, &server_ctx, server_fd, path);
+                    let mut server =
+                        http1::RuntimeServerConnection::new(transport, HttpConfig::default());
+                    for _ in 0..WARMUP_ROUNDS + MEASURED_ROUNDS {
+                        server
+                            .serve_one(cx, |request| {
+                                assert_eq!(request.uri(), "/allocation-runtime-agnostic-tls");
+                                assert_eq!(request.body().as_bytes(), b"ping");
+                                Ok(response.clone())
+                            })
+                            .unwrap();
+                    }
+                    server.close(cx).unwrap();
+                });
+
+                let transport = client_tls_transport(cx, &client_ctx, client_fd, path);
+                let mut client =
+                    http1::RuntimeClientConnection::new(transport, HttpConfig::default());
+                for _ in 0..WARMUP_ROUNDS {
+                    black_box(client.send(cx, &request).unwrap());
+                }
+
+                let (_, counts) = allocation_tracking::measure(|| {
+                    for _ in 0..MEASURED_ROUNDS {
+                        black_box(client.send(cx, &request).unwrap());
+                    }
+                });
+                client.close(cx).unwrap();
+                server.join(cx);
+                counts
+            })
+        })
     }
 
     fn request(uri: &str, bytes: &[u8]) -> http::Request<Body> {

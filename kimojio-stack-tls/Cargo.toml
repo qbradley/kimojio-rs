@@ -18,6 +18,7 @@ rustix-uring.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+kimojio-stack-steal.workspace = true
 
 [[bench]]
 name = "tls_read_write"

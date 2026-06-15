@@ -24,6 +24,15 @@ also available.
 
 Plaintext builds avoid the TLS/OpenSSL dependency surface by default.
 
+The OpenTelemetry runtime migration boundary is inherited from gRPC: export
+clients own unary gRPC clients, which own HTTP/2 stack connections.
+Runtime-agnostic export should follow generic HTTP/2 and gRPC wrappers when
+those exist, without adding a separate telemetry runtime trait. Optional
+runtime-operation instrumentation can attach to explicit shared-contract events
+such as capability checks, socket submission/completion, wait registration,
+cancellation, close, and adapter error mapping; disabled instrumentation must not
+add mandatory dynamic dispatch, allocation, background work, or helper threads.
+
 ## Export behavior
 
 Export is caller controlled:

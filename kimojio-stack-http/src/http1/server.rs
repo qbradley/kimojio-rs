@@ -2,22 +2,25 @@
 // Licensed under the MIT License.
 
 use http::{Request, Response};
-use kimojio_stack::RuntimeContext;
+use kimojio_stack::{IoFd, RuntimeSocket};
 
-use crate::{Body, Error, HttpConfig, StackTransport};
+use crate::{Body, Error, HttpConfig, HttpRuntime, RuntimeStackTransport};
 
 use super::codec;
 
 /// Low-level HTTP/1.1 server connection over a stackful transport.
-pub struct ServerConnection {
-    transport: StackTransport,
+pub struct RuntimeServerConnection<S> {
+    transport: RuntimeStackTransport<S>,
     config: HttpConfig,
     read_buf: Vec<u8>,
 }
 
-impl ServerConnection {
+/// Stack-core HTTP/1.1 server compatibility alias.
+pub type ServerConnection = RuntimeServerConnection<IoFd>;
+
+impl<S> RuntimeServerConnection<S> {
     /// Creates an HTTP/1.1 server over an already-connected transport.
-    pub fn new(transport: StackTransport, config: HttpConfig) -> Self {
+    pub fn new(transport: RuntimeStackTransport<S>, config: HttpConfig) -> Self {
         Self {
             transport,
             config,
@@ -26,20 +29,21 @@ impl ServerConnection {
     }
 
     /// Reads the next request, returning `Ok(None)` after clean peer EOF.
-    pub fn read_request(
-        &mut self,
-        cx: &RuntimeContext<'_>,
-    ) -> Result<Option<Request<Body>>, Error> {
+    pub fn read_request<R>(&mut self, cx: &R) -> Result<Option<Request<Body>>, Error>
+    where
+        R: HttpRuntime<S>,
+        S: RuntimeSocket,
+    {
         codec::read_request(cx, &mut self.transport, &mut self.read_buf, self.config)
             .map(|request| request.map(|request| request.request))
     }
 
     /// Writes one response on the connection.
-    pub fn write_response(
-        &mut self,
-        cx: &RuntimeContext<'_>,
-        response: &Response<Body>,
-    ) -> Result<(), Error> {
+    pub fn write_response<R>(&mut self, cx: &R, response: &Response<Body>) -> Result<(), Error>
+    where
+        R: HttpRuntime<S>,
+        S: RuntimeSocket,
+    {
         codec::write_response(cx, &mut self.transport, response)
     }
 
@@ -47,11 +51,15 @@ impl ServerConnection {
     ///
     /// Returns `Ok(false)` when the client closed before another request. Returns
     /// `Ok(true)` when the connection can be kept alive for another request.
-    pub fn serve_one(
+    pub fn serve_one<R>(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &R,
         handler: impl FnOnce(Request<Body>) -> Result<Response<Body>, Error>,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool, Error>
+    where
+        R: HttpRuntime<S>,
+        S: RuntimeSocket,
+    {
         let Some(incoming) =
             codec::read_request(cx, &mut self.transport, &mut self.read_buf, self.config)?
         else {
@@ -67,7 +75,11 @@ impl ServerConnection {
     }
 
     /// Closes the underlying transport.
-    pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
+    pub fn close<R>(self, cx: &R) -> Result<(), Error>
+    where
+        R: HttpRuntime<S>,
+        S: RuntimeSocket,
+    {
         self.transport.close(cx)
     }
 }

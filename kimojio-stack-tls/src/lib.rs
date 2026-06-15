@@ -5,11 +5,11 @@
 //!
 //! This crate adapts the existing Kimojio OpenSSL memory-BIO integration to the
 //! stackful runtime. OpenSSL reads encrypted bytes directly from an internal BIO
-//! buffer returned by `kimojio-tls`; the runtime fills that buffer with
-//! `RuntimeContext::read`. OpenSSL writes encrypted bytes into another BIO
-//! buffer, and the runtime drains it with `RuntimeContext::write`. That keeps the
-//! OS-thread nonblocking without adding an intermediate copy between the socket
-//! and OpenSSL's encrypted buffers.
+//! buffer returned by `kimojio-tls`; the runtime fills that buffer through
+//! `SocketIoRuntime::read`. OpenSSL writes encrypted bytes into another BIO
+//! buffer, and the runtime drains it with `SocketIoRuntime::write`. That keeps
+//! the OS-thread nonblocking without adding an intermediate copy between the
+//! socket and OpenSSL's encrypted buffers.
 //!
 //! # Success path
 //!
@@ -17,9 +17,9 @@
 //! with [`TlsContext::from_openssl`], then perform the handshake from a stackful
 //! coroutine. After handshake, [`TlsStream::read`] and [`TlsStream::write`]
 //! exchange plaintext while the runtime drives encrypted socket I/O underneath.
-//! [`TlsStream::read_async`] and [`TlsStream::write_async`] return waitable
-//! handles for integrating TLS operations with [`RuntimeContext::select`] and
-//! [`RuntimeContext::join`].
+//! [`TlsStream::read_async`] and [`TlsStream::write_async`] return handles that
+//! implement `RuntimeWaitable` for runtime-neutral waiting and `Waitable` for
+//! stack-core [`RuntimeContext::select`] / [`RuntimeContext::join`] compatibility.
 //!
 //! ```no_run
 //! use kimojio_stack::{RuntimeContext, OwnedFd};
@@ -49,8 +49,15 @@
 //!
 //! This crate is stack-runtime oriented rather than `std::io::Read`/`Write`
 //! oriented. All I/O methods require a [`RuntimeContext`] and may park the
-//! current coroutine. `TlsContext::from_openssl` takes ownership of the OpenSSL
-//! context; do not keep using the original `SslContext` value after conversion.
+//! current coroutine. Stack-core compatibility methods take a [`RuntimeContext`];
+//! runtime-agnostic constructors such as [`TlsContext::client_with_runtime`] and
+//! [`TlsContext::server_with_runtime`] take any [`SocketIoRuntime`] adapter, and
+//! async TLS handles can wait through any adapter that also implements
+//! `StackfulWaitContext`. Canceling a pending async TLS operation drains the
+//! private socket I/O through that adapter and poisons the stream, so callers
+//! should close rather than reuse a stream after an active timeout.
+//! `TlsContext::from_openssl` takes ownership of the OpenSSL context; do not keep
+//! using the original `SslContext` value after conversion.
 
 use std::{
     cell::{Cell, RefCell},
@@ -60,8 +67,10 @@ use std::{
 
 use foreign_types_shared::{ForeignType, ForeignTypeRef};
 use kimojio_stack::{
-    Errno, IoFd, IoReadBuffer, IoResult, IoWriteBuffer, ReadOutput, RuntimeContext,
-    WaitRegistration, Waitable, WriteOutput,
+    Errno, IoFd, IoReadBuffer, IoWriteBuffer, ReadOutput, RuntimeContext, RuntimeIoError,
+    RuntimeReadResult, RuntimeWaitError, RuntimeWaitable, RuntimeWaitableAdapter,
+    RuntimeWriteResult, SocketIoRuntime, StackfulWaitContext, WaitRegistration, Waitable,
+    WriteOutput,
 };
 use kimojio_tls::{Response, TlsServer, TlsServerContext, TlsServerError};
 use rustix::{fd::OwnedFd, net::Shutdown};
@@ -87,7 +96,7 @@ impl TlsContext {
         Self { ssl_ctx }
     }
 
-    /// Performs a server-side TLS handshake over `socket`.
+    /// Performs a server-side TLS handshake over `socket` on the stack-core runtime.
     ///
     /// The handshake runs synchronously from the caller's perspective but parks
     /// the current coroutine whenever OpenSSL needs socket input or output. The
@@ -98,13 +107,29 @@ impl TlsContext {
         bufsize: usize,
         socket: OwnedFd,
     ) -> Result<TlsStream, Errno> {
+        self.server_with_runtime(cx, bufsize, socket)
+    }
+
+    /// Performs a server-side TLS handshake over `socket` through a runtime adapter.
+    pub fn server_with_runtime<R>(
+        &self,
+        cx: &R,
+        bufsize: usize,
+        socket: OwnedFd,
+    ) -> Result<RuntimeTlsStream<R::Socket>, Errno>
+    where
+        R: SocketIoRuntime,
+    {
         let ssl = self.ssl_ctx.server(bufsize).map_err(as_io_error)?;
-        let mut stream = TlsStream::new(ssl, socket);
+        let socket = cx
+            .socket_from_owned_fd(socket)
+            .map_err(runtime_io_error_as_errno)?;
+        let mut stream = RuntimeTlsStream::from_socket(ssl, socket);
         stream.server_side_handshake(cx)?;
         Ok(stream)
     }
 
-    /// Performs a client-side TLS handshake over `socket`.
+    /// Performs a client-side TLS handshake over `socket` on the stack-core runtime.
     ///
     /// `server_name` is installed as the OpenSSL hostname before the handshake so
     /// normal SNI and certificate-name verification policies can apply according
@@ -116,8 +141,25 @@ impl TlsContext {
         socket: OwnedFd,
         server_name: &str,
     ) -> Result<TlsStream, Errno> {
+        self.client_with_runtime(cx, bufsize, socket, server_name)
+    }
+
+    /// Performs a client-side TLS handshake over `socket` through a runtime adapter.
+    pub fn client_with_runtime<R>(
+        &self,
+        cx: &R,
+        bufsize: usize,
+        socket: OwnedFd,
+        server_name: &str,
+    ) -> Result<RuntimeTlsStream<R::Socket>, Errno>
+    where
+        R: SocketIoRuntime,
+    {
         let ssl = self.ssl_ctx.client(bufsize).map_err(as_io_error)?;
-        let mut stream = TlsStream::new(ssl, socket);
+        let socket = cx
+            .socket_from_owned_fd(socket)
+            .map_err(runtime_io_error_as_errno)?;
+        let mut stream = RuntimeTlsStream::from_socket(ssl, socket);
         stream
             .ssl_mut()
             .set_hostname(server_name)
@@ -127,26 +169,26 @@ impl TlsContext {
     }
 }
 
-/// A TLS stream driven by `kimojio-stack` I/O.
+/// A TLS stream driven through a stack runtime socket-I/O adapter.
 ///
 /// The stream owns one connected socket until [`close`](Self::close) consumes it.
 /// `shutdown_write` only half-closes the socket write side; use
 /// [`shutdown`](Self::shutdown) first when TLS close-notify matters to the peer.
-pub struct TlsStream {
+pub struct RuntimeTlsStream<S> {
     ssl: TlsServer,
-    socket: Option<IoFd>,
+    socket: Option<S>,
     poisoned: bool,
 }
 
-impl TlsStream {
-    /// Creates a TLS stream from an initialized TLS handle and connected socket.
-    ///
-    /// Most callers should prefer [`TlsContext::client`] or
-    /// [`TlsContext::server`], which create the TLS handle and run the handshake.
-    pub fn new(ssl: TlsServer, socket: OwnedFd) -> Self {
+/// Stack-core TLS stream compatibility alias.
+pub type TlsStream = RuntimeTlsStream<IoFd>;
+
+impl<S> RuntimeTlsStream<S> {
+    /// Creates a TLS stream from an initialized TLS handle and runtime socket.
+    pub fn from_socket(ssl: TlsServer, socket: S) -> Self {
         Self {
             ssl,
-            socket: Some(IoFd::from_owned(socket)),
+            socket: Some(socket),
             poisoned: false,
         }
     }
@@ -172,7 +214,10 @@ impl TlsStream {
     ///
     /// This is useful when constructing a stream manually with [`TlsStream::new`].
     /// `TlsContext::client` calls it automatically.
-    pub fn client_side_handshake(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+    pub fn client_side_handshake<R>(&mut self, cx: &R) -> Result<(), Errno>
+    where
+        R: SocketIoRuntime<Socket = S>,
+    {
         self.ensure_usable()?;
         loop {
             match self.ssl.client_side_handshake() {
@@ -189,7 +234,10 @@ impl TlsStream {
     ///
     /// This is useful when constructing a stream manually with [`TlsStream::new`].
     /// `TlsContext::server` calls it automatically.
-    pub fn server_side_handshake(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+    pub fn server_side_handshake<R>(&mut self, cx: &R) -> Result<(), Errno>
+    where
+        R: SocketIoRuntime<Socket = S>,
+    {
         self.ensure_usable()?;
         loop {
             match self.ssl.server_side_handshake() {
@@ -205,7 +253,10 @@ impl TlsStream {
     /// Reads decrypted TLS plaintext into `buf`.
     ///
     /// Returns `Ok(0)` after a clean TLS EOF.
-    pub fn read(&mut self, cx: &RuntimeContext<'_>, buf: &mut [u8]) -> Result<usize, Errno> {
+    pub fn read<R>(&mut self, cx: &R, buf: &mut [u8]) -> Result<usize, Errno>
+    where
+        R: SocketIoRuntime<Socket = S>,
+    {
         self.ensure_usable()?;
         loop {
             match self.ssl.read(buf) {
@@ -224,7 +275,7 @@ impl TlsStream {
     /// than `buf.len()` when the peer closes cleanly.
     pub fn read_exact_or_eof(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl SocketIoRuntime<Socket = S>,
         mut buf: &mut [u8],
     ) -> Result<usize, Errno> {
         self.ensure_usable()?;
@@ -244,7 +295,10 @@ impl TlsStream {
     /// The method loops until every plaintext byte has been accepted by OpenSSL
     /// and all produced encrypted bytes have been written through the stack
     /// runtime. It returns the original plaintext length on success.
-    pub fn write(&mut self, cx: &RuntimeContext<'_>, mut buf: &[u8]) -> Result<usize, Errno> {
+    pub fn write<R>(&mut self, cx: &R, mut buf: &[u8]) -> Result<usize, Errno>
+    where
+        R: SocketIoRuntime<Socket = S>,
+    {
         self.ensure_usable()?;
         let requested = buf.len();
         while !buf.is_empty() {
@@ -265,62 +319,15 @@ impl TlsStream {
         Ok(requested)
     }
 
-    /// Starts a TLS plaintext read into an owned buffer.
-    ///
-    /// The returned handle implements [`Waitable`], so callers can wait for it
-    /// with [`RuntimeContext::select`] or [`RuntimeContext::join`] and then
-    /// consume the [`ReadOutput`] with [`TlsReadResult::get`] or
-    /// [`TlsReadResult::try_get`]. The handle keeps an exclusive borrow of this
-    /// stream until it is consumed or dropped.
-    ///
-    /// Dropping a pending TLS operation before it completes leaves the encrypted
-    /// socket stream in an unknown protocol state. To prevent later duplicate or
-    /// lost TLS records from being hidden, the stream is marked unusable and
-    /// subsequent I/O returns [`Errno::PIPE`].
-    pub fn read_async<'stream, B>(
-        &'stream mut self,
-        cx: &RuntimeContext<'_>,
-        buffer: B,
-    ) -> TlsReadResult<'stream, B>
-    where
-        B: IoReadBuffer,
-    {
-        let result = TlsReadResult::new(self, buffer);
-        result.progress(Some(cx));
-        result
-    }
-
-    /// Starts a TLS plaintext write from an owned buffer.
-    ///
-    /// The returned handle implements [`Waitable`], so callers can wait for it
-    /// with [`RuntimeContext::select`] or [`RuntimeContext::join`] and then
-    /// consume the [`WriteOutput`] with [`TlsWriteResult::get`] or
-    /// [`TlsWriteResult::try_get`]. The handle keeps an exclusive borrow of this
-    /// stream until it is consumed or dropped.
-    ///
-    /// Dropping a pending TLS operation before it completes marks the stream
-    /// unusable for the same reason as [`read_async`](Self::read_async): the
-    /// underlying socket may have consumed or emitted encrypted TLS records that
-    /// OpenSSL has not accounted for.
-    pub fn write_async<'stream, B>(
-        &'stream mut self,
-        cx: &RuntimeContext<'_>,
-        buffer: B,
-    ) -> TlsWriteResult<'stream, B>
-    where
-        B: IoWriteBuffer,
-    {
-        let result = TlsWriteResult::new(self, buffer);
-        result.progress(Some(cx));
-        result
-    }
-
     /// Sends TLS close-notify if possible.
     ///
     /// A peer that has already closed the transport is treated as a successful
     /// shutdown. Transport or protocol errors before close-notify completes are
     /// returned as [`Errno`].
-    pub fn shutdown(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+    pub fn shutdown<R>(&mut self, cx: &R) -> Result<(), Errno>
+    where
+        R: SocketIoRuntime<Socket = S>,
+    {
         self.ensure_usable()?;
         loop {
             match self.ssl.shutdown() {
@@ -337,24 +344,33 @@ impl TlsStream {
     }
 
     /// Shuts down the underlying socket write half.
-    pub fn shutdown_write(&self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+    pub fn shutdown_write<R>(&self, cx: &R) -> Result<(), Errno>
+    where
+        R: SocketIoRuntime<Socket = S>,
+    {
         self.ensure_usable()?;
         let socket = self.socket.as_ref().ok_or(Errno::PIPE)?;
         cx.shutdown(socket, Shutdown::Write)
+            .map_err(runtime_io_error_as_errno)
     }
 
     /// Closes the underlying socket through the stack runtime.
-    pub fn close(mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+    pub fn close<R>(mut self, cx: &R) -> Result<(), Errno>
+    where
+        R: SocketIoRuntime<Socket = S>,
+    {
         let socket = self.socket.take().ok_or(Errno::PIPE)?;
-        let socket = socket.into_owned().map_err(|_| Errno::BUSY)?;
-        cx.close(socket)
+        cx.close(socket).map_err(runtime_io_error_as_errno)
     }
 
-    fn fill_tls_read(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+    fn fill_tls_read<R>(&mut self, cx: &R) -> Result<(), Errno>
+    where
+        R: SocketIoRuntime<Socket = S>,
+    {
         self.ensure_usable()?;
         let socket = self.socket.as_ref().ok_or(Errno::PIPE)?;
         if let Some(buffer) = self.ssl.get_push_buffer() {
-            let amount = cx.read(socket, buffer)?;
+            let amount = cx.read(socket, buffer).map_err(runtime_io_error_as_errno)?;
             if amount == 0 {
                 return Err(Errno::PIPE);
             }
@@ -363,13 +379,18 @@ impl TlsStream {
         Ok(())
     }
 
-    fn flush_tls_write(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+    fn flush_tls_write<R>(&mut self, cx: &R) -> Result<(), Errno>
+    where
+        R: SocketIoRuntime<Socket = S>,
+    {
         self.ensure_usable()?;
         let socket = self.socket.as_ref().ok_or(Errno::PIPE)?;
         loop {
             let amount = match self.ssl.get_pull_buffer() {
                 Some(buffer) => {
-                    let amount = cx.write(socket, buffer)?;
+                    let amount = cx
+                        .write(socket, buffer)
+                        .map_err(runtime_io_error_as_errno)?;
                     if amount == 0 {
                         return Err(Errno::PIPE);
                     }
@@ -402,56 +423,140 @@ impl TlsStream {
     }
 }
 
-enum TlsPendingIo {
-    Read(IoResult<ReadOutput<Vec<u8>>, Vec<u8>>),
-    Write(IoResult<WriteOutput<Vec<u8>>, Vec<u8>>),
+impl<S> RuntimeTlsStream<S> {
+    /// Starts a TLS plaintext read into an owned buffer through a runtime adapter.
+    ///
+    /// The returned handle implements [`RuntimeWaitable`] for runtime-neutral
+    /// waiting and [`Waitable`] for stack-core compatibility. It keeps an
+    /// exclusive borrow of this stream until consumed or dropped.
+    ///
+    /// Dropping a pending TLS operation before it completes leaves the encrypted
+    /// socket stream in an unknown protocol state. To prevent later duplicate or
+    /// lost TLS records from being hidden, the stream is marked unusable and
+    /// subsequent I/O returns [`Errno::PIPE`].
+    pub fn read_async<'operation, R, B>(
+        &'operation mut self,
+        cx: &'operation R,
+        buffer: B,
+    ) -> TlsReadResult<'operation, B, R>
+    where
+        R: SocketIoRuntime<Socket = S> + StackfulWaitContext,
+        R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
+        R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
+        B: IoReadBuffer,
+    {
+        let result = TlsReadResult::new(cx, self, buffer);
+        result.progress();
+        result
+    }
+
+    /// Starts a TLS plaintext write from an owned buffer through a runtime adapter.
+    ///
+    /// The returned handle implements [`RuntimeWaitable`] for runtime-neutral
+    /// waiting and [`Waitable`] for stack-core compatibility. It keeps an
+    /// exclusive borrow of this stream until consumed or dropped.
+    ///
+    /// Dropping a pending TLS operation before it completes marks the stream
+    /// unusable for the same reason as [`read_async`](Self::read_async): the
+    /// underlying socket may have consumed or emitted encrypted TLS records that
+    /// OpenSSL has not accounted for.
+    pub fn write_async<'operation, R, B>(
+        &'operation mut self,
+        cx: &'operation R,
+        buffer: B,
+    ) -> TlsWriteResult<'operation, B, R>
+    where
+        R: SocketIoRuntime<Socket = S> + StackfulWaitContext,
+        R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
+        R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
+        B: IoWriteBuffer,
+    {
+        let result = TlsWriteResult::new(cx, self, buffer);
+        result.progress();
+        result
+    }
 }
 
-impl TlsPendingIo {
-    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
+impl RuntimeTlsStream<IoFd> {
+    /// Creates a stack-core TLS stream from an initialized TLS handle and connected socket.
+    ///
+    /// Most callers should prefer [`TlsContext::client`] or
+    /// [`TlsContext::server`], which create the TLS handle and run the handshake.
+    pub fn new(ssl: TlsServer, socket: OwnedFd) -> Self {
+        Self::from_socket(ssl, IoFd::from_owned(socket))
+    }
+}
+
+enum TlsPendingIo<R>
+where
+    R: SocketIoRuntime,
+{
+    Read(R::ReadResult<Vec<u8>>),
+    Write(R::WriteResult<Vec<u8>>),
+}
+
+impl<R> TlsPendingIo<R>
+where
+    R: SocketIoRuntime + StackfulWaitContext,
+    R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
+    R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
+{
+    fn add_stackful_waiter(&self, waiter: Box<dyn kimojio_stack::StackfulWaiter>) -> bool {
         match self {
-            Self::Read(io) => io.add_waiter(cx, registration),
-            Self::Write(io) => io.add_waiter(cx, registration),
+            Self::Read(io) => RuntimeWaitable::add_stackful_waiter(io, waiter),
+            Self::Write(io) => RuntimeWaitable::add_stackful_waiter(io, waiter),
         }
     }
 
-    fn cancel(&self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
-        match self {
-            Self::Read(io) => cx.cancel_io(io),
-            Self::Write(io) => cx.cancel_io(io),
-        }
-    }
-
-    fn drain(self, cx: &RuntimeContext<'_>) {
+    fn cancel(&mut self, cx: &R) -> Result<(), Errno> {
         match self {
             Self::Read(io) => {
-                let _ = io.get(cx);
+                SocketIoRuntime::cancel_read(cx, io).map_err(runtime_io_error_as_errno)
             }
             Self::Write(io) => {
-                let _ = io.get(cx);
+                SocketIoRuntime::cancel_write(cx, io).map_err(runtime_io_error_as_errno)
             }
+        }
+    }
+
+    fn drain(self, cx: &R) -> Result<(), Errno> {
+        match self {
+            Self::Read(mut io) => drain_read_result(cx, &mut io),
+            Self::Write(mut io) => drain_write_result(cx, &mut io),
         }
     }
 }
 
 /// A pending TLS plaintext read.
-#[must_use = "pending TLS reads should be completed with get, try_get, or RuntimeContext::join"]
-pub struct TlsReadResult<'stream, B> {
-    stream: RefCell<&'stream mut TlsStream>,
+#[must_use = "pending TLS reads should be completed with get, try_get, or a runtime wait"]
+pub struct TlsReadResult<'operation, B, R = RuntimeContext<'operation>>
+where
+    R: SocketIoRuntime + StackfulWaitContext,
+{
+    runtime: &'operation R,
+    stream: RefCell<&'operation mut RuntimeTlsStream<R::Socket>>,
     buffer: RefCell<Option<B>>,
     encrypted_read_buffer: RefCell<Vec<u8>>,
     encrypted_write_buffer: RefCell<Vec<u8>>,
-    pending: RefCell<Option<TlsPendingIo>>,
+    pending: RefCell<Option<TlsPendingIo<R>>>,
     result: RefCell<Option<Result<usize, Errno>>>,
     taken: bool,
 }
 
-impl<'stream, B> TlsReadResult<'stream, B>
+impl<'operation, B, R> TlsReadResult<'operation, B, R>
 where
+    R: SocketIoRuntime + StackfulWaitContext,
+    R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
+    R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
     B: IoReadBuffer,
 {
-    fn new(stream: &'stream mut TlsStream, buffer: B) -> Self {
+    fn new(
+        runtime: &'operation R,
+        stream: &'operation mut RuntimeTlsStream<R::Socket>,
+        buffer: B,
+    ) -> Self {
         Self {
+            runtime,
             stream: RefCell::new(stream),
             buffer: RefCell::new(Some(buffer)),
             encrypted_read_buffer: RefCell::new(Vec::new()),
@@ -470,7 +575,7 @@ where
     /// [`RuntimeContext::join`].
     pub fn try_get(&mut self) -> Option<Result<ReadOutput<B>, Errno>> {
         assert!(!self.taken, "TlsReadResult value already taken");
-        self.progress(None);
+        self.progress();
         let result = self.result.borrow_mut().take()?;
         self.taken = true;
         let buffer = self
@@ -502,32 +607,32 @@ where
     /// consumed encrypted bytes from the socket, so continuing the same stream
     /// would risk duplicate or lost protocol data. After successful cancellation,
     /// [`try_get`](Self::try_get) returns `Err(Errno::CANCELED)`.
-    pub fn cancel(&self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+    pub fn cancel(&self, _cx: &R) -> Result<(), Errno> {
         if self.taken || self.result.borrow().is_some() {
             return Ok(());
         }
 
-        self.progress(Some(cx));
+        self.progress();
         if self.result.borrow().is_some() {
             return Ok(());
         }
 
         {
-            let pending = self.pending.borrow();
-            if let Some(pending) = pending.as_ref() {
-                pending.cancel(cx)?;
+            let mut pending = self.pending.borrow_mut();
+            if let Some(pending) = pending.as_mut() {
+                pending.cancel(self.runtime)?;
             }
         }
 
         if let Some(pending) = self.pending.borrow_mut().take() {
-            pending.drain(cx);
+            pending.drain(self.runtime)?;
         }
         self.stream.borrow_mut().poison();
         self.complete(Err(Errno::CANCELED));
         Ok(())
     }
 
-    fn progress(&self, cx: Option<&RuntimeContext<'_>>) {
+    fn progress(&self) {
         if self.result.borrow().is_some() {
             return;
         }
@@ -559,32 +664,22 @@ where
                     self.complete(Err(error));
                     return;
                 }
-                Response::WantRead => {
-                    let Some(cx) = cx else {
+                Response::WantRead => match self.start_encrypted_read() {
+                    Ok(true) => return,
+                    Ok(false) => {}
+                    Err(error) => {
+                        self.complete(Err(error));
                         return;
-                    };
-                    match self.start_encrypted_read(cx) {
-                        Ok(true) => return,
-                        Ok(false) => {}
-                        Err(error) => {
-                            self.complete(Err(error));
-                            return;
-                        }
                     }
-                }
-                Response::WantWrite => {
-                    let Some(cx) = cx else {
+                },
+                Response::WantWrite => match self.start_encrypted_write() {
+                    Ok(true) => return,
+                    Ok(false) => {}
+                    Err(error) => {
+                        self.complete(Err(error));
                         return;
-                    };
-                    match self.start_encrypted_write(cx) {
-                        Ok(true) => return,
-                        Ok(false) => {}
-                        Err(error) => {
-                            self.complete(Err(error));
-                            return;
-                        }
                     }
-                }
+                },
                 Response::Eof => {
                     self.complete(Ok(0));
                     return;
@@ -597,17 +692,21 @@ where
         let completion = {
             let mut pending = self.pending.borrow_mut();
             match pending.as_mut() {
-                Some(TlsPendingIo::Read(read)) => match read.try_get() {
+                Some(TlsPendingIo::Read(read)) => match RuntimeReadResult::try_get(read) {
                     Some(result) => {
                         *pending = None;
-                        Some(PendingCompletion::Read(result))
+                        Some(PendingCompletion::Read(
+                            result.map_err(runtime_io_error_as_errno),
+                        ))
                     }
                     None => return false,
                 },
-                Some(TlsPendingIo::Write(write)) => match write.try_get() {
+                Some(TlsPendingIo::Write(write)) => match RuntimeWriteResult::try_get(write) {
                     Some(result) => {
                         *pending = None;
-                        Some(PendingCompletion::Write(result))
+                        Some(PendingCompletion::Write(
+                            result.map_err(runtime_io_error_as_errno),
+                        ))
                     }
                     None => return false,
                 },
@@ -664,7 +763,7 @@ where
         }
     }
 
-    fn start_encrypted_read(&self, cx: &RuntimeContext<'_>) -> Result<bool, Errno> {
+    fn start_encrypted_read(&self) -> Result<bool, Errno> {
         let len = {
             let mut stream = self.stream.borrow_mut();
             stream.ensure_usable()?;
@@ -682,13 +781,14 @@ where
         let read = {
             let stream = self.stream.borrow();
             let socket = stream.socket.as_ref().ok_or(Errno::PIPE)?;
-            cx.read_async(socket, buffer)
+            SocketIoRuntime::read_async(self.runtime, socket, buffer)
+                .map_err(runtime_io_error_as_errno)?
         };
         *self.pending.borrow_mut() = Some(TlsPendingIo::Read(read));
         Ok(true)
     }
 
-    fn start_encrypted_write(&self, cx: &RuntimeContext<'_>) -> Result<bool, Errno> {
+    fn start_encrypted_write(&self) -> Result<bool, Errno> {
         let mut buffer = mem::take(&mut *self.encrypted_write_buffer.borrow_mut());
         {
             let stream = self.stream.borrow_mut();
@@ -707,7 +807,8 @@ where
         let write = {
             let stream = self.stream.borrow();
             let socket = stream.socket.as_ref().ok_or(Errno::PIPE)?;
-            cx.write_async(socket, buffer)
+            SocketIoRuntime::write_async(self.runtime, socket, buffer)
+                .map_err(runtime_io_error_as_errno)?
         };
         *self.pending.borrow_mut() = Some(TlsPendingIo::Write(write));
         Ok(true)
@@ -718,45 +819,76 @@ where
     }
 }
 
-impl<B> Waitable for TlsReadResult<'_, B>
+impl<B, R> RuntimeWaitable for TlsReadResult<'_, B, R>
 where
+    R: SocketIoRuntime + StackfulWaitContext,
+    R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
+    R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
     B: IoReadBuffer,
 {
     fn is_ready(&self) -> bool {
         if self.taken {
             return true;
         }
-        self.progress(None);
+        self.progress();
         self.result.borrow().is_some()
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
+    fn add_stackful_waiter(&self, waiter: Box<dyn kimojio_stack::StackfulWaiter>) -> bool {
         if self.taken {
-            return;
+            return false;
         }
-        self.progress(Some(cx));
+        self.progress();
         if self.result.borrow().is_some() {
-            return;
+            return false;
         }
         if let Some(pending) = self.pending.borrow().as_ref() {
-            pending.add_waiter(cx, registration);
+            pending.add_stackful_waiter(waiter)
+        } else {
+            false
         }
     }
 }
 
-impl<B> fmt::Debug for TlsReadResult<'_, B>
+impl<B, R> Waitable for TlsReadResult<'_, B, R>
 where
+    R: SocketIoRuntime + StackfulWaitContext,
+    R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
+    R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
+    B: IoReadBuffer,
+{
+    fn is_ready(&self) -> bool {
+        RuntimeWaitable::is_ready(self)
+    }
+
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
+        if RuntimeWaitable::is_ready(self) {
+            return;
+        }
+        let adapter = RuntimeWaitableAdapter::new(self);
+        Waitable::add_waiter(&adapter, cx, registration);
+    }
+}
+
+impl<B, R> fmt::Debug for TlsReadResult<'_, B, R>
+where
+    R: SocketIoRuntime + StackfulWaitContext,
+    R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
+    R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
     B: IoReadBuffer,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TlsReadResult")
-            .field("ready", &self.is_ready())
+            .field("ready", &RuntimeWaitable::is_ready(self))
             .field("taken", &self.taken)
             .finish()
     }
 }
 
-impl<B> Drop for TlsReadResult<'_, B> {
+impl<B, R> Drop for TlsReadResult<'_, B, R>
+where
+    R: SocketIoRuntime + StackfulWaitContext,
+{
     fn drop(&mut self) {
         if !self.taken && self.result.borrow().is_none() {
             self.stream.borrow_mut().poison();
@@ -765,24 +897,36 @@ impl<B> Drop for TlsReadResult<'_, B> {
 }
 
 /// A pending TLS plaintext write.
-#[must_use = "pending TLS writes should be completed with get, try_get, or RuntimeContext::join"]
-pub struct TlsWriteResult<'stream, B> {
-    stream: RefCell<&'stream mut TlsStream>,
+#[must_use = "pending TLS writes should be completed with get, try_get, or a runtime wait"]
+pub struct TlsWriteResult<'operation, B, R = RuntimeContext<'operation>>
+where
+    R: SocketIoRuntime + StackfulWaitContext,
+{
+    runtime: &'operation R,
+    stream: RefCell<&'operation mut RuntimeTlsStream<R::Socket>>,
     buffer: RefCell<Option<B>>,
     encrypted_read_buffer: RefCell<Vec<u8>>,
     encrypted_write_buffer: RefCell<Vec<u8>>,
-    pending: RefCell<Option<TlsPendingIo>>,
+    pending: RefCell<Option<TlsPendingIo<R>>>,
     result: RefCell<Option<Result<usize, Errno>>>,
     plaintext_offset: Cell<usize>,
     taken: bool,
 }
 
-impl<'stream, B> TlsWriteResult<'stream, B>
+impl<'operation, B, R> TlsWriteResult<'operation, B, R>
 where
+    R: SocketIoRuntime + StackfulWaitContext,
+    R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
+    R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
     B: IoWriteBuffer,
 {
-    fn new(stream: &'stream mut TlsStream, buffer: B) -> Self {
+    fn new(
+        runtime: &'operation R,
+        stream: &'operation mut RuntimeTlsStream<R::Socket>,
+        buffer: B,
+    ) -> Self {
         Self {
+            runtime,
             stream: RefCell::new(stream),
             buffer: RefCell::new(Some(buffer)),
             encrypted_read_buffer: RefCell::new(Vec::new()),
@@ -802,7 +946,7 @@ where
     /// [`RuntimeContext::join`].
     pub fn try_get(&mut self) -> Option<Result<WriteOutput<B>, Errno>> {
         assert!(!self.taken, "TlsWriteResult value already taken");
-        self.progress(None);
+        self.progress();
         let result = self.result.borrow_mut().take()?;
         self.taken = true;
         let buffer = self
@@ -835,32 +979,32 @@ where
     /// so continuing the same stream would risk duplicate protocol data. After
     /// successful cancellation, [`try_get`](Self::try_get) returns
     /// `Err(Errno::CANCELED)`.
-    pub fn cancel(&self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+    pub fn cancel(&self, _cx: &R) -> Result<(), Errno> {
         if self.taken || self.result.borrow().is_some() {
             return Ok(());
         }
 
-        self.progress(Some(cx));
+        self.progress();
         if self.result.borrow().is_some() {
             return Ok(());
         }
 
         {
-            let pending = self.pending.borrow();
-            if let Some(pending) = pending.as_ref() {
-                pending.cancel(cx)?;
+            let mut pending = self.pending.borrow_mut();
+            if let Some(pending) = pending.as_mut() {
+                pending.cancel(self.runtime)?;
             }
         }
 
         if let Some(pending) = self.pending.borrow_mut().take() {
-            pending.drain(cx);
+            pending.drain(self.runtime)?;
         }
         self.stream.borrow_mut().poison();
         self.complete(Err(Errno::CANCELED));
         Ok(())
     }
 
-    fn progress(&self, cx: Option<&RuntimeContext<'_>>) {
+    fn progress(&self) {
         if self.result.borrow().is_some() {
             return;
         }
@@ -877,16 +1021,11 @@ where
                     Ok(false) => {
                         self.complete(Ok(plaintext_len));
                     }
-                    Ok(true) => {
-                        let Some(cx) = cx else {
-                            return;
-                        };
-                        match self.start_encrypted_write(cx) {
-                            Ok(true) => return,
-                            Ok(false) => self.complete(Ok(plaintext_len)),
-                            Err(error) => self.complete(Err(error)),
-                        }
-                    }
+                    Ok(true) => match self.start_encrypted_write() {
+                        Ok(true) => return,
+                        Ok(false) => self.complete(Ok(plaintext_len)),
+                        Err(error) => self.complete(Err(error)),
+                    },
                     Err(error) => self.complete(Err(error)),
                 }
                 return;
@@ -922,32 +1061,22 @@ where
                     self.complete(Err(error));
                     return;
                 }
-                Response::WantRead => {
-                    let Some(cx) = cx else {
+                Response::WantRead => match self.start_encrypted_read() {
+                    Ok(true) => return,
+                    Ok(false) => {}
+                    Err(error) => {
+                        self.complete(Err(error));
                         return;
-                    };
-                    match self.start_encrypted_read(cx) {
-                        Ok(true) => return,
-                        Ok(false) => {}
-                        Err(error) => {
-                            self.complete(Err(error));
-                            return;
-                        }
                     }
-                }
-                Response::WantWrite => {
-                    let Some(cx) = cx else {
+                },
+                Response::WantWrite => match self.start_encrypted_write() {
+                    Ok(true) => return,
+                    Ok(false) => {}
+                    Err(error) => {
+                        self.complete(Err(error));
                         return;
-                    };
-                    match self.start_encrypted_write(cx) {
-                        Ok(true) => return,
-                        Ok(false) => {}
-                        Err(error) => {
-                            self.complete(Err(error));
-                            return;
-                        }
                     }
-                }
+                },
                 Response::Eof => {
                     self.complete(Err(Errno::PIPE));
                     return;
@@ -960,17 +1089,21 @@ where
         let completion = {
             let mut pending = self.pending.borrow_mut();
             match pending.as_mut() {
-                Some(TlsPendingIo::Read(read)) => match read.try_get() {
+                Some(TlsPendingIo::Read(read)) => match RuntimeReadResult::try_get(read) {
                     Some(result) => {
                         *pending = None;
-                        Some(PendingCompletion::Read(result))
+                        Some(PendingCompletion::Read(
+                            result.map_err(runtime_io_error_as_errno),
+                        ))
                     }
                     None => return false,
                 },
-                Some(TlsPendingIo::Write(write)) => match write.try_get() {
+                Some(TlsPendingIo::Write(write)) => match RuntimeWriteResult::try_get(write) {
                     Some(result) => {
                         *pending = None;
-                        Some(PendingCompletion::Write(result))
+                        Some(PendingCompletion::Write(
+                            result.map_err(runtime_io_error_as_errno),
+                        ))
                     }
                     None => return false,
                 },
@@ -1027,7 +1160,7 @@ where
         }
     }
 
-    fn start_encrypted_read(&self, cx: &RuntimeContext<'_>) -> Result<bool, Errno> {
+    fn start_encrypted_read(&self) -> Result<bool, Errno> {
         let len = {
             let mut stream = self.stream.borrow_mut();
             stream.ensure_usable()?;
@@ -1045,13 +1178,14 @@ where
         let read = {
             let stream = self.stream.borrow();
             let socket = stream.socket.as_ref().ok_or(Errno::PIPE)?;
-            cx.read_async(socket, buffer)
+            SocketIoRuntime::read_async(self.runtime, socket, buffer)
+                .map_err(runtime_io_error_as_errno)?
         };
         *self.pending.borrow_mut() = Some(TlsPendingIo::Read(read));
         Ok(true)
     }
 
-    fn start_encrypted_write(&self, cx: &RuntimeContext<'_>) -> Result<bool, Errno> {
+    fn start_encrypted_write(&self) -> Result<bool, Errno> {
         let mut buffer = mem::take(&mut *self.encrypted_write_buffer.borrow_mut());
         {
             let stream = self.stream.borrow_mut();
@@ -1070,7 +1204,8 @@ where
         let write = {
             let stream = self.stream.borrow();
             let socket = stream.socket.as_ref().ok_or(Errno::PIPE)?;
-            cx.write_async(socket, buffer)
+            SocketIoRuntime::write_async(self.runtime, socket, buffer)
+                .map_err(runtime_io_error_as_errno)?
         };
         *self.pending.borrow_mut() = Some(TlsPendingIo::Write(write));
         Ok(true)
@@ -1098,45 +1233,76 @@ where
     }
 }
 
-impl<B> Waitable for TlsWriteResult<'_, B>
+impl<B, R> RuntimeWaitable for TlsWriteResult<'_, B, R>
 where
+    R: SocketIoRuntime + StackfulWaitContext,
+    R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
+    R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
     B: IoWriteBuffer,
 {
     fn is_ready(&self) -> bool {
         if self.taken {
             return true;
         }
-        self.progress(None);
+        self.progress();
         self.result.borrow().is_some()
     }
 
-    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
+    fn add_stackful_waiter(&self, waiter: Box<dyn kimojio_stack::StackfulWaiter>) -> bool {
         if self.taken {
-            return;
+            return false;
         }
-        self.progress(Some(cx));
+        self.progress();
         if self.result.borrow().is_some() {
-            return;
+            return false;
         }
         if let Some(pending) = self.pending.borrow().as_ref() {
-            pending.add_waiter(cx, registration);
+            pending.add_stackful_waiter(waiter)
+        } else {
+            false
         }
     }
 }
 
-impl<B> fmt::Debug for TlsWriteResult<'_, B>
+impl<B, R> Waitable for TlsWriteResult<'_, B, R>
 where
+    R: SocketIoRuntime + StackfulWaitContext,
+    R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
+    R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
+    B: IoWriteBuffer,
+{
+    fn is_ready(&self) -> bool {
+        RuntimeWaitable::is_ready(self)
+    }
+
+    fn add_waiter(&self, cx: &RuntimeContext<'_>, registration: &WaitRegistration) {
+        if RuntimeWaitable::is_ready(self) {
+            return;
+        }
+        let adapter = RuntimeWaitableAdapter::new(self);
+        Waitable::add_waiter(&adapter, cx, registration);
+    }
+}
+
+impl<B, R> fmt::Debug for TlsWriteResult<'_, B, R>
+where
+    R: SocketIoRuntime + StackfulWaitContext,
+    R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
+    R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
     B: IoWriteBuffer,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TlsWriteResult")
-            .field("ready", &self.is_ready())
+            .field("ready", &RuntimeWaitable::is_ready(self))
             .field("taken", &self.taken)
             .finish()
     }
 }
 
-impl<B> Drop for TlsWriteResult<'_, B> {
+impl<B, R> Drop for TlsWriteResult<'_, B, R>
+where
+    R: SocketIoRuntime + StackfulWaitContext,
+{
     fn drop(&mut self) {
         if !self.taken && self.result.borrow().is_none() {
             self.stream.borrow_mut().poison();
@@ -1147,6 +1313,34 @@ impl<B> Drop for TlsWriteResult<'_, B> {
 enum PendingCompletion {
     Read(Result<ReadOutput<Vec<u8>>, Errno>),
     Write(Result<WriteOutput<Vec<u8>>, Errno>),
+}
+
+fn drain_read_result<R>(cx: &R, read: &mut R::ReadResult<Vec<u8>>) -> Result<(), Errno>
+where
+    R: SocketIoRuntime + StackfulWaitContext,
+    R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
+{
+    loop {
+        if RuntimeReadResult::try_get(read).is_some() {
+            return Ok(());
+        }
+        cx.wait_stackful(read)
+            .map_err(runtime_wait_error_as_errno)?;
+    }
+}
+
+fn drain_write_result<R>(cx: &R, write: &mut R::WriteResult<Vec<u8>>) -> Result<(), Errno>
+where
+    R: SocketIoRuntime + StackfulWaitContext,
+    R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
+{
+    loop {
+        if RuntimeWriteResult::try_get(write).is_some() {
+            return Ok(());
+        }
+        cx.wait_stackful(write)
+            .map_err(runtime_wait_error_as_errno)?;
+    }
 }
 
 fn plaintext_read_slice<B>(buffer: &mut B) -> &mut [u8]
@@ -1180,12 +1374,27 @@ fn as_io_error(error: TlsServerError) -> Errno {
     }
 }
 
+fn runtime_io_error_as_errno(error: RuntimeIoError) -> Errno {
+    match error {
+        RuntimeIoError::Io(errno) => errno,
+        RuntimeIoError::Unsupported(_) => Errno::OPNOTSUPP,
+        RuntimeIoError::Other(_) => Errno::INVAL,
+    }
+}
+
+fn runtime_wait_error_as_errno(error: RuntimeWaitError) -> Errno {
+    match error {
+        RuntimeWaitError::Unsupported(_) => Errno::OPNOTSUPP,
+        RuntimeWaitError::Empty => Errno::INVAL,
+        RuntimeWaitError::NoStackfulContext { .. } => Errno::INVAL,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::mem::size_of;
-    use std::time::Duration;
+    use std::{mem::size_of, num::NonZeroUsize, time::Duration};
 
-    use kimojio_stack::{Runtime, Waitable};
+    use kimojio_stack::{Runtime, RuntimeWaitable, StackfulWaitContext, Waitable};
     use openssl::{
         asn1::Asn1Time,
         hash::MessageDigest,
@@ -1311,6 +1520,167 @@ mod tests {
     }
 
     #[test]
+    fn tls_echo_over_runtime_agnostic_stealing_socketpair() {
+        let (server_ctx, client_ctx) = make_contexts();
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+
+        let message = b"hello from generic stack tls over a stealing runtime";
+        let mut runtime =
+            kimojio_stack_steal::Runtime::with_config(kimojio_stack_steal::RuntimeConfig {
+                workers: NonZeroUsize::new(2).unwrap(),
+                ..kimojio_stack_steal::RuntimeConfig::default()
+            });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut tls = server_ctx
+                        .server_with_runtime(cx, TLS_BUFFER_SIZE, server_fd)
+                        .expect("server TLS handshake failed");
+                    let mut buf = [0_u8; 11];
+                    let mut read = 0;
+                    while read < message.len() {
+                        let amount = tls.read(cx, &mut buf).expect("server TLS read failed");
+                        assert_ne!(amount, 0);
+                        read += amount;
+                        tls.write(cx, &buf[..amount])
+                            .expect("server TLS write failed");
+                    }
+                    tls.shutdown(cx).expect("server TLS shutdown failed");
+                    tls.close(cx).expect("server TLS close failed");
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut tls = client_ctx
+                        .client_with_runtime(cx, TLS_BUFFER_SIZE, client_fd, "localhost")
+                        .expect("client TLS handshake failed");
+                    tls.write(cx, message).expect("client TLS write failed");
+
+                    let mut echoed = Vec::new();
+                    let mut buf = [0_u8; 13];
+                    while echoed.len() < message.len() {
+                        let amount = tls.read(cx, &mut buf).expect("client TLS read failed");
+                        if amount == 0 {
+                            break;
+                        }
+                        echoed.extend_from_slice(&buf[..amount]);
+                    }
+                    tls.shutdown(cx).expect("client TLS shutdown failed");
+                    tls.close(cx).expect("client TLS close failed");
+                    echoed
+                });
+
+                server.join(cx);
+                let echoed = client.join(cx);
+                assert_eq!(echoed, message);
+            });
+        });
+    }
+
+    #[test]
+    fn tls_async_read_write_handles_are_runtime_neutral_on_stealing_runtime() {
+        let (server_ctx, client_ctx) = make_contexts();
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+
+        let message = b"runtime-neutral TLS async over a stealing runtime";
+        let mut runtime =
+            kimojio_stack_steal::Runtime::with_config(kimojio_stack_steal::RuntimeConfig {
+                workers: NonZeroUsize::new(2).unwrap(),
+                ..kimojio_stack_steal::RuntimeConfig::default()
+            });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut tls = server_ctx
+                        .server_with_runtime(cx, TLS_BUFFER_SIZE, server_fd)
+                        .expect("server TLS handshake failed");
+
+                    let read = {
+                        let mut read = tls.read_async(cx, vec![0_u8; message.len()]);
+                        cx.wait_stackful(&read)
+                            .expect("server TLS runtime-neutral read wait failed");
+                        let output = read
+                            .try_get()
+                            .expect("server TLS async read not ready")
+                            .expect("server TLS async read failed");
+                        drop(read);
+                        output
+                    };
+                    assert_eq!(&read.buffer[..read.bytes], message);
+
+                    let written = {
+                        let mut write = tls.write_async(cx, message.to_vec());
+                        cx.wait_stackful(&write)
+                            .expect("server TLS runtime-neutral write wait failed");
+                        let output = write
+                            .try_get()
+                            .expect("server TLS async write not ready")
+                            .expect("server TLS async write failed");
+                        drop(write);
+                        output
+                    };
+                    assert_eq!(written.bytes, message.len());
+
+                    tls.shutdown(cx).expect("server TLS shutdown failed");
+                    tls.close(cx).expect("server TLS close failed");
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut tls = client_ctx
+                        .client_with_runtime(cx, TLS_BUFFER_SIZE, client_fd, "localhost")
+                        .expect("client TLS handshake failed");
+
+                    let written = {
+                        let mut write = tls.write_async(cx, message.to_vec());
+                        cx.wait_stackful(&write)
+                            .expect("client TLS runtime-neutral write wait failed");
+                        let output = write
+                            .try_get()
+                            .expect("client TLS async write not ready")
+                            .expect("client TLS async write failed");
+                        drop(write);
+                        output
+                    };
+                    assert_eq!(written.bytes, message.len());
+
+                    let echoed = {
+                        let mut read = tls.read_async(cx, vec![0_u8; message.len()]);
+                        cx.wait_stackful(&read)
+                            .expect("client TLS runtime-neutral read wait failed");
+                        let output = read
+                            .try_get()
+                            .expect("client TLS async read not ready")
+                            .expect("client TLS async read failed");
+                        drop(read);
+                        output
+                    };
+
+                    tls.shutdown(cx).expect("client TLS shutdown failed");
+                    tls.close(cx).expect("client TLS close failed");
+                    echoed.buffer[..echoed.bytes].to_vec()
+                });
+
+                server.join(cx);
+                let echoed = client.join(cx);
+                assert_eq!(echoed, message);
+            });
+        });
+    }
+
+    #[test]
     fn tls_async_read_write_handles_are_waitable() {
         let (server_ctx, client_ctx) = make_contexts();
         let (client_fd, server_fd) = socketpair(
@@ -1339,7 +1709,7 @@ mod tests {
                         .try_get()
                         .expect("server TLS async read not ready")
                         .expect("server TLS async read failed");
-                    assert!(read.is_ready());
+                    assert!(RuntimeWaitable::is_ready(&read));
                     drop(read);
                     let read = read_output;
                     assert_eq!(&read.buffer[..read.bytes], message);
@@ -1352,7 +1722,7 @@ mod tests {
                         .try_get()
                         .expect("server TLS async write not ready")
                         .expect("server TLS async write failed");
-                    assert!(write.is_ready());
+                    assert!(RuntimeWaitable::is_ready(&write));
                     drop(write);
                     assert_eq!(written.bytes, message.len());
 
@@ -1373,7 +1743,7 @@ mod tests {
                         .try_get()
                         .expect("client TLS async write not ready")
                         .expect("client TLS async write failed");
-                    assert!(write.is_ready());
+                    assert!(RuntimeWaitable::is_ready(&write));
                     drop(write);
                     assert_eq!(written.bytes, message.len());
 
@@ -1434,7 +1804,7 @@ mod tests {
                     timeout.cancel();
 
                     read.cancel(cx).expect("cancel TLS read failed");
-                    assert!(read.is_ready());
+                    assert!(RuntimeWaitable::is_ready(&read));
                     assert_eq!(
                         read.try_get().expect("canceled TLS read not ready").err(),
                         Some(Errno::CANCELED)
