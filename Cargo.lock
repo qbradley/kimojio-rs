@@ -471,8 +471,11 @@ dependencies = [
  "clap",
  "futures",
  "kimojio",
+ "kimojio-stack",
+ "kimojio-stack-steal",
  "openssl",
  "rustix",
+ "tokio",
 ]
 
 [[package]]

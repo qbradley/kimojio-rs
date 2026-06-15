@@ -13,8 +13,11 @@ anyhow.workspace = true
 clap.workspace = true
 futures.workspace = true
 kimojio.workspace = true
+kimojio-stack.workspace = true
+kimojio-stack-steal.workspace = true
 openssl = { workspace = true, optional = true }
 rustix.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread"] }
 
 [[bin]]
 name = "copyfile"
@@ -29,6 +32,22 @@ required-features = ["virtual-clock"]
 name = "tls-echo-server"
 path = "src/bin/tls_echo_server.rs"
 required-features = ["tls"]
+
+[[bin]]
+name = "tcp-echo-client"
+path = "src/bin/tcp_echo_client.rs"
+
+[[bin]]
+name = "tcp-echo-kimojio-host"
+path = "src/bin/tcp_echo_kimojio_host.rs"
+
+[[bin]]
+name = "tcp-echo-stack-host"
+path = "src/bin/tcp_echo_stack_host.rs"
+
+[[bin]]
+name = "tcp-echo-tokio-host"
+path = "src/bin/tcp_echo_tokio_host.rs"
 
 [[bin]]
 name = "virtual-time"
