@@ -775,15 +775,26 @@ impl RuntimeContext<'_> {
 
     /// Cooperatively yields the current stackful coroutine.
     pub fn yield_now(&self) {
-        match self.current {
-            CurrentTask::Root => {
-                drive_scheduler(&self.core);
-            }
+        let _ = self.internal_scheduler_tick();
+    }
+
+    /// Drives one scheduler tick and reports whether scheduler progress was made.
+    ///
+    /// This is hidden from the public API docs because it exists for companion
+    /// schedulers that need to multiplex their own work queues with this
+    /// runtime's stackful tasks and io_uring completions.
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn internal_scheduler_tick(&self) -> bool {
+        let made_progress = match self.current {
+            CurrentTask::Root => drive_scheduler(&self.core),
             CurrentTask::Coroutine { id, yielder, stack } => {
                 suspend_task(id, yielder, stack, Suspend::Ready);
+                true
             }
-        }
+        };
         self.resume_active_scope_panic();
+        made_progress
     }
 
     /// Captures stack traces for live stackful coroutines.

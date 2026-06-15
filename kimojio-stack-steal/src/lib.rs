@@ -3260,10 +3260,37 @@ struct MultiRuntime {
     local_depths: Vec<AtomicUsize>,
     global_depth: AtomicUsize,
     active_jobs: AtomicUsize,
-    wake_lock: Mutex<()>,
+    wake_state: Mutex<WakeState>,
     wake: Condvar,
     shutdown: AtomicBool,
     metrics: MultiMetrics,
+}
+
+#[derive(Default)]
+struct WakeState {
+    epoch: u64,
+}
+
+struct VictimIter {
+    worker: usize,
+    worker_count: usize,
+    start_offset: usize,
+    yielded: usize,
+    victims: usize,
+}
+
+impl Iterator for VictimIter {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.yielded >= self.victims {
+            return None;
+        }
+
+        let offset = 1 + ((self.start_offset + self.yielded) % self.victims);
+        self.yielded += 1;
+        Some((self.worker + offset) % self.worker_count)
+    }
 }
 
 impl MultiRuntime {
@@ -3286,7 +3313,7 @@ impl MultiRuntime {
             local_depths: (0..worker_count).map(|_| AtomicUsize::new(0)).collect(),
             global_depth: AtomicUsize::new(0),
             active_jobs: AtomicUsize::new(0),
-            wake_lock: Mutex::new(()),
+            wake_state: Mutex::new(WakeState::default()),
             wake: Condvar::new(),
             shutdown: AtomicBool::new(false),
             metrics: MultiMetrics::new(worker_count),
@@ -3628,6 +3655,7 @@ impl MultiRuntime {
                         break;
                     }
 
+                    let observed_wake = self.wake_epoch();
                     let mut made_progress =
                         self.drain_shared_ring_commands(worker, root, &mut active_shared);
                     made_progress |= Self::poll_active_shared_operations(&mut active_shared);
@@ -3674,7 +3702,7 @@ impl MultiRuntime {
                         };
                     made_progress |= spawned;
 
-                    root.yield_now();
+                    made_progress |= root.internal_scheduler_tick();
                     made_progress |= Self::poll_active_shared_operations(&mut active_shared);
 
                     if self.shutdown.load(Ordering::Acquire) {
@@ -3686,11 +3714,7 @@ impl MultiRuntime {
                         idle_iterations = 0;
                     } else if active_shared.is_empty() {
                         idle_iterations = idle_iterations.wrapping_add(1);
-                        let guard = self.wake_lock.lock().expect("worker wake mutex poisoned");
-                        let _guard = self
-                            .wake
-                            .wait_timeout(guard, Self::idle_backoff(idle_iterations))
-                            .expect("worker wake mutex poisoned");
+                        self.wait_for_wake_after(observed_wake);
                     }
                 }
             });
@@ -3742,6 +3766,10 @@ impl MultiRuntime {
     }
 
     fn should_poll_global(&self, idle_iterations: usize) -> bool {
+        if self.global_depth.load(Ordering::Relaxed) != 0 {
+            return true;
+        }
+
         match self.config.steal_policy.global_queue_interval() {
             Some(interval) => idle_iterations.is_multiple_of(interval.get()),
             None => true,
@@ -3758,29 +3786,37 @@ impl MultiRuntime {
             return None;
         }
 
-        let victim = self.next_victim(worker, idle_iterations)?;
-        self.metrics.steal_attempts.fetch_add(1, Ordering::Relaxed);
-        if let Some(job) = self.steal_from(worker.index(), victim, local_queue) {
-            self.metrics
-                .successful_steals
-                .fetch_add(1, Ordering::Relaxed);
-            return Some(ReadyJob {
-                queued: job,
-                stolen_from: Some(WorkerId(victim)),
-            });
+        for victim in self.victims(worker, idle_iterations) {
+            self.metrics.steal_attempts.fetch_add(1, Ordering::Relaxed);
+            if let Some(job) = self.steal_from(worker.index(), victim, local_queue) {
+                self.metrics
+                    .successful_steals
+                    .fetch_add(1, Ordering::Relaxed);
+                return Some(ReadyJob {
+                    queued: job,
+                    stolen_from: Some(WorkerId(victim)),
+                });
+            }
+            self.metrics.failed_steals.fetch_add(1, Ordering::Relaxed);
         }
-        self.metrics.failed_steals.fetch_add(1, Ordering::Relaxed);
 
         None
     }
 
-    fn next_victim(&self, worker: WorkerId, idle_iterations: usize) -> Option<usize> {
-        let victims = self.stealers.len().checked_sub(1)?;
-        if victims == 0 {
-            return None;
+    fn victims(&self, worker: WorkerId, idle_iterations: usize) -> VictimIter {
+        let victims = self.stealers.len().saturating_sub(1);
+        let start_offset = if victims == 0 {
+            0
+        } else {
+            idle_iterations % victims
+        };
+        VictimIter {
+            worker: worker.index(),
+            worker_count: self.stealers.len(),
+            start_offset,
+            yielded: 0,
+            victims,
         }
-        let offset = 1 + (idle_iterations % victims);
-        Some((worker.index() + offset) % self.stealers.len())
     }
 
     fn steal_from(
@@ -3799,11 +3835,6 @@ impl MultiRuntime {
                 self.steal_batch(worker, victim, local_queue, batch.get())
             }
         }
-    }
-
-    fn idle_backoff(idle_iterations: usize) -> Duration {
-        let shift = idle_iterations.min(5) as u32;
-        Duration::from_micros(100 * (1_u64 << shift))
     }
 
     fn steal_one_from(&self, victim: usize) -> Option<QueuedJob> {
@@ -3858,12 +3889,33 @@ impl MultiRuntime {
         }
     }
 
+    fn wake_epoch(&self) -> u64 {
+        self.wake_state
+            .lock()
+            .expect("worker wake mutex poisoned")
+            .epoch
+    }
+
     fn wake_one(&self) {
+        self.advance_wake_epoch();
         self.wake.notify_one();
     }
 
     fn wake_all(&self) {
+        self.advance_wake_epoch();
         self.wake.notify_all();
+    }
+
+    fn advance_wake_epoch(&self) {
+        let mut state = self.wake_state.lock().expect("worker wake mutex poisoned");
+        state.epoch = state.epoch.wrapping_add(1);
+    }
+
+    fn wait_for_wake_after(&self, observed_epoch: u64) {
+        let state = self.wake_state.lock().expect("worker wake mutex poisoned");
+        if state.epoch == observed_epoch {
+            let _guard = self.wake.wait(state).expect("worker wake mutex poisoned");
+        }
     }
 
     fn metrics(&self) -> RuntimeMetrics {
@@ -4750,6 +4802,66 @@ mod tests {
     }
 
     #[test]
+    fn idle_steal_scan_visits_every_victim_before_sleeping() {
+        let workers = (0..4)
+            .map(|_| CrossbeamWorker::new_lifo())
+            .collect::<Vec<_>>();
+        let stealers = workers
+            .iter()
+            .map(CrossbeamWorker::stealer)
+            .collect::<Vec<_>>();
+        let runtime = MultiRuntime::with_runtime_id(
+            RuntimeConfig {
+                workers: NonZeroUsize::new(4).unwrap(),
+                steal_policy: StealPolicy::steal_one(),
+                ..RuntimeConfig::default()
+            },
+            RuntimeId::next(),
+            stealers,
+        );
+
+        assert_eq!(
+            runtime.victims(WorkerId(0), 0).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            runtime.victims(WorkerId(0), 1).collect::<Vec<_>>(),
+            vec![2, 3, 1]
+        );
+        assert_eq!(
+            runtime.victims(WorkerId(2), 2).collect::<Vec<_>>(),
+            vec![1, 3, 0]
+        );
+    }
+
+    #[test]
+    fn global_queue_depth_forces_poll_before_idle_sleep() {
+        let workers = (0..2)
+            .map(|_| CrossbeamWorker::new_lifo())
+            .collect::<Vec<_>>();
+        let stealers = workers
+            .iter()
+            .map(CrossbeamWorker::stealer)
+            .collect::<Vec<_>>();
+        let runtime = MultiRuntime::with_runtime_id(
+            RuntimeConfig {
+                workers: NonZeroUsize::new(2).unwrap(),
+                steal_policy: StealPolicy::StealBatch {
+                    batch: NonZeroUsize::new(1).unwrap(),
+                    global_queue_interval: NonZeroUsize::new(usize::MAX).unwrap(),
+                },
+                ..RuntimeConfig::default()
+            },
+            RuntimeId::next(),
+            stealers,
+        );
+
+        assert!(!runtime.should_poll_global(1));
+        runtime.global_depth.store(1, Ordering::Relaxed);
+        assert!(runtime.should_poll_global(1));
+    }
+
+    #[test]
     fn steal_policy_global_queue_intervals_are_distinct() {
         assert_eq!(
             StealPolicy::steal_one()
@@ -5022,6 +5134,59 @@ mod tests {
             ring.close(cx, read_fd).unwrap();
             ring.close(cx, write_fd).unwrap();
         });
+    }
+
+    #[test]
+    fn multi_worker_worker_ring_completion_is_not_timer_driven() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+        let mut slowest_completion = Duration::ZERO;
+
+        for _ in 0..8 {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+
+            let completion_latency = runtime.block_on(|cx| {
+                cx.scope(|scope| {
+                    let handle = scope.spawn_stealable(move |cx| {
+                        let ring = cx.create_worker_ring();
+                        let read_fd = RingFd::from_owned(read_fd);
+                        ready_tx.send(()).unwrap();
+
+                        let mut buffer = [0_u8; 1];
+                        assert_eq!(ring.read(cx, &read_fd, &mut buffer).unwrap(), 1);
+                        assert_eq!(buffer, [7]);
+                        done_tx.send(()).unwrap();
+                        ring.close(cx, read_fd).unwrap();
+                    });
+
+                    ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+                    thread::sleep(Duration::from_millis(20));
+
+                    let byte = [7_u8];
+                    let start = Instant::now();
+                    let written = unsafe {
+                        libc::write(write_fd.as_raw_fd(), byte.as_ptr().cast(), byte.len())
+                    };
+                    assert_eq!(written, 1);
+                    done_rx.recv_timeout(Duration::from_millis(25)).unwrap();
+                    let completion_latency = start.elapsed();
+
+                    handle.join(cx);
+                    completion_latency
+                })
+            });
+            slowest_completion = slowest_completion.max(completion_latency);
+        }
+
+        assert!(
+            slowest_completion < Duration::from_millis(2),
+            "worker-local I/O completion was stranded behind scheduler idle timing: {slowest_completion:?}"
+        );
     }
 
     #[test]
