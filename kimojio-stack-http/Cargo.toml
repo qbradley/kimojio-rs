@@ -28,6 +28,7 @@ http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "server", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["client", "server", "tokio", "http1", "http2"] }
 kimojio-stack-steal.workspace = true
+libc.workspace = true
 openssl.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
 

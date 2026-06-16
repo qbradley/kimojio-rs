@@ -949,6 +949,7 @@ dependencies = [
  "kimojio-stack",
  "kimojio-stack-steal",
  "kimojio-stack-tls",
+ "libc",
  "openssl",
  "rustix",
  "tokio",

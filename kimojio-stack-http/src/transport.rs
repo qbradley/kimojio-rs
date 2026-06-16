@@ -411,8 +411,15 @@ where
             .map_err(runtime_wait_error)?
             == 1
         {
-            pending.cancel().map_err(Error::tls)?;
-            return Err(Error::io(Errno::TIME));
+            if let Some(result) = pending.try_get() {
+                let output = result.map_err(Error::tls)?;
+                let amount = output.bytes;
+                buf[..amount].copy_from_slice(&output.buffer[..amount]);
+                return Ok(amount);
+            } else {
+                pending.cancel().map_err(Error::tls)?;
+                return Err(Error::io(Errno::TIME));
+            }
         }
     }
 }
@@ -442,8 +449,12 @@ where
             .map_err(runtime_wait_error)?
             == 1
         {
-            pending.cancel().map_err(Error::tls)?;
-            return Err(Error::io(Errno::TIME));
+            if let Some(result) = pending.try_get() {
+                return result.map(|output| output.bytes).map_err(Error::tls);
+            } else {
+                pending.cancel().map_err(Error::tls)?;
+                return Err(Error::io(Errno::TIME));
+            }
         }
     }
 }

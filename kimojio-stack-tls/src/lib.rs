@@ -613,11 +613,6 @@ where
             return Ok(());
         }
 
-        self.progress();
-        if self.result.borrow().is_some() {
-            return Ok(());
-        }
-
         {
             let mut pending = self.pending.borrow_mut();
             if let Some(pending) = pending.as_mut() {
@@ -983,11 +978,6 @@ where
     /// `Err(Errno::CANCELED)`.
     pub fn cancel(&self) -> Result<(), Errno> {
         if self.taken || self.result.borrow().is_some() {
-            return Ok(());
-        }
-
-        self.progress();
-        if self.result.borrow().is_some() {
             return Ok(());
         }
 
