@@ -9,7 +9,7 @@
 
 use crate::{
     AttemptError, Conditions, Error, ErrorKind, ObjectRef, OperationClass, RequestParts,
-    ResponseParts, SignedSource, Transport, properties::object_uri,
+    ResponseParts, SignedSource, StorageRuntime, Transport, properties::object_uri,
 };
 
 /// Copy acceptance information captured from response metadata.
@@ -29,14 +29,18 @@ pub struct CopyClient;
 
 impl CopyClient {
     /// Starts a copy operation and requires the service to accept it.
-    pub fn copy_from_source<T: Transport>(
+    pub fn copy_from_source<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         destination: &ObjectRef,
         source: &SignedSource,
         conditions: Option<&Conditions>,
-    ) -> Result<CopyInfo, AttemptError> {
+    ) -> Result<CopyInfo, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let response = transport.execute(
             cx,
             &copy_from_source_request(destination, source, conditions),

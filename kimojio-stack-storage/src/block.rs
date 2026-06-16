@@ -37,7 +37,8 @@ use bytes::{Bytes, BytesMut};
 
 use crate::{
     AttemptError, Conditions, Diagnostics, Error, ErrorKind, LeaseContext, MetadataMap, ObjectRef,
-    OperationClass, ReplayBody, RequestParts, ResponseParts, Transport, ownership::apply_lease,
+    OperationClass, ReplayBody, RequestParts, ResponseParts, StorageRuntime, Transport,
+    ownership::apply_lease,
 };
 
 /// Result of deleting a block object.
@@ -64,12 +65,16 @@ pub struct BlockClient;
 
 impl BlockClient {
     /// Uploads one block object using the supplied transport.
-    pub fn upload<T: Transport>(
+    pub fn upload<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         request: BlockUpload<'_>,
-    ) -> Result<ResponseParts, AttemptError> {
+    ) -> Result<ResponseParts, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let request = block_upload_request(request).map_err(attempt_error)?;
         transport.execute(cx, &request)
     }
@@ -78,12 +83,16 @@ impl BlockClient {
     ///
     /// Already-exists and condition-not-met responses are converted to
     /// [`BlockUploadOutcome::Skipped`].
-    pub fn upload_if_not_exists<T: Transport>(
+    pub fn upload_if_not_exists<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         mut request: BlockUpload<'_>,
-    ) -> Result<BlockUploadOutcome, AttemptError> {
+    ) -> Result<BlockUploadOutcome, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         request.if_not_exists = true;
         let request = block_upload_request(request).map_err(attempt_error)?;
         match transport.execute(cx, &request) {
@@ -105,16 +114,17 @@ impl BlockClient {
     /// If the transport fails after any bytes have been delivered, the error kind
     /// is converted to [`ErrorKind::Incomplete`] so callers know the sink received
     /// a prefix of the object.
-    pub fn download<T, F>(
+    pub fn download<'cx, R, T, F>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         object: &ObjectRef,
         range: Option<(u64, u64)>,
         mut on_chunk: F,
     ) -> Result<ResponseParts, AttemptError>
     where
-        T: Transport,
+        R: StorageRuntime,
+        T: Transport<R>,
         F: FnMut(Bytes) -> Result<(), Error>,
     {
         let request = block_download_request(object, range);
@@ -150,9 +160,9 @@ impl BlockClient {
     ///
     /// This is useful when callers need each response to fit within HTTP body
     /// limits or service-side range quotas.
-    pub fn download_in_ranges<T, F>(
+    pub fn download_in_ranges<'cx, R, T, F>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         object: &ObjectRef,
         content_len: u64,
@@ -160,7 +170,8 @@ impl BlockClient {
         mut on_chunk: F,
     ) -> Result<(), AttemptError>
     where
-        T: Transport,
+        R: StorageRuntime,
+        T: Transport<R>,
         F: FnMut(Bytes) -> Result<(), Error>,
     {
         if chunk_size == 0 {
@@ -186,13 +197,17 @@ impl BlockClient {
     }
 
     /// Downloads a small object into memory with a caller-supplied size limit.
-    pub fn collect_small<T: Transport>(
+    pub fn collect_small<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         object: &ObjectRef,
         max_bytes: usize,
-    ) -> Result<Bytes, AttemptError> {
+    ) -> Result<Bytes, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let mut body = BytesMut::new();
         self.download(cx, transport, object, None, |chunk| {
             if body.len().saturating_add(chunk.len()) > max_bytes {
@@ -205,12 +220,16 @@ impl BlockClient {
     }
 
     /// Deletes a block object or snapshot.
-    pub fn delete<T: Transport>(
+    pub fn delete<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         request: BlockDelete<'_>,
-    ) -> Result<DeleteOutcome, AttemptError> {
+    ) -> Result<DeleteOutcome, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let request = block_delete_request(request);
         match transport.execute(cx, &request) {
             Ok(_) => Ok(DeleteOutcome::Deleted),

@@ -9,7 +9,7 @@
 
 use crate::{
     AttemptError, Conditions, Error, ErrorKind, LeaseContext, MetadataMap, ObjectProperties,
-    ObjectRef, OperationClass, RequestParts, Transport, properties::object_uri,
+    ObjectRef, OperationClass, RequestParts, StorageRuntime, Transport, properties::object_uri,
 };
 
 /// Reference to one object snapshot.
@@ -36,14 +36,18 @@ pub struct SnapshotClient;
 
 impl SnapshotClient {
     /// Creates a snapshot and returns its service identifier.
-    pub fn create<T: Transport>(
+    pub fn create<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         object: &ObjectRef,
         conditions: Option<&Conditions>,
         lease: Option<&LeaseContext>,
-    ) -> Result<SnapshotRef, AttemptError> {
+    ) -> Result<SnapshotRef, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let response =
             transport.execute(cx, &create_snapshot_request(object, conditions, lease))?;
         let snapshot = response.metadata.get("x-ms-snapshot").ok_or_else(|| {
@@ -56,12 +60,16 @@ impl SnapshotClient {
     }
 
     /// Deletes a snapshot, treating already-absent snapshots as success.
-    pub fn delete<T: Transport>(
+    pub fn delete<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         snapshot: &SnapshotRef,
-    ) -> Result<(), AttemptError> {
+    ) -> Result<(), AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         match transport.execute(cx, &delete_snapshot_request(snapshot)) {
             Ok(_) => Ok(()),
             Err(error) if error.error.kind() == ErrorKind::NotFound => Ok(()),
@@ -73,13 +81,17 @@ impl SnapshotClient {
     ///
     /// This method does not sleep between polls; callers that need backoff should
     /// perform it around repeated property calls.
-    pub fn poll_delta_size<T: Transport>(
+    pub fn poll_delta_size<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         snapshot: &SnapshotRef,
         max_polls: usize,
-    ) -> Result<DeltaSize, AttemptError> {
+    ) -> Result<DeltaSize, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let mut last = DeltaSize::Pending;
         for _ in 0..max_polls {
             let response = transport.execute(cx, &snapshot_properties_request(snapshot))?;

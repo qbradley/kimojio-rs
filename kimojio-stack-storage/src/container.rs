@@ -10,7 +10,7 @@
 
 use crate::{
     AccountId, AttemptError, ContainerName, Diagnostics, Error, ErrorKind, OperationClass,
-    RequestParts, Transport, model::percent_encode_component,
+    RequestParts, StorageRuntime, Transport, model::percent_encode_component,
 };
 
 /// Result of creating a container.
@@ -37,13 +37,17 @@ pub struct ContainerClient;
 
 impl ContainerClient {
     /// Creates a container if it does not already exist.
-    pub fn create<T: Transport>(
+    pub fn create<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         account: &AccountId,
         container: &ContainerName,
-    ) -> Result<ContainerCreateOutcome, AttemptError> {
+    ) -> Result<ContainerCreateOutcome, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         match transport.execute(cx, &create_container_request(account, container)) {
             Ok(_) => Ok(ContainerCreateOutcome::Created),
             Err(error) if error.error.kind() == ErrorKind::AlreadyExists => {
@@ -54,13 +58,17 @@ impl ContainerClient {
     }
 
     /// Deletes a container if it exists.
-    pub fn delete<T: Transport>(
+    pub fn delete<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         account: &AccountId,
         container: &ContainerName,
-    ) -> Result<ContainerDeleteOutcome, AttemptError> {
+    ) -> Result<ContainerDeleteOutcome, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         match transport.execute(cx, &delete_container_request(account, container)) {
             Ok(_) => Ok(ContainerDeleteOutcome::Deleted),
             Err(error) if error.error.kind() == ErrorKind::NotFound => {
@@ -71,13 +79,17 @@ impl ContainerClient {
     }
 
     /// Returns whether the container exists.
-    pub fn exists<T: Transport>(
+    pub fn exists<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         account: &AccountId,
         container: &ContainerName,
-    ) -> Result<bool, AttemptError> {
+    ) -> Result<bool, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         match transport.execute(cx, &container_exists_request(account, container)) {
             Ok(_) => Ok(true),
             Err(error) if error.error.kind() == ErrorKind::NotFound => Ok(false),

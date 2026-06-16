@@ -10,11 +10,11 @@
 //!
 //! # Runtime migration boundary
 //!
-//! [`Transport`] remains the storage-facing boundary. `StackHttpTransport`
-//! currently wraps the concrete protocol-neutral stack HTTP client; after HTTP
-//! client wrappers become runtime-generic, this adapter can become generic over
-//! the shared runtime socket contract without changing request construction,
-//! retry classification, or diagnostics.
+//! [`Transport`] remains the storage-facing boundary. `StackHttpTransport` is the
+//! stack-core alias for [`RuntimeStackHttpTransport`], which adapts generic
+//! protocol-neutral HTTP clients for any runtime/socket family implementing the
+//! shared HTTP socket contract without changing request construction, retry
+//! classification, or diagnostics.
 //!
 //! ```
 //! use kimojio_stack_storage::{OperationClass, RequestParts, ReplayBody};
@@ -25,10 +25,12 @@
 //! assert!(request.body.as_bytes().is_some());
 //! ```
 
-use std::fmt;
 use std::time::{Duration, Instant};
+use std::{fmt, marker::PhantomData};
 
 use bytes::Bytes;
+use kimojio_stack::{IoFd, RuntimeSocket};
+use kimojio_stack_http::HttpRuntime;
 
 use crate::{
     AttemptDiagnostics, Diagnostics, Error, ErrorKind, MetadataMap, OperationClass, PoolConfig,
@@ -117,11 +119,24 @@ pub struct AttemptError {
 /// Implement this trait for custom test doubles, pooled transports, or service
 /// connectors. Implementations should report one attempted request and include
 /// whatever diagnostics are available when an error occurs.
-pub trait Transport {
+/// Runtime-family marker used by storage transports.
+pub trait StorageRuntime {
+    /// Context type supplied to storage client operations.
+    type Context<'cx>;
+}
+
+/// Default storage runtime marker for the single-threaded `kimojio-stack` runtime.
+pub struct StackStorageRuntime;
+
+impl StorageRuntime for StackStorageRuntime {
+    type Context<'cx> = kimojio_stack::RuntimeContext<'cx>;
+}
+
+pub trait Transport<R: StorageRuntime = StackStorageRuntime> {
     /// Executes one request attempt.
-    fn execute(
+    fn execute<'cx>(
         &mut self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         request: &RequestParts,
     ) -> Result<ResponseParts, AttemptError>;
 
@@ -131,9 +146,9 @@ pub trait Transport {
     /// downloads should call `on_chunk` for successful response body data only;
     /// error response bodies should be consumed for connection health and
     /// reported through diagnostics or [`Error`].
-    fn execute_with_body_chunks(
+    fn execute_with_body_chunks<'cx>(
         &mut self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         request: &RequestParts,
         on_chunk: &mut dyn FnMut(Bytes) -> Result<(), Error>,
     ) -> Result<ResponseParts, AttemptError> {
@@ -149,34 +164,40 @@ pub trait Transport {
     }
 }
 
-/// Adapter from storage request parts to the stack HTTP client.
+/// Runtime-generic adapter from storage request parts to the stack HTTP client.
 ///
 /// The adapter owns one protocol-neutral HTTP connection. It applies
 /// request-specific deadlines or a default total timeout from [`PoolConfig`], maps
 /// HTTP status codes to storage errors, and streams success body chunks to the
 /// caller sink.
-pub struct StackHttpTransport {
-    client: kimojio_stack_http::client::ClientConnection,
+pub struct RuntimeStackHttpTransport<R, S> {
+    client: kimojio_stack_http::client::RuntimeClientConnection<S>,
     pool_config: Option<PoolConfig>,
+    runtime: PhantomData<fn() -> R>,
 }
 
-impl StackHttpTransport {
+/// Stack-core storage HTTP transport alias preserved for compatibility.
+pub type StackHttpTransport = RuntimeStackHttpTransport<StackStorageRuntime, IoFd>;
+
+impl<R, S> RuntimeStackHttpTransport<R, S> {
     /// Creates an adapter from an existing stack HTTP client connection.
-    pub fn new(client: kimojio_stack_http::client::ClientConnection) -> Self {
+    pub fn new(client: kimojio_stack_http::client::RuntimeClientConnection<S>) -> Self {
         Self {
             client,
             pool_config: None,
+            runtime: PhantomData,
         }
     }
 
     /// Creates an adapter that applies request timeout defaults from pool configuration.
     pub fn new_with_pool_config(
-        client: kimojio_stack_http::client::ClientConnection,
+        client: kimojio_stack_http::client::RuntimeClientConnection<S>,
         pool_config: PoolConfig,
     ) -> Self {
         Self {
             client,
             pool_config: Some(pool_config),
+            runtime: PhantomData,
         }
     }
 
@@ -187,19 +208,24 @@ impl StackHttpTransport {
     }
 }
 
-impl Transport for StackHttpTransport {
-    fn execute(
+impl<R, S> Transport<R> for RuntimeStackHttpTransport<R, S>
+where
+    R: StorageRuntime,
+    S: RuntimeSocket,
+    for<'cx> R::Context<'cx>: HttpRuntime<S>,
+{
+    fn execute<'cx>(
         &mut self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         request: &RequestParts,
     ) -> Result<ResponseParts, AttemptError> {
         let mut discard = |_| Ok(());
         self.execute_with_body_chunks(cx, request, &mut discard)
     }
 
-    fn execute_with_body_chunks(
+    fn execute_with_body_chunks<'cx>(
         &mut self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         request: &RequestParts,
         on_chunk: &mut dyn FnMut(Bytes) -> Result<(), Error>,
     ) -> Result<ResponseParts, AttemptError> {
@@ -353,11 +379,25 @@ fn failure_diagnostics(
 
 #[cfg(test)]
 mod tests {
-    use std::{os::fd::OwnedFd, os::unix::net::UnixStream, time::Duration};
+    use std::{num::NonZeroUsize, os::fd::OwnedFd, os::unix::net::UnixStream, time::Duration};
 
-    use crate::{AttemptDiagnostics, Error, ErrorKind};
+    use kimojio_stack::SocketIoRuntime;
+    use kimojio_stack_steal::{
+        Runtime as StealRuntime, RuntimeConfig as StealRuntimeConfig, StealPolicy,
+    };
+
+    use crate::{
+        AccountId, AttemptDiagnostics, BlockClient, ContainerName, Error, ErrorKind, ObjectKind,
+        ObjectName, ObjectRef,
+    };
 
     use super::*;
+
+    struct StealStorageRuntime;
+
+    impl StorageRuntime for StealStorageRuntime {
+        type Context<'cx> = kimojio_stack_steal::RuntimeContext<'cx>;
+    }
 
     struct FakeTransport;
 
@@ -397,11 +437,16 @@ mod tests {
     }
 
     #[test]
-    fn runtime_migration_boundary_is_transport_attempt_trait() {
-        fn accepts_storage_boundary<T: Transport>(_transport: &mut T) {}
+    fn runtime_migration_boundary_accepts_runtime_marker_transport() {
+        fn accepts_storage_boundary<R, T>(_transport: &mut T)
+        where
+            R: StorageRuntime,
+            T: Transport<R>,
+        {
+        }
 
         let mut transport = FakeTransport;
-        accepts_storage_boundary(&mut transport);
+        accepts_storage_boundary::<StackStorageRuntime, _>(&mut transport);
     }
 
     #[test]
@@ -532,6 +577,61 @@ mod tests {
                 assert_eq!(body, b"hello world");
             });
         });
+    }
+
+    #[test]
+    fn stack_http_transport_runs_storage_client_on_stealing_runtime() {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let client_fd: OwnedFd = client_stream.into();
+        let server_fd: OwnedFd = server_stream.into();
+        let object = ObjectRef {
+            account: AccountId::new("acct"),
+            container: ContainerName::new("container"),
+            name: ObjectName::new("object"),
+            kind: ObjectKind::Data,
+        };
+        let mut runtime = StealRuntime::with_config(StealRuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..StealRuntimeConfig::default()
+        });
+
+        let body = runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn_stealable(move |cx| {
+                    let server_fd = cx.socket_from_owned_fd(server_fd).unwrap();
+                    let mut server_transport =
+                        kimojio_stack_http::RuntimeStackTransport::plaintext_socket(server_fd);
+                    let mut request = [0_u8; 512];
+                    let _ = server_transport.read(cx, &mut request).unwrap();
+                    server_transport
+                        .write_all(
+                            cx,
+                            b"HTTP/1.1 200 OK\r\ncontent-length: 11\r\nx-ms-request-id: req-steal\r\n\r\nhello steal",
+                        )
+                        .unwrap();
+                    server_transport.close(cx).unwrap();
+                });
+
+                let client = scope.spawn_stealable(move |cx| {
+                    let client_fd = cx.socket_from_owned_fd(client_fd).unwrap();
+                    let client_transport =
+                        kimojio_stack_http::RuntimeStackTransport::plaintext_socket(client_fd);
+                    let client = kimojio_stack_http::client::RuntimeClientConnection::http1(
+                        client_transport,
+                        kimojio_stack_http::HttpConfig::default(),
+                    );
+                    let mut transport =
+                        RuntimeStackHttpTransport::<StealStorageRuntime, _>::new(client);
+                    BlockClient.collect_small(cx, &mut transport, &object, 1024)
+                });
+
+                server.join(cx);
+                client.join(cx).unwrap()
+            })
+        });
+
+        assert_eq!(body.as_ref(), b"hello steal");
     }
 
     #[test]

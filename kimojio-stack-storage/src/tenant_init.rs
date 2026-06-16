@@ -11,7 +11,7 @@
 
 use crate::{
     AccountId, AttemptError, ContainerClient, ContainerName, Diagnostics, Error, ErrorKind,
-    MetadataMap, ObjectRef, OperationClass, PageClient, Transport,
+    MetadataMap, ObjectRef, OperationClass, PageClient, StorageRuntime, Transport,
     properties::object_properties_request, properties::set_object_metadata_request,
 };
 
@@ -72,13 +72,17 @@ impl TenantInitializer {
     /// The final initialized marker is written with an ETag condition when a
     /// metadata object already exists, reducing the chance of racing initializers
     /// silently overwriting each other.
-    pub fn initialize<T: Transport>(
+    pub fn initialize<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         plan: &TenantInitPlan,
         state: &mut TenantInitState,
-    ) -> Result<(), AttemptError> {
+    ) -> Result<(), AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         if state.initialized {
             return Err(attempt_error(Error::new(
                 ErrorKind::AlreadyExists,
@@ -156,11 +160,15 @@ impl TenantInitializer {
     }
 }
 
-fn ensure_page_object<T: Transport>(
-    cx: &kimojio_stack::RuntimeContext<'_>,
+fn ensure_page_object<'cx, R, T>(
+    cx: &'cx R::Context<'cx>,
     transport: &mut T,
     page: &PageObjectInit,
-) -> Result<(), AttemptError> {
+) -> Result<(), AttemptError>
+where
+    R: StorageRuntime,
+    T: Transport<R>,
+{
     match PageClient.create(
         cx,
         transport,

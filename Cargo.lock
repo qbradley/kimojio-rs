@@ -998,6 +998,7 @@ dependencies = [
  "httpdate",
  "kimojio-stack",
  "kimojio-stack-http",
+ "kimojio-stack-steal",
  "openssl",
  "serde_json",
 ]

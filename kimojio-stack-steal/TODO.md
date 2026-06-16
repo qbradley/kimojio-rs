@@ -310,7 +310,7 @@ connections.
 - Unary and server-streaming gRPC tests on both runtime families.
 - Existing tonic/hyper interop tests should still pass for stack-core aliases.
 
-### 14. Fully migrate storage transports and clients to generic runtime contexts
+### 14. [done] Fully migrate storage transports and clients to generic runtime contexts
 
 **Why:** Storage still depends on a concrete `StackHttpTransport` over stack-core
 HTTP clients.

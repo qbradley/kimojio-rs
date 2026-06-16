@@ -22,7 +22,7 @@ use bytes::Bytes;
 
 use crate::{
     AttemptError, Diagnostics, Error, ErrorKind, LeaseContext, MetadataMap, ObjectProperties,
-    ObjectRef, OperationClass, ReplayBody, RequestParts, ResponseParts, Transport,
+    ObjectRef, OperationClass, ReplayBody, RequestParts, ResponseParts, StorageRuntime, Transport,
     ownership::apply_lease,
 };
 
@@ -179,69 +179,89 @@ pub struct PageClient;
 
 impl PageClient {
     /// Creates a page object with aligned total length.
-    pub fn create<T: Transport>(
+    pub fn create<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         object: &ObjectRef,
         content_len: u64,
         metadata: &MetadataMap,
         lease: Option<&LeaseContext>,
-    ) -> Result<ResponseParts, AttemptError> {
+    ) -> Result<ResponseParts, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let request = create_page_request(object, content_len, metadata, lease)
             .map_err(|error| attempt_error(OperationClass::PageWrite, error))?;
         transport.execute(cx, &request)
     }
 
     /// Uploads one aligned page range.
-    pub fn upload_range<T: Transport>(
+    pub fn upload_range<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         object: &ObjectRef,
         range: PageRange,
         body: ReplayBody,
         lease: Option<&LeaseContext>,
-    ) -> Result<ResponseParts, AttemptError> {
+    ) -> Result<ResponseParts, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let request = upload_range_request(object, range, body, lease)
             .map_err(|error| attempt_error(OperationClass::PageWrite, error))?;
         transport.execute(cx, &request)
     }
 
     /// Clears one aligned page range.
-    pub fn clear_range<T: Transport>(
+    pub fn clear_range<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         object: &ObjectRef,
         range: PageRange,
         lease: Option<&LeaseContext>,
-    ) -> Result<ResponseParts, AttemptError> {
+    ) -> Result<ResponseParts, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let request = clear_range_request(object, range, lease)
             .map_err(|error| attempt_error(OperationClass::PageWrite, error))?;
         transport.execute(cx, &request)
     }
 
     /// Updates the service sequence number.
-    pub fn update_sequence_number<T: Transport>(
+    pub fn update_sequence_number<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         object: &ObjectRef,
         action: SequenceNumberAction,
         lease: Option<&LeaseContext>,
-    ) -> Result<ResponseParts, AttemptError> {
+    ) -> Result<ResponseParts, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let request = sequence_number_request(object, action, lease);
         transport.execute(cx, &request)
     }
 
     /// Reads object properties and parses page-object metadata.
-    pub fn get_properties<T: Transport>(
+    pub fn get_properties<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         object: &ObjectRef,
-    ) -> Result<ObjectProperties, AttemptError> {
+    ) -> Result<ObjectProperties, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let request = properties_request(object);
         let response = transport.execute(cx, &request)?;
         parse_object_properties(&response.metadata)
@@ -249,13 +269,17 @@ impl PageClient {
     }
 
     /// Lists written page ranges, optionally constrained to a byte range.
-    pub fn list_written_ranges<T: Transport>(
+    pub fn list_written_ranges<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         object: &ObjectRef,
         range: Option<PageRange>,
-    ) -> Result<Vec<PageRange>, AttemptError> {
+    ) -> Result<Vec<PageRange>, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let request = written_ranges_request(object, range);
         let mut parser = WrittenRangeParser::new();
         transport.execute_with_body_chunks(cx, &request, &mut |chunk| parser.push(&chunk))?;
@@ -268,16 +292,17 @@ impl PageClient {
     ///
     /// If the transport fails after bytes have been delivered, the returned error
     /// is converted to [`ErrorKind::Incomplete`].
-    pub fn read_range<T, F>(
+    pub fn read_range<'cx, R, T, F>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         object: &ObjectRef,
         range: PageRange,
         mut on_chunk: F,
     ) -> Result<ResponseParts, AttemptError>
     where
-        T: Transport,
+        R: StorageRuntime,
+        T: Transport<R>,
         F: FnMut(Bytes) -> Result<(), Error>,
     {
         let request = read_range_request(object, range);

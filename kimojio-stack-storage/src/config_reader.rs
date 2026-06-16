@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use crate::{
     AttemptError, Conditions, Diagnostics, Error, ErrorKind, ObjectRef, OperationClass,
-    RequestParts, Transport,
+    RequestParts, StorageRuntime, Transport,
 };
 
 /// Outcome of one config read.
@@ -49,13 +49,17 @@ pub struct ConfigReader;
 
 impl ConfigReader {
     /// Reads the config object, using `state.etag` as an `if-none-match` condition.
-    pub fn read<T: Transport>(
+    pub fn read<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         object: &ObjectRef,
         state: &mut ConfigState,
-    ) -> Result<ConfigReadOutcome, AttemptError> {
+    ) -> Result<ConfigReadOutcome, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let request = config_request(object, state.etag.as_deref());
         let mut body = BytesMut::new();
         let response = match transport.execute_with_body_chunks(cx, &request, &mut |chunk| {

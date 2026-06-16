@@ -25,11 +25,12 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use bytes::BytesMut;
+use kimojio_stack::IoRuntime;
 
 use crate::{
     AccountId, AttemptError, ContainerName, Diagnostics, Error, ErrorKind, MetadataMap, ObjectKind,
     ObjectName, OperationClass, ReplayBody, RequestParts, RetryDecision, RetryPolicy, RetryState,
-    Transport, model::percent_encode_component,
+    StorageRuntime, Transport, model::percent_encode_component,
 };
 
 /// Options controlling one list page request.
@@ -77,14 +78,18 @@ pub struct ListClient;
 
 impl ListClient {
     /// Fetches and parses one list page.
-    pub fn fetch_page<T: Transport>(
+    pub fn fetch_page<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         account: &AccountId,
         container: &ContainerName,
         options: &ListOptions,
-    ) -> Result<ListPage, AttemptError> {
+    ) -> Result<ListPage, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let request = list_request(account, container, options);
         let mut body = BytesMut::new();
         transport.execute_with_body_chunks(cx, &request, &mut |chunk| {
@@ -101,15 +106,20 @@ impl ListClient {
     }
 
     /// Fetches one page with retry policy applied to retryable list failures.
-    pub fn fetch_page_with_retry<T: Transport>(
+    pub fn fetch_page_with_retry<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         account: &AccountId,
         container: &ContainerName,
         options: &ListOptions,
         retry: RetryPolicy,
-    ) -> Result<ListPage, AttemptError> {
+    ) -> Result<ListPage, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+        for<'rt> R::Context<'rt>: IoRuntime,
+    {
         let mut attempt = 1;
         let start = Instant::now();
         loop {
@@ -132,10 +142,10 @@ impl ListClient {
                     match decision {
                         RetryDecision::RetryAfter(delay) => {
                             if !delay.is_zero() {
-                                cx.sleep(delay).map_err(|errno| {
+                                cx.sleep_for(delay).map_err(|error| {
                                     attempt_error(Error::new(
                                         ErrorKind::Transport,
-                                        format!("list retry sleep failed: {errno:?}"),
+                                        format!("list retry sleep failed: {error}"),
                                     ))
                                 })?;
                             }
@@ -153,9 +163,9 @@ impl ListClient {
     ///
     /// The callback runs before the next page is fetched, allowing callers to
     /// apply backpressure or stop by returning an error.
-    pub fn stream_pages<T, F>(
+    pub fn stream_pages<'cx, R, T, F>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         account: &AccountId,
         container: &ContainerName,
@@ -163,7 +173,8 @@ impl ListClient {
         mut on_page: F,
     ) -> Result<(), AttemptError>
     where
-        T: Transport,
+        R: StorageRuntime,
+        T: Transport<R>,
         F: FnMut(ListPage) -> Result<(), Error>,
     {
         let mut next = Some(options.clone());

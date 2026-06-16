@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::{
     AttemptError, BlockClient, BlockUpload, Error, ErrorKind, MetadataMap, ObjectRef,
-    OperationClass, ReplayBody, Transport,
+    OperationClass, ReplayBody, StorageRuntime, Transport,
 };
 
 /// Backup checkpoint status persisted as JSON.
@@ -62,13 +62,17 @@ pub struct BackupStatusClient;
 
 impl BackupStatusClient {
     /// Writes backup status to a block object.
-    pub fn update<T: Transport>(
+    pub fn update<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         object: &ObjectRef,
         status: &BackupStatus,
-    ) -> Result<(), AttemptError> {
+    ) -> Result<(), AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let mut metadata = MetadataMap::new();
         metadata.insert("status-kind", "checkpoint");
         BlockClient.upload(
@@ -87,12 +91,16 @@ impl BackupStatusClient {
     }
 
     /// Reads and parses backup status from a block object.
-    pub fn read<T: Transport>(
+    pub fn read<'cx, R, T>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         object: &ObjectRef,
-    ) -> Result<BackupStatus, AttemptError> {
+    ) -> Result<BackupStatus, AttemptError>
+    where
+        R: StorageRuntime,
+        T: Transport<R>,
+    {
         let mut body = BytesMut::new();
         BlockClient.download(cx, transport, object, None, |chunk| {
             body.extend_from_slice(&chunk);

@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::{AttemptError, SnapshotClient, SnapshotRef, Transport};
+use crate::{AttemptError, SnapshotClient, SnapshotRef, StorageRuntime, Transport};
 
 /// Set of snapshots that must not be deleted by cleanup.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -49,12 +49,16 @@ pub fn orphan_snapshots(
 /// Deletes at most `max_deletes` orphan snapshots.
 ///
 /// The return value is the number of delete requests that succeeded.
-pub fn delete_orphans_bounded<T: Transport>(
-    cx: &kimojio_stack::RuntimeContext<'_>,
+pub fn delete_orphans_bounded<'cx, R, T>(
+    cx: &'cx R::Context<'cx>,
     transport: &mut T,
     orphans: &[SnapshotRef],
     max_deletes: usize,
-) -> Result<usize, AttemptError> {
+) -> Result<usize, AttemptError>
+where
+    R: StorageRuntime,
+    T: Transport<R>,
+{
     let mut deleted = 0;
     for snapshot in orphans.iter().take(max_deletes) {
         SnapshotClient.delete(cx, transport, snapshot)?;

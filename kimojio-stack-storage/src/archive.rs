@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 
 use crate::{
     AttemptError, BlockClient, BlockUpload, Error, ErrorKind, MetadataMap, ObjectName, ObjectRef,
-    ReplayBody, Transport, block_upload_request,
+    ReplayBody, StorageRuntime, Transport, block_upload_request,
 };
 
 /// Archive compression metadata.
@@ -101,15 +101,16 @@ impl ArchiveClient {
     /// A CRC mismatch is returned after the complete body has been delivered. A
     /// mid-stream transport failure after any bytes have reached the sink remains
     /// an incomplete-download error from the block client.
-    pub fn download_validate_to_sink<T, F>(
+    pub fn download_validate_to_sink<'cx, R, T, F>(
         self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         transport: &mut T,
         descriptor: &ArchiveDescriptor,
         mut on_chunk: F,
     ) -> Result<(), AttemptError>
     where
-        T: Transport,
+        R: StorageRuntime,
+        T: Transport<R>,
         F: FnMut(Bytes) -> Result<(), Error>,
     {
         let mut crc = Crc32::new();

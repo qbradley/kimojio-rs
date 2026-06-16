@@ -57,12 +57,12 @@
 //!
 //! # Runtime migration boundary
 //!
-//! Storage operations are already runtime-independent above [`Transport`]. The
-//! current stack HTTP adapter is concrete because the protocol-neutral HTTP
-//! client is still concrete; once HTTP exposes generic client wrappers, storage
-//! can make the adapter generic over that client/runtime socket type. Direct
-//! file or disk I/O is not part of this HTTP+TLS migration and should be added as
-//! a separate shared runtime capability if storage needs it later.
+//! Storage operations are runtime-independent above [`Transport`]. The stack HTTP
+//! adapter is available as the stack-core [`StackHttpTransport`] alias and as the
+//! generic [`RuntimeStackHttpTransport`] for runtime/socket families that satisfy
+//! the HTTP socket I/O contract. Direct file or disk I/O is not part of this
+//! HTTP+TLS migration and should be added as a separate shared runtime capability
+//! if storage needs it later.
 
 pub mod archive;
 pub mod auth;
@@ -161,4 +161,7 @@ pub use tenant_init::{
     ContainerTarget, PageObjectInit, TenantInitPlan, TenantInitState, TenantInitializer,
 };
 pub use testing::{DeterministicEmulator, FakeResponse, FakeService};
-pub use transport::{AttemptError, RequestParts, ResponseParts, StackHttpTransport, Transport};
+pub use transport::{
+    AttemptError, RequestParts, ResponseParts, RuntimeStackHttpTransport, StackHttpTransport,
+    StackStorageRuntime, StorageRuntime, Transport,
+};

@@ -22,4 +22,5 @@ serde_json.workspace = true
 [dev-dependencies]
 base64.workspace = true
 httpdate.workspace = true
+kimojio-stack-steal.workspace = true
 openssl.workspace = true
