@@ -373,6 +373,7 @@ impl Runtime {
                 active_steal_scope: None,
                 local_shared_operations: Some(Rc::clone(&local_shared_operations)),
                 shared_ring_queue_capacity: self.config.max_shared_ring_queue_len,
+                socket_ring: RefCell::new(None),
             };
             let output = panic::catch_unwind(AssertUnwindSafe(|| main(&cx)));
             local_shared_operations.close_all();
@@ -406,6 +407,7 @@ impl Runtime {
                     active_steal_scope: None,
                     local_shared_operations: None,
                     shared_ring_queue_capacity: self.config.max_shared_ring_queue_len,
+                    socket_ring: RefCell::new(None),
                 };
                 main(&cx)
             })
@@ -441,6 +443,7 @@ pub struct RuntimeContext<'cx> {
     active_steal_scope: Option<Arc<StealScopeState>>,
     local_shared_operations: Option<Rc<LocalSharedOperations>>,
     shared_ring_queue_capacity: usize,
+    socket_ring: RefCell<Option<Ring>>,
 }
 
 impl RuntimeContext<'_> {
@@ -897,6 +900,14 @@ impl Ring {
     fn shared_test_counters(&self) -> Option<SharedRingTestCounterSnapshot> {
         match &self.inner {
             RingInner::Shared(shared) => Some(shared.core.test_counters()),
+            RingInner::WorkerLocal { .. } => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn shared_core_ptr(&self) -> Option<*const SharedRingCore> {
+        match &self.inner {
+            RingInner::Shared(shared) => Some(Arc::as_ptr(&shared.core)),
             RingInner::WorkerLocal { .. } => None,
         }
     }
@@ -1722,6 +1733,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                         active_steal_scope,
                         local_shared_operations,
                         shared_ring_queue_capacity,
+                        socket_ring: RefCell::new(None),
                     };
                     f(&cx)
                 }
@@ -1831,6 +1843,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                         active_steal_scope,
                         local_shared_operations,
                         shared_ring_queue_capacity,
+                        socket_ring: RefCell::new(None),
                     };
                     f(&cx)
                 }
@@ -3748,6 +3761,7 @@ impl MultiRuntime {
                                     active_steal_scope,
                                     local_shared_operations: None,
                                     shared_ring_queue_capacity,
+                                    socket_ring: RefCell::new(None),
                                 };
                                 let runtime = cx
                                     .steal_runtime
@@ -5737,6 +5751,26 @@ mod tests {
                 let nop = scope.spawn(move |cx| ring.nop(cx).unwrap());
                 nop.join(cx);
             });
+        });
+    }
+
+    #[test]
+    fn multi_root_socket_adapter_reuses_shared_ring_core() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            assert_eq!(cx.current_worker(), None);
+            let first = cx.socket_ring_for_test().unwrap();
+            let second = cx.socket_ring_for_test().unwrap();
+            assert_eq!(
+                first.shared_core_ptr(),
+                second.shared_core_ptr(),
+                "root SocketIoRuntime adapter calls should reuse one shared ring core"
+            );
         });
     }
 

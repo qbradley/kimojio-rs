@@ -198,12 +198,23 @@ impl SocketIoRuntime for RuntimeContext<'_> {
 
 impl RuntimeContext<'_> {
     fn socket_ring(&self) -> Result<crate::Ring, RingError> {
+        if let Some(ring) = self.socket_ring.borrow().as_ref() {
+            return Ok(ring.clone());
+        }
+
         let mode = if self.current_worker().is_some() {
             RingMode::WorkerLocal
         } else {
             RingMode::Shared
         };
-        self.create_ring(mode)
+        let ring = self.create_ring(mode)?;
+        *self.socket_ring.borrow_mut() = Some(ring.clone());
+        Ok(ring)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn socket_ring_for_test(&self) -> Result<crate::Ring, RingError> {
+        self.socket_ring()
     }
 }
 
