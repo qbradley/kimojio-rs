@@ -187,7 +187,7 @@ decision.
 - Run the package/publish dry-run or equivalent release gate after the
   version/no-publish decision is made.
 
-### 8. Decide what to do with `RuntimeSocket::as_stack_io_fd`
+### 8. [done] Decide what to do with `RuntimeSocket::as_stack_io_fd`
 
 **Why:** The runtime-neutral socket trait exposes a stack-core escape hatch. It is
 currently useful for compatibility assertions, but it could let production

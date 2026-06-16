@@ -229,18 +229,9 @@ pub trait IoRuntime: RuntimeCapabilities {
 }
 
 /// Runtime-neutral socket handle abstraction used by downstream stack transports.
-pub trait RuntimeSocket: AsFd {
-    /// Returns the stack-core socket handle when this adapter uses one.
-    fn as_stack_io_fd(&self) -> Option<&IoFd> {
-        None
-    }
-}
+pub trait RuntimeSocket: AsFd {}
 
-impl RuntimeSocket for IoFd {
-    fn as_stack_io_fd(&self) -> Option<&IoFd> {
-        Some(self)
-    }
-}
+impl RuntimeSocket for IoFd {}
 
 /// A runtime-neutral condition that can park stackful coroutines until ready.
 ///
