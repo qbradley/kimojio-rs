@@ -3,15 +3,19 @@
 
 use std::{
     hint::black_box,
+    num::NonZeroUsize,
     time::{Duration, Instant},
 };
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use http::{Request, Response, StatusCode};
-use kimojio_stack::{Runtime, RuntimeContext};
+use kimojio_stack::{Runtime, RuntimeContext, SocketIoRuntime};
 use kimojio_stack_http::{
-    Body, BodyLimits, HttpConfig, StackTransport, h2, http1,
+    Body, BodyLimits, HttpConfig, RuntimeStackTransport, StackTransport, h2, http1,
     tls::{self, HttpProtocol},
+};
+use kimojio_stack_steal::{
+    Runtime as StealRuntime, RuntimeConfig as StealRuntimeConfig, StealPolicy,
 };
 use kimojio_stack_tls::TlsContext;
 use openssl::{
@@ -28,6 +32,13 @@ use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 const SMALL_BODY: usize = 64;
 const LARGE_BODY: usize = 16 * 1024;
 const TLS_BUFFER_SIZE: usize = 16 * 1024;
+const BENCH_DEADLINE: Duration = Duration::from_secs(60);
+
+#[derive(Clone, Copy)]
+enum StealPath {
+    WorkerLocal,
+    SharedRoot,
+}
 
 fn bench_http(c: &mut Criterion) {
     for size in [SMALL_BODY, LARGE_BODY] {
@@ -37,24 +48,82 @@ fn bench_http(c: &mut Criterion) {
             "large_body"
         };
 
-        c.bench_function(&format!("http1/plaintext/{label}"), |b| {
-            b.iter_custom(|iters| run_http1_plaintext(iters, size));
-        });
-        c.bench_function(&format!("http1/tls/{label}"), |b| {
-            b.iter_custom(|iters| run_http1_tls(iters, size));
-        });
-        c.bench_function(&format!("h2/plaintext/{label}"), |b| {
-            b.iter_custom(|iters| run_h2_plaintext(iters, size));
-        });
-        c.bench_function(&format!("h2/tls/{label}"), |b| {
-            b.iter_custom(|iters| run_h2_tls(iters, size));
-        });
+        c.bench_function(
+            &format!("stack-core/http1/plaintext/request_response/{label}"),
+            |b| {
+                b.iter_custom(|iters| run_http1_plaintext(iters, size));
+            },
+        );
+        c.bench_function(
+            &format!("stack-core/http1/plaintext/deadline/request_response/{label}"),
+            |b| {
+                b.iter_custom(|iters| run_http1_plaintext_with_deadline(iters, size));
+            },
+        );
+        c.bench_function(
+            &format!("stack-core/http1/tls/request_response/{label}"),
+            |b| {
+                b.iter_custom(|iters| run_http1_tls(iters, size));
+            },
+        );
+        c.bench_function(
+            &format!("stack-steal/worker-local/http1/plaintext/request_response/{label}"),
+            |b| {
+                b.iter_custom(|iters| {
+                    run_http1_steal_plaintext(iters, size, StealPath::WorkerLocal)
+                });
+            },
+        );
+        c.bench_function(
+            &format!("stack-steal/shared-root/http1/plaintext/request_response/{label}"),
+            |b| {
+                b.iter_custom(|iters| {
+                    run_http1_steal_plaintext(iters, size, StealPath::SharedRoot)
+                });
+            },
+        );
+
+        c.bench_function(
+            &format!("stack-core/h2/plaintext/request_response/{label}"),
+            |b| {
+                b.iter_custom(|iters| run_h2_plaintext(iters, size));
+            },
+        );
+        c.bench_function(
+            &format!("stack-core/h2/plaintext/deadline/request_response/{label}"),
+            |b| {
+                b.iter_custom(|iters| run_h2_plaintext_with_deadline(iters, size));
+            },
+        );
+        c.bench_function(
+            &format!("stack-core/h2/tls/request_response/{label}"),
+            |b| {
+                b.iter_custom(|iters| run_h2_tls(iters, size));
+            },
+        );
+        c.bench_function(
+            &format!("stack-steal/worker-local/h2/plaintext/request_response/{label}"),
+            |b| {
+                b.iter_custom(|iters| run_h2_steal_plaintext(iters, size, StealPath::WorkerLocal));
+            },
+        );
+        c.bench_function(
+            &format!("stack-steal/shared-root/h2/plaintext/request_response/{label}"),
+            |b| {
+                b.iter_custom(|iters| run_h2_steal_plaintext(iters, size, StealPath::SharedRoot));
+            },
+        );
     }
 }
 
 fn run_http1_plaintext(iters: u64, body_len: usize) -> Duration {
     let (client, server) = socket_transport_pair();
-    run_http1(iters, body_len, client, server)
+    run_http1(iters, body_len, client, server, None)
+}
+
+fn run_http1_plaintext_with_deadline(iters: u64, body_len: usize) -> Duration {
+    let (client, server) = socket_transport_pair();
+    run_http1(iters, body_len, client, server, Some(BENCH_DEADLINE))
 }
 
 fn run_http1_tls(iters: u64, body_len: usize) -> Duration {
@@ -85,7 +154,7 @@ fn run_http1_tls(iters: u64, body_len: usize) -> Duration {
             )
             .unwrap();
             let server = server.join(cx);
-            run_http1_in_scope(cx, iters, body_len, client, server)
+            run_http1_in_scope(cx, iters, body_len, client, server, None)
         })
     })
 }
@@ -95,9 +164,10 @@ fn run_http1(
     body_len: usize,
     client: StackTransport,
     server: StackTransport,
+    deadline: Option<Duration>,
 ) -> Duration {
     let mut runtime = Runtime::new();
-    runtime.block_on(|cx| run_http1_in_scope(cx, iters, body_len, client, server))
+    runtime.block_on(|cx| run_http1_in_scope(cx, iters, body_len, client, server, deadline))
 }
 
 fn run_http1_in_scope(
@@ -106,6 +176,7 @@ fn run_http1_in_scope(
     body_len: usize,
     client: StackTransport,
     server: StackTransport,
+    deadline: Option<Duration>,
 ) -> Duration {
     let request = request("/bench-http1", body_len);
     let response = response(body_len);
@@ -122,22 +193,44 @@ fn run_http1_in_scope(
             server.close(cx).unwrap();
         });
 
-        let mut client = http1::ClientConnection::new(client, HttpConfig::default());
-        black_box(client.send(cx, &request).unwrap());
-        let start = Instant::now();
-        for _ in 0..iters {
+        if let Some(deadline) = deadline {
+            let client = scope.spawn(move |cx| {
+                let mut client = http1::ClientConnection::new(client, HttpConfig::default());
+                client.set_io_deadline(Some(Instant::now() + deadline));
+                black_box(client.send(cx, &request).unwrap());
+                let start = Instant::now();
+                for _ in 0..iters {
+                    black_box(client.send(cx, &request).unwrap());
+                }
+                let elapsed = start.elapsed();
+                client.close(cx).unwrap();
+                elapsed
+            });
+            server.join(cx);
+            client.join(cx)
+        } else {
+            let mut client = http1::ClientConnection::new(client, HttpConfig::default());
             black_box(client.send(cx, &request).unwrap());
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(client.send(cx, &request).unwrap());
+            }
+            let elapsed = start.elapsed();
+            client.close(cx).unwrap();
+            server.join(cx);
+            elapsed
         }
-        let elapsed = start.elapsed();
-        client.close(cx).unwrap();
-        server.join(cx);
-        elapsed
     })
 }
 
 fn run_h2_plaintext(iters: u64, body_len: usize) -> Duration {
     let (client, server) = socket_transport_pair();
-    run_h2(iters, body_len, client, server)
+    run_h2(iters, body_len, client, server, None)
+}
+
+fn run_h2_plaintext_with_deadline(iters: u64, body_len: usize) -> Duration {
+    let (client, server) = socket_transport_pair();
+    run_h2(iters, body_len, client, server, Some(BENCH_DEADLINE))
 }
 
 fn run_h2_tls(iters: u64, body_len: usize) -> Duration {
@@ -168,14 +261,20 @@ fn run_h2_tls(iters: u64, body_len: usize) -> Duration {
             )
             .unwrap();
             let server = server.join(cx);
-            run_h2_in_scope(cx, iters, body_len, client, server)
+            run_h2_in_scope(cx, iters, body_len, client, server, None)
         })
     })
 }
 
-fn run_h2(iters: u64, body_len: usize, client: StackTransport, server: StackTransport) -> Duration {
+fn run_h2(
+    iters: u64,
+    body_len: usize,
+    client: StackTransport,
+    server: StackTransport,
+    deadline: Option<Duration>,
+) -> Duration {
     let mut runtime = Runtime::new();
-    runtime.block_on(|cx| run_h2_in_scope(cx, iters, body_len, client, server))
+    runtime.block_on(|cx| run_h2_in_scope(cx, iters, body_len, client, server, deadline))
 }
 
 fn run_h2_in_scope(
@@ -184,6 +283,7 @@ fn run_h2_in_scope(
     body_len: usize,
     client: StackTransport,
     server: StackTransport,
+    deadline: Option<Duration>,
 ) -> Duration {
     let request = request("/bench-h2", body_len);
     let response = response(body_len);
@@ -201,16 +301,186 @@ fn run_h2_in_scope(
             server.shutdown_write_and_close_after_peer(cx).unwrap();
         });
 
-        let mut client = h2::ClientConnection::new(client, HttpConfig::default());
-        black_box(client.send(cx, &request).unwrap());
-        let start = Instant::now();
-        for _ in 0..iters {
+        if let Some(deadline) = deadline {
+            let client = scope.spawn(move |cx| {
+                let mut client = h2::ClientConnection::new(client, HttpConfig::default());
+                client.set_io_deadline(Some(Instant::now() + deadline));
+                black_box(client.send(cx, &request).unwrap());
+                let start = Instant::now();
+                for _ in 0..iters {
+                    black_box(client.send(cx, &request).unwrap());
+                }
+                let elapsed = start.elapsed();
+                client.close(cx).unwrap();
+                elapsed
+            });
+            server.join(cx);
+            client.join(cx)
+        } else {
+            let mut client = h2::ClientConnection::new(client, HttpConfig::default());
             black_box(client.send(cx, &request).unwrap());
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(client.send(cx, &request).unwrap());
+            }
+            let elapsed = start.elapsed();
+            client.close(cx).unwrap();
+            server.join(cx);
+            elapsed
         }
-        let elapsed = start.elapsed();
-        client.close(cx).unwrap();
-        server.join(cx);
-        elapsed
+    })
+}
+
+fn run_http1_steal_plaintext(iters: u64, body_len: usize, path: StealPath) -> Duration {
+    let (client_fd, server_fd) = socketpair_fds();
+    let mut runtime = steal_runtime();
+    runtime.block_on(|cx| {
+        cx.scope(|scope| match path {
+            StealPath::WorkerLocal => {
+                let server = scope.spawn_stealable(move |cx| {
+                    let server_fd = cx.socket_from_owned_fd(server_fd).unwrap();
+                    let server = RuntimeStackTransport::plaintext_socket(server_fd);
+                    run_http1_steal_server(cx, iters, body_len, server);
+                });
+                let client = scope.spawn_stealable(move |cx| {
+                    let client_fd = cx.socket_from_owned_fd(client_fd).unwrap();
+                    let client = RuntimeStackTransport::plaintext_socket(client_fd);
+                    run_http1_steal_client(cx, iters, body_len, client)
+                });
+                server.join(cx);
+                client.join(cx)
+            }
+            StealPath::SharedRoot => {
+                let server = scope.spawn(move |cx| {
+                    let server_fd = cx.socket_from_owned_fd(server_fd).unwrap();
+                    let server = RuntimeStackTransport::plaintext_socket(server_fd);
+                    run_http1_steal_server(cx, iters, body_len, server);
+                });
+                let client = scope.spawn(move |cx| {
+                    let client_fd = cx.socket_from_owned_fd(client_fd).unwrap();
+                    let client = RuntimeStackTransport::plaintext_socket(client_fd);
+                    run_http1_steal_client(cx, iters, body_len, client)
+                });
+                server.join(cx);
+                client.join(cx)
+            }
+        })
+    })
+}
+
+fn run_http1_steal_server(
+    cx: &kimojio_stack_steal::RuntimeContext<'_>,
+    iters: u64,
+    body_len: usize,
+    server: RuntimeStackTransport<kimojio_stack_steal::RingFd>,
+) {
+    let response = response(body_len);
+    let rounds = iters.saturating_add(1);
+    let mut server = http1::RuntimeServerConnection::new(server, HttpConfig::default());
+    for _ in 0..rounds {
+        let request = server.read_request(cx).unwrap().unwrap();
+        black_box(request.body().len());
+        server.write_response(cx, &response).unwrap();
+    }
+    server.close(cx).unwrap();
+}
+
+fn run_http1_steal_client(
+    cx: &kimojio_stack_steal::RuntimeContext<'_>,
+    iters: u64,
+    body_len: usize,
+    client: RuntimeStackTransport<kimojio_stack_steal::RingFd>,
+) -> Duration {
+    let request = request("/bench-http1-steal", body_len);
+    let mut client = http1::RuntimeClientConnection::new(client, HttpConfig::default());
+    black_box(client.send(cx, &request).unwrap());
+    let start = Instant::now();
+    for _ in 0..iters {
+        black_box(client.send(cx, &request).unwrap());
+    }
+    let elapsed = start.elapsed();
+    client.close(cx).unwrap();
+    elapsed
+}
+
+fn run_h2_steal_plaintext(iters: u64, body_len: usize, path: StealPath) -> Duration {
+    let (client_fd, server_fd) = socketpair_fds();
+    let mut runtime = steal_runtime();
+    runtime.block_on(|cx| {
+        cx.scope(|scope| match path {
+            StealPath::WorkerLocal => {
+                let server = scope.spawn_stealable(move |cx| {
+                    let server_fd = cx.socket_from_owned_fd(server_fd).unwrap();
+                    let server = RuntimeStackTransport::plaintext_socket(server_fd);
+                    run_h2_steal_server(cx, iters, body_len, server);
+                });
+                let client = scope.spawn_stealable(move |cx| {
+                    let client_fd = cx.socket_from_owned_fd(client_fd).unwrap();
+                    let client = RuntimeStackTransport::plaintext_socket(client_fd);
+                    run_h2_steal_client(cx, iters, body_len, client)
+                });
+                server.join(cx);
+                client.join(cx)
+            }
+            StealPath::SharedRoot => {
+                let server = scope.spawn(move |cx| {
+                    let server_fd = cx.socket_from_owned_fd(server_fd).unwrap();
+                    let server = RuntimeStackTransport::plaintext_socket(server_fd);
+                    run_h2_steal_server(cx, iters, body_len, server);
+                });
+                let client = scope.spawn(move |cx| {
+                    let client_fd = cx.socket_from_owned_fd(client_fd).unwrap();
+                    let client = RuntimeStackTransport::plaintext_socket(client_fd);
+                    run_h2_steal_client(cx, iters, body_len, client)
+                });
+                server.join(cx);
+                client.join(cx)
+            }
+        })
+    })
+}
+
+fn run_h2_steal_server(
+    cx: &kimojio_stack_steal::RuntimeContext<'_>,
+    iters: u64,
+    body_len: usize,
+    server: RuntimeStackTransport<kimojio_stack_steal::RingFd>,
+) {
+    let response = response(body_len);
+    let rounds = iters.saturating_add(1);
+    let mut server = h2::RuntimeServerConnection::new(server, HttpConfig::default());
+    for _ in 0..rounds {
+        let incoming = server.accept(cx).unwrap().unwrap();
+        server
+            .send_response(cx, incoming.stream_id, &response)
+            .unwrap();
+    }
+    server.shutdown_write_and_close_after_peer(cx).unwrap();
+}
+
+fn run_h2_steal_client(
+    cx: &kimojio_stack_steal::RuntimeContext<'_>,
+    iters: u64,
+    body_len: usize,
+    client: RuntimeStackTransport<kimojio_stack_steal::RingFd>,
+) -> Duration {
+    let request = request("/bench-h2-steal", body_len);
+    let mut client = h2::RuntimeClientConnection::new(client, HttpConfig::default());
+    black_box(client.send(cx, &request).unwrap());
+    let start = Instant::now();
+    for _ in 0..iters {
+        black_box(client.send(cx, &request).unwrap());
+    }
+    let elapsed = start.elapsed();
+    client.close(cx).unwrap();
+    elapsed
+}
+
+fn steal_runtime() -> StealRuntime {
+    StealRuntime::with_config(StealRuntimeConfig {
+        workers: NonZeroUsize::new(2).unwrap(),
+        steal_policy: StealPolicy::steal_one(),
+        ..StealRuntimeConfig::default()
     })
 }
 

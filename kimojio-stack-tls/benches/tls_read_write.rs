@@ -3,11 +3,15 @@
 
 use std::{
     hint::black_box,
+    num::NonZeroUsize,
     time::{Duration, Instant},
 };
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use kimojio_stack::{IoReadBuffer, Runtime, RuntimeContext};
+use kimojio_stack_steal::{
+    Runtime as StealRuntime, RuntimeConfig as StealRuntimeConfig, StealPolicy,
+};
 use kimojio_stack_tls::TlsContext;
 use openssl::{
     asn1::Asn1Time,
@@ -24,6 +28,12 @@ const TLS_BUFFER_SIZE: usize = 16 * 1024;
 const SMALL_PAYLOAD: usize = 1024;
 const LARGE_PAYLOAD: usize = 16 * 1024;
 
+#[derive(Clone, Copy)]
+enum StealPath {
+    WorkerLocal,
+    SharedRoot,
+}
+
 fn bench_tls_read_write(c: &mut Criterion) {
     for size in [SMALL_PAYLOAD, LARGE_PAYLOAD] {
         let label = if size == SMALL_PAYLOAD {
@@ -32,17 +42,32 @@ fn bench_tls_read_write(c: &mut Criterion) {
             "16KiB"
         };
 
-        c.bench_function(&format!("tls/read/{label}"), |b| {
+        c.bench_function(&format!("stack-core/tls/read/{label}"), |b| {
             b.iter_custom(|iters| run_tls_read(iters, size));
         });
-        c.bench_function(&format!("tls/read_async/{label}"), |b| {
+        c.bench_function(&format!("stack-core/tls/read_async/{label}"), |b| {
             b.iter_custom(|iters| run_tls_read_async(iters, size));
         });
-        c.bench_function(&format!("tls/write/{label}"), |b| {
+        c.bench_function(&format!("stack-core/tls/write/{label}"), |b| {
             b.iter_custom(|iters| run_tls_write(iters, size));
         });
-        c.bench_function(&format!("tls/write_async/{label}"), |b| {
+        c.bench_function(&format!("stack-core/tls/write_async/{label}"), |b| {
             b.iter_custom(|iters| run_tls_write_async(iters, size));
+        });
+        c.bench_function(&format!("stack-steal/worker-local/tls/read/{label}"), |b| {
+            b.iter_custom(|iters| run_tls_steal_read(iters, size, StealPath::WorkerLocal));
+        });
+        c.bench_function(&format!("stack-steal/shared-root/tls/read/{label}"), |b| {
+            b.iter_custom(|iters| run_tls_steal_read(iters, size, StealPath::SharedRoot));
+        });
+        c.bench_function(
+            &format!("stack-steal/worker-local/tls/write/{label}"),
+            |b| {
+                b.iter_custom(|iters| run_tls_steal_write(iters, size, StealPath::WorkerLocal));
+            },
+        );
+        c.bench_function(&format!("stack-steal/shared-root/tls/write/{label}"), |b| {
+            b.iter_custom(|iters| run_tls_steal_write(iters, size, StealPath::SharedRoot));
         });
     }
 }
@@ -207,6 +232,162 @@ fn run_tls_write_async(iters: u64, size: usize) -> Duration {
             server.join(cx);
             elapsed
         })
+    })
+}
+
+fn run_tls_steal_read(iters: u64, size: usize, path: StealPath) -> Duration {
+    let (server_ctx, client_ctx) = make_contexts();
+    let (client_fd, server_fd) = socketpair_fds();
+    let mut runtime = steal_runtime();
+
+    runtime.block_on(|cx| {
+        cx.scope(|scope| match path {
+            StealPath::WorkerLocal => {
+                let server = scope.spawn_stealable(move |cx| {
+                    let mut tls = server_ctx
+                        .server_with_runtime(cx, TLS_BUFFER_SIZE, server_fd)
+                        .expect("server TLS handshake failed");
+                    let payload = vec![0x5a; size];
+                    for _ in 0..iters {
+                        assert_eq!(tls.write(cx, &payload).unwrap(), size);
+                    }
+                    tls.shutdown(cx).unwrap();
+                    tls.close(cx).unwrap();
+                });
+                let client = scope.spawn_stealable(move |cx| {
+                    let mut tls = client_ctx
+                        .client_with_runtime(cx, TLS_BUFFER_SIZE, client_fd, "localhost")
+                        .expect("client TLS handshake failed");
+                    let mut buffer = vec![0_u8; size];
+                    let start = Instant::now();
+                    for _ in 0..iters {
+                        let amount = tls.read_exact_or_eof(cx, &mut buffer).unwrap();
+                        assert_eq!(amount, size);
+                        black_box(&buffer);
+                    }
+                    let elapsed = start.elapsed();
+                    tls.shutdown(cx).unwrap();
+                    tls.close(cx).unwrap();
+                    elapsed
+                });
+                server.join(cx);
+                client.join(cx)
+            }
+            StealPath::SharedRoot => {
+                let server = scope.spawn(move |cx| {
+                    let mut tls = server_ctx
+                        .server_with_runtime(cx, TLS_BUFFER_SIZE, server_fd)
+                        .expect("server TLS handshake failed");
+                    let payload = vec![0x5a; size];
+                    for _ in 0..iters {
+                        assert_eq!(tls.write(cx, &payload).unwrap(), size);
+                    }
+                    tls.shutdown(cx).unwrap();
+                    tls.close(cx).unwrap();
+                });
+                let client = scope.spawn(move |cx| {
+                    let mut tls = client_ctx
+                        .client_with_runtime(cx, TLS_BUFFER_SIZE, client_fd, "localhost")
+                        .expect("client TLS handshake failed");
+                    let mut buffer = vec![0_u8; size];
+                    let start = Instant::now();
+                    for _ in 0..iters {
+                        let amount = tls.read_exact_or_eof(cx, &mut buffer).unwrap();
+                        assert_eq!(amount, size);
+                        black_box(&buffer);
+                    }
+                    let elapsed = start.elapsed();
+                    tls.shutdown(cx).unwrap();
+                    tls.close(cx).unwrap();
+                    elapsed
+                });
+                server.join(cx);
+                client.join(cx)
+            }
+        })
+    })
+}
+
+fn run_tls_steal_write(iters: u64, size: usize, path: StealPath) -> Duration {
+    let (server_ctx, client_ctx) = make_contexts();
+    let (client_fd, server_fd) = socketpair_fds();
+    let mut runtime = steal_runtime();
+
+    runtime.block_on(|cx| {
+        cx.scope(|scope| match path {
+            StealPath::WorkerLocal => {
+                let server = scope.spawn_stealable(move |cx| {
+                    let mut tls = server_ctx
+                        .server_with_runtime(cx, TLS_BUFFER_SIZE, server_fd)
+                        .expect("server TLS handshake failed");
+                    let mut buffer = vec![0_u8; size];
+                    for _ in 0..iters {
+                        let amount = tls.read_exact_or_eof(cx, &mut buffer).unwrap();
+                        assert_eq!(amount, size);
+                        black_box(&buffer);
+                    }
+                    tls.shutdown(cx).unwrap();
+                    tls.close(cx).unwrap();
+                });
+                let client = scope.spawn_stealable(move |cx| {
+                    let mut tls = client_ctx
+                        .client_with_runtime(cx, TLS_BUFFER_SIZE, client_fd, "localhost")
+                        .expect("client TLS handshake failed");
+                    let payload = vec![0x5a; size];
+                    let start = Instant::now();
+                    for _ in 0..iters {
+                        assert_eq!(tls.write(cx, &payload).unwrap(), size);
+                        black_box(&payload);
+                    }
+                    let elapsed = start.elapsed();
+                    tls.shutdown(cx).unwrap();
+                    tls.close(cx).unwrap();
+                    elapsed
+                });
+                server.join(cx);
+                client.join(cx)
+            }
+            StealPath::SharedRoot => {
+                let server = scope.spawn(move |cx| {
+                    let mut tls = server_ctx
+                        .server_with_runtime(cx, TLS_BUFFER_SIZE, server_fd)
+                        .expect("server TLS handshake failed");
+                    let mut buffer = vec![0_u8; size];
+                    for _ in 0..iters {
+                        let amount = tls.read_exact_or_eof(cx, &mut buffer).unwrap();
+                        assert_eq!(amount, size);
+                        black_box(&buffer);
+                    }
+                    tls.shutdown(cx).unwrap();
+                    tls.close(cx).unwrap();
+                });
+                let client = scope.spawn(move |cx| {
+                    let mut tls = client_ctx
+                        .client_with_runtime(cx, TLS_BUFFER_SIZE, client_fd, "localhost")
+                        .expect("client TLS handshake failed");
+                    let payload = vec![0x5a; size];
+                    let start = Instant::now();
+                    for _ in 0..iters {
+                        assert_eq!(tls.write(cx, &payload).unwrap(), size);
+                        black_box(&payload);
+                    }
+                    let elapsed = start.elapsed();
+                    tls.shutdown(cx).unwrap();
+                    tls.close(cx).unwrap();
+                    elapsed
+                });
+                server.join(cx);
+                client.join(cx)
+            }
+        })
+    })
+}
+
+fn steal_runtime() -> StealRuntime {
+    StealRuntime::with_config(StealRuntimeConfig {
+        workers: NonZeroUsize::new(2).unwrap(),
+        steal_policy: StealPolicy::steal_one(),
+        ..StealRuntimeConfig::default()
     })
 }
 

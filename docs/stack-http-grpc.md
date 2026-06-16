@@ -33,13 +33,13 @@ users can disable HTTP default features to avoid the TLS/OpenSSL dependency
 surface.
 
 `StackTransport` is the stack-core compatibility alias for
-`RuntimeStackTransport<IoFd>`. The HTTP/1.1 client and server connection types
-also have runtime-generic forms that work with any socket handle implementing the
-shared `kimojio-stack::runtime_api` socket contract. This keeps runtime choice
-explicit: stack-core callers can use the existing names, while companion runtime
-adapters such as `kimojio-stack-steal` can pass their own socket handles without
-adding helper threads, mandatory dynamic dispatch, or a second HTTP runtime
-trait.
+`RuntimeStackTransport<IoFd>`. The HTTP/1.1, HTTP/2, and protocol-neutral client
+and server connection types also have runtime-generic forms that work with any
+socket handle implementing the shared `kimojio-stack::runtime_api` socket
+contract. This keeps runtime choice explicit: stack-core callers can use the
+existing names, while companion runtime adapters such as `kimojio-stack-steal`
+can pass their own socket handles without adding helper threads, mandatory
+dynamic dispatch, or a second HTTP runtime trait.
 
 Transport I/O deadlines are transport-local. Plaintext deadlines use runtime
 socket async handles, TLS deadlines use generic TLS async handles, and both wait
@@ -63,9 +63,10 @@ Current runtime-agnostic status:
 | Layer | Status |
 |-------|--------|
 | HTTP/1.1 plaintext/TLS | Runtime-generic over `RuntimeStackTransport<S>` |
-| HTTP/2 | Stack-core concrete connection types |
-| Protocol-neutral HTTP wrappers | Stack-core concrete enums |
-| gRPC | Stack-core concrete HTTP/2 boundary |
+| HTTP/2 | Runtime-generic over `RuntimeStackTransport<S>` |
+| Protocol-neutral HTTP wrappers | Runtime-generic over HTTP/1.1 or HTTP/2 connections |
+| gRPC client | Runtime-generic over the owned HTTP/2 client connection |
+| gRPC server | Runtime-generic over a `GrpcRuntime` marker and owned HTTP/2 server connection |
 
 Bodies are represented by `Body` and bounded by `BodyLimits`. Parser and
 connection limits live in `HttpConfig`, including header, body, frame, and read
@@ -93,9 +94,10 @@ stackful transport and service model are proven without adding hidden runtime
 or allocation costs.
 
 The gRPC runtime migration boundary is the owned HTTP/2 client or server
-connection supplied by the caller. When HTTP/2 grows generic connection wrappers,
-gRPC can parameterize over those same types rather than introducing a separate
-gRPC runtime trait or hidden dispatch layer.
+connection supplied by the caller. Stack-core compatibility aliases preserve the
+existing `UnaryClient`, `UnaryServer`, and `ServerStreamingResponse` names, while
+`RuntimeUnaryClient`, `RuntimeUnaryServer`, and `RuntimeServerStreamingResponse`
+allow companion runtimes to supply their own HTTP/2 socket handles.
 
 `UnaryClient::call` and `UnaryServer::serve_one` are sequential convenience
 helpers for unary RPCs. `UnaryClient::call_server_streaming` returns a
@@ -177,12 +179,31 @@ Representative final Criterion medians:
 | gRPC plaintext small / moderate payload | ~25.61 us / ~46.65 us |
 | gRPC TLS small / moderate payload | ~72.41 us / ~102.26 us |
 
-Run them with:
+Run the benchmark suites with:
 
 ```sh
+cargo test -p kimojio-stack-http --bench http_request_response -- --test
+cargo test -p kimojio-stack-tls --bench tls_read_write -- --test
 cargo bench -p kimojio-stack-http --bench http_request_response -- --noplot
+cargo bench -p kimojio-stack-tls --bench tls_read_write -- --noplot
 cargo bench -p kimojio-stack-grpc --bench unary_rpc -- --noplot
 ```
+
+The HTTP benchmark labels are explicit about runtime, protocol, transport, and
+deadline path: for example
+`stack-core/http1/plaintext/request_response/small_body`,
+`stack-core/h2/plaintext/deadline/request_response/large_body`, and
+`stack-steal/worker-local/h2/plaintext/request_response/small_body`.
+`stack-steal/shared-root/*` uses stack-steal shared-ring routing from non-worker
+stackful tasks; `stack-steal/worker-local/*` runs socket I/O from worker
+contexts. Criterion output should be interpreted as latency distributions for
+the labeled path; compare medians and tail percentiles only between labels with
+the same body size and protocol.
+
+The TLS benchmark labels separate stack-core synchronous and waitable async
+read/write paths from stack-steal worker-local and shared-root synchronous
+read/write paths, for example `stack-core/tls/read_async/16KiB` and
+`stack-steal/shared-root/tls/write/1KiB`.
 
 Allocation-focused tests cover warmed plaintext HTTP/1.1, HTTP/2, and unary
 gRPC local loops. TLS paths are benchmarked for latency/throughput instead of

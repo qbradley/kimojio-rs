@@ -347,7 +347,7 @@ current stack-core runtime boundary.
 - Existing log/metric unit tests.
 - Collector interop tests gated by `KIMOJIO_STACK_OTEL_RECEIVER_TESTS=1`.
 
-### 16. Add runtime-agnostic TLS and HTTP read/write benchmarks
+### 16. [done] Add runtime-agnostic TLS and HTTP read/write benchmarks
 
 **Why:** The first vertical slice now passes correctness gates, but comparative
 runtime costs need explicit labels and measurements.

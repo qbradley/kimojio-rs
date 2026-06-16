@@ -78,6 +78,7 @@ Benchmarks for local scheduling, raw scheduler queue movement, full stealable
 handoff, rings, metrics, and channels are available with:
 
 ```sh
+cargo test -p kimojio-stack-steal --bench runtime_baseline -- --test
 cargo bench -p kimojio-stack-steal --bench runtime_baseline
 cargo bench -p kimojio-stack-steal --features tokio --bench runtime_baseline
 ```
@@ -89,6 +90,23 @@ Ring benchmarks separate `ring/owned_worker_local_*` from
 `ring/shared_worker_owned_*` so worker-local io_uring costs are not conflated
 with shared-ring routing and synchronization costs.
 
+Runtime-agnostic downstream benchmark coverage lives in the downstream crates and
+uses explicit labels:
+
+```sh
+cargo test -p kimojio-stack-http --bench http_request_response -- --test
+cargo test -p kimojio-stack-tls --bench tls_read_write -- --test
+cargo bench -p kimojio-stack-http --bench http_request_response -- --noplot
+cargo bench -p kimojio-stack-tls --bench tls_read_write -- --noplot
+```
+
+Use `stack-steal/worker-local/*` HTTP/TLS labels to measure worker-owned socket
+I/O and `stack-steal/shared-root/*` labels to measure shared-ring routing from
+non-worker stackful tasks. HTTP labels also separate plaintext, TLS, and active
+deadline paths; TLS labels separate read versus write and stack-core waitable
+async paths. Compare Criterion medians and tail percentiles only within matching
+payload sizes and protocols.
+
 ## Performance Gate Status
 
 The current implementation includes benchmark smoke coverage and local
@@ -99,9 +117,9 @@ scaling. Until that report exists, the release-mode median/p99 threshold work is
 a failing performance investigation item, not a passed acceptance criterion.
 
 The crate is a foundation for runtime-generic stack HTTP, gRPC, TLS, storage,
-and telemetry libraries. The first migrated downstream slice is HTTP/1.1 over
-plaintext/TLS; HTTP/2, gRPC, storage, and telemetry are still compatibility and
-readiness targets.
+and telemetry libraries. HTTP/1.1, HTTP/2, protocol-neutral HTTP wrappers, gRPC,
+storage HTTP transports/clients, and OpenTelemetry unary exporters now expose
+runtime-generic compatibility paths while preserving stack-core aliases.
 
 ## Limitations and Future Work
 
@@ -118,9 +136,9 @@ readiness targets.
 - Shared-ring completion currently polls active shared operations in the owner
   worker loop; lower-overhead completion fanout remains an optimization item if
   benchmarks show it is needed.
-- Downstream HTTP/1.1+TLS has a runtime-generic slice with runtime-neutral async
-  wait and active TLS deadlines. HTTP/2, gRPC, storage, and telemetry are not
-  fully runtime-generic yet.
+- Downstream HTTP/TLS/gRPC/storage/telemetry runtime-generic APIs currently cover
+  the migrated socket-based paths. Broader direct file/storage io_uring
+  operations remain future shared runtime capabilities.
 - The crate is not publishable until the shared `kimojio-stack` runtime API is
   versioned and released first.
 - Release-mode median/p99 threshold validation is currently a failing
