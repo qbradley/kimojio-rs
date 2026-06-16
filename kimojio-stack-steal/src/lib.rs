@@ -10,15 +10,15 @@
 //! eligible queued jobs before they start running, not already-running
 //! continuations.
 //!
-//! The runtime does not expose implicit I/O methods directly on the context.
-//! Instead, code creates [`Ring`] handles with [`RuntimeContext::create_ring`],
-//! [`RuntimeContext::create_worker_ring`], or
-//! [`RuntimeContext::create_shared_ring`]. This keeps worker-local versus shared
-//! I/O costs visible to the application. Shared rings submit through runtime
-//! workers instead of hiding a helper OS thread per ring; the current shared
-//! operation surface includes no-op, timeout, and socket read/write lifecycle
-//! operations while broader file/storage I/O remains outside this crate's first
-//! downstream migration slice.
+//! The runtime context exposes the same direct io_uring operation surface as
+//! `kimojio-stack`; direct calls run on the embedded stackful scheduler for the
+//! current root or worker context. Code that needs to keep worker-local versus
+//! shared-ring costs visible can create [`Ring`] handles with
+//! [`RuntimeContext::create_ring`], [`RuntimeContext::create_worker_ring`], or
+//! [`RuntimeContext::create_shared_ring`]. Shared rings submit through runtime
+//! workers instead of hiding a helper OS thread per ring; they currently provide
+//! no-op, timeout, and socket read/write lifecycle operations as the explicit
+//! synchronized-ring subset.
 //! Runtime-neutral socket cancellation requests keep result handles drainable, so
 //! downstream HTTP/TLS timeout paths can cancel pending shared operations, let
 //! worker-owned state retire, and then close/reclaim sockets explicitly.
@@ -88,20 +88,29 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::panic::{self, AssertUnwindSafe};
 use std::ptr::NonNull;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread::{self, JoinHandle as ThreadJoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker as CrossbeamWorker};
-pub use kimojio_stack::StackUsage;
+pub use kimojio_stack::{
+    AddressFamily, AtFlags, EpollCtlOp, EpollEvent, EpollEventData, EpollEventFlags,
+    FallocateFlags, FileAdvice, FutexWaitFlags, FutexWaitvFlags, IoCounters, IoFd, IoVec,
+    MemoryAdvice, Mode, MsgHdr, OFlags, Protocol, RecvFlags, RegisteredBuffer, RegisteredFd,
+    RenameFlags, ResolveFlags, SendFlags, SocketType, StackUsage, Statx, StatxFlags,
+    UringSpliceFlags,
+};
 use kimojio_stack::{
     Errno, IoReadBuffer, IoWriteBuffer, NoPayloadIo, RawIo, ReadOutput, RuntimeCapabilities,
     RuntimeCapability, RuntimeFamily, RuntimeWaitable, SchedulerWake, StackfulWaitContext,
     StackfulWaitRegistration, StackfulWaiterHandle, UnsupportedCapability, WaitRegistration,
     Waitable, WriteOutput,
 };
-use rustix::net::Shutdown;
+use rustix::io_uring::{IoringOp, io_uring_user_data};
+use rustix::net::{Shutdown, addr::SocketAddrArg};
+use rustix::path;
+use rustix_uring::types::{CancelBuilder, FutexWaitV};
 
 pub mod runtime_api;
 
@@ -164,6 +173,10 @@ pub struct RuntimeConfig {
     pub stack_size: usize,
     /// Maximum completed coroutine stacks retained per worker-local scheduler.
     pub max_cached_stacks_per_worker: usize,
+    /// Number of fixed-file slots to register with each embedded io_uring runtime.
+    pub registered_file_slots: u32,
+    /// Number of fixed-buffer slots to register with each embedded io_uring runtime.
+    pub registered_buffer_slots: u16,
     /// Number of worker threads requested for the runtime.
     pub workers: NonZeroUsize,
     /// Policy controlling how queued work may be stolen.
@@ -182,6 +195,8 @@ impl Default for RuntimeConfig {
         Self {
             stack_size: 64 * 1024,
             max_cached_stacks_per_worker: 1024,
+            registered_file_slots: 0,
+            registered_buffer_slots: 0,
             workers: NonZeroUsize::new(1).expect("one is nonzero"),
             steal_policy: StealPolicy::Disabled,
             max_worker_queue_len: DEFAULT_QUEUE_CAPACITY,
@@ -424,6 +439,8 @@ impl Runtime {
         let mut config = kimojio_stack::RuntimeConfig::default();
         config.stack_size = self.config.stack_size;
         config.max_cached_stacks = self.config.max_cached_stacks_per_worker;
+        config.registered_file_slots = self.config.registered_file_slots;
+        config.registered_buffer_slots = self.config.registered_buffer_slots;
         kimojio_stack::Runtime::with_config(config)
     }
 }
@@ -585,6 +602,636 @@ impl RuntimeContext<'_> {
         self.create_ring(RingMode::Shared)
             .expect("shared ring creation failed")
     }
+
+    /// Submits an io_uring no-op and waits for completion.
+    pub fn nop(&self) -> Result<(), Errno> {
+        self.inner.nop()
+    }
+
+    /// Starts an internal no-payload no-op.
+    #[doc(hidden)]
+    pub fn submit_no_payload_nop(&self) -> NoPayloadIo {
+        self.inner.submit_no_payload_nop()
+    }
+
+    /// Starts an internal no-payload timeout.
+    #[doc(hidden)]
+    pub fn submit_no_payload_timeout(&self, duration: Duration) -> NoPayloadIo {
+        self.inner.submit_no_payload_timeout(duration)
+    }
+
+    /// Starts an internal raw read.
+    ///
+    /// # Safety
+    ///
+    /// `buffer` must be valid for writes of `len` bytes until the operation
+    /// completes or is detached with equivalent ownership.
+    #[doc(hidden)]
+    pub unsafe fn submit_raw_read(&self, fd: &impl AsFd, buffer: *mut u8, len: usize) -> RawIo {
+        unsafe { self.inner.submit_raw_read(fd, buffer, len) }
+    }
+
+    /// Starts an internal raw write.
+    ///
+    /// # Safety
+    ///
+    /// `buffer` must be valid for reads of `len` bytes until the operation
+    /// completes or is detached with equivalent ownership.
+    #[doc(hidden)]
+    pub unsafe fn submit_raw_write(&self, fd: &impl AsFd, buffer: *const u8, len: usize) -> RawIo {
+        unsafe { self.inner.submit_raw_write(fd, buffer, len) }
+    }
+
+    /// Starts an internal raw socket shutdown.
+    #[doc(hidden)]
+    pub fn submit_raw_shutdown(&self, fd: &impl AsFd, how: Shutdown) -> RawIo {
+        self.inner.submit_raw_shutdown(fd, how)
+    }
+
+    /// Starts an internal raw close.
+    #[doc(hidden)]
+    pub fn submit_raw_close(&self, fd: OwnedFd) -> RawIo {
+        self.inner.submit_raw_close(fd)
+    }
+
+    /// Waits until `duration` has elapsed.
+    pub fn sleep(&self, duration: Duration) -> Result<(), Errno> {
+        self.inner.sleep(duration)
+    }
+
+    /// Registers `fd` in the embedded runtime's fixed-file table.
+    pub fn register_fd(&self, fd: OwnedFd) -> Result<RegisteredFd, Errno> {
+        self.inner.register_fd(fd)
+    }
+
+    /// Registers an owned buffer in the embedded runtime's fixed-buffer table.
+    pub fn register_buffer<B>(&self, buffer: B) -> Result<RegisteredBuffer<B>, Errno>
+    where
+        B: IoReadBuffer + IoWriteBuffer + 'static,
+    {
+        self.inner.register_buffer(buffer)
+    }
+
+    /// Returns whether the current kernel reports support for an io_uring opcode.
+    pub fn supports_io_uring_opcode(&self, opcode: IoringOp) -> bool {
+        self.inner.supports_io_uring_opcode(opcode)
+    }
+
+    /// Opens `path` relative to the process current working directory.
+    pub fn open<P: path::Arg>(&self, path: P, flags: OFlags, mode: Mode) -> Result<OwnedFd, Errno> {
+        self.inner.open(path, flags, mode)
+    }
+
+    /// Opens `path` relative to `dirfd`.
+    pub fn openat<P: path::Arg>(
+        &self,
+        dirfd: &impl AsFd,
+        path: P,
+        flags: OFlags,
+        mode: Mode,
+    ) -> Result<OwnedFd, Errno> {
+        self.inner.openat(dirfd, path, flags, mode)
+    }
+
+    /// Opens `path` relative to the process current working directory using openat2.
+    pub fn open2<P: path::Arg>(
+        &self,
+        path: P,
+        flags: OFlags,
+        mode: Mode,
+        resolve: ResolveFlags,
+    ) -> Result<OwnedFd, Errno> {
+        self.inner.open2(path, flags, mode, resolve)
+    }
+
+    /// Opens `path` relative to `dirfd` using openat2.
+    pub fn openat2<P: path::Arg>(
+        &self,
+        dirfd: &impl AsFd,
+        path: P,
+        flags: OFlags,
+        mode: Mode,
+        resolve: ResolveFlags,
+    ) -> Result<OwnedFd, Errno> {
+        self.inner.openat2(dirfd, path, flags, mode, resolve)
+    }
+
+    /// Gets extended file status for `path` in the process current working directory.
+    pub fn statx<P: path::Arg>(
+        &self,
+        path: P,
+        flags: AtFlags,
+        mask: StatxFlags,
+    ) -> Result<Statx, Errno> {
+        self.inner.statx(path, flags, mask)
+    }
+
+    /// Gets extended file status relative to `dirfd`.
+    pub fn statxat<P: path::Arg>(
+        &self,
+        dirfd: &impl AsFd,
+        path: P,
+        flags: AtFlags,
+        mask: StatxFlags,
+    ) -> Result<Statx, Errno> {
+        self.inner.statxat(dirfd, path, flags, mask)
+    }
+
+    /// Creates a hard link using paths relative to the process current working directory.
+    pub fn link<P: path::Arg, Q: path::Arg>(
+        &self,
+        oldpath: P,
+        newpath: Q,
+        flags: AtFlags,
+    ) -> Result<(), Errno> {
+        self.inner.link(oldpath, newpath, flags)
+    }
+
+    /// Creates a hard link using paths relative to directory fds.
+    pub fn linkat<P: path::Arg, Q: path::Arg>(
+        &self,
+        olddirfd: &impl AsFd,
+        oldpath: P,
+        newdirfd: &impl AsFd,
+        newpath: Q,
+        flags: AtFlags,
+    ) -> Result<(), Errno> {
+        self.inner
+            .linkat(olddirfd, oldpath, newdirfd, newpath, flags)
+    }
+
+    /// Creates a symbolic link in the process current working directory.
+    pub fn symlink<P: path::Arg, Q: path::Arg>(&self, target: P, linkpath: Q) -> Result<(), Errno> {
+        self.inner.symlink(target, linkpath)
+    }
+
+    /// Creates a symbolic link relative to `newdirfd`.
+    pub fn symlinkat<P: path::Arg, Q: path::Arg>(
+        &self,
+        target: P,
+        newdirfd: &impl AsFd,
+        linkpath: Q,
+    ) -> Result<(), Errno> {
+        self.inner.symlinkat(target, newdirfd, linkpath)
+    }
+
+    /// Creates a directory relative to the process current working directory.
+    pub fn mkdir<P: path::Arg>(&self, path: P, mode: Mode) -> Result<(), Errno> {
+        self.inner.mkdir(path, mode)
+    }
+
+    /// Creates a directory relative to `dirfd`.
+    pub fn mkdirat<P: path::Arg>(
+        &self,
+        dirfd: &impl AsFd,
+        path: P,
+        mode: Mode,
+    ) -> Result<(), Errno> {
+        self.inner.mkdirat(dirfd, path, mode)
+    }
+
+    /// Removes a directory.
+    pub fn rmdir<P: path::Arg>(&self, path: P) -> Result<(), Errno> {
+        self.inner.rmdir(path)
+    }
+
+    /// Removes a filesystem entry.
+    pub fn unlink<P: path::Arg>(&self, path: P) -> Result<(), Errno> {
+        self.inner.unlink(path)
+    }
+
+    /// Removes a filesystem entry relative to `dirfd`.
+    pub fn unlinkat<P: path::Arg>(
+        &self,
+        dirfd: &impl AsFd,
+        path: P,
+        flags: AtFlags,
+    ) -> Result<(), Errno> {
+        self.inner.unlinkat(dirfd, path, flags)
+    }
+
+    /// Renames a filesystem entry in the process current working directory.
+    pub fn rename<P: path::Arg, Q: path::Arg>(
+        &self,
+        oldpath: P,
+        newpath: Q,
+        flags: RenameFlags,
+    ) -> Result<(), Errno> {
+        self.inner.rename(oldpath, newpath, flags)
+    }
+
+    /// Renames a filesystem entry relative to directory fds.
+    pub fn renameat<P: path::Arg, Q: path::Arg>(
+        &self,
+        olddirfd: &impl AsFd,
+        oldpath: P,
+        newdirfd: &impl AsFd,
+        newpath: Q,
+        flags: RenameFlags,
+    ) -> Result<(), Errno> {
+        self.inner
+            .renameat(olddirfd, oldpath, newdirfd, newpath, flags)
+    }
+
+    /// Declares an expected file access pattern.
+    pub fn fadvise(
+        &self,
+        fd: &impl AsFd,
+        offset: u64,
+        len: u32,
+        advice: FileAdvice,
+    ) -> Result<(), Errno> {
+        self.inner.fadvise(fd, offset, len, advice)
+    }
+
+    /// Gives advice about a memory range.
+    ///
+    /// # Safety
+    ///
+    /// `addr..addr + len` must satisfy the safety requirements of `madvise(2)`.
+    pub unsafe fn madvise(
+        &self,
+        addr: *mut std::ffi::c_void,
+        len: usize,
+        advice: MemoryAdvice,
+    ) -> Result<(), Errno> {
+        unsafe { self.inner.madvise(addr, len, advice) }
+    }
+
+    /// Preallocates or deallocates file space.
+    pub fn fallocate(
+        &self,
+        fd: &impl AsFd,
+        mode: FallocateFlags,
+        offset: u64,
+        len: u64,
+    ) -> Result<(), Errno> {
+        self.inner.fallocate(fd, mode, offset, len)
+    }
+
+    /// Sets the length of a file.
+    pub fn ftruncate(&self, fd: &impl AsFd, len: u64) -> Result<(), Errno> {
+        self.inner.ftruncate(fd, len)
+    }
+
+    /// Synchronizes file data and metadata.
+    pub fn fsync(&self, fd: &impl AsFd) -> Result<(), Errno> {
+        self.inner.fsync(fd)
+    }
+
+    /// Synchronizes a file range.
+    pub fn sync_file_range(
+        &self,
+        fd: &impl AsFd,
+        offset: u64,
+        len: u32,
+        flags: u32,
+    ) -> Result<(), Errno> {
+        self.inner.sync_file_range(fd, offset, len, flags)
+    }
+
+    /// Splices data between file descriptors.
+    pub fn splice(
+        &self,
+        fd_in: &impl AsFd,
+        off_in: i64,
+        fd_out: &impl AsFd,
+        off_out: i64,
+        len: u32,
+        flags: UringSpliceFlags,
+    ) -> Result<usize, Errno> {
+        self.inner
+            .splice(fd_in, off_in, fd_out, off_out, len, flags)
+    }
+
+    /// Duplicates pipe data between file descriptors.
+    pub fn tee(
+        &self,
+        fd_in: &impl AsFd,
+        fd_out: &impl AsFd,
+        len: u32,
+        flags: UringSpliceFlags,
+    ) -> Result<usize, Errno> {
+        self.inner.tee(fd_in, fd_out, len, flags)
+    }
+
+    /// Waits for one poll event set on `fd`.
+    pub fn poll(&self, fd: &impl AsFd, flags: u32) -> Result<u32, Errno> {
+        self.inner.poll(fd, flags)
+    }
+
+    /// Removes a previously submitted poll request by user data.
+    pub fn poll_remove(&self, user_data: io_uring_user_data) -> Result<(), Errno> {
+        self.inner.poll_remove(user_data)
+    }
+
+    /// Modifies an epoll instance.
+    pub fn epoll_ctl(
+        &self,
+        epfd: &impl AsFd,
+        fd: &impl AsFd,
+        op: EpollCtlOp,
+        event: &EpollEvent,
+    ) -> Result<(), Errno> {
+        self.inner.epoll_ctl(epfd, fd, op, event)
+    }
+
+    /// Creates a socket.
+    pub fn socket(
+        &self,
+        domain: AddressFamily,
+        socket_type: SocketType,
+        protocol: Option<Protocol>,
+    ) -> Result<OwnedFd, Errno> {
+        self.inner.socket(domain, socket_type, protocol)
+    }
+
+    /// Binds a socket to `address`.
+    pub fn bind(&self, fd: &impl AsFd, address: &impl SocketAddrArg) -> Result<(), Errno> {
+        self.inner.bind(fd, address)
+    }
+
+    /// Marks a socket as accepting incoming connections.
+    pub fn listen(&self, fd: &impl AsFd, backlog: i32) -> Result<(), Errno> {
+        self.inner.listen(fd, backlog)
+    }
+
+    /// Accepts one connection from a listening socket.
+    pub fn accept(&self, fd: &impl AsFd) -> Result<OwnedFd, Errno> {
+        self.inner.accept(fd)
+    }
+
+    /// Connects a socket to `address`.
+    pub fn connect(&self, fd: &impl AsFd, address: &impl SocketAddrArg) -> Result<(), Errno> {
+        self.inner.connect(fd, address)
+    }
+
+    /// Reads from `fd` into `buf`.
+    pub fn read(&self, fd: &impl AsFd, buf: &mut [u8]) -> Result<usize, Errno> {
+        self.inner.read(fd, buf)
+    }
+
+    /// Vectored read from `fd` into `iovecs`.
+    pub fn readv(&self, fd: &impl AsFd, iovecs: &mut [IoVec]) -> Result<usize, Errno> {
+        self.inner.readv(fd, iovecs)
+    }
+
+    /// Reads from a registered fixed fd into `buf`.
+    pub fn read_registered_fd(&self, fd: &RegisteredFd, buf: &mut [u8]) -> Result<usize, Errno> {
+        self.inner.read_registered_fd(fd, buf)
+    }
+
+    /// Reads from `fd` into a registered fixed buffer.
+    pub fn read_registered_buffer<B>(
+        &self,
+        fd: &impl AsFd,
+        buffer: &mut RegisteredBuffer<B>,
+    ) -> Result<usize, Errno> {
+        self.inner.read_registered_buffer(fd, buffer)
+    }
+
+    /// Reads from a registered fixed fd into a registered fixed buffer.
+    pub fn read_registered_fixed<B>(
+        &self,
+        fd: &RegisteredFd,
+        buffer: &mut RegisteredBuffer<B>,
+    ) -> Result<usize, Errno> {
+        self.inner.read_registered_fixed(fd, buffer)
+    }
+
+    /// Starts a read into an owned buffer.
+    pub fn read_async<B>(&self, fd: &IoFd, buffer: B) -> IoResult<ReadOutput<B>, B>
+    where
+        B: IoReadBuffer + 'static,
+    {
+        IoResult::new(self.inner.read_async(fd, buffer))
+    }
+
+    /// Starts a read from a registered fixed fd into an owned buffer.
+    pub fn read_registered_fd_async<B>(
+        &self,
+        fd: &RegisteredFd,
+        buffer: B,
+    ) -> IoResult<ReadOutput<B>, B>
+    where
+        B: IoReadBuffer + 'static,
+    {
+        IoResult::new(self.inner.read_registered_fd_async(fd, buffer))
+    }
+
+    /// Starts a read from `fd` into a registered fixed buffer.
+    pub fn read_registered_buffer_async<B: 'static>(
+        &self,
+        fd: &IoFd,
+        buffer: RegisteredBuffer<B>,
+    ) -> IoResult<ReadOutput<RegisteredBuffer<B>>, RegisteredBuffer<B>> {
+        IoResult::new(self.inner.read_registered_buffer_async(fd, buffer))
+    }
+
+    /// Starts a read from a registered fixed fd into a registered fixed buffer.
+    pub fn read_registered_fixed_async<B: 'static>(
+        &self,
+        fd: &RegisteredFd,
+        buffer: RegisteredBuffer<B>,
+    ) -> IoResult<ReadOutput<RegisteredBuffer<B>>, RegisteredBuffer<B>> {
+        IoResult::new(self.inner.read_registered_fixed_async(fd, buffer))
+    }
+
+    /// Writes `buf` to `fd`.
+    pub fn write(&self, fd: &impl AsFd, buf: &[u8]) -> Result<usize, Errno> {
+        self.inner.write(fd, buf)
+    }
+
+    /// Vectored write from `iovecs` to `fd`.
+    pub fn writev(&self, fd: &impl AsFd, iovecs: &[IoVec]) -> Result<usize, Errno> {
+        self.inner.writev(fd, iovecs)
+    }
+
+    /// Writes `buf` to a registered fixed fd.
+    pub fn write_registered_fd(&self, fd: &RegisteredFd, buf: &[u8]) -> Result<usize, Errno> {
+        self.inner.write_registered_fd(fd, buf)
+    }
+
+    /// Writes from a registered fixed buffer to `fd`.
+    pub fn write_registered_buffer<B>(
+        &self,
+        fd: &impl AsFd,
+        buffer: &RegisteredBuffer<B>,
+    ) -> Result<usize, Errno> {
+        self.inner.write_registered_buffer(fd, buffer)
+    }
+
+    /// Writes from a registered fixed buffer to a registered fixed fd.
+    pub fn write_registered_fixed<B>(
+        &self,
+        fd: &RegisteredFd,
+        buffer: &RegisteredBuffer<B>,
+    ) -> Result<usize, Errno> {
+        self.inner.write_registered_fixed(fd, buffer)
+    }
+
+    /// Sends bytes on a connected socket.
+    pub fn send(&self, fd: &impl AsFd, buf: &[u8]) -> Result<usize, Errno> {
+        self.inner.send(fd, buf)
+    }
+
+    /// Sends a message on a socket.
+    pub fn sendmsg(&self, fd: &impl AsFd, msg: &MsgHdr, flags: SendFlags) -> Result<usize, Errno> {
+        self.inner.sendmsg(fd, msg, flags)
+    }
+
+    /// Receives bytes from a connected socket.
+    pub fn recv(&self, fd: &impl AsFd, buf: &mut [u8]) -> Result<usize, Errno> {
+        self.inner.recv(fd, buf)
+    }
+
+    /// Receives a message from a socket.
+    pub fn recvmsg(
+        &self,
+        fd: &impl AsFd,
+        msg: &mut MsgHdr,
+        flags: RecvFlags,
+    ) -> Result<usize, Errno> {
+        self.inner.recvmsg(fd, msg, flags)
+    }
+
+    /// Starts a write from an owned buffer.
+    pub fn write_async<B>(&self, fd: &IoFd, buffer: B) -> IoResult<WriteOutput<B>, B>
+    where
+        B: IoWriteBuffer + 'static,
+    {
+        IoResult::new(self.inner.write_async(fd, buffer))
+    }
+
+    /// Starts a write from an owned buffer to a registered fixed fd.
+    pub fn write_registered_fd_async<B>(
+        &self,
+        fd: &RegisteredFd,
+        buffer: B,
+    ) -> IoResult<WriteOutput<B>, B>
+    where
+        B: IoWriteBuffer + 'static,
+    {
+        IoResult::new(self.inner.write_registered_fd_async(fd, buffer))
+    }
+
+    /// Starts a write from a registered fixed buffer to `fd`.
+    pub fn write_registered_buffer_async<B: 'static>(
+        &self,
+        fd: &IoFd,
+        buffer: RegisteredBuffer<B>,
+    ) -> IoResult<WriteOutput<RegisteredBuffer<B>>, RegisteredBuffer<B>> {
+        IoResult::new(self.inner.write_registered_buffer_async(fd, buffer))
+    }
+
+    /// Starts a write from a registered fixed buffer to a registered fixed fd.
+    pub fn write_registered_fixed_async<B: 'static>(
+        &self,
+        fd: &RegisteredFd,
+        buffer: RegisteredBuffer<B>,
+    ) -> IoResult<WriteOutput<RegisteredBuffer<B>>, RegisteredBuffer<B>> {
+        IoResult::new(self.inner.write_registered_fixed_async(fd, buffer))
+    }
+
+    /// Closes `fd`.
+    pub fn close(&self, fd: OwnedFd) -> Result<(), Errno> {
+        self.inner.close(fd)
+    }
+
+    /// Shuts down part or all of a connected socket.
+    pub fn shutdown(&self, fd: &impl AsFd, how: Shutdown) -> Result<(), Errno> {
+        self.inner.shutdown(fd, how)
+    }
+
+    /// Starts an io_uring timeout and returns a waitable handle.
+    pub fn timeout(&self, duration: Duration) -> Timeout {
+        Timeout::new(self.inner.timeout(duration))
+    }
+
+    /// Returns a snapshot of runtime I/O lifecycle counters.
+    pub fn io_counters(&self) -> IoCounters {
+        self.inner.io_counters()
+    }
+
+    /// Attempts to cancel a pending [`IoResult`] without consuming its handle.
+    pub fn cancel_io<T, B>(&self, io: &IoResult<T, B>) -> Result<(), Errno> {
+        if let Some(inner) = io.as_inner() {
+            self.inner.cancel_io(inner)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Attempts to cancel a pending internal [`RawIo`] without consuming its handle.
+    #[doc(hidden)]
+    pub fn cancel_raw_io(&self, io: &RawIo) -> Result<(), Errno> {
+        self.inner.cancel_raw_io(io)
+    }
+
+    /// Attempts to cancel requests matched by `builder`.
+    pub fn cancel_matching(&self, builder: CancelBuilder) -> Result<(), Errno> {
+        self.inner.cancel_matching(builder)
+    }
+
+    /// Waits on one futex.
+    pub fn futex_wait(
+        &self,
+        futex: &AtomicU32,
+        val: u64,
+        mask: u64,
+        futex_flags: FutexWaitFlags,
+    ) -> Result<(), Errno> {
+        self.inner.futex_wait(futex, val, mask, futex_flags)
+    }
+
+    /// Wakes waiters on one futex.
+    pub fn futex_wake(
+        &self,
+        futex: &AtomicU32,
+        count: u64,
+        mask: u64,
+        futex_flags: FutexWaitFlags,
+    ) -> Result<usize, Errno> {
+        self.inner.futex_wake(futex, count, mask, futex_flags)
+    }
+
+    /// Waits on any futex in `futexes`.
+    pub fn futex_waitv(&self, futexes: &[FutexWaitV]) -> Result<usize, Errno> {
+        self.inner.futex_waitv(futexes)
+    }
+
+    /// Issues a device-specific 80-byte io_uring command.
+    ///
+    /// # Safety
+    ///
+    /// The caller must satisfy the target device driver's command requirements.
+    pub unsafe fn uring_cmd80(
+        &self,
+        fd: &impl AsFd,
+        cmd_op: u32,
+        cmd: [u8; 80],
+        buf_index: Option<u16>,
+    ) -> Result<u32, Errno> {
+        unsafe { self.inner.uring_cmd80(fd, cmd_op, cmd, buf_index) }
+    }
+
+    /// Issues a device-specific 80-byte io_uring command to a registered fd.
+    ///
+    /// # Safety
+    ///
+    /// The caller must satisfy the target device driver's command requirements.
+    pub unsafe fn uring_cmd80_registered_fd(
+        &self,
+        fd: &RegisteredFd,
+        cmd_op: u32,
+        cmd: [u8; 80],
+        buf_index: Option<u16>,
+    ) -> Result<u32, Errno> {
+        unsafe {
+            self.inner
+                .uring_cmd80_registered_fd(fd, cmd_op, cmd, buf_index)
+        }
+    }
 }
 
 /// Explicit ring ownership/sharing mode.
@@ -705,6 +1352,183 @@ impl AsFd for RingFd {
 impl fmt::Debug for RingFd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RingFd").finish_non_exhaustive()
+    }
+}
+
+/// A pending direct io_uring operation submitted through [`RuntimeContext`].
+///
+/// This is a thin stack-steal wrapper around the embedded stack runtime's
+/// [`kimojio_stack::IoResult`]. It preserves the same buffer ownership,
+/// readiness, and cancellation behavior while accepting stack-steal
+/// [`RuntimeContext`] values in [`IoResult::get`].
+#[must_use = "pending IO should be completed with get, try_get, cancel, or detach"]
+pub struct IoResult<T, B = Vec<u8>> {
+    inner: Option<kimojio_stack::IoResult<T, B>>,
+}
+
+impl<T, B> IoResult<T, B> {
+    fn new(inner: kimojio_stack::IoResult<T, B>) -> Self {
+        Self { inner: Some(inner) }
+    }
+
+    /// Returns the completed result if the operation is ready.
+    pub fn try_get(&mut self) -> Option<Result<T, Errno>> {
+        let result = self.inner.as_mut()?.try_get()?;
+        self.inner = None;
+        Some(result)
+    }
+
+    /// Waits for the operation to complete.
+    pub fn get(mut self, cx: &RuntimeContext<'_>) -> Result<T, Errno> {
+        self.inner
+            .take()
+            .expect("IoResult value already taken")
+            .get(cx.inner)
+    }
+
+    /// Requests cancellation of this operation and detaches this result handle.
+    pub fn cancel(&mut self) {
+        if let Some(mut inner) = self.inner.take() {
+            inner.cancel();
+        }
+    }
+
+    /// Detaches this operation without requesting cancellation.
+    pub fn detach(mut self) {
+        if let Some(inner) = self.inner.take() {
+            inner.detach();
+        }
+    }
+
+    fn as_inner(&self) -> Option<&kimojio_stack::IoResult<T, B>> {
+        self.inner.as_ref()
+    }
+}
+
+impl<T, B> Waitable for IoResult<T, B> {
+    fn is_ready(&self) -> bool {
+        self.inner
+            .as_ref()
+            .is_none_or(kimojio_stack::Waitable::is_ready)
+    }
+
+    fn add_waiter(&self, cx: &kimojio_stack::RuntimeContext<'_>, registration: &WaitRegistration) {
+        if let Some(inner) = &self.inner {
+            inner.add_waiter(cx, registration);
+        }
+    }
+}
+
+impl<T, B> RuntimeWaitable for IoResult<T, B> {
+    fn is_ready(&self) -> bool {
+        Waitable::is_ready(self)
+    }
+
+    fn add_stackful_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
+        self.inner
+            .as_ref()
+            .is_some_and(|inner| inner.add_stackful_waiter(waiter))
+    }
+}
+
+impl<T, B> fmt::Debug for IoResult<T, B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IoResult")
+            .field("ready", &Waitable::is_ready(self))
+            .finish()
+    }
+}
+
+/// A waitable direct io_uring timeout submitted through [`RuntimeContext`].
+#[must_use = "timeouts should be waited on, canceled, detached, or allowed to complete"]
+pub struct Timeout {
+    inner: Option<kimojio_stack::Timeout>,
+}
+
+impl Timeout {
+    fn new(inner: kimojio_stack::Timeout) -> Self {
+        Self { inner: Some(inner) }
+    }
+
+    /// Returns the completed timeout result if it is already ready.
+    pub fn try_wait(&mut self) -> Option<Result<(), Errno>> {
+        let result = self.inner.as_mut()?.try_wait()?;
+        self.inner = None;
+        Some(result)
+    }
+
+    /// Waits until the timeout completes.
+    pub fn wait(mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+        self.inner
+            .take()
+            .expect("Timeout value already taken")
+            .wait(cx.inner)
+    }
+
+    /// Updates the timeout duration.
+    pub fn update(&self, cx: &RuntimeContext<'_>, duration: Duration) -> Result<(), Errno> {
+        if let Some(inner) = &self.inner {
+            inner.update(cx.inner, duration)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Requests cancellation of this timeout without waiting for completion.
+    pub fn cancel(&mut self) {
+        if let Some(mut inner) = self.inner.take() {
+            inner.cancel();
+        }
+    }
+
+    /// Detaches this timeout without requesting cancellation.
+    pub fn detach(mut self) {
+        if let Some(inner) = self.inner.take() {
+            inner.detach();
+        }
+    }
+
+    /// Requests cancellation and waits for the cancellation CQE.
+    pub fn cancel_and_wait(mut self, cx: &RuntimeContext<'_>) -> Result<(), Errno> {
+        if let Some(inner) = self.inner.take() {
+            inner.cancel_and_wait(cx.inner)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Waitable for Timeout {
+    fn is_ready(&self) -> bool {
+        self.inner
+            .as_ref()
+            .is_none_or(kimojio_stack::Waitable::is_ready)
+    }
+
+    fn add_waiter(&self, cx: &kimojio_stack::RuntimeContext<'_>, registration: &WaitRegistration) {
+        if let Some(inner) = &self.inner {
+            inner.add_waiter(cx, registration);
+        }
+    }
+}
+
+impl RuntimeWaitable for Timeout {
+    fn is_ready(&self) -> bool {
+        Waitable::is_ready(self)
+    }
+
+    fn add_stackful_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
+        self.inner
+            .as_ref()
+            .is_some_and(|inner| inner.add_stackful_waiter(waiter))
+    }
+}
+
+impl fmt::Debug for Timeout {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Timeout")
+            .field("ready", &Waitable::is_ready(self))
+            .finish()
     }
 }
 
@@ -3734,6 +4558,8 @@ impl MultiRuntime {
         let mut inner_config = kimojio_stack::RuntimeConfig::default();
         inner_config.stack_size = self.config.stack_size;
         inner_config.max_cached_stacks = self.config.max_cached_stacks_per_worker;
+        inner_config.registered_file_slots = self.config.registered_file_slots;
+        inner_config.registered_buffer_slots = self.config.registered_buffer_slots;
         let mut inner = kimojio_stack::Runtime::with_config(inner_config);
         inner.block_on(|root| {
             let _scheduler_wake =
@@ -4422,9 +5248,11 @@ pub mod bench_support {
 mod tests {
     use std::cell::Cell;
     use std::collections::HashSet;
+    use std::ffi::c_void;
     use std::num::NonZeroUsize;
     use std::os::fd::AsRawFd;
     use std::panic;
+    use std::path::PathBuf;
     use std::rc::Rc;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -4443,10 +5271,11 @@ mod tests {
     use rustix::pipe::pipe;
 
     use super::{
-        CrossbeamWorker, ExecutionPlace, MultiRuntime, NO_WORKER, Ring, RingError, RingFd,
-        RingInner, RingMode, Runtime, RuntimeConfig, RuntimeId, SharedOpLifecycle, SharedOpRoute,
-        SharedOpState, SharedOpTestResource, SharedOperation, SharedOperationKind, SharedRingCore,
-        SharedRingWake, StealPolicy, WorkerId,
+        AtFlags, CrossbeamWorker, ExecutionPlace, IoFd, IoVec, Mode, MultiRuntime, NO_WORKER,
+        OFlags, RenameFlags, Ring, RingError, RingFd, RingInner, RingMode, Runtime, RuntimeConfig,
+        RuntimeId, SharedOpLifecycle, SharedOpRoute, SharedOpState, SharedOpTestResource,
+        SharedOperation, SharedOperationKind, SharedRingCore, SharedRingWake, StatxFlags,
+        StealPolicy, WorkerId,
     };
 
     struct WaitProbe<'cx, 'a> {
@@ -4464,6 +5293,18 @@ mod tests {
             cx.yield_now();
             thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        static NEXT_TEMP: AtomicUsize = AtomicUsize::new(0);
+
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "kimojio-stack-steal-{prefix}-{}-{}",
+            std::process::id(),
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+        ));
+        path
     }
 
     struct DropCountingReadBuffer {
@@ -4570,6 +5411,158 @@ mod tests {
             self.parked.store(true, Ordering::Release);
             self.cx.park_stackful();
         }
+    }
+
+    #[test]
+    fn direct_context_filesystem_and_vectored_io_parity() {
+        let root = unique_temp_dir("direct-fs");
+        let file = root.join("file");
+        let renamed = root.join("renamed");
+        let _ = std::fs::remove_dir_all(&root);
+
+        let mut runtime = Runtime::new();
+        runtime.block_on(|cx| {
+            cx.mkdir(&root, Mode::RWXU).unwrap();
+            let fd = cx
+                .open(
+                    &file,
+                    OFlags::CREATE | OFlags::RDWR | OFlags::TRUNC,
+                    Mode::RUSR | Mode::WUSR,
+                )
+                .unwrap();
+            assert_eq!(cx.write(&fd, b"hello").unwrap(), 5);
+            cx.ftruncate(&fd, 3).unwrap();
+            cx.fsync(&fd).unwrap();
+            let stat = cx
+                .statx(&file, AtFlags::empty(), StatxFlags::BASIC_STATS)
+                .unwrap();
+            assert_eq!(stat.stx_size, 3);
+            cx.close(fd).unwrap();
+            cx.rename(&file, &renamed, RenameFlags::empty()).unwrap();
+            cx.unlink(&renamed).unwrap();
+
+            let (read_fd, write_fd) = pipe().unwrap();
+            let left = b"vec";
+            let right = b"tor";
+            let write_iov = [
+                IoVec {
+                    iov_base: left.as_ptr().cast::<c_void>().cast_mut(),
+                    iov_len: left.len(),
+                },
+                IoVec {
+                    iov_base: right.as_ptr().cast::<c_void>().cast_mut(),
+                    iov_len: right.len(),
+                },
+            ];
+            assert_eq!(cx.writev(&write_fd, &write_iov).unwrap(), 6);
+
+            let mut first = [0_u8; 3];
+            let mut second = [0_u8; 3];
+            let mut read_iov = [
+                IoVec {
+                    iov_base: first.as_mut_ptr().cast::<c_void>(),
+                    iov_len: first.len(),
+                },
+                IoVec {
+                    iov_base: second.as_mut_ptr().cast::<c_void>(),
+                    iov_len: second.len(),
+                },
+            ];
+            assert_eq!(cx.readv(&read_fd, &mut read_iov).unwrap(), 6);
+            assert_eq!([first.as_slice(), second.as_slice()].concat(), b"vector");
+            cx.close(read_fd).unwrap();
+            cx.close(write_fd).unwrap();
+
+            cx.rmdir(&root).unwrap();
+        });
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn direct_context_async_registered_and_socket_io_parity() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            registered_file_slots: 1,
+            registered_buffer_slots: 1,
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            let (read_fd, write_fd) = pipe().unwrap();
+            let read_io = IoFd::from_owned(read_fd);
+            let write_io = IoFd::from_owned(write_fd);
+            let read = cx.read_async(&read_io, vec![0_u8; 4]);
+            let write = cx.write_async(&write_io, b"ping".to_vec());
+
+            let written = write.get(cx).unwrap();
+            assert_eq!(written.bytes, 4);
+            let read = read.get(cx).unwrap();
+            assert_eq!(read.bytes, 4);
+            assert_eq!(&read.buffer[..read.bytes], b"ping");
+            cx.close(read_io.into_owned().unwrap()).unwrap();
+            cx.close(write_io.into_owned().unwrap()).unwrap();
+
+            let (read_fd, write_fd) = pipe().unwrap();
+            let registered_fd = cx.register_fd(write_fd).unwrap();
+            let mut registered_buffer = cx.register_buffer(vec![0_u8; 5]).unwrap();
+            assert_eq!(cx.write_registered_fd(&registered_fd, b"hello").unwrap(), 5);
+            assert_eq!(
+                cx.read_registered_buffer(&read_fd, &mut registered_buffer)
+                    .unwrap(),
+                5
+            );
+            assert_eq!(&registered_buffer.buffer()[..5], b"hello");
+            cx.close(read_fd).unwrap();
+
+            let (left, right) = socketpair(
+                AddressFamily::UNIX,
+                SocketType::STREAM,
+                SocketFlags::CLOEXEC,
+                None,
+            )
+            .unwrap();
+            assert_eq!(cx.send(&left, b"ok").unwrap(), 2);
+            let mut buf = [0_u8; 2];
+            assert_eq!(cx.recv(&right, &mut buf).unwrap(), 2);
+            assert_eq!(&buf, b"ok");
+            cx.shutdown(&left, Shutdown::Write).unwrap();
+            cx.close(left).unwrap();
+            cx.close(right).unwrap();
+        });
+    }
+
+    #[test]
+    fn multi_worker_direct_registered_slots_are_forwarded_to_workers() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            registered_file_slots: 1,
+            registered_buffer_slots: 1,
+            ..RuntimeConfig::default()
+        });
+
+        let worker = runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let handle = scope.spawn_stealable(|cx| {
+                    let (read_fd, write_fd) = pipe().unwrap();
+                    let registered_fd = cx.register_fd(write_fd).unwrap();
+                    let mut registered_buffer = cx.register_buffer(vec![0_u8; 4]).unwrap();
+
+                    assert_eq!(cx.write_registered_fd(&registered_fd, b"pong").unwrap(), 4);
+                    assert_eq!(
+                        cx.read_registered_buffer(&read_fd, &mut registered_buffer)
+                            .unwrap(),
+                        4
+                    );
+                    assert_eq!(&registered_buffer.buffer()[..4], b"pong");
+                    cx.close(read_fd).unwrap();
+                    cx.worker_id()
+                });
+                handle.join(cx)
+            })
+        });
+
+        assert!(worker.index() < 2);
     }
 
     #[test]

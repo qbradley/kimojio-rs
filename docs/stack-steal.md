@@ -40,19 +40,28 @@ let value = runtime.block_on(|cx| {
 assert_eq!(value, 42);
 ```
 
-The runtime exposes I/O through explicit ring handles instead of implicit context
-methods. Worker-local rings enforce owner-worker and runtime-instance use and
-cannot be created from the root `block_on` context of a multi-worker runtime.
-Shared rings are cloneable and synchronized for cross-worker use, but remain
-runtime-affine. The root `block_on` context is not a worker; use
-`RuntimeContext::current_worker()` or `RuntimeContext::execution_place()` when
-code needs to distinguish root from worker-pool execution. Shared rings route
-no-op and timeout/sleep operations through runtime-owned io_uring schedulers
+The runtime context exposes the same direct io_uring operation surface as
+`kimojio-stack`, including filesystem, socket setup, send/recv, vectored I/O,
+poll/epoll, splice/tee, futex, cancellation, async read/write, and registered
+fixed-file/fixed-buffer operations. Direct operations run on the embedded
+stackful scheduler for the current root or worker context, preserving
+`kimojio-stack` buffer ownership, fixed-resource, cancellation, and waiter
+semantics.
+
+Code that needs explicit worker-local versus synchronized shared-ring costs can
+still create ring handles. Worker-local rings enforce owner-worker and
+runtime-instance use and cannot be created from the root `block_on` context of a
+multi-worker runtime. Shared rings are cloneable and synchronized for
+cross-worker use, but remain runtime-affine. The root `block_on` context is not a
+worker; use `RuntimeContext::current_worker()` or
+`RuntimeContext::execution_place()` when code needs to distinguish root from
+worker-pool execution. Shared rings route no-op, timeout/sleep, and socket
+read/write lifecycle operations through runtime-owned io_uring schedulers
 instead of a ring-owned helper thread. Single-worker runtimes drive shared
-operations locally; multi-worker runtimes assign each shared ring to a real
-owner worker and use bounded per-ring queues, bounded submitted-operation
-tracking, deduplicated pending worker commands, and worker wakeups for
-submission and completion routing.
+operations locally; multi-worker runtimes assign each shared ring to a real owner
+worker and use bounded per-ring queues, bounded submitted-operation tracking,
+deduplicated pending worker commands, and worker wakeups for submission and
+completion routing.
 
 The runtime also implements the shared `kimojio-stack::runtime_api` socket I/O
 contract used by the runtime-agnostic HTTP/1.1+TLS slice. Worker code routes
@@ -129,16 +138,16 @@ runtime-generic compatibility paths while preserving stack-core aliases.
 - Queue saturation for `spawn_stealable` is currently reported when the returned
   handle is joined, by resuming a rejection panic payload. A fallible
   backpressure-oriented spawn API is future work.
-- Shared-ring I/O currently supports no-op, timeout/sleep, and the socket
-  read/write/shutdown/close lifecycle used by the HTTP+TLS migration. Broader
-  accept/connect, send/recv, registered-resource, file, and storage operations
-  are future work.
+- Direct `RuntimeContext` I/O has operation parity with `kimojio-stack`.
+  Explicit shared-ring I/O remains intentionally narrower: no-op, timeout/sleep,
+  and the socket read/write/shutdown/close lifecycle used by the HTTP+TLS
+  migration.
 - Shared-ring completion currently polls active shared operations in the owner
   worker loop; lower-overhead completion fanout remains an optimization item if
   benchmarks show it is needed.
 - Downstream HTTP/TLS/gRPC/storage/telemetry runtime-generic APIs currently cover
-  the migrated socket-based paths. Broader direct file/storage io_uring
-  operations remain future shared runtime capabilities.
+  the migrated socket-based paths. Runtime-neutral traits for broader direct
+  file/storage io_uring APIs remain future shared runtime capabilities.
 - The crate is not publishable until the shared `kimojio-stack` runtime API is
   versioned and released first.
 - Release-mode median/p99 threshold validation is currently a failing

@@ -354,7 +354,7 @@ fn direct_result_cancel_detaches_stealing_runtime_handle() {
             let worker = scope.spawn_stealable(|cx| {
                 let (read_fd, _write_fd) = pipe().unwrap();
                 let read_fd = cx.socket_from_owned_fd(read_fd).unwrap();
-                let mut read = cx.read_async(&read_fd, vec![0_u8; 1]).unwrap();
+                let mut read = SocketIoRuntime::read_async(cx, &read_fd, vec![0_u8; 1]).unwrap();
 
                 RuntimeReadResult::cancel(&mut read).unwrap();
 
@@ -381,7 +381,7 @@ fn context_cancel_keeps_stealing_runtime_result_drainable_before_close() {
                 let (read_fd, write_fd) = pipe().unwrap();
                 let read_fd = cx.socket_from_owned_fd(read_fd).unwrap();
                 let write_fd = cx.socket_from_owned_fd(write_fd).unwrap();
-                let mut read = cx.read_async(&read_fd, vec![0_u8; 1]).unwrap();
+                let mut read = SocketIoRuntime::read_async(cx, &read_fd, vec![0_u8; 1]).unwrap();
 
                 cx.cancel_read(&mut read).unwrap();
                 cx.wait_stackful(&read).unwrap();
@@ -417,8 +417,9 @@ fn stealing_runtime_waits_on_runtime_neutral_socket_results() {
                 let read_fd = cx.socket_from_owned_fd(read_fd).unwrap();
                 let write_fd = cx.socket_from_owned_fd(write_fd).unwrap();
 
-                let mut read = cx.read_async(&read_fd, vec![0_u8; 2]).unwrap();
-                let mut write = cx.write_async(&write_fd, b"ok".to_vec()).unwrap();
+                let mut read = SocketIoRuntime::read_async(cx, &read_fd, vec![0_u8; 2]).unwrap();
+                let mut write =
+                    SocketIoRuntime::write_async(cx, &write_fd, b"ok".to_vec()).unwrap();
                 let waitables: [&dyn RuntimeWaitable; 2] = [&read, &write];
 
                 cx.wait_all_stackful(&waitables).unwrap();
