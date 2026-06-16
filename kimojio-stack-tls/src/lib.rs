@@ -600,14 +600,15 @@ where
         }
     }
 
-    /// Attempts to cancel this TLS read.
+    /// Attempts to cancel this TLS read using the runtime captured by
+    /// [`RuntimeTlsStream::read_async`].
     ///
     /// Cancellation drains the private socket I/O used by the TLS state machine,
     /// then marks the TLS stream unusable. A canceled TLS record may already have
     /// consumed encrypted bytes from the socket, so continuing the same stream
     /// would risk duplicate or lost protocol data. After successful cancellation,
     /// [`try_get`](Self::try_get) returns `Err(Errno::CANCELED)`.
-    pub fn cancel(&self, _cx: &R) -> Result<(), Errno> {
+    pub fn cancel(&self) -> Result<(), Errno> {
         if self.taken || self.result.borrow().is_some() {
             return Ok(());
         }
@@ -971,7 +972,8 @@ where
         }
     }
 
-    /// Attempts to cancel this TLS write.
+    /// Attempts to cancel this TLS write using the runtime captured by
+    /// [`RuntimeTlsStream::write_async`].
     ///
     /// Cancellation drains the private socket I/O used by the TLS state machine,
     /// then marks the TLS stream unusable. A canceled write may already have
@@ -979,7 +981,7 @@ where
     /// so continuing the same stream would risk duplicate protocol data. After
     /// successful cancellation, [`try_get`](Self::try_get) returns
     /// `Err(Errno::CANCELED)`.
-    pub fn cancel(&self, _cx: &R) -> Result<(), Errno> {
+    pub fn cancel(&self) -> Result<(), Errno> {
         if self.taken || self.result.borrow().is_some() {
             return Ok(());
         }
@@ -1803,7 +1805,7 @@ mod tests {
                     assert_eq!(ready, 1);
                     timeout.cancel();
 
-                    read.cancel(cx).expect("cancel TLS read failed");
+                    read.cancel().expect("cancel TLS read failed");
                     assert!(RuntimeWaitable::is_ready(&read));
                     assert_eq!(
                         read.try_get().expect("canceled TLS read not ready").err(),

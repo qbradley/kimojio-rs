@@ -411,7 +411,7 @@ where
             .map_err(runtime_wait_error)?
             == 1
         {
-            pending.cancel(cx).map_err(Error::tls)?;
+            pending.cancel().map_err(Error::tls)?;
             return Err(Error::io(Errno::TIME));
         }
     }
@@ -442,7 +442,7 @@ where
             .map_err(runtime_wait_error)?
             == 1
         {
-            pending.cancel(cx).map_err(Error::tls)?;
+            pending.cancel().map_err(Error::tls)?;
             return Err(Error::io(Errno::TIME));
         }
     }
