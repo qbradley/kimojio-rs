@@ -2,10 +2,10 @@
 // Licensed under the MIT License.
 
 use http::{Request, Response};
-use kimojio_stack::RuntimeContext;
+use kimojio_stack::{IoFd, RuntimeSocket};
 use std::time::Instant;
 
-use crate::{Body, Error, HttpConfig, StackTransport, h2, http1};
+use crate::{Body, Error, HttpConfig, HttpRuntime, RuntimeStackTransport, h2, http1};
 
 /// Shared configuration for stackful HTTP clients.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -19,22 +19,25 @@ pub struct ClientConfig {
 /// This enum keeps the concrete HTTP/1.1 or HTTP/2 connection inline so callers
 /// can choose a protocol without paying for dynamic dispatch or heap allocation.
 #[allow(clippy::large_enum_variant)] // Keep concrete connections inline to avoid heap allocation.
-pub enum ClientConnection {
+pub enum RuntimeClientConnection<S> {
     /// HTTP/1.1 connection.
-    Http1(http1::ClientConnection),
+    Http1(http1::RuntimeClientConnection<S>),
     /// HTTP/2 connection.
-    Http2(h2::ClientConnection),
+    Http2(h2::RuntimeClientConnection<S>),
 }
 
-impl ClientConnection {
+/// Stack-core protocol-neutral HTTP client compatibility alias.
+pub type ClientConnection = RuntimeClientConnection<IoFd>;
+
+impl<S> RuntimeClientConnection<S> {
     /// Wraps a transport as an HTTP/1.1 client connection.
-    pub fn http1(transport: StackTransport, config: HttpConfig) -> Self {
-        Self::Http1(http1::ClientConnection::new(transport, config))
+    pub fn http1(transport: RuntimeStackTransport<S>, config: HttpConfig) -> Self {
+        Self::Http1(http1::RuntimeClientConnection::new(transport, config))
     }
 
     /// Wraps a transport as an HTTP/2 client connection.
-    pub fn http2(transport: StackTransport, config: HttpConfig) -> Self {
-        Self::Http2(h2::ClientConnection::new(transport, config))
+    pub fn http2(transport: RuntimeStackTransport<S>, config: HttpConfig) -> Self {
+        Self::Http2(h2::RuntimeClientConnection::new(transport, config))
     }
 
     /// Sends one request and buffers the complete response body.
@@ -43,9 +46,12 @@ impl ClientConnection {
     /// bodies can be large or should be processed incrementally.
     pub fn send(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         request: &Request<Body>,
-    ) -> Result<Response<Body>, Error> {
+    ) -> Result<Response<Body>, Error>
+    where
+        S: RuntimeSocket,
+    {
         match self {
             Self::Http1(connection) => connection.send(cx, request),
             Self::Http2(connection) => connection.send(cx, request),
@@ -69,11 +75,12 @@ impl ClientConnection {
     /// `on_chunk`. If `on_chunk` returns an error, the request fails immediately.
     pub fn send_with_body_chunks<F>(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         request: &Request<Body>,
         on_chunk: F,
     ) -> Result<Response<Body>, Error>
     where
+        S: RuntimeSocket,
         F: FnMut(bytes::Bytes) -> Result<(), Error>,
     {
         match self {
@@ -94,12 +101,13 @@ impl ClientConnection {
     /// while still completing the response.
     pub fn send_with_body_chunks_after_headers<H, F>(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         request: &Request<Body>,
         on_headers: H,
         on_chunk: F,
     ) -> Result<Response<Body>, Error>
     where
+        S: RuntimeSocket,
         H: FnMut(&Response<Body>) -> Result<bool, Error>,
         F: FnMut(bytes::Bytes) -> Result<(), Error>,
     {
@@ -119,7 +127,10 @@ impl ClientConnection {
     }
 
     /// Closes the underlying transport through the stack runtime.
-    pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
+    pub fn close(self, cx: &impl HttpRuntime<S>) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         match self {
             Self::Http1(connection) => connection.close(cx),
             Self::Http2(connection) => connection.close(cx),

@@ -26,11 +26,13 @@ pub mod server;
 pub mod settings;
 pub mod stream;
 
-pub use client::{ClientConnection, ResponseStreamEvent, ResponseWithTrailers};
+pub use client::{
+    ClientConnection, ResponseStreamEvent, ResponseWithTrailers, RuntimeClientConnection,
+};
 pub use connection::ConnectionState;
 pub use frame::{Frame, FrameFlags, FramePayload, FrameType};
 pub use hpack::Header;
-pub use server::{IncomingRequest, ServerConnection};
+pub use server::{IncomingRequest, RuntimeServerConnection, ServerConnection};
 pub use settings::{Setting, SettingId, Settings};
 pub use stream::{FlowControlWindow, Stream, StreamId, StreamState};
 
@@ -83,13 +85,23 @@ mod tests {
         HeaderName, HeaderValue, Request, Response, StatusCode,
         header::{CONTENT_TYPE, TE},
     };
-    use kimojio_stack::{Runtime, channel};
+    use kimojio_stack::{Runtime, SocketIoRuntime, channel};
+    use kimojio_stack_steal::{
+        Runtime as StealRuntime, RuntimeConfig as StealRuntimeConfig, StealPolicy,
+    };
     use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
+    use std::num::NonZeroUsize;
 
     use crate::{
-        Body, BodyLimits, ErrorKind, HttpConfig, StackTransport, Trailers,
-        client::ClientConnection as AnyClientConnection,
-        server::ServerConnection as AnyServerConnection,
+        Body, BodyLimits, ErrorKind, HttpConfig, RuntimeStackTransport, StackTransport, Trailers,
+        client::{
+            ClientConnection as AnyClientConnection,
+            RuntimeClientConnection as AnyRuntimeClientConnection,
+        },
+        server::{
+            RuntimeServerConnection as AnyRuntimeServerConnection,
+            ServerConnection as AnyServerConnection,
+        },
     };
 
     use super::{
@@ -904,6 +916,62 @@ mod tests {
                 server.join(cx);
                 let response = client.join(cx);
                 assert_eq!(response.body().as_bytes(), b"dispatch");
+            });
+        });
+    }
+
+    #[test]
+    fn h2_protocol_neutral_dispatch_runs_on_stealing_runtime() {
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+        let mut runtime = StealRuntime::with_config(StealRuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..StealRuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn_stealable(move |cx| {
+                    let server_fd = cx.socket_from_owned_fd(server_fd).unwrap();
+                    let server_transport = RuntimeStackTransport::plaintext_socket(server_fd);
+                    let mut server =
+                        AnyRuntimeServerConnection::http2(server_transport, HttpConfig::default());
+                    server
+                        .serve_one(cx, |request| {
+                            assert_eq!(request.uri(), "/steal-neutral");
+                            Ok(Response::builder()
+                                .status(StatusCode::OK)
+                                .body(body(request.body().as_bytes()))
+                                .unwrap())
+                        })
+                        .unwrap();
+                    server.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn_stealable(move |cx| {
+                    let client_fd = cx.socket_from_owned_fd(client_fd).unwrap();
+                    let client_transport = RuntimeStackTransport::plaintext_socket(client_fd);
+                    let mut client =
+                        AnyRuntimeClientConnection::http2(client_transport, HttpConfig::default());
+                    let request = Request::builder()
+                        .method("POST")
+                        .uri("/steal-neutral")
+                        .body(body(b"dispatch-steal"))
+                        .unwrap();
+                    let response = client.send(cx, &request).unwrap();
+                    client.close(cx).unwrap();
+                    response
+                });
+
+                server.join(cx);
+                let response = client.join(cx);
+                assert_eq!(response.body().as_bytes(), b"dispatch-steal");
             });
         });
     }

@@ -6,9 +6,9 @@ use http::{
     HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri, Version,
     header::{CONNECTION, HOST, TE, TRANSFER_ENCODING, UPGRADE},
 };
-use kimojio_stack::RuntimeContext;
+use kimojio_stack::RuntimeSocket;
 
-use crate::{Body, Error, HttpConfig, LimitKind, StackTransport, Trailers};
+use crate::{Body, Error, HttpConfig, HttpRuntime, LimitKind, RuntimeStackTransport, Trailers};
 
 use super::{
     CLIENT_PREFACE, ConnectionState, Frame, FrameFlags, FramePayload, FrameType, Header, Setting,
@@ -38,11 +38,15 @@ pub(super) fn settings_frame(settings: Settings) -> Frame {
     ])
 }
 
-pub(super) fn read_frame(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub(super) fn read_frame<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     max_frame_size: u32,
-) -> Result<Frame, Error> {
+) -> Result<Frame, Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let mut header = [0_u8; super::frame::FRAME_HEADER_LEN];
     if transport.read_exact_or_eof(cx, &mut header)? != header.len() {
         return Err(Error::Eof);
@@ -64,22 +68,30 @@ pub(super) fn read_frame(
     Frame::decode(&bytes, max_frame_size).map(|(frame, _)| frame)
 }
 
-pub(super) fn write_frame(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub(super) fn write_frame<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     frame: &Frame,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let bytes = frame.encode()?;
     transport.write_all(cx, &bytes)
 }
 
-pub(super) fn write_data_frame(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub(super) fn write_data_frame<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     stream_id: StreamId,
     data: &[u8],
     end_stream: bool,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     if data.len() > 0x00ff_ffff {
         return Err(Error::size_limit(LimitKind::Frame, 0x00ff_ffff, data.len()));
     }
@@ -98,14 +110,18 @@ pub(super) fn write_data_frame(
     transport.write_all(cx, data)
 }
 
-pub(super) fn write_header_block(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub(super) fn write_header_block<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     stream_id: StreamId,
     block: Bytes,
     end_stream: bool,
     max_frame_size: u32,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let max_frame_size = max_frame_size as usize;
     if max_frame_size == 0 {
         return Err(Error::Protocol("peer max frame size is zero"));
@@ -146,29 +162,41 @@ pub(super) fn write_header_block(
     Ok(())
 }
 
-pub(super) fn flush_pending(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub(super) fn flush_pending<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     state: &mut ConnectionState,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     while let Some(frame) = state.pop_outbound() {
         write_frame(cx, transport, &frame)?;
     }
     Ok(())
 }
 
-pub(super) fn write_client_preface(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
-) -> Result<(), Error> {
+pub(super) fn write_client_preface<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
+) -> Result<(), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     transport.write_all(cx, CLIENT_PREFACE)
 }
 
-pub(super) fn read_client_preface(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub(super) fn read_client_preface<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     state: &mut ConnectionState,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let mut preface = [0_u8; CLIENT_PREFACE.len()];
     if transport.read_exact_or_eof(cx, &mut preface)? != preface.len() {
         return Err(Error::Eof);
@@ -177,12 +205,16 @@ pub(super) fn read_client_preface(
     state.receive_preface(&preface)
 }
 
-pub(super) fn collect_header_block(
-    cx: &RuntimeContext<'_>,
-    transport: &mut StackTransport,
+pub(super) fn collect_header_block<R, S>(
+    cx: &R,
+    transport: &mut RuntimeStackTransport<S>,
     state: &mut ConnectionState,
     first: Frame,
-) -> Result<(StreamId, bool, Bytes), Error> {
+) -> Result<(StreamId, bool, Bytes), Error>
+where
+    R: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let stream_id = StreamId::new(first.stream_id)?;
     let end_stream = first.flags.contains(FrameFlags::END_STREAM);
     let mut end_headers = first.flags.contains(FrameFlags::END_HEADERS);

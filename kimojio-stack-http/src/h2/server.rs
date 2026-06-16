@@ -6,9 +6,11 @@ use std::collections::{BTreeMap, VecDeque};
 use bytes::Bytes;
 use http::{Request, Response};
 use kimojio_stack::Errno;
-use kimojio_stack::RuntimeContext;
+use kimojio_stack::{IoFd, RuntimeSocket};
 
-use crate::{Body, BodyBuilder, BodyLimits, Error, HttpConfig, StackTransport, Trailers};
+use crate::{
+    Body, BodyBuilder, BodyLimits, Error, HttpConfig, HttpRuntime, RuntimeStackTransport, Trailers,
+};
 
 use super::{
     ConnectionState, Frame, FrameFlags, FramePayload, FrameType, Header, Settings, StreamId, codec,
@@ -45,8 +47,8 @@ impl PendingRequest {
 /// [`send_response_headers`](Self::send_response_headers),
 /// [`send_response_data`](Self::send_response_data), and
 /// [`finish_response_stream`](Self::finish_response_stream).
-pub struct ServerConnection {
-    transport: StackTransport,
+pub struct RuntimeServerConnection<S> {
+    transport: RuntimeStackTransport<S>,
     config: HttpConfig,
     state: ConnectionState,
     initialized: bool,
@@ -56,16 +58,19 @@ pub struct ServerConnection {
     goaway: Option<Error>,
 }
 
-impl ServerConnection {
+/// Stack-core HTTP/2 server compatibility alias.
+pub type ServerConnection = RuntimeServerConnection<IoFd>;
+
+impl<S> RuntimeServerConnection<S> {
     /// Creates a server connection with settings derived from [`HttpConfig`].
-    pub fn new(transport: StackTransport, config: HttpConfig) -> Self {
+    pub fn new(transport: RuntimeStackTransport<S>, config: HttpConfig) -> Self {
         let settings = codec::settings_from_config(config);
         Self::new_with_settings(transport, config, settings)
     }
 
     /// Creates a server connection with explicit local HTTP/2 settings.
     pub fn new_with_settings(
-        transport: StackTransport,
+        transport: RuntimeStackTransport<S>,
         config: HttpConfig,
         settings: Settings,
     ) -> Self {
@@ -86,7 +91,10 @@ impl ServerConnection {
     /// Request bodies are currently buffered up to [`HttpConfig::max_body_bytes`].
     /// While waiting for a request, peer resets and GOAWAY frames update
     /// connection state and can cause the connection to finish.
-    pub fn accept(&mut self, cx: &RuntimeContext<'_>) -> Result<Option<IncomingRequest>, Error> {
+    pub fn accept(&mut self, cx: &impl HttpRuntime<S>) -> Result<Option<IncomingRequest>, Error>
+    where
+        S: RuntimeSocket,
+    {
         self.ensure_initialized(cx)?;
         if let Some(request) = self.completed.pop_front() {
             return Ok(Some(request));
@@ -114,10 +122,13 @@ impl ServerConnection {
     /// Sends a response with no trailers.
     pub fn send_response(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
         response: &Response<Body>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.send_response_with_trailers(cx, stream_id, response, None)
     }
 
@@ -127,11 +138,14 @@ impl ServerConnection {
     /// trailers complete in the response HEADERS frame.
     pub fn send_response_with_trailers(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
         response: &Response<Body>,
         trailers: Option<&Trailers>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.ensure_initialized(cx)?;
         let has_trailers = trailers.is_some_and(|trailers| !trailers.is_empty());
         let body = response.body().as_bytes();
@@ -182,10 +196,13 @@ impl ServerConnection {
     /// Stream state remains active until `finish_response_stream` or a reset.
     pub fn send_response_headers(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
         response: &Response<()>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.ensure_initialized(cx)?;
         self.check_stream_reset(stream_id)?;
         let headers = codec::response_headers(response)?;
@@ -211,10 +228,13 @@ impl ServerConnection {
     /// Peer resets observed while waiting for capacity are surfaced as errors.
     pub fn send_response_data(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
         data: &[u8],
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.ensure_initialized(cx)?;
         self.check_stream_reset(stream_id)?;
         self.write_data(cx, stream_id, data, false)
@@ -227,10 +247,13 @@ impl ServerConnection {
     /// `END_STREAM`. Local stream state is removed after this succeeds.
     pub fn finish_response_stream(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
         trailers: Option<&Trailers>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.ensure_initialized(cx)?;
         self.check_stream_reset(stream_id)?;
         if let Some(trailers) = trailers.filter(|trailers| !trailers.is_empty()) {
@@ -268,9 +291,12 @@ impl ServerConnection {
     /// Returns `Ok(false)` when the peer has closed and no request remains.
     pub fn serve_one(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         handler: impl FnOnce(Request<Body>) -> Result<Response<Body>, Error>,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool, Error>
+    where
+        S: RuntimeSocket,
+    {
         let Some(incoming) = self.accept(cx)? else {
             return Ok(false);
         };
@@ -285,10 +311,13 @@ impl ServerConnection {
     /// only that stream while keeping the connection alive.
     pub fn reset_stream(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
         error_code: u32,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.ensure_initialized(cx)?;
         codec::write_frame(
             cx,
@@ -303,10 +332,13 @@ impl ServerConnection {
     /// code. The connection is not closed automatically.
     pub fn goaway(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         last_stream_id: u32,
         error_code: u32,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.ensure_initialized(cx)?;
         codec::write_frame(
             cx,
@@ -316,7 +348,10 @@ impl ServerConnection {
     }
 
     /// Closes the underlying transport.
-    pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
+    pub fn close(self, cx: &impl HttpRuntime<S>) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.transport.close(cx)
     }
 
@@ -326,8 +361,11 @@ impl ServerConnection {
     /// the client to observe a graceful end of writes before the socket is closed.
     pub fn shutdown_write_and_close_after_peer(
         mut self,
-        cx: &RuntimeContext<'_>,
-    ) -> Result<(), Error> {
+        cx: &impl HttpRuntime<S>,
+    ) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         if let Err(error) = self.transport.shutdown_write(cx) {
             if peer_closed(&error) {
                 return self.transport.close(cx);
@@ -345,7 +383,10 @@ impl ServerConnection {
         }
     }
 
-    fn ensure_initialized(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
+    fn ensure_initialized(&mut self, cx: &impl HttpRuntime<S>) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         if self.initialized {
             return Ok(());
         }
@@ -372,11 +413,14 @@ impl ServerConnection {
 
     fn write_data(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
         mut body: &[u8],
         end_stream_on_last: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         while !body.is_empty() {
             let capacity = self.state.outbound_capacity(stream_id)?;
             if capacity == 0 {
@@ -414,7 +458,10 @@ impl ServerConnection {
         Ok(())
     }
 
-    fn process_frame(&mut self, cx: &RuntimeContext<'_>, frame: Frame) -> Result<(), Error> {
+    fn process_frame(&mut self, cx: &impl HttpRuntime<S>, frame: Frame) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         match frame.frame_type {
             FrameType::Settings => {
                 self.state.receive_settings(&frame)?;
@@ -480,7 +527,10 @@ impl ServerConnection {
         }
     }
 
-    fn process_headers(&mut self, cx: &RuntimeContext<'_>, frame: Frame) -> Result<(), Error> {
+    fn process_headers(&mut self, cx: &impl HttpRuntime<S>, frame: Frame) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         let (stream_id, end_stream, block) =
             codec::collect_header_block(cx, &mut self.transport, &mut self.state, frame)?;
         if stream_id.get().is_multiple_of(2) {
@@ -516,7 +566,10 @@ impl ServerConnection {
         Ok(())
     }
 
-    fn process_data(&mut self, cx: &RuntimeContext<'_>, frame: Frame) -> Result<(), Error> {
+    fn process_data(&mut self, cx: &impl HttpRuntime<S>, frame: Frame) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.state.track_inbound_frame(&frame)?;
         let stream_id = StreamId::new(frame.stream_id)?;
         let end_stream = frame.flags.contains(FrameFlags::END_STREAM);

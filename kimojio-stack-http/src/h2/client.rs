@@ -8,9 +8,11 @@ use std::{
 
 use bytes::Bytes;
 use http::{Request, Response};
-use kimojio_stack::RuntimeContext;
+use kimojio_stack::{IoFd, RuntimeSocket};
 
-use crate::{Body, BodyBuilder, BodyLimits, Error, HttpConfig, StackTransport, Trailers};
+use crate::{
+    Body, BodyBuilder, BodyLimits, Error, HttpConfig, HttpRuntime, RuntimeStackTransport, Trailers,
+};
 
 use super::{
     ConnectionState, Frame, FrameFlags, FramePayload, FrameType, Header, Settings, StreamId, codec,
@@ -25,7 +27,7 @@ pub struct ResponseWithTrailers {
     pub trailers: Trailers,
 }
 
-/// Incremental response event returned by [`ClientConnection::read_response_event`].
+/// Incremental response event returned by [`RuntimeClientConnection::read_response_event`].
 #[derive(Debug)]
 pub enum ResponseStreamEvent {
     /// One DATA payload for the response stream.
@@ -110,8 +112,8 @@ impl PendingResponse {
 /// where response DATA frames carry independently framed messages. Call
 /// [`cancel_response_stream`](Self::cancel_response_stream) when abandoning a
 /// stream before terminal trailers are received.
-pub struct ClientConnection {
-    transport: StackTransport,
+pub struct RuntimeClientConnection<S> {
+    transport: RuntimeStackTransport<S>,
     config: HttpConfig,
     state: ConnectionState,
     initialized: bool,
@@ -122,9 +124,12 @@ pub struct ClientConnection {
     goaway: Option<Error>,
 }
 
-impl ClientConnection {
+/// Stack-core HTTP/2 client compatibility alias.
+pub type ClientConnection = RuntimeClientConnection<IoFd>;
+
+impl<S> RuntimeClientConnection<S> {
     /// Creates a client connection with settings derived from [`HttpConfig`].
-    pub fn new(transport: StackTransport, config: HttpConfig) -> Self {
+    pub fn new(transport: RuntimeStackTransport<S>, config: HttpConfig) -> Self {
         let settings = codec::settings_from_config(config);
         Self::new_with_settings(transport, config, settings)
     }
@@ -135,7 +140,7 @@ impl ClientConnection {
     /// flow-control or frame-size values independently from the broader
     /// [`HttpConfig`].
     pub fn new_with_settings(
-        transport: StackTransport,
+        transport: RuntimeStackTransport<S>,
         config: HttpConfig,
         settings: Settings,
     ) -> Self {
@@ -168,9 +173,12 @@ impl ClientConnection {
     /// incremental read method.
     pub fn send(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         request: &Request<Body>,
-    ) -> Result<Response<Body>, Error> {
+    ) -> Result<Response<Body>, Error>
+    where
+        S: RuntimeSocket,
+    {
         let stream_id = self.send_request(cx, request)?;
         self.read_response_with_trailers(cx, stream_id)
             .map(|response| response.response)
@@ -183,9 +191,12 @@ impl ClientConnection {
     /// reader or cancellation method.
     pub fn send_request(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         request: &Request<Body>,
-    ) -> Result<StreamId, Error> {
+    ) -> Result<StreamId, Error>
+    where
+        S: RuntimeSocket,
+    {
         self.ensure_initialized(cx)?;
         let stream_id = StreamId::new(self.next_stream_id)?;
         self.next_stream_id = self
@@ -219,9 +230,12 @@ impl ClientConnection {
     /// Reads a buffered response body for a previously sent stream.
     pub fn read_response(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
-    ) -> Result<Response<Body>, Error> {
+    ) -> Result<Response<Body>, Error>
+    where
+        S: RuntimeSocket,
+    {
         self.read_response_with_trailers(cx, stream_id)
             .map(|response| response.response)
     }
@@ -232,9 +246,12 @@ impl ClientConnection {
     /// queued so those streams can be read later.
     pub fn read_response_with_trailers(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
-    ) -> Result<ResponseWithTrailers, Error> {
+    ) -> Result<ResponseWithTrailers, Error>
+    where
+        S: RuntimeSocket,
+    {
         self.ensure_initialized(cx)?;
         if let Some(response) = self.completed.remove(&stream_id) {
             return Ok(response);
@@ -270,11 +287,12 @@ impl ClientConnection {
     /// returned as chunks are delivered.
     pub fn read_response_with_body_chunks<F>(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
         on_chunk: F,
     ) -> Result<ResponseWithTrailers, Error>
     where
+        S: RuntimeSocket,
         F: FnMut(Bytes) -> Result<(), Error>,
     {
         self.read_response_with_body_chunks_after_headers(cx, stream_id, |_| Ok(true), on_chunk)
@@ -287,12 +305,13 @@ impl ClientConnection {
     /// without delivering chunks.
     pub fn read_response_with_body_chunks_after_headers<H, F>(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
         mut on_headers: H,
         mut on_chunk: F,
     ) -> Result<ResponseWithTrailers, Error>
     where
+        S: RuntimeSocket,
         H: FnMut(&Response<Body>) -> Result<bool, Error>,
         F: FnMut(Bytes) -> Result<(), Error>,
     {
@@ -325,9 +344,12 @@ impl ClientConnection {
     /// streams so connection state remains current.
     pub fn read_response_headers(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
-    ) -> Result<Response<()>, Error> {
+    ) -> Result<Response<()>, Error>
+    where
+        S: RuntimeSocket,
+    {
         self.ensure_initialized(cx)?;
         self.ensure_streaming_pending(stream_id)?;
         loop {
@@ -365,9 +387,12 @@ impl ClientConnection {
     /// for the stream is removed.
     pub fn read_response_event(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
-    ) -> Result<ResponseStreamEvent, Error> {
+    ) -> Result<ResponseStreamEvent, Error>
+    where
+        S: RuntimeSocket,
+    {
         self.ensure_initialized(cx)?;
         self.ensure_streaming_pending(stream_id)?;
         if self
@@ -407,10 +432,13 @@ impl ClientConnection {
     /// after the stream has already completed is a no-op.
     pub fn cancel_response_stream(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
         error_code: u32,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.ensure_initialized(cx)?;
         self.pending.remove(&stream_id);
         self.completed.remove(&stream_id);
@@ -426,11 +454,17 @@ impl ClientConnection {
     }
 
     /// Closes the underlying transport.
-    pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
+    pub fn close(self, cx: &impl HttpRuntime<S>) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.transport.close(cx)
     }
 
-    fn ensure_initialized(&mut self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
+    fn ensure_initialized(&mut self, cx: &impl HttpRuntime<S>) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         if self.initialized {
             return Ok(());
         }
@@ -463,10 +497,13 @@ impl ClientConnection {
 
     fn write_data(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
         mut body: Bytes,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         while !body.is_empty() {
             let capacity = self.state.outbound_capacity(stream_id)?;
             if capacity == 0 {
@@ -495,7 +532,10 @@ impl ClientConnection {
         Ok(())
     }
 
-    fn process_frame(&mut self, cx: &RuntimeContext<'_>, frame: Frame) -> Result<(), Error> {
+    fn process_frame(&mut self, cx: &impl HttpRuntime<S>, frame: Frame) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         match frame.frame_type {
             FrameType::Settings => {
                 self.state.receive_settings(&frame)?;
@@ -560,7 +600,10 @@ impl ClientConnection {
         }
     }
 
-    fn process_headers(&mut self, cx: &RuntimeContext<'_>, frame: Frame) -> Result<(), Error> {
+    fn process_headers(&mut self, cx: &impl HttpRuntime<S>, frame: Frame) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         let (stream_id, end_stream, block) =
             codec::collect_header_block(cx, &mut self.transport, &mut self.state, frame)?;
         let headers = self.state.decode_header_block(&block)?;
@@ -603,7 +646,10 @@ impl ClientConnection {
         Ok(())
     }
 
-    fn process_data(&mut self, cx: &RuntimeContext<'_>, frame: Frame) -> Result<(), Error> {
+    fn process_data(&mut self, cx: &impl HttpRuntime<S>, frame: Frame) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.state.track_inbound_frame(&frame)?;
         let stream_id = StreamId::new(frame.stream_id)?;
         let end_stream = frame.flags.contains(FrameFlags::END_STREAM);
@@ -715,9 +761,12 @@ impl ClientConnection {
 
     fn pop_streaming_event(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
-    ) -> Result<Option<ResponseStreamEvent>, Error> {
+    ) -> Result<Option<ResponseStreamEvent>, Error>
+    where
+        S: RuntimeSocket,
+    {
         let Some(queued) = self
             .pending
             .get_mut(&stream_id)

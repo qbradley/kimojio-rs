@@ -275,7 +275,7 @@ false-positive or hide the actual portability budget.
 
 ## Deferred downstream migration work
 
-### 12. Fully migrate HTTP/2 and protocol-neutral HTTP APIs
+### 12. [done] Fully migrate HTTP/2 and protocol-neutral HTTP APIs
 
 **Why:** The current runtime-generic slice covers HTTP/1.1 plaintext/TLS. HTTP/2
 and protocol-neutral top-level client/server enums remain stack-core concrete.
