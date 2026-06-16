@@ -274,7 +274,8 @@ pub use runtime_api::{
     IoRuntime, RuntimeCapabilities, RuntimeCapability, RuntimeFamily, RuntimeIoError,
     RuntimeIoErrorKind, RuntimeReadResult, RuntimeSocket, RuntimeWaitError, RuntimeWaitable,
     RuntimeWaitableAdapter, RuntimeWriteResult, SocketIoRuntime, StackRuntime, StackRuntimeContext,
-    StackfulWaitContext, StackfulWaitRegistration, StackfulWaiter, UnsupportedCapability,
+    StackfulWaitContext, StackfulWaitRegistration, StackfulWaiter, StackfulWaiterHandle,
+    UnsupportedCapability,
 };
 pub use rwlock::{ReadLock, RwLock, RwLockReadGuard, RwLockWriteGuard, WriteLock};
 pub use semaphore::{Semaphore, SemaphorePermit};
@@ -3450,7 +3451,7 @@ impl RuntimeWaitable for Timeout {
         Waitable::is_ready(self)
     }
 
-    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+    fn add_stackful_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
         let Some(state) = &self.state else {
             return false;
         };
@@ -3653,7 +3654,7 @@ impl RuntimeWaitable for NoPayloadIo {
         Waitable::is_ready(self)
     }
 
-    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+    fn add_stackful_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
         let Some(state) = &self.state else {
             return false;
         };
@@ -3802,7 +3803,7 @@ impl RuntimeWaitable for RawIo {
         Waitable::is_ready(self)
     }
 
-    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+    fn add_stackful_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
         let Some(state) = &self.state else {
             return false;
         };
@@ -3883,7 +3884,7 @@ impl IoState {
         }
     }
 
-    pub(crate) fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+    pub(crate) fn add_stackful_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
         let mut inner = self.inner.borrow_mut();
         if inner.result.is_some() {
             false
@@ -3995,16 +3996,21 @@ impl IoStateInner {
 
 #[derive(Default)]
 pub(crate) struct StackfulWaiters {
-    first: Option<Box<dyn StackfulWaiter>>,
-    rest: Vec<Box<dyn StackfulWaiter>>,
+    first: Option<StackfulWaiterHandle>,
+    second: Option<StackfulWaiterHandle>,
+    rest: Vec<StackfulWaiterHandle>,
 }
 
 impl StackfulWaiters {
-    pub(crate) fn push(&mut self, waiter: Box<dyn StackfulWaiter>) {
+    pub(crate) fn push(&mut self, waiter: StackfulWaiterHandle) {
         if self
             .first
             .as_ref()
             .is_some_and(|waiter| !waiter.is_active())
+            || self
+                .second
+                .as_ref()
+                .is_some_and(|waiter| !waiter.is_active())
             || self.rest.len() > WAITER_COMPACT_THRESHOLD
         {
             self.compact_inactive();
@@ -4012,6 +4018,8 @@ impl StackfulWaiters {
 
         if self.first.is_none() {
             self.first = Some(waiter);
+        } else if self.second.is_none() {
+            self.second = Some(waiter);
         } else {
             self.rest.push(waiter);
         }
@@ -4019,6 +4027,11 @@ impl StackfulWaiters {
 
     pub(crate) fn wake_all(&mut self) {
         if let Some(waiter) = self.first.take()
+            && waiter.mark_ready()
+        {
+            waiter.wake_ready();
+        }
+        if let Some(waiter) = self.second.take()
             && waiter.mark_ready()
         {
             waiter.wake_ready();
@@ -4033,6 +4046,7 @@ impl StackfulWaiters {
 
     pub(crate) fn clear(&mut self) {
         self.first = None;
+        self.second = None;
         self.rest.clear();
     }
 
@@ -4044,10 +4058,26 @@ impl StackfulWaiters {
         {
             self.first = None;
         }
+        if self
+            .second
+            .as_ref()
+            .is_some_and(|waiter| !waiter.is_active())
+        {
+            self.second = None;
+        }
 
         self.rest.retain(|waiter| waiter.is_active());
-        if self.first.is_none() && !self.rest.is_empty() {
-            self.first = Some(self.rest.remove(0));
+        if self.first.is_none() {
+            self.first = self.second.take().or_else(|| {
+                if self.rest.is_empty() {
+                    None
+                } else {
+                    Some(self.rest.remove(0))
+                }
+            });
+        }
+        if self.second.is_none() && !self.rest.is_empty() {
+            self.second = Some(self.rest.remove(0));
         }
     }
 }
@@ -4210,17 +4240,14 @@ impl WaitRegistration {
     /// Returns a stackful waiter tied to this registration for first-party
     /// external wait queues.
     #[doc(hidden)]
-    pub fn external_waiter(
-        &self,
-        cx: &RuntimeContext<'_>,
-    ) -> Option<Box<dyn StackfulWaiter + 'static>> {
+    pub fn external_waiter(&self, cx: &RuntimeContext<'_>) -> Option<StackfulWaiterHandle> {
         let mut external = self.external.borrow_mut();
         if external.is_none() {
             *external = cx.external_wait_registration();
         }
         external
             .as_ref()
-            .map(|registration| Box::new(registration.waiter()) as Box<dyn StackfulWaiter>)
+            .map(|registration| StackfulWaiterHandle::external(registration.waiter()))
     }
 }
 
@@ -5938,7 +5965,7 @@ mod tests {
         RenameFlags, ResolveFlags, Runtime, RuntimeCapabilities, RuntimeCapability, RuntimeConfig,
         RuntimeContext, RuntimeFamily, RuntimeIoError, RuntimeWaitError, RuntimeWaitable,
         RuntimeWaitableAdapter, SendFlags, Shutdown, SocketIoRuntime, SocketType,
-        StackfulWaitContext, StackfulWaiter, StackfulWaiters, StatxFlags, TaskStackState,
+        StackfulWaitContext, StackfulWaiterHandle, StackfulWaiters, StatxFlags, TaskStackState,
         UringSpliceFlags, WaitError, WaitRegistration, Waitable, Waiters, allocation_tracking,
         ipproto, once,
     };
@@ -6016,7 +6043,7 @@ mod tests {
             true
         }
 
-        fn add_stackful_waiter(&self, _waiter: Box<dyn StackfulWaiter>) -> bool {
+        fn add_stackful_waiter(&self, _waiter: StackfulWaiterHandle) -> bool {
             false
         }
     }
@@ -6219,7 +6246,7 @@ mod tests {
             self.ready.get()
         }
 
-        fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+        fn add_stackful_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
             self.registrations.set(self.registrations.get() + 1);
             if self.ready.get() {
                 false
@@ -6249,7 +6276,7 @@ mod tests {
             self.ready.get()
         }
 
-        fn add_stackful_waiter(&self, _waiter: Box<dyn StackfulWaiter>) -> bool {
+        fn add_stackful_waiter(&self, _waiter: StackfulWaiterHandle) -> bool {
             self.registrations.set(self.registrations.get() + 1);
             self.ready.set(true);
             false
@@ -6343,6 +6370,33 @@ mod tests {
                 waitable.wake_all();
 
                 assert_eq!(worker.join(cx), 42);
+            });
+        });
+    }
+
+    #[test]
+    fn runtime_neutral_waiter_creation_after_registration_is_allocation_free() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let worker = scope.spawn(|cx| {
+                    let registration = cx
+                        .stackful_wait_registration()
+                        .expect("spawned task should provide stackful wait registration");
+
+                    let (_, counts) = allocation_tracking::measure(|| {
+                        for _ in 0..8 {
+                            let waiter = registration.waiter();
+                            std::hint::black_box(waiter.is_active());
+                        }
+                    });
+
+                    assert_eq!(counts.allocating_operations(), 0, "{counts:?}");
+                    assert_eq!(counts.allocated_or_reallocated_bytes(), 0, "{counts:?}");
+                });
+
+                worker.join(cx);
             });
         });
     }

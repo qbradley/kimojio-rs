@@ -501,7 +501,7 @@ where
     R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
     R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
 {
-    fn add_stackful_waiter(&self, waiter: Box<dyn kimojio_stack::StackfulWaiter>) -> bool {
+    fn add_stackful_waiter(&self, waiter: kimojio_stack::StackfulWaiterHandle) -> bool {
         match self {
             Self::Read(io) => RuntimeWaitable::add_stackful_waiter(io, waiter),
             Self::Write(io) => RuntimeWaitable::add_stackful_waiter(io, waiter),
@@ -830,7 +830,7 @@ where
         self.result.borrow().is_some()
     }
 
-    fn add_stackful_waiter(&self, waiter: Box<dyn kimojio_stack::StackfulWaiter>) -> bool {
+    fn add_stackful_waiter(&self, waiter: kimojio_stack::StackfulWaiterHandle) -> bool {
         if self.taken {
             return false;
         }
@@ -1240,7 +1240,7 @@ where
         self.result.borrow().is_some()
     }
 
-    fn add_stackful_waiter(&self, waiter: Box<dyn kimojio_stack::StackfulWaiter>) -> bool {
+    fn add_stackful_waiter(&self, waiter: kimojio_stack::StackfulWaiterHandle) -> bool {
         if self.taken {
             return false;
         }

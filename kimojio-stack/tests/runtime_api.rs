@@ -5,7 +5,7 @@ use std::panic::{self, AssertUnwindSafe};
 
 use kimojio_stack::{
     ReadOutput, Runtime, RuntimeIoError, RuntimeReadResult, RuntimeWaitable, RuntimeWriteResult,
-    SocketIoRuntime, StackfulWaitContext, StackfulWaiter, WriteOutput,
+    SocketIoRuntime, StackfulWaitContext, StackfulWaiterHandle, WriteOutput,
 };
 use rustix::pipe::pipe;
 
@@ -26,7 +26,7 @@ impl<T> RuntimeWaitable for FakeResult<T> {
         self.output.is_some()
     }
 
-    fn add_stackful_waiter(&self, _waiter: Box<dyn StackfulWaiter>) -> bool {
+    fn add_stackful_waiter(&self, _waiter: StackfulWaiterHandle) -> bool {
         false
     }
 }

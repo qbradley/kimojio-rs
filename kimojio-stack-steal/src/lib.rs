@@ -98,8 +98,8 @@ pub use kimojio_stack::StackUsage;
 use kimojio_stack::{
     Errno, IoReadBuffer, IoWriteBuffer, NoPayloadIo, RawIo, ReadOutput, RuntimeCapabilities,
     RuntimeCapability, RuntimeFamily, RuntimeWaitable, SchedulerWake, StackfulWaitContext,
-    StackfulWaitRegistration, StackfulWaiter, UnsupportedCapability, WaitRegistration, Waitable,
-    WriteOutput,
+    StackfulWaitRegistration, StackfulWaiterHandle, UnsupportedCapability, WaitRegistration,
+    Waitable, WriteOutput,
 };
 use rustix::net::Shutdown;
 
@@ -1053,7 +1053,7 @@ where
         Waitable::is_ready(self)
     }
 
-    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+    fn add_stackful_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
         match self.inner.as_ref() {
             None => false,
             Some(RingIoResultInner::Local(operation)) => operation.io.add_stackful_waiter(waiter),
@@ -1313,7 +1313,7 @@ impl RuntimeWaitable for RingTimeout {
         }
     }
 
-    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+    fn add_stackful_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
         match self.inner.as_ref() {
             None => false,
             Some(RingTimeoutInner::Local(timeout)) => timeout.add_stackful_waiter(waiter),
@@ -1407,7 +1407,7 @@ impl LocalSharedOperationHandle {
         self.state.is_terminal() || self.io.borrow().as_ref().is_some_and(Waitable::is_ready)
     }
 
-    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+    fn add_stackful_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
         if self.state.is_terminal() {
             return false;
         }
@@ -1502,7 +1502,7 @@ impl RuntimeWaitable for ActiveUnitIo {
         Waitable::is_ready(self)
     }
 
-    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+    fn add_stackful_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
         match self {
             Self::NoPayload(io) => RuntimeWaitable::add_stackful_waiter(io, waiter),
             Self::Raw(io) => RuntimeWaitable::add_stackful_waiter(io, waiter),
@@ -1670,7 +1670,7 @@ struct StealWaitRegistration<'registration> {
 }
 
 impl StackfulWaitRegistration for StealWaitRegistration<'_> {
-    fn waiter(&self) -> Box<dyn StackfulWaiter> {
+    fn waiter(&self) -> StackfulWaiterHandle {
         let waiter = self.inner.waiter();
         if !self.scope.push_cancel_waiter(self.inner.waiter()) {
             let immediate_wake = self.inner.waiter();
@@ -2857,7 +2857,7 @@ impl SharedOpState {
         inner.result.take()
     }
 
-    fn add_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+    fn add_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
         let mut inner = self.inner.lock().expect("shared operation mutex poisoned");
         if inner.lifecycle.is_terminal() {
             false
@@ -3090,14 +3090,17 @@ trait StealPanicSource: Send + Sync {
 
 #[derive(Default)]
 struct StackfulWaiters {
-    first: Option<Box<dyn StackfulWaiter>>,
-    rest: Vec<Box<dyn StackfulWaiter>>,
+    first: Option<StackfulWaiterHandle>,
+    second: Option<StackfulWaiterHandle>,
+    rest: Vec<StackfulWaiterHandle>,
 }
 
 impl StackfulWaiters {
-    fn push(&mut self, waiter: Box<dyn StackfulWaiter>) {
+    fn push(&mut self, waiter: StackfulWaiterHandle) {
         if self.first.is_none() {
             self.first = Some(waiter);
+        } else if self.second.is_none() {
+            self.second = Some(waiter);
         } else {
             self.rest.push(waiter);
         }
@@ -3105,6 +3108,11 @@ impl StackfulWaiters {
 
     fn wake_all(self) {
         if let Some(waiter) = self.first
+            && waiter.mark_ready()
+        {
+            waiter.wake_ready();
+        }
+        if let Some(waiter) = self.second
             && waiter.mark_ready()
         {
             waiter.wake_ready();
@@ -4122,7 +4130,7 @@ impl StealScopeState {
         inner.panic_sources.push(panic_source);
     }
 
-    fn push_cancel_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+    fn push_cancel_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
         let mut inner = self.inner.lock().expect("scope pending mutex poisoned");
         if inner.cancel_requested {
             false
@@ -4272,7 +4280,7 @@ impl<T> StealJoinState<T> {
         }
     }
 
-    fn add_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+    fn add_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
         if self.taken.load(Ordering::Acquire) {
             panic!("JoinHandle value already taken");
         }

@@ -229,11 +229,11 @@ fd-in-use, and no-stackful-context structure.
   no-stackful-context, and true cancellation.
 - Assert each maps to a documented caller-visible category.
 
-### 10. Measure and reduce boxed waiter allocation on runtime-neutral waits
+### 10. [done] Measure and reduce boxed waiter allocation on runtime-neutral waits
 
-**Why:** `RuntimeWaitable::add_stackful_waiter(Box<dyn StackfulWaiter>)` can
-allocate per park. HTTP deadlines now use runtime-neutral `wait_any_stackful`, so
-this may become a real hot-path cost.
+**Why:** `RuntimeWaitable::add_stackful_waiter` used to require boxed stackful
+waiters that could allocate per park. HTTP deadlines now use runtime-neutral
+`wait_any_stackful`, so this may become a real hot-path cost.
 
 **Pickup notes:**
 

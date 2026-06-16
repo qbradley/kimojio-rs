@@ -47,7 +47,7 @@ use std::thread;
 use crossbeam_queue::ArrayQueue;
 
 use crate::channel::{RecvError, SendError, TryRecvError, TrySendError};
-use crate::{RuntimeContext, StackfulWaitContext, StackfulWaiter};
+use crate::{RuntimeContext, StackfulWaitContext, StackfulWaiterHandle};
 
 const ADAPTIVE_SPIN_RETRIES: usize = 128;
 const ADAPTIVE_YIELD_RETRIES: usize = 2;
@@ -1037,7 +1037,7 @@ impl WaitQueue {
     fn push_stackful_waiter(
         &self,
         guard: &mut MutexGuard<'_, WaitState>,
-        waiter: Box<dyn StackfulWaiter>,
+        waiter: StackfulWaiterHandle,
     ) {
         if guard
             .stackful_waiters
@@ -1230,7 +1230,7 @@ impl WaitQueue {
 #[derive(Default)]
 struct WaitState {
     generation: u64,
-    stackful_waiters: VecDeque<Box<dyn StackfulWaiter>>,
+    stackful_waiters: VecDeque<StackfulWaiterHandle>,
     async_waiters: VecDeque<AsyncWaiter>,
 }
 
@@ -1240,14 +1240,14 @@ struct AsyncWaiter {
 }
 
 enum WakeOne {
-    Stackful(Box<dyn StackfulWaiter>),
+    Stackful(StackfulWaiterHandle),
     Async(Waker),
     Thread,
     None,
 }
 
 struct WakeAll {
-    stackful: VecDeque<Box<dyn StackfulWaiter>>,
+    stackful: VecDeque<StackfulWaiterHandle>,
     async_wakers: Vec<Waker>,
     notify_threads: bool,
 }
@@ -1714,7 +1714,10 @@ mod tests {
         let wait_queue = super::WaitQueue::default();
         {
             let mut wait = wait_queue.lock();
-            wait_queue.push_stackful_waiter(&mut wait, Box::new(registration.waiter()));
+            wait_queue.push_stackful_waiter(
+                &mut wait,
+                crate::StackfulWaiterHandle::external(registration.waiter()),
+            );
         }
 
         let waiter = match wait_queue.advance_generation_and_pop_wake() {

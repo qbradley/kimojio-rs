@@ -200,7 +200,7 @@ mod tests {
         Errno, IoReadBuffer, IoRuntime, ReadOutput, Runtime, RuntimeCapabilities,
         RuntimeCapability, RuntimeContext, RuntimeFamily, RuntimeIoError, RuntimeReadResult,
         RuntimeSocket, RuntimeWaitable, RuntimeWriteResult, SocketIoRuntime, StackfulWaitContext,
-        StackfulWaitRegistration, StackfulWaiter, UnsupportedCapability, WaitRegistration,
+        StackfulWaitRegistration, StackfulWaiterHandle, UnsupportedCapability, WaitRegistration,
         Waitable, WriteOutput,
     };
     use kimojio_stack_steal::{Runtime as StealRuntime, RuntimeConfig as StealRuntimeConfig};
@@ -327,7 +327,7 @@ mod tests {
             false
         }
 
-        fn add_stackful_waiter(&self, _waiter: Box<dyn StackfulWaiter>) -> bool {
+        fn add_stackful_waiter(&self, _waiter: StackfulWaiterHandle) -> bool {
             false
         }
     }
@@ -355,7 +355,7 @@ mod tests {
             Waitable::is_ready(self)
         }
 
-        fn add_stackful_waiter(&self, _waiter: Box<dyn StackfulWaiter>) -> bool {
+        fn add_stackful_waiter(&self, _waiter: StackfulWaiterHandle) -> bool {
             false
         }
     }
@@ -390,7 +390,7 @@ mod tests {
             Waitable::is_ready(self)
         }
 
-        fn add_stackful_waiter(&self, _waiter: Box<dyn StackfulWaiter>) -> bool {
+        fn add_stackful_waiter(&self, _waiter: StackfulWaiterHandle) -> bool {
             false
         }
     }

@@ -310,7 +310,7 @@ pub trait RuntimeWaitable {
     /// Returns `true` when the waiter was stored. Returning `false` means the
     /// condition became ready before registration completed and the caller should
     /// re-check readiness instead of parking.
-    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool;
+    fn add_stackful_waiter(&self, waiter: StackfulWaiterHandle) -> bool;
 
     /// Wraps this runtime-neutral condition as a stack-core [`Waitable`].
     fn as_stack_waitable(&self) -> RuntimeWaitableAdapter<'_>
@@ -526,10 +526,63 @@ pub trait StackfulWaiter: Send + 'static {
     fn wake_ready(self: Box<Self>) -> bool;
 }
 
+/// A stored stackful waiter.
+///
+/// First-party stack runtimes use an inline external-waiter handle here so
+/// runtime-neutral waits do not allocate one `Box<dyn StackfulWaiter>` per
+/// waitable. Custom adapters can still use [`StackfulWaiterHandle::boxed`].
+pub struct StackfulWaiterHandle {
+    inner: StackfulWaiterHandleInner,
+}
+
+enum StackfulWaiterHandleInner {
+    External(ExternalWaiter),
+    Boxed(Box<dyn StackfulWaiter>),
+}
+
+impl StackfulWaiterHandle {
+    /// Wraps a custom boxed stackful waiter.
+    pub fn boxed(waiter: Box<dyn StackfulWaiter>) -> Self {
+        Self {
+            inner: StackfulWaiterHandleInner::Boxed(waiter),
+        }
+    }
+
+    pub(crate) fn external(waiter: ExternalWaiter) -> Self {
+        Self {
+            inner: StackfulWaiterHandleInner::External(waiter),
+        }
+    }
+
+    /// Returns whether this waiter is still active.
+    pub fn is_active(&self) -> bool {
+        match &self.inner {
+            StackfulWaiterHandleInner::External(waiter) => waiter.is_active(),
+            StackfulWaiterHandleInner::Boxed(waiter) => waiter.is_active(),
+        }
+    }
+
+    /// Marks this waiter ready if it is still active.
+    pub fn mark_ready(&self) -> bool {
+        match &self.inner {
+            StackfulWaiterHandleInner::External(waiter) => waiter.mark_ready(),
+            StackfulWaiterHandleInner::Boxed(waiter) => waiter.mark_ready(),
+        }
+    }
+
+    /// Wakes a waiter that was previously marked ready.
+    pub fn wake_ready(self) -> bool {
+        match self.inner {
+            StackfulWaiterHandleInner::External(waiter) => waiter.wake_ready(),
+            StackfulWaiterHandleInner::Boxed(waiter) => waiter.wake_ready(),
+        }
+    }
+}
+
 /// A cancellation guard for a registered stackful wait.
 pub trait StackfulWaitRegistration {
     /// Creates a waiter associated with this registration.
-    fn waiter(&self) -> Box<dyn StackfulWaiter>;
+    fn waiter(&self) -> StackfulWaiterHandle;
 }
 
 /// Runtime context operations needed to park stackful coroutines on external waits.
@@ -641,7 +694,7 @@ fn first_ready_stackful(waitables: &[&dyn RuntimeWaitable]) -> Option<usize> {
     waitables.iter().position(|waitable| waitable.is_ready())
 }
 
-fn wake_stackful_waiter(waiter: Box<dyn StackfulWaiter>) {
+fn wake_stackful_waiter(waiter: StackfulWaiterHandle) {
     if waiter.mark_ready() {
         waiter.wake_ready();
     }
@@ -652,7 +705,7 @@ impl<T, B> RuntimeWaitable for IoResult<T, B> {
         Waitable::is_ready(self)
     }
 
-    fn add_stackful_waiter(&self, waiter: Box<dyn StackfulWaiter>) -> bool {
+    fn add_stackful_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
         let Some(state) = &self.state else {
             return false;
         };
@@ -675,8 +728,8 @@ impl StackfulWaiter for ExternalWaiter {
 }
 
 impl StackfulWaitRegistration for ExternalWaitRegistration {
-    fn waiter(&self) -> Box<dyn StackfulWaiter> {
-        Box::new(ExternalWaitRegistration::waiter(self))
+    fn waiter(&self) -> StackfulWaiterHandle {
+        StackfulWaiterHandle::external(ExternalWaitRegistration::waiter(self))
     }
 }
 

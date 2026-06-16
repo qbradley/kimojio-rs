@@ -14,6 +14,126 @@ use kimojio_stack_steal::{
 };
 use rustix::pipe::pipe;
 
+#[global_allocator]
+static TEST_ALLOCATOR: allocation_tracking::CountingAllocator =
+    allocation_tracking::CountingAllocator;
+
+mod allocation_tracking {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    thread_local! {
+        static ACTIVE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+    static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+    static REALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+    static REALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+    static MEASUREMENT_LOCK: Mutex<()> = Mutex::new(());
+
+    pub struct CountingAllocator;
+
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub struct AllocationCounts {
+        pub allocations: usize,
+        pub allocated_bytes: usize,
+        pub reallocations: usize,
+        pub reallocated_bytes: usize,
+    }
+
+    impl AllocationCounts {
+        pub fn allocating_operations(self) -> usize {
+            self.allocations + self.reallocations
+        }
+
+        pub fn allocated_or_reallocated_bytes(self) -> usize {
+            self.allocated_bytes + self.reallocated_bytes
+        }
+    }
+
+    pub fn measure<T>(f: impl FnOnce() -> T) -> (T, AllocationCounts) {
+        let _measurement = MEASUREMENT_LOCK.lock().unwrap();
+
+        ACTIVE.with(|active| {
+            assert!(!active.get(), "nested allocation measurement");
+        });
+        reset();
+
+        ACTIVE.with(|active| active.set(true));
+        let guard = MeasurementGuard;
+        let output = f();
+        drop(guard);
+
+        (output, current())
+    }
+
+    fn reset() {
+        ALLOCATIONS.store(0, Ordering::Relaxed);
+        ALLOCATED_BYTES.store(0, Ordering::Relaxed);
+        REALLOCATIONS.store(0, Ordering::Relaxed);
+        REALLOCATED_BYTES.store(0, Ordering::Relaxed);
+    }
+
+    fn current() -> AllocationCounts {
+        AllocationCounts {
+            allocations: ALLOCATIONS.load(Ordering::Relaxed),
+            allocated_bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
+            reallocations: REALLOCATIONS.load(Ordering::Relaxed),
+            reallocated_bytes: REALLOCATED_BYTES.load(Ordering::Relaxed),
+        }
+    }
+
+    fn record_allocation(bytes: usize) {
+        ACTIVE.with(|active| {
+            if active.get() {
+                ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+                ALLOCATED_BYTES.fetch_add(bytes, Ordering::Relaxed);
+            }
+        });
+    }
+
+    fn record_reallocation(bytes: usize) {
+        ACTIVE.with(|active| {
+            if active.get() {
+                REALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+                REALLOCATED_BYTES.fetch_add(bytes, Ordering::Relaxed);
+            }
+        });
+    }
+
+    struct MeasurementGuard;
+
+    impl Drop for MeasurementGuard {
+        fn drop(&mut self) {
+            ACTIVE.with(|active| active.set(false));
+        }
+    }
+
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            record_allocation(layout.size());
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            record_allocation(layout.size());
+            unsafe { System.alloc_zeroed(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            record_reallocation(new_size);
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+}
+
 fn runtime_agnostic_component<R>(runtime: &mut R, explicit_ring_io_supported: bool)
 where
     R: StackRuntimeTrait,
@@ -188,6 +308,37 @@ fn stealing_runtime_maps_ring_diagnostics_to_runtime_io_categories() {
     });
 
     assert_runtime_io_kind(RingError::Canceled, RuntimeIoErrorKind::Canceled);
+}
+
+#[test]
+fn stealing_runtime_neutral_waiter_creation_after_registration_is_allocation_free() {
+    let mut runtime = StealRuntime::with_config(RuntimeConfig {
+        workers: NonZeroUsize::new(2).unwrap(),
+        steal_policy: StealPolicy::steal_one(),
+        ..RuntimeConfig::default()
+    });
+
+    runtime.block_on(|cx| {
+        cx.scope(|scope| {
+            let worker = scope.spawn_stealable(|cx| {
+                let registration = cx
+                    .stackful_wait_registration()
+                    .expect("stealable task should provide stackful wait registration");
+
+                let (_, counts) = allocation_tracking::measure(|| {
+                    for _ in 0..2 {
+                        let waiter = registration.waiter();
+                        std::hint::black_box(waiter.is_active());
+                    }
+                });
+
+                assert_eq!(counts.allocating_operations(), 0, "{counts:?}");
+                assert_eq!(counts.allocated_or_reallocated_bytes(), 0, "{counts:?}");
+            });
+
+            worker.join(cx);
+        });
+    });
 }
 
 #[test]
