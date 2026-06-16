@@ -25,13 +25,13 @@
 
 use std::collections::BTreeMap;
 
-use kimojio_stack::RuntimeContext;
-use kimojio_stack_http::{HttpConfig, StackTransport, h2};
+use kimojio_stack::{IoFd, RuntimeSocket};
+use kimojio_stack_http::{HttpConfig, HttpRuntime, RuntimeStackTransport, h2};
 use prost::Message;
 
 use crate::{
     Error, ExportClientConfig, ExportLimits, InstrumentationScope, KeyValue, Resource,
-    check_encoded_len, client::UnaryExportClient, proto, validate_non_empty,
+    check_encoded_len, client::RuntimeUnaryExportClient, proto, validate_non_empty,
 };
 
 /// OTLP metrics unary export path.
@@ -335,49 +335,29 @@ impl MetricsExportResult {
 ///
 /// The client owns one gRPC connection. It performs one unary export per
 /// [`export`](Self::export) call and leaves retry/batching policy to the caller.
-pub struct MetricsClient {
-    inner: UnaryExportClient,
+pub struct RuntimeMetricsClient<S> {
+    inner: RuntimeUnaryExportClient<S>,
 }
 
-impl MetricsClient {
+/// Stack-core OTLP metrics export client compatibility alias.
+pub type MetricsClient = RuntimeMetricsClient<IoFd>;
+
+impl<S> RuntimeMetricsClient<S> {
     /// Creates a metrics client from a caller-created HTTP/2 connection.
-    pub fn new(http: h2::ClientConnection, config: ExportClientConfig) -> Self {
+    pub fn new(http: h2::RuntimeClientConnection<S>, config: ExportClientConfig) -> Self {
         Self {
-            inner: UnaryExportClient::new(http, config),
+            inner: RuntimeUnaryExportClient::new(http, config),
         }
     }
 
     /// Creates a metrics client from a caller-created stack transport.
     pub fn from_transport(
-        transport: StackTransport,
+        transport: RuntimeStackTransport<S>,
         http_config: HttpConfig,
         config: ExportClientConfig,
     ) -> Self {
         Self {
-            inner: UnaryExportClient::from_transport(transport, http_config, config),
-        }
-    }
-
-    /// Creates a plaintext metrics client from a connected socket.
-    pub fn plaintext(
-        socket: kimojio_stack::OwnedFd,
-        http_config: HttpConfig,
-        config: ExportClientConfig,
-    ) -> Self {
-        Self {
-            inner: UnaryExportClient::plaintext(socket, http_config, config),
-        }
-    }
-
-    /// Creates a TLS metrics client from an established stack TLS stream.
-    #[cfg(feature = "tls")]
-    pub fn tls(
-        stream: kimojio_stack_tls::TlsStream,
-        http_config: HttpConfig,
-        config: ExportClientConfig,
-    ) -> Self {
-        Self {
-            inner: UnaryExportClient::tls(stream, http_config, config),
+            inner: RuntimeUnaryExportClient::from_transport(transport, http_config, config),
         }
     }
 
@@ -387,9 +367,12 @@ impl MetricsClient {
     /// a gRPC request.
     pub fn export(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         batch: MetricBatch,
-    ) -> Result<MetricsExportResult, Error> {
+    ) -> Result<MetricsExportResult, Error>
+    where
+        S: RuntimeSocket,
+    {
         if batch.is_empty() {
             return Ok(MetricsExportResult::default());
         }
@@ -401,8 +384,36 @@ impl MetricsClient {
     }
 
     /// Finishes the client by closing the underlying gRPC connection.
-    pub fn finish(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
+    pub fn finish(self, cx: &impl HttpRuntime<S>) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.inner.finish(cx)
+    }
+}
+
+impl MetricsClient {
+    /// Creates a plaintext metrics client from a connected socket.
+    pub fn plaintext(
+        socket: kimojio_stack::OwnedFd,
+        http_config: HttpConfig,
+        config: ExportClientConfig,
+    ) -> Self {
+        Self {
+            inner: RuntimeUnaryExportClient::plaintext(socket, http_config, config),
+        }
+    }
+
+    /// Creates a TLS metrics client from an established stack TLS stream.
+    #[cfg(feature = "tls")]
+    pub fn tls(
+        stream: kimojio_stack_tls::TlsStream,
+        http_config: HttpConfig,
+        config: ExportClientConfig,
+    ) -> Self {
+        Self {
+            inner: RuntimeUnaryExportClient::tls(stream, http_config, config),
+        }
     }
 }
 

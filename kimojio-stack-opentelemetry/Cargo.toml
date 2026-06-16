@@ -22,6 +22,7 @@ prost.workspace = true
 
 [dev-dependencies]
 kimojio-stack-http = { path = "../kimojio-stack-http", version = "0.0.1-alpha.0", features = ["tls"] }
+kimojio-stack-steal.workspace = true
 opentelemetry-proto = { workspace = true, default-features = false, features = ["gen-tonic-messages", "logs", "metrics"] }
 openssl.workspace = true
 serde_json.workspace = true

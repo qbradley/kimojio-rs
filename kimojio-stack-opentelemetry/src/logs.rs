@@ -36,13 +36,13 @@
 //! # }
 //! ```
 
-use kimojio_stack::RuntimeContext;
-use kimojio_stack_http::{HttpConfig, StackTransport, h2};
+use kimojio_stack::{IoFd, RuntimeSocket};
+use kimojio_stack_http::{HttpConfig, HttpRuntime, RuntimeStackTransport, h2};
 use prost::Message;
 
 use crate::{
     AnyValue, Error, ExportClientConfig, ExportLimits, InstrumentationScope, KeyValue, Resource,
-    check_encoded_len, client::UnaryExportClient, proto,
+    check_encoded_len, client::RuntimeUnaryExportClient, proto,
 };
 
 /// OTLP logs unary export path.
@@ -245,49 +245,29 @@ impl LogsExportResult {
 ///
 /// The client owns one gRPC connection. It performs one unary export per
 /// [`export`](Self::export) call and does not retry or batch in the background.
-pub struct LogsClient {
-    inner: UnaryExportClient,
+pub struct RuntimeLogsClient<S> {
+    inner: RuntimeUnaryExportClient<S>,
 }
 
-impl LogsClient {
+/// Stack-core OTLP logs export client compatibility alias.
+pub type LogsClient = RuntimeLogsClient<IoFd>;
+
+impl<S> RuntimeLogsClient<S> {
     /// Creates a logs client from a caller-created HTTP/2 connection.
-    pub fn new(http: h2::ClientConnection, config: ExportClientConfig) -> Self {
+    pub fn new(http: h2::RuntimeClientConnection<S>, config: ExportClientConfig) -> Self {
         Self {
-            inner: UnaryExportClient::new(http, config),
+            inner: RuntimeUnaryExportClient::new(http, config),
         }
     }
 
     /// Creates a logs client from a caller-created stack transport.
     pub fn from_transport(
-        transport: StackTransport,
+        transport: RuntimeStackTransport<S>,
         http_config: HttpConfig,
         config: ExportClientConfig,
     ) -> Self {
         Self {
-            inner: UnaryExportClient::from_transport(transport, http_config, config),
-        }
-    }
-
-    /// Creates a plaintext logs client from a connected socket.
-    pub fn plaintext(
-        socket: kimojio_stack::OwnedFd,
-        http_config: HttpConfig,
-        config: ExportClientConfig,
-    ) -> Self {
-        Self {
-            inner: UnaryExportClient::plaintext(socket, http_config, config),
-        }
-    }
-
-    /// Creates a TLS logs client from an established stack TLS stream.
-    #[cfg(feature = "tls")]
-    pub fn tls(
-        stream: kimojio_stack_tls::TlsStream,
-        http_config: HttpConfig,
-        config: ExportClientConfig,
-    ) -> Self {
-        Self {
-            inner: UnaryExportClient::tls(stream, http_config, config),
+            inner: RuntimeUnaryExportClient::from_transport(transport, http_config, config),
         }
     }
 
@@ -297,9 +277,12 @@ impl LogsClient {
     /// gRPC request.
     pub fn export(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         batch: LogBatch,
-    ) -> Result<LogsExportResult, Error> {
+    ) -> Result<LogsExportResult, Error>
+    where
+        S: RuntimeSocket,
+    {
         if batch.is_empty() {
             return Ok(LogsExportResult::default());
         }
@@ -313,22 +296,61 @@ impl LogsClient {
     }
 
     /// Finishes the client by closing the underlying gRPC connection.
-    pub fn finish(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
+    pub fn finish(self, cx: &impl HttpRuntime<S>) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.inner.finish(cx)
+    }
+}
+
+impl LogsClient {
+    /// Creates a plaintext logs client from a connected socket.
+    pub fn plaintext(
+        socket: kimojio_stack::OwnedFd,
+        http_config: HttpConfig,
+        config: ExportClientConfig,
+    ) -> Self {
+        Self {
+            inner: RuntimeUnaryExportClient::plaintext(socket, http_config, config),
+        }
+    }
+
+    /// Creates a TLS logs client from an established stack TLS stream.
+    #[cfg(feature = "tls")]
+    pub fn tls(
+        stream: kimojio_stack_tls::TlsStream,
+        http_config: HttpConfig,
+        config: ExportClientConfig,
+    ) -> Self {
+        Self {
+            inner: RuntimeUnaryExportClient::tls(stream, http_config, config),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::hint::black_box;
+    use std::{hint::black_box, num::NonZeroUsize};
 
-    use kimojio_stack::{Runtime, once};
-    use kimojio_stack_grpc::{ServerConfig, Status, StatusCode, UnaryReply, UnaryServer};
-    use kimojio_stack_http::{HttpConfig, StackTransport, h2};
+    use kimojio_stack::{Runtime, SocketIoRuntime, once};
+    use kimojio_stack_grpc::{
+        GrpcRuntime, RuntimeUnaryServer, ServerConfig, Status, StatusCode, UnaryReply, UnaryServer,
+    };
+    use kimojio_stack_http::{HttpConfig, RuntimeStackTransport, StackTransport, h2};
+    use kimojio_stack_steal::{
+        Runtime as StealRuntime, RuntimeConfig as StealRuntimeConfig, StealPolicy,
+    };
     use rustix::net::{AddressFamily, RecvFlags, SocketFlags, SocketType, recv, socketpair};
 
     use super::*;
     use crate::allocation_tracking;
+
+    struct StealGrpcRuntime;
+
+    impl GrpcRuntime for StealGrpcRuntime {
+        type Context<'cx> = kimojio_stack_steal::RuntimeContext<'cx>;
+    }
 
     fn batch() -> LogBatch {
         LogBatch::new(
@@ -515,6 +537,63 @@ mod tests {
 
                 assert_eq!(result.rejected_log_records(), 1);
                 assert_eq!(result.error_message(), "one rejected");
+            });
+        });
+    }
+
+    #[test]
+    fn logs_client_exports_on_stealing_runtime() {
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        let mut runtime = StealRuntime::with_config(StealRuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..StealRuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn_stealable(move |cx| {
+                    let server_fd = cx.socket_from_owned_fd(server_fd).unwrap();
+                    let server_transport = RuntimeStackTransport::plaintext_socket(server_fd);
+                    let mut http =
+                        h2::RuntimeServerConnection::new(server_transport, HttpConfig::default());
+                    let mut grpc =
+                        RuntimeUnaryServer::<StealGrpcRuntime>::new(ServerConfig::default());
+                    grpc.add_unary::<
+                        proto::ExportLogsServiceRequest,
+                        proto::ExportLogsServiceResponse,
+                        _,
+                    >(LOGS_SERVICE_PATH, |_cx, _metadata, request| {
+                        let records = &request.resource_logs[0].scope_logs[0].log_records;
+                        assert_eq!(records.len(), 1);
+                        assert_eq!(records[0].severity_text, "INFO");
+                        Ok(UnaryReply::new(proto::ExportLogsServiceResponse {
+                            partial_success: None,
+                        }))
+                    });
+                    grpc.serve_one(cx, &mut http).unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn_stealable(move |cx| {
+                    let client_fd = cx.socket_from_owned_fd(client_fd).unwrap();
+                    let client_transport = RuntimeStackTransport::plaintext_socket(client_fd);
+                    let http =
+                        h2::RuntimeClientConnection::new(client_transport, HttpConfig::default());
+                    let mut client = RuntimeLogsClient::new(http, ExportClientConfig::default());
+                    let result = client.export(cx, batch()).unwrap();
+                    client.finish(cx).unwrap();
+                    result.rejected_log_records()
+                });
+
+                server.join(cx);
+                assert_eq!(client.join(cx), 0);
             });
         });
     }

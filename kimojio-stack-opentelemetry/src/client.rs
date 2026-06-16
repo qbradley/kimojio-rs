@@ -3,14 +3,14 @@
 
 //! Shared OTLP unary export client.
 //!
-//! Runtime I/O is inherited from the contained gRPC unary client and its HTTP/2
-//! connection. This module intentionally adds no runtime instrumentation hooks or
-//! hidden background export machinery; future hooks should be optional and attach
-//! below this layer at the shared runtime socket contract.
+//! Runtime I/O is inherited from the contained gRPC unary client and its generic
+//! HTTP/2 connection. This module intentionally adds no runtime instrumentation
+//! hooks or hidden background export machinery; future hooks should be optional
+//! and attach below this layer at the shared runtime socket contract.
 
-use kimojio_stack_grpc::ClientConfig;
-use kimojio_stack_grpc::{Metadata, UnaryClient};
-use kimojio_stack_http::{HttpConfig, StackTransport, h2};
+use kimojio_stack::{IoFd, RuntimeSocket};
+use kimojio_stack_grpc::{ClientConfig, Metadata, RuntimeUnaryClient};
+use kimojio_stack_http::{HttpConfig, HttpRuntime, RuntimeStackTransport, StackTransport, h2};
 use prost::Message;
 
 use crate::{Error, ExportLimits};
@@ -45,51 +45,40 @@ impl ExportClientConfig {
     }
 }
 
-pub(crate) struct UnaryExportClient {
-    grpc: UnaryClient,
+pub(crate) struct RuntimeUnaryExportClient<S> {
+    grpc: RuntimeUnaryClient<S>,
     config: ExportClientConfig,
 }
 
-impl UnaryExportClient {
-    pub(crate) fn new(http: h2::ClientConnection, config: ExportClientConfig) -> Self {
+pub(crate) type UnaryExportClient = RuntimeUnaryExportClient<IoFd>;
+
+impl<S> RuntimeUnaryExportClient<S> {
+    pub(crate) fn new(http: h2::RuntimeClientConnection<S>, config: ExportClientConfig) -> Self {
         Self {
-            grpc: UnaryClient::new(http, config.grpc()),
+            grpc: RuntimeUnaryClient::new(http, config.grpc()),
             config,
         }
     }
 
     pub(crate) fn from_transport(
-        transport: StackTransport,
+        transport: RuntimeStackTransport<S>,
         http_config: HttpConfig,
         config: ExportClientConfig,
     ) -> Self {
-        Self::new(h2::ClientConnection::new(transport, http_config), config)
-    }
-
-    pub(crate) fn plaintext(
-        socket: kimojio_stack::OwnedFd,
-        http_config: HttpConfig,
-        config: ExportClientConfig,
-    ) -> Self {
-        Self::from_transport(StackTransport::plaintext(socket), http_config, config)
-    }
-
-    #[cfg(feature = "tls")]
-    pub(crate) fn tls(
-        stream: kimojio_stack_tls::TlsStream,
-        http_config: HttpConfig,
-        config: ExportClientConfig,
-    ) -> Self {
-        Self::from_transport(StackTransport::tls(stream), http_config, config)
+        Self::new(
+            h2::RuntimeClientConnection::new(transport, http_config),
+            config,
+        )
     }
 
     pub(crate) fn export<Req, Resp>(
         &mut self,
-        cx: &kimojio_stack::RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         path: &str,
         request: &Req,
     ) -> Result<Resp, Error>
     where
+        S: RuntimeSocket,
         Req: Message,
         Resp: Message + Default,
     {
@@ -103,7 +92,37 @@ impl UnaryExportClient {
         self.config.export_limits
     }
 
-    pub(crate) fn finish(self, cx: &kimojio_stack::RuntimeContext<'_>) -> Result<(), Error> {
+    pub(crate) fn finish(self, cx: &impl HttpRuntime<S>) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.grpc.close(cx).map_err(Error::from)
+    }
+}
+
+impl UnaryExportClient {
+    pub(crate) fn from_stack_transport(
+        transport: StackTransport,
+        http_config: HttpConfig,
+        config: ExportClientConfig,
+    ) -> Self {
+        Self::from_transport(transport, http_config, config)
+    }
+
+    pub(crate) fn plaintext(
+        socket: kimojio_stack::OwnedFd,
+        http_config: HttpConfig,
+        config: ExportClientConfig,
+    ) -> Self {
+        Self::from_stack_transport(StackTransport::plaintext(socket), http_config, config)
+    }
+
+    #[cfg(feature = "tls")]
+    pub(crate) fn tls(
+        stream: kimojio_stack_tls::TlsStream,
+        http_config: HttpConfig,
+        config: ExportClientConfig,
+    ) -> Self {
+        Self::from_stack_transport(StackTransport::tls(stream), http_config, config)
     }
 }

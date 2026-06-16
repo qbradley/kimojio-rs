@@ -328,7 +328,7 @@ HTTP clients.
 - Runtime-generic HTTP transport tests once generic HTTP clients exist.
 - Emulator/real-storage tests remain environment-gated.
 
-### 15. Fully migrate OpenTelemetry exporters to generic runtime contexts
+### 15. [done] Fully migrate OpenTelemetry exporters to generic runtime contexts
 
 **Why:** OpenTelemetry exporters wrap gRPC unary clients, so they inherit the
 current stack-core runtime boundary.

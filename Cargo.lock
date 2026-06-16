@@ -964,6 +964,7 @@ dependencies = [
  "kimojio-stack",
  "kimojio-stack-grpc",
  "kimojio-stack-http",
+ "kimojio-stack-steal",
  "kimojio-stack-tls",
  "openssl",
  "opentelemetry-proto",

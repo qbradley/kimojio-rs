@@ -16,13 +16,15 @@
 //! # Runtime and instrumentation readiness
 //!
 //! OpenTelemetry inherits its runtime boundary from gRPC, which in turn owns a
-//! `kimojio-stack-http` HTTP/2 connection. Runtime-agnostic export should follow
-//! that existing chain once generic HTTP/2/gRPC wrappers exist; this crate should
-//! not add another runtime trait. Runtime operation instrumentation, if added,
-//! should attach at explicit shared-contract events such as capability checks,
-//! socket submission/completion, wait registration, cancellation, close, and
-//! adapter error mapping. With instrumentation disabled, those hooks must not
-//! require dynamic dispatch, allocation, background work, or helper threads.
+//! `kimojio-stack-http` HTTP/2 connection. The stack-core [`LogsClient`] and
+//! [`MetricsClient`] aliases are backed by runtime-generic [`RuntimeLogsClient`]
+//! and [`RuntimeMetricsClient`] types, so export can run on any runtime/socket
+//! family that satisfies the HTTP/gRPC socket I/O contract. Runtime operation
+//! instrumentation, if added, should attach at explicit shared-contract events
+//! such as capability checks, socket submission/completion, wait registration,
+//! cancellation, close, and adapter error mapping. With instrumentation disabled,
+//! those hooks must not require dynamic dispatch, allocation, background work, or
+//! helper threads.
 //!
 //! # Encoding a log batch
 //!
@@ -82,10 +84,12 @@ mod proto;
 
 pub use client::ExportClientConfig;
 pub use error::{Error, ErrorKind};
-pub use logs::{LogBatch, LogRecord, LogsClient, LogsExportResult, SeverityNumber};
+pub use logs::{
+    LogBatch, LogRecord, LogsClient, LogsExportResult, RuntimeLogsClient, SeverityNumber,
+};
 pub use metrics::{
     GaugeDataPoint, MetricBatch, MetricShape, MetricsClient, MetricsExportResult,
-    MonotonicSumDataPoint, NumberValue,
+    MonotonicSumDataPoint, NumberValue, RuntimeMetricsClient,
 };
 
 #[cfg(test)]
