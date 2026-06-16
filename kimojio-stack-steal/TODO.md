@@ -13,7 +13,7 @@ is the companion runtime that drives the shared runtime/I/O contract.
 
 ## Stack-steal and runtime API hardening
 
-### 1. Replace shared-buffer fd-clone retirement polling
+### 1. [done] Replace shared-buffer fd-clone retirement polling
 
 **Why:** `SharedBufferOperation::request_cancel` still waits for fd clone
 retirement with zero-duration runtime sleeps plus `thread::sleep`. This can block
@@ -40,7 +40,7 @@ already decided a deadline won.
 - Stress many stalled stack-steal HTTP/TLS connections with short deadlines and
   assert bounded cancellation latency and worker availability.
 
-### 2. Avoid fresh shared-ring core allocation for each root socket adapter call
+### 2. [done] Avoid fresh shared-ring core allocation for each root socket adapter call
 
 **Why:** Root/non-worker `SocketIoRuntime` adapter calls choose `RingMode::Shared`
 and currently create a fresh shared ring for each read/write/async/shutdown/close
@@ -66,7 +66,7 @@ allocation on hot root/shared paths.
 - A regression that shared-ring core creation is bounded near setup, not
   proportional to read/write calls or deadline waits.
 
-### 3. Remove stack-core `Waitable` from runtime-neutral result traits
+### 3. [done] Remove stack-core `Waitable` from runtime-neutral result traits
 
 **Why:** `RuntimeReadResult` and `RuntimeWriteResult` are runtime-neutral in name
 but still inherit stack-core `Waitable`, forcing non-stack runtimes to implement
@@ -91,7 +91,7 @@ stack-core waiter compatibility.
 - HTTP/TLS runtime-generic tests proving waits still work on stack-core and
   stack-steal.
 
-### 4. Clarify or fix direct result `cancel()` semantics
+### 4. [done] Clarify or fix direct result `cancel()` semantics
 
 **Why:** The shared result trait comments say cancellation is non-consuming, but
 direct stack-core `IoResult::cancel` and stack-steal `RingIoResult::cancel`
@@ -116,7 +116,7 @@ consume/detach state. The safer non-consuming path currently lives on
   then verify one deterministic drain/close behavior.
 - Tests for immediate socket close/reclaim after direct cancellation.
 
-### 5. Clarify TLS async cancellation API ownership
+### 5. [done] Clarify TLS async cancellation API ownership
 
 **Why:** `TlsReadResult::cancel(&self, _cx: &R)` and
 `TlsWriteResult::cancel(&self, _cx: &R)` accept a runtime context but use the
@@ -141,7 +141,7 @@ runtime captured when the async handle was created.
 - A regression that cancellation still poisons TLS streams and drains private
   socket I/O on both runtime families.
 
-### 6. Add TLS write-deadline cancellation coverage
+### 6. [done] Add TLS write-deadline cancellation coverage
 
 **Why:** Current active HTTP TLS deadline tests cover read timeouts. Write
 timeouts have distinct cancellation, drain, poisoning, and close paths.
