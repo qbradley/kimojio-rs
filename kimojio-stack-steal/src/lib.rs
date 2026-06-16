@@ -96,10 +96,10 @@ use std::time::{Duration, Instant};
 use crossbeam_deque::{Injector, Steal, Stealer, Worker as CrossbeamWorker};
 pub use kimojio_stack::StackUsage;
 use kimojio_stack::{
-    Errno, IoReadBuffer, IoRuntime, IoWriteBuffer, NoPayloadIo, RawIo, ReadOutput,
-    RuntimeCapabilities, RuntimeCapability, RuntimeFamily, RuntimeIoError, RuntimeWaitable,
-    SchedulerWake, StackfulWaitContext, StackfulWaitRegistration, StackfulWaiter,
-    UnsupportedCapability, WaitRegistration, Waitable, WriteOutput,
+    Errno, IoReadBuffer, IoWriteBuffer, NoPayloadIo, RawIo, ReadOutput, RuntimeCapabilities,
+    RuntimeCapability, RuntimeFamily, RuntimeWaitable, SchedulerWake, StackfulWaitContext,
+    StackfulWaitRegistration, StackfulWaiter, UnsupportedCapability, WaitRegistration, Waitable,
+    WriteOutput,
 };
 use rustix::net::Shutdown;
 
@@ -691,10 +691,6 @@ impl RingFd {
             Err(fd) => Err(Self { fd }),
         }
     }
-
-    fn strong_count(&self) -> usize {
-        Arc::strong_count(&self.fd)
-    }
 }
 
 impl AsFd for RingFd {
@@ -950,7 +946,7 @@ where
             inner: Some(RingIoResultInner::Shared(SharedBufferOperation {
                 state,
                 buffer,
-                fd,
+                fd: Some(fd),
                 _ring: ring,
             })),
             output,
@@ -1119,7 +1115,7 @@ where
 struct SharedBufferOperation<B> {
     state: Arc<SharedOpState>,
     buffer: Arc<Mutex<Option<B>>>,
-    fd: RingFd,
+    fd: Option<RingFd>,
     _ring: SharedRing,
 }
 
@@ -1158,9 +1154,10 @@ impl<B> SharedBufferOperation<B> {
         );
     }
 
-    fn request_cancel(&mut self, cx: &RuntimeContext<'_>) -> Result<(), RingError> {
+    fn request_cancel(&mut self, _cx: &RuntimeContext<'_>) -> Result<(), RingError> {
         self.state.cancel();
-        wait_for_fd_clone_release(cx, &self.fd, 2)
+        self.fd = None;
+        Ok(())
     }
 }
 
@@ -1175,30 +1172,6 @@ fn write_output<B>(buffer: B, bytes: u32) -> WriteOutput<B> {
     WriteOutput {
         bytes: bytes as usize,
         buffer,
-    }
-}
-
-fn wait_for_fd_clone_release(
-    cx: &RuntimeContext<'_>,
-    fd: &RingFd,
-    retained_count: usize,
-) -> Result<(), RingError> {
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while fd.strong_count() > retained_count {
-        if Instant::now() >= deadline {
-            return Err(RingError::FdInUse);
-        }
-        IoRuntime::sleep_for(cx, Duration::ZERO).map_err(ring_error_from_runtime_io)?;
-        thread::sleep(Duration::from_micros(50));
-    }
-    Ok(())
-}
-
-fn ring_error_from_runtime_io(error: RuntimeIoError) -> RingError {
-    match error {
-        RuntimeIoError::Io(error) => RingError::Io(error),
-        RuntimeIoError::Unsupported(_) => RingError::Canceled,
-        RuntimeIoError::Other(_) => RingError::Canceled,
     }
 }
 
@@ -2120,9 +2093,27 @@ impl SharedRing {
     }
 
     fn submit_close(&self, cx: &RuntimeContext<'_>, fd: RingFd) -> Result<RingTimeout, RingError> {
-        let fd = fd.into_owned().map_err(|_| RingError::FdInUse)?;
-        let state = Arc::new(SharedOpState::new(&self.core));
-        self.submit_operation(cx, SharedOperationKind::Close { fd: Some(fd) }, state, None)
+        match &self.driver {
+            SharedRingDriver::Local { .. } => {
+                let fd = fd.into_owned().map_err(|_| RingError::FdInUse)?;
+                let state = Arc::new(SharedOpState::new(&self.core));
+                self.submit_operation(cx, SharedOperationKind::Close { fd: Some(fd) }, state, None)
+            }
+            SharedRingDriver::Multi { runtime, owner } => {
+                let state = Arc::new(SharedOpState::new(&self.core));
+                self.core.submit_queued(
+                    SharedOperation::deferred_close(Arc::clone(&state), fd),
+                    SharedOpRoute::worker(*owner),
+                )?;
+                if let Err(error) = runtime.submit_shared_ring(*owner, &self.core) {
+                    if matches!(error, RingError::QueueFull) {
+                        self.core.reject_queued(RingError::QueueFull);
+                    }
+                    return Err(error);
+                }
+                Ok(RingTimeout::shared(state))
+            }
+        }
     }
 
     fn submit_operation(
@@ -2579,6 +2570,10 @@ enum SharedOperation {
         state: Arc<SharedOpState>,
     },
     Buffer(Box<dyn QueuedSharedBufferOperation>),
+    DeferredClose {
+        state: Arc<SharedOpState>,
+        fd: RingFd,
+    },
 }
 
 impl SharedOperation {
@@ -2590,10 +2585,15 @@ impl SharedOperation {
         Self::Buffer(operation)
     }
 
+    fn deferred_close(state: Arc<SharedOpState>, fd: RingFd) -> Self {
+        Self::DeferredClose { state, fd }
+    }
+
     fn state(&self) -> &Arc<SharedOpState> {
         match self {
             Self::Unit { state, .. } => state,
             Self::Buffer(operation) => operation.state(),
+            Self::DeferredClose { state, .. } => state,
         }
     }
 
@@ -2752,6 +2752,62 @@ where
             return true;
         }
 
+        false
+    }
+}
+
+struct ActiveCloseOperation {
+    state: Arc<SharedOpState>,
+    fd: Option<RingFd>,
+    io: Option<ActiveUnitIo>,
+}
+
+impl ActiveCloseOperation {
+    fn new(state: Arc<SharedOpState>, fd: RingFd) -> Self {
+        Self {
+            state,
+            fd: Some(fd),
+            io: None,
+        }
+    }
+
+    fn cancel(&mut self) {
+        if let Some(io) = self.io.as_mut() {
+            io.cancel();
+        }
+        self.io = None;
+        self.fd = None;
+    }
+
+    fn poll(&mut self, root: &kimojio_stack::RuntimeContext<'_>) -> bool {
+        if self.state.is_terminal() {
+            self.cancel();
+            return true;
+        }
+
+        if let Some(io) = self.io.as_mut() {
+            if let Some(result) = io.try_wait() {
+                self.state
+                    .complete_from_driver(result.map_err(RingError::from));
+                self.io = None;
+                return true;
+            }
+            return false;
+        }
+
+        let Some(fd) = self.fd.take() else {
+            self.state.complete_from_driver(Err(RingError::Closed));
+            return true;
+        };
+
+        match fd.into_owned() {
+            Ok(fd) => {
+                self.io = Some(ActiveUnitIo::Raw(root.submit_raw_close(fd)));
+            }
+            Err(fd) => {
+                self.fd = Some(fd);
+            }
+        }
         false
     }
 }
@@ -3201,6 +3257,7 @@ enum ActiveSharedOperation {
         fd: Option<RingFd>,
     },
     Buffer(Box<dyn ActiveSharedBufferOperation>),
+    Close(ActiveCloseOperation),
 }
 
 impl ActiveSharedOperation {
@@ -3208,6 +3265,7 @@ impl ActiveSharedOperation {
         match self {
             Self::Unit { state, .. } => state,
             Self::Buffer(operation) => operation.state(),
+            Self::Close(operation) => &operation.state,
         }
     }
 
@@ -3221,10 +3279,11 @@ impl ActiveSharedOperation {
                 }
             }
             Self::Buffer(operation) => operation.cancel(),
+            Self::Close(operation) => operation.cancel(),
         }
     }
 
-    fn poll(&mut self) -> bool {
+    fn poll(&mut self, root: &kimojio_stack::RuntimeContext<'_>) -> bool {
         match self {
             Self::Unit { state, io, fd } => {
                 if state.is_terminal() {
@@ -3245,6 +3304,7 @@ impl ActiveSharedOperation {
                 false
             }
             Self::Buffer(operation) => operation.poll(),
+            Self::Close(operation) => operation.poll(root),
         }
     }
 }
@@ -3591,6 +3651,9 @@ impl MultiRuntime {
                         ActiveSharedOperation::Unit { state, io, fd }
                     }
                     SharedOperation::Buffer(operation) => operation.start(root),
+                    SharedOperation::DeferredClose { state, fd } => {
+                        ActiveSharedOperation::Close(ActiveCloseOperation::new(state, fd))
+                    }
                 };
                 #[cfg(test)]
                 core.record_driver_submission_for_test();
@@ -3621,11 +3684,14 @@ impl MultiRuntime {
         }
     }
 
-    fn poll_active_shared_operations(active: &mut Vec<ActiveSharedOperation>) -> bool {
+    fn poll_active_shared_operations(
+        root: &kimojio_stack::RuntimeContext<'_>,
+        active: &mut Vec<ActiveSharedOperation>,
+    ) -> bool {
         let mut made_progress = false;
         let mut index = 0;
         while index < active.len() {
-            if active[index].poll() {
+            if active[index].poll(root) {
                 #[cfg(test)]
                 active[index].state().record_driver_retired_for_test();
                 active.swap_remove(index);
@@ -3658,7 +3724,7 @@ impl MultiRuntime {
                     let observed_wake = self.wake_epoch();
                     let mut made_progress =
                         self.drain_shared_ring_commands(worker, root, &mut active_shared);
-                    made_progress |= Self::poll_active_shared_operations(&mut active_shared);
+                    made_progress |= Self::poll_active_shared_operations(root, &mut active_shared);
 
                     let spawned =
                         if let Some(ready) = self.take_job(worker, &local_queue, idle_iterations) {
@@ -3703,7 +3769,7 @@ impl MultiRuntime {
                     made_progress |= spawned;
 
                     made_progress |= root.internal_scheduler_tick();
-                    made_progress |= Self::poll_active_shared_operations(&mut active_shared);
+                    made_progress |= Self::poll_active_shared_operations(root, &mut active_shared);
 
                     if self.shutdown.load(Ordering::Acquire) {
                         self.close_worker_shared_operations(worker, &mut active_shared);
@@ -5336,6 +5402,50 @@ mod tests {
             write.cancel();
             assert_eq!(drops.load(Ordering::Acquire), 0);
             wait_until(cx, || drops.load(Ordering::Acquire) == 1);
+        });
+    }
+
+    #[test]
+    fn shared_ring_cancel_write_then_close_does_not_return_fd_in_use() {
+        let (read_fd, write_fd) = pipe().unwrap();
+        fill_pipe(&write_fd);
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let handle = scope.spawn(move |cx| {
+                    let ring = cx.create_shared_ring();
+                    let _read_fd = RingFd::from_owned(read_fd);
+                    let write_fd = RingFd::from_owned(write_fd);
+                    let mut write = ring
+                        .write_async(
+                            cx,
+                            &write_fd,
+                            DropCountingWriteBuffer::new(1, Arc::clone(&drops)),
+                        )
+                        .unwrap();
+
+                    wait_until(cx, || {
+                        ring.shared_test_counters().unwrap().driver_submitted == 1
+                    });
+                    let cancel_start = Instant::now();
+                    write.request_cancel(cx).unwrap();
+                    assert!(
+                        cancel_start.elapsed() < Duration::from_millis(50),
+                        "shared cancellation should not poll fd clone retirement"
+                    );
+
+                    ring.close(cx, write_fd).unwrap();
+                    assert!(matches!(write.try_get(), Some(Err(RingError::Canceled))));
+                    assert_eq!(drops.load(Ordering::Acquire), 1);
+                });
+                handle.join(cx);
+            });
         });
     }
 
