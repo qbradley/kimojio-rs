@@ -1,10 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::panic::{self, AssertUnwindSafe};
+
 use kimojio_stack::{
-    ReadOutput, RuntimeIoError, RuntimeReadResult, RuntimeWaitable, RuntimeWriteResult,
-    StackfulWaiter, WriteOutput,
+    ReadOutput, Runtime, RuntimeIoError, RuntimeReadResult, RuntimeWaitable, RuntimeWriteResult,
+    SocketIoRuntime, StackfulWaitContext, StackfulWaiter, WriteOutput,
 };
+use rustix::pipe::pipe;
 
 struct FakeResult<T> {
     output: Option<T>,
@@ -81,4 +84,46 @@ fn runtime_result_traits_do_not_require_stack_core_waitable() {
         .unwrap();
     assert_eq!(output.bytes, 1);
     assert_eq!(output.buffer, vec![7]);
+}
+
+#[test]
+fn direct_result_cancel_detaches_stack_core_handle() {
+    let mut runtime = Runtime::new();
+
+    runtime.block_on(|cx| {
+        let (read_fd, _write_fd) = pipe().unwrap();
+        let read_fd = cx.socket_from_owned_fd(read_fd).unwrap();
+        let mut read = cx.read_async(&read_fd, vec![0_u8; 1]);
+
+        RuntimeReadResult::cancel(&mut read).unwrap();
+
+        assert!(RuntimeWaitable::is_ready(&read));
+        assert!(
+            panic::catch_unwind(AssertUnwindSafe(|| RuntimeReadResult::try_get(&mut read)))
+                .is_err()
+        );
+    });
+}
+
+#[test]
+fn context_cancel_keeps_stack_core_result_drainable_before_close() {
+    let mut runtime = Runtime::new();
+
+    runtime.block_on(|cx| {
+        let (read_fd, write_fd) = pipe().unwrap();
+        let read_fd = cx.socket_from_owned_fd(read_fd).unwrap();
+        let write_fd = cx.socket_from_owned_fd(write_fd).unwrap();
+        let mut read = cx.read_async(&read_fd, vec![0_u8; 1]);
+
+        cx.cancel_read(&mut read).unwrap();
+        cx.wait_stackful(&read).unwrap();
+        assert!(
+            RuntimeReadResult::try_get(&mut read)
+                .expect("canceled read should drain")
+                .is_err()
+        );
+
+        SocketIoRuntime::close(cx, read_fd).unwrap();
+        SocketIoRuntime::close(cx, write_fd).unwrap();
+    });
 }

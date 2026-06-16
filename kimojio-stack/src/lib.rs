@@ -3133,7 +3133,12 @@ impl<T, B> IoResult<T, B> {
         self.state.as_ref().map(io_state_user_data)
     }
 
-    /// Requests cancellation of this operation without waiting for completion.
+    /// Requests cancellation of this operation and detaches this result handle.
+    ///
+    /// After direct cancellation, this handle is taken and must not be drained
+    /// for a completion result. Runtime-neutral code that needs a drainable
+    /// canceled read/write result should call `SocketIoRuntime::cancel_read` or
+    /// `SocketIoRuntime::cancel_write` on the runtime context instead.
     pub fn cancel(&mut self) {
         self.detach_pending(true);
     }

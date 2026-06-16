@@ -311,7 +311,14 @@ pub trait RuntimeReadResult<B>: RuntimeWaitable {
     /// Attempts to consume the read result without parking.
     fn try_get(&mut self) -> Option<Result<Self::Output, RuntimeIoError>>;
 
-    /// Requests cancellation without consuming the pending result handle.
+    /// Requests cancellation through this result handle.
+    ///
+    /// This direct result-level cancellation is allowed to detach the pending
+    /// operation from the handle; callers should not expect a later `try_get` to
+    /// return a cancellation result. Code that must keep the result handle
+    /// drainable after a timeout should call [`SocketIoRuntime::cancel_read`]
+    /// instead; a runtime adapter may override that method with a non-consuming
+    /// cancellation path.
     fn cancel(&mut self) -> Result<(), RuntimeIoError>;
 }
 
@@ -344,7 +351,14 @@ pub trait RuntimeWriteResult<B>: RuntimeWaitable {
     /// Attempts to consume the write result without parking.
     fn try_get(&mut self) -> Option<Result<Self::Output, RuntimeIoError>>;
 
-    /// Requests cancellation without consuming the pending result handle.
+    /// Requests cancellation through this result handle.
+    ///
+    /// This direct result-level cancellation is allowed to detach the pending
+    /// operation from the handle; callers should not expect a later `try_get` to
+    /// return a cancellation result. Code that must keep the result handle
+    /// drainable after a timeout should call [`SocketIoRuntime::cancel_write`]
+    /// instead; a runtime adapter may override that method with a non-consuming
+    /// cancellation path.
     fn cancel(&mut self) -> Result<(), RuntimeIoError>;
 }
 
@@ -407,6 +421,10 @@ pub trait SocketIoRuntime: IoRuntime {
         B: IoWriteBuffer + Send + 'static;
 
     /// Requests cancellation of a pending read.
+    ///
+    /// The default delegates to [`RuntimeReadResult::cancel`], which may detach
+    /// the result handle. Runtime adapters that can keep canceled results
+    /// drainable should override this method.
     fn cancel_read<B>(&self, read: &mut Self::ReadResult<B>) -> Result<(), RuntimeIoError>
     where
         B: IoReadBuffer + Send + 'static,
@@ -415,6 +433,10 @@ pub trait SocketIoRuntime: IoRuntime {
     }
 
     /// Requests cancellation of a pending write.
+    ///
+    /// The default delegates to [`RuntimeWriteResult::cancel`], which may detach
+    /// the result handle. Runtime adapters that can keep canceled results
+    /// drainable should override this method.
     fn cancel_write<B>(&self, write: &mut Self::WriteResult<B>) -> Result<(), RuntimeIoError>
     where
         B: IoWriteBuffer + Send + 'static,

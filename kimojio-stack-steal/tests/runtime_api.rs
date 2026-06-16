@@ -100,6 +100,65 @@ fn runtime_agnostic_component_runs_on_stealing_runtime() {
 }
 
 #[test]
+fn direct_result_cancel_detaches_stealing_runtime_handle() {
+    let mut runtime = StealRuntime::with_config(RuntimeConfig {
+        workers: NonZeroUsize::new(2).unwrap(),
+        steal_policy: StealPolicy::steal_one(),
+        ..RuntimeConfig::default()
+    });
+
+    runtime.block_on(|cx| {
+        cx.scope(|scope| {
+            let worker = scope.spawn_stealable(|cx| {
+                let (read_fd, _write_fd) = pipe().unwrap();
+                let read_fd = cx.socket_from_owned_fd(read_fd).unwrap();
+                let mut read = cx.read_async(&read_fd, vec![0_u8; 1]).unwrap();
+
+                RuntimeReadResult::cancel(&mut read).unwrap();
+
+                assert!(RuntimeWaitable::is_ready(&read));
+                assert!(RuntimeReadResult::try_get(&mut read).is_none());
+            });
+
+            worker.join(cx);
+        });
+    });
+}
+
+#[test]
+fn context_cancel_keeps_stealing_runtime_result_drainable_before_close() {
+    let mut runtime = StealRuntime::with_config(RuntimeConfig {
+        workers: NonZeroUsize::new(2).unwrap(),
+        steal_policy: StealPolicy::steal_one(),
+        ..RuntimeConfig::default()
+    });
+
+    runtime.block_on(|cx| {
+        cx.scope(|scope| {
+            let worker = scope.spawn_stealable(|cx| {
+                let (read_fd, write_fd) = pipe().unwrap();
+                let read_fd = cx.socket_from_owned_fd(read_fd).unwrap();
+                let write_fd = cx.socket_from_owned_fd(write_fd).unwrap();
+                let mut read = cx.read_async(&read_fd, vec![0_u8; 1]).unwrap();
+
+                cx.cancel_read(&mut read).unwrap();
+                cx.wait_stackful(&read).unwrap();
+                assert!(
+                    RuntimeReadResult::try_get(&mut read)
+                        .expect("canceled read should drain")
+                        .is_err()
+                );
+
+                SocketIoRuntime::close(cx, read_fd).unwrap();
+                SocketIoRuntime::close(cx, write_fd).unwrap();
+            });
+
+            worker.join(cx);
+        });
+    });
+}
+
+#[test]
 fn stealing_runtime_waits_on_runtime_neutral_socket_results() {
     let mut runtime = StealRuntime::with_config(RuntimeConfig {
         workers: NonZeroUsize::new(2).unwrap(),

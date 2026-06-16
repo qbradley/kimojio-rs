@@ -995,7 +995,12 @@ where
         }
     }
 
-    /// Requests cancellation without waiting for completion.
+    /// Requests cancellation and detaches this result handle.
+    ///
+    /// After direct cancellation, this handle is detached and should not be used
+    /// to drain a completion result. Runtime-neutral code that needs a drainable
+    /// canceled read/write result should call `SocketIoRuntime::cancel_read` or
+    /// `SocketIoRuntime::cancel_write` on the runtime context instead.
     pub fn cancel(&mut self) {
         let Some(inner) = self.inner.take() else {
             return;
