@@ -22,6 +22,7 @@ http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "server", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["client", "server", "tokio", "http1", "http2"] }
 kimojio-stack-http = { path = "../kimojio-stack-http", version = "0.0.1-alpha.0", features = ["tls"] }
+kimojio-stack-steal.workspace = true
 kimojio-stack-tls.workspace = true
 openssl.workspace = true
 rustix = { workspace = true, features = ["net"] }

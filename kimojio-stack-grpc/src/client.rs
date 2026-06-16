@@ -8,8 +8,8 @@ use http::{
     HeaderMap, Request, Response, StatusCode,
     header::{CONTENT_TYPE, TE},
 };
-use kimojio_stack::RuntimeContext;
-use kimojio_stack_http::{Body, BodyLimits, Trailers, h2};
+use kimojio_stack::{IoFd, RuntimeSocket};
+use kimojio_stack_http::{Body, BodyLimits, HttpRuntime, Trailers, h2};
 use prost::Message;
 
 use crate::{Error, Metadata, Status, StatusCode as GrpcStatusCode, codec, status::GRPC_STATUS};
@@ -69,8 +69,8 @@ pub struct UnaryResponse<M> {
 /// [`trailers`]: Self::trailers
 /// [`cancel`]: Self::cancel
 /// [`next`]: Self::next
-pub struct ServerStreamingResponse<'a, M> {
-    client: &'a mut UnaryClient,
+pub struct RuntimeServerStreamingResponse<'a, S, M> {
+    client: &'a mut RuntimeUnaryClient<S>,
     stream_id: h2::StreamId,
     response_headers: HeaderMap,
     pub metadata: Metadata,
@@ -82,7 +82,7 @@ pub struct ServerStreamingResponse<'a, M> {
     _marker: PhantomData<fn() -> M>,
 }
 
-/// Low-level gRPC client over one stackful HTTP/2 connection.
+/// Low-level gRPC client over one runtime-backed HTTP/2 connection.
 ///
 /// The client name is historical: it supports both unary calls and
 /// server-streaming calls. It owns the HTTP/2 connection and does not perform
@@ -91,16 +91,22 @@ pub struct ServerStreamingResponse<'a, M> {
 /// # Runtime migration boundary
 ///
 /// Runtime-specific I/O is contained in the owned HTTP/2 connection. A future
-/// generic HTTP/2 connection can replace the concrete `h2::ClientConnection`
-/// field without changing gRPC framing, metadata, or status handling.
-pub struct UnaryClient {
-    http: h2::ClientConnection,
+/// Generic HTTP/2 connection ownership is the only runtime boundary; gRPC
+/// framing, metadata, and status handling remain runtime-neutral.
+pub struct RuntimeUnaryClient<S> {
+    http: h2::RuntimeClientConnection<S>,
     config: ClientConfig,
 }
 
-impl UnaryClient {
+/// Stack-core gRPC client compatibility alias.
+pub type UnaryClient = RuntimeUnaryClient<IoFd>;
+
+/// Stack-core server-streaming response compatibility alias.
+pub type ServerStreamingResponse<'a, M> = RuntimeServerStreamingResponse<'a, IoFd, M>;
+
+impl<S> RuntimeUnaryClient<S> {
     /// Creates a client over a caller-created HTTP/2 connection.
-    pub fn new(http: h2::ClientConnection, config: ClientConfig) -> Self {
+    pub fn new(http: h2::RuntimeClientConnection<S>, config: ClientConfig) -> Self {
         Self { http, config }
     }
 
@@ -111,12 +117,13 @@ impl UnaryClient {
     /// terminal status must be OK; non-OK statuses return [`Error::Status`].
     pub fn call<Req, Resp>(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         path: &str,
         metadata: Metadata,
         request: &Req,
     ) -> Result<UnaryResponse<Resp>, Error>
     where
+        S: RuntimeSocket,
         Req: Message,
         Resp: Message + Default,
     {
@@ -141,12 +148,13 @@ impl UnaryClient {
     /// [`metadata`]: ServerStreamingResponse::metadata
     pub fn call_server_streaming<Req, Resp>(
         &mut self,
-        cx: &RuntimeContext<'_>,
+        cx: &impl HttpRuntime<S>,
         path: &str,
         metadata: Metadata,
         request: &Req,
-    ) -> Result<ServerStreamingResponse<'_, Resp>, Error>
+    ) -> Result<RuntimeServerStreamingResponse<'_, S, Resp>, Error>
     where
+        S: RuntimeSocket,
         Req: Message,
         Resp: Message + Default,
     {
@@ -179,7 +187,7 @@ impl UnaryClient {
                 return Err(error);
             }
         };
-        Ok(ServerStreamingResponse {
+        Ok(RuntimeServerStreamingResponse {
             client: self,
             stream_id,
             response_headers: response.headers().clone(),
@@ -194,13 +202,17 @@ impl UnaryClient {
     }
 
     /// Closes the underlying HTTP/2 connection.
-    pub fn close(self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
+    pub fn close(self, cx: &impl HttpRuntime<S>) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
         self.http.close(cx).map_err(Error::from)
     }
 }
 
-impl<M> ServerStreamingResponse<'_, M>
+impl<S, M> RuntimeServerStreamingResponse<'_, S, M>
 where
+    S: RuntimeSocket,
     M: Message + Default,
 {
     /// Returns the next decoded message from the stream.
@@ -215,7 +227,7 @@ where
     /// immediately return `Ok(None)` without blocking.
     ///
     /// [`trailers`]: Self::trailers
-    pub fn next(&mut self, cx: &RuntimeContext<'_>) -> Result<Option<M>, Error> {
+    pub fn next(&mut self, cx: &impl HttpRuntime<S>) -> Result<Option<M>, Error> {
         if self.finished {
             return Ok(None);
         }
@@ -264,7 +276,7 @@ where
     /// If the stream has already reached a terminal state this is a no-op.
     ///
     /// [`next`]: Self::next
-    pub fn cancel(mut self, cx: &RuntimeContext<'_>) -> Result<(), Error> {
+    pub fn cancel(mut self, cx: &impl HttpRuntime<S>) -> Result<(), Error> {
         if !self.finished {
             self.client
                 .http
@@ -275,7 +287,7 @@ where
         Ok(())
     }
 
-    fn cancel_after_local_error(&mut self, cx: &RuntimeContext<'_>) {
+    fn cancel_after_local_error(&mut self, cx: &impl HttpRuntime<S>) {
         let _ = self
             .client
             .http

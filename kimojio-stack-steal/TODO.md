@@ -292,7 +292,7 @@ and protocol-neutral top-level client/server enums remain stack-core concrete.
 - HTTP/2 request/response tests on both stack-core and stack-steal.
 - gRPC smoke tests after generic HTTP/2 wrappers exist.
 
-### 13. Fully migrate gRPC client/server APIs to generic runtime contexts
+### 13. [done] Fully migrate gRPC client/server APIs to generic runtime contexts
 
 **Why:** gRPC layers on HTTP/2 and still owns concrete stack-core HTTP/2
 connections.

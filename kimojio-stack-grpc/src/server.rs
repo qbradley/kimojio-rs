@@ -8,11 +8,24 @@ use http::{
     Method, Request, Response, StatusCode,
     header::{CONTENT_TYPE, TE},
 };
-use kimojio_stack::{RuntimeContext, channel};
-use kimojio_stack_http::{Body, BodyLimits, h2};
+use kimojio_stack::{RuntimeContext, RuntimeSocket, channel};
+use kimojio_stack_http::{Body, BodyLimits, HttpRuntime, h2};
 use prost::Message;
 
 use crate::{Error, Metadata, Status, StatusCode as GrpcStatusCode, codec};
+
+/// Runtime context family used by gRPC server handlers.
+pub trait GrpcRuntime {
+    /// Context type passed to registered handlers while serving one request.
+    type Context<'cx>;
+}
+
+/// Stack-core gRPC runtime context family.
+pub struct StackGrpcRuntime;
+
+impl GrpcRuntime for StackGrpcRuntime {
+    type Context<'cx> = RuntimeContext<'cx>;
+}
 
 /// Shared configuration for unary gRPC servers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,12 +51,18 @@ impl Default for ServerConfig {
 /// I/O enters only through the `h2::ServerConnection` argument to
 /// [`serve_one`](Self::serve_one), so the generic HTTP/2 server connection can be
 /// adopted here without introducing a separate gRPC runtime trait.
-pub struct UnaryServer {
-    handlers: BTreeMap<String, Box<dyn MethodHandler>>,
+pub struct RuntimeUnaryServer<R: GrpcRuntime = StackGrpcRuntime> {
+    handlers: BTreeMap<String, Box<dyn MethodHandler<R>>>,
     config: ServerConfig,
 }
 
-impl UnaryServer {
+/// Stack-core gRPC server compatibility alias.
+pub type UnaryServer = RuntimeUnaryServer<StackGrpcRuntime>;
+
+impl<R> RuntimeUnaryServer<R>
+where
+    R: GrpcRuntime + 'static,
+{
     /// Creates an empty gRPC dispatcher.
     pub fn new(config: ServerConfig) -> Self {
         Self {
@@ -56,12 +75,12 @@ impl UnaryServer {
     ///
     /// `path` should look like `/package.Service/Method`. The handler runs
     /// inline on the coroutine serving the request and may use the supplied
-    /// [`RuntimeContext`] to perform stackful I/O or synchronization.
+    /// runtime context to perform stackful I/O or synchronization.
     pub fn add_unary<Req, Resp, F>(&mut self, path: impl Into<String>, handler: F)
     where
         Req: Message + Default + 'static,
         Resp: Message + 'static,
-        F: for<'a> Fn(&'a RuntimeContext<'a>, Metadata, Req) -> Result<UnaryReply<Resp>, Status>
+        F: for<'a> Fn(&'a R::Context<'a>, Metadata, Req) -> Result<UnaryReply<Resp>, Status>
             + 'static,
     {
         let max_message_len = self.config.max_message_len;
@@ -95,9 +114,9 @@ impl UnaryServer {
     ) where
         Req: Message + Default + 'static,
         Resp: Message + 'static,
-        Stream: ServerStream<Resp> + 'static,
+        Stream: ServerStream<Resp, R> + 'static,
         F: for<'a> Fn(
-                &'a RuntimeContext<'a>,
+                &'a R::Context<'a>,
                 Metadata,
                 Req,
             ) -> Result<ServerStreamingReply<Stream>, Status>
@@ -120,30 +139,36 @@ impl UnaryServer {
     /// EOF before another request. Handler `Err(Status)` values are converted
     /// into gRPC status responses; transport/protocol failures are returned as
     /// [`Error`] so the serve loop can stop.
-    pub fn serve_one(
+    pub fn serve_one<'cx, S>(
         &self,
-        cx: &RuntimeContext<'_>,
-        http: &mut h2::ServerConnection,
-    ) -> Result<bool, Error> {
+        cx: &'cx R::Context<'cx>,
+        http: &mut h2::RuntimeServerConnection<S>,
+    ) -> Result<bool, Error>
+    where
+        R::Context<'cx>: HttpRuntime<S>,
+        S: RuntimeSocket,
+    {
         let Some(incoming) = http.accept(cx).map_err(Error::from)? else {
             return Ok(false);
         };
         let result = self.dispatch(cx, incoming.request);
         match result {
-            Ok(RawResponse::Unary(reply)) => write_reply(cx, http, incoming.stream_id, reply),
-            Ok(RawResponse::ServerStreaming(reply)) => {
-                write_streaming_reply(cx, http, incoming.stream_id, reply)
+            Ok(RawResponse::Unary(reply)) => {
+                write_reply::<R, S>(cx, http, incoming.stream_id, reply)
             }
-            Err(status) => write_status(cx, http, incoming.stream_id, status),
+            Ok(RawResponse::ServerStreaming(reply)) => {
+                write_streaming_reply::<R, S>(cx, http, incoming.stream_id, reply)
+            }
+            Err(status) => write_status::<R, S>(cx, http, incoming.stream_id, status),
         }?;
         Ok(true)
     }
 
-    fn dispatch(
+    fn dispatch<'cx>(
         &self,
-        cx: &RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         request: Request<Body>,
-    ) -> Result<RawResponse, Status> {
+    ) -> Result<RawResponse<R>, Status> {
         validate_request(&request)?;
         let path = request.uri().path();
         let Some(handler) = self.handlers.get(path) else {
@@ -222,17 +247,18 @@ impl<S> ServerStreamingReply<S> {
 /// Callers that need prompt cancellation detection must wire their own cancellation
 /// mechanism into the source (for example, by sending a terminal item through the channel
 /// or by checking a flag before parking).
-pub trait ServerStream<M> {
+pub trait ServerStream<M, R: GrpcRuntime = StackGrpcRuntime> {
     /// Returns the next response message, `Ok(None)` when the stream is complete, or
     /// `Err(Status)` to terminate the stream with a non-OK status.
-    fn next(&mut self, cx: &RuntimeContext<'_>) -> Result<Option<M>, Status>;
+    fn next<'cx>(&mut self, cx: &'cx R::Context<'cx>) -> Result<Option<M>, Status>;
 }
 
-impl<M, F> ServerStream<M> for F
+impl<M, R, F> ServerStream<M, R> for F
 where
-    F: for<'a> FnMut(&'a RuntimeContext<'a>) -> Result<Option<M>, Status>,
+    R: GrpcRuntime,
+    F: for<'a> FnMut(&'a R::Context<'a>) -> Result<Option<M>, Status>,
 {
-    fn next(&mut self, cx: &RuntimeContext<'_>) -> Result<Option<M>, Status> {
+    fn next<'cx>(&mut self, cx: &'cx R::Context<'cx>) -> Result<Option<M>, Status> {
         self(cx)
     }
 }
@@ -256,7 +282,7 @@ impl<M> ReceiverStream<M> {
     }
 }
 
-impl<M> ServerStream<M> for ReceiverStream<M> {
+impl<M> ServerStream<M, StackGrpcRuntime> for ReceiverStream<M> {
     fn next(&mut self, cx: &RuntimeContext<'_>) -> Result<Option<M>, Status> {
         match self.receiver.recv(cx) {
             Ok(Ok(message)) => Ok(Some(message)),
@@ -272,28 +298,28 @@ struct RawReply {
     trailers: Metadata,
 }
 
-struct RawStreamReply {
+struct RawStreamReply<R: GrpcRuntime> {
     metadata: Metadata,
-    stream: Box<dyn RawServerStream>,
+    stream: Box<dyn RawServerStream<R>>,
     trailers: Metadata,
 }
 
-enum RawResponse {
+enum RawResponse<R: GrpcRuntime> {
     Unary(RawReply),
-    ServerStreaming(RawStreamReply),
+    ServerStreaming(RawStreamReply<R>),
 }
 
-trait MethodHandler {
-    fn call(
+trait MethodHandler<R: GrpcRuntime> {
+    fn call<'cx>(
         &self,
-        cx: &RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         metadata: Metadata,
         frame: &[u8],
-    ) -> Result<RawResponse, Status>;
+    ) -> Result<RawResponse<R>, Status>;
 }
 
-trait RawServerStream {
-    fn next_bytes(&mut self, cx: &RuntimeContext<'_>) -> Result<Option<Bytes>, Status>;
+trait RawServerStream<R: GrpcRuntime> {
+    fn next_bytes<'cx>(&mut self, cx: &'cx R::Context<'cx>) -> Result<Option<Bytes>, Status>;
 }
 
 struct TypedUnaryHandler<Req, Resp, F> {
@@ -302,18 +328,19 @@ struct TypedUnaryHandler<Req, Resp, F> {
     _marker: std::marker::PhantomData<fn(Req) -> Resp>,
 }
 
-impl<Req, Resp, F> MethodHandler for TypedUnaryHandler<Req, Resp, F>
+impl<R, Req, Resp, F> MethodHandler<R> for TypedUnaryHandler<Req, Resp, F>
 where
+    R: GrpcRuntime,
     Req: Message + Default,
     Resp: Message,
-    F: for<'a> Fn(&'a RuntimeContext<'a>, Metadata, Req) -> Result<UnaryReply<Resp>, Status>,
+    F: for<'a> Fn(&'a R::Context<'a>, Metadata, Req) -> Result<UnaryReply<Resp>, Status>,
 {
-    fn call(
+    fn call<'cx>(
         &self,
-        cx: &RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         metadata: Metadata,
         frame: &[u8],
-    ) -> Result<RawResponse, Status> {
+    ) -> Result<RawResponse<R>, Status> {
         let request =
             codec::decode_message::<Req>(frame, self.max_message_len).map_err(|error| {
                 if matches!(error, Error::SizeLimit { .. }) {
@@ -344,23 +371,24 @@ struct TypedServerStreamingHandler<Req, Resp, Stream, F> {
     _marker: std::marker::PhantomData<fn(Req) -> (Resp, Stream)>,
 }
 
-impl<Req, Resp, Stream, F> MethodHandler for TypedServerStreamingHandler<Req, Resp, Stream, F>
+impl<R, Req, Resp, Stream, F> MethodHandler<R> for TypedServerStreamingHandler<Req, Resp, Stream, F>
 where
+    R: GrpcRuntime,
     Req: Message + Default,
     Resp: Message + 'static,
-    Stream: ServerStream<Resp> + 'static,
+    Stream: ServerStream<Resp, R> + 'static,
     F: for<'a> Fn(
-        &'a RuntimeContext<'a>,
+        &'a R::Context<'a>,
         Metadata,
         Req,
     ) -> Result<ServerStreamingReply<Stream>, Status>,
 {
-    fn call(
+    fn call<'cx>(
         &self,
-        cx: &RuntimeContext<'_>,
+        cx: &'cx R::Context<'cx>,
         metadata: Metadata,
         frame: &[u8],
-    ) -> Result<RawResponse, Status> {
+    ) -> Result<RawResponse<R>, Status> {
         let request =
             codec::decode_message::<Req>(frame, self.max_message_len).map_err(|error| {
                 if matches!(error, Error::SizeLimit { .. }) {
@@ -388,12 +416,13 @@ struct EncodedServerStream<S, M> {
     _marker: std::marker::PhantomData<fn() -> M>,
 }
 
-impl<S, M> RawServerStream for EncodedServerStream<S, M>
+impl<R, S, M> RawServerStream<R> for EncodedServerStream<S, M>
 where
-    S: ServerStream<M>,
+    R: GrpcRuntime,
+    S: ServerStream<M, R>,
     M: Message,
 {
-    fn next_bytes(&mut self, cx: &RuntimeContext<'_>) -> Result<Option<Bytes>, Status> {
+    fn next_bytes<'cx>(&mut self, cx: &'cx R::Context<'cx>) -> Result<Option<Bytes>, Status> {
         let Some(message) = self.stream.next(cx)? else {
             return Ok(None);
         };
@@ -439,12 +468,17 @@ fn is_grpc_content_type(value: &[u8]) -> bool {
     value == b"application/grpc" || value.starts_with(b"application/grpc+")
 }
 
-fn write_reply(
-    cx: &RuntimeContext<'_>,
-    http: &mut h2::ServerConnection,
+fn write_reply<'cx, R, S>(
+    cx: &'cx R::Context<'cx>,
+    http: &mut h2::RuntimeServerConnection<S>,
     stream_id: h2::StreamId,
     reply: RawReply,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: GrpcRuntime,
+    R::Context<'cx>: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let mut response = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "application/grpc");
@@ -468,12 +502,17 @@ fn write_reply(
         .map_err(Error::from)
 }
 
-fn write_streaming_reply(
-    cx: &RuntimeContext<'_>,
-    http: &mut h2::ServerConnection,
+fn write_streaming_reply<'cx, R, S>(
+    cx: &'cx R::Context<'cx>,
+    http: &mut h2::RuntimeServerConnection<S>,
     stream_id: h2::StreamId,
-    mut reply: RawStreamReply,
-) -> Result<(), Error> {
+    mut reply: RawStreamReply<R>,
+) -> Result<(), Error>
+where
+    R: GrpcRuntime,
+    R::Context<'cx>: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let mut response = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "application/grpc");
@@ -516,12 +555,17 @@ fn write_streaming_reply(
     }
 }
 
-fn write_status(
-    cx: &RuntimeContext<'_>,
-    http: &mut h2::ServerConnection,
+fn write_status<'cx, R, S>(
+    cx: &'cx R::Context<'cx>,
+    http: &mut h2::RuntimeServerConnection<S>,
     stream_id: h2::StreamId,
     status: Status,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    R: GrpcRuntime,
+    R::Context<'cx>: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
     let response = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "application/grpc")

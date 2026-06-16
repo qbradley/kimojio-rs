@@ -924,6 +924,7 @@ dependencies = [
  "hyper-util",
  "kimojio-stack",
  "kimojio-stack-http",
+ "kimojio-stack-steal",
  "kimojio-stack-tls",
  "openssl",
  "prost",

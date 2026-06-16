@@ -83,12 +83,16 @@ pub mod metadata;
 pub mod server;
 pub mod status;
 
-pub use client::{ClientConfig, ServerStreamingResponse, UnaryClient, UnaryResponse};
+pub use client::{
+    ClientConfig, RuntimeServerStreamingResponse, RuntimeUnaryClient, ServerStreamingResponse,
+    UnaryClient, UnaryResponse,
+};
 pub use codec::{decode_message, encode_message};
 pub use error::{Error, ErrorKind};
 pub use metadata::Metadata;
 pub use server::{
-    ReceiverStream, ServerConfig, ServerStream, ServerStreamingReply, UnaryReply, UnaryServer,
+    GrpcRuntime, ReceiverStream, RuntimeUnaryServer, ServerConfig, ServerStream,
+    ServerStreamingReply, StackGrpcRuntime, UnaryReply, UnaryServer,
 };
 pub use status::{Status, StatusCode};
 
@@ -200,30 +204,43 @@ mod allocation_tracking {
 
 #[cfg(test)]
 mod tests {
-    use std::hint::black_box;
+    use std::{hint::black_box, num::NonZeroUsize};
 
     use bytes::{Bytes, BytesMut};
     use http::{
         HeaderName, HeaderValue, Request, Response, StatusCode as HttpStatusCode,
         header::CONTENT_TYPE,
     };
-    use kimojio_stack::{Runtime, channel};
-    use kimojio_stack_http::{Body, BodyLimits, HttpConfig, StackTransport, h2};
+    use kimojio_stack::{Runtime, SocketIoRuntime, channel};
+    use kimojio_stack_http::{
+        Body, BodyLimits, HttpConfig, RuntimeStackTransport, StackTransport, h2,
+    };
+    use kimojio_stack_steal::{
+        Runtime as StealRuntime, RuntimeConfig as StealRuntimeConfig, StealPolicy,
+    };
     use prost::Message;
     use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 
     use super::{
-        Error, ErrorKind, Metadata, Status, StatusCode, UnaryClient, UnaryReply, UnaryResponse,
-        UnaryServer, allocation_tracking,
+        Error, ErrorKind, Metadata, RuntimeUnaryClient, Status, StatusCode, UnaryClient,
+        UnaryReply, UnaryResponse, UnaryServer, allocation_tracking,
         client::ClientConfig,
         codec, decode_message, encode_message,
-        server::{ReceiverStream, ServerConfig, ServerStreamingReply},
+        server::{
+            GrpcRuntime, ReceiverStream, RuntimeUnaryServer, ServerConfig, ServerStreamingReply,
+        },
     };
 
     #[derive(Clone, PartialEq, Message)]
     struct TestMessage {
         #[prost(string, tag = "1")]
         value: String,
+    }
+
+    struct StealGrpcRuntime;
+
+    impl GrpcRuntime for StealGrpcRuntime {
+        type Context<'cx> = kimojio_stack_steal::RuntimeContext<'cx>;
     }
 
     #[test]
@@ -1037,6 +1054,158 @@ mod tests {
 
                 server.join(cx);
                 client.join(cx);
+            });
+        });
+    }
+
+    #[test]
+    fn unary_call_runs_on_stealing_runtime() {
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+        let mut runtime = StealRuntime::with_config(StealRuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..StealRuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn_stealable(move |cx| {
+                    let server_fd = cx.socket_from_owned_fd(server_fd).unwrap();
+                    let server_transport = RuntimeStackTransport::plaintext_socket(server_fd);
+                    let mut http =
+                        h2::RuntimeServerConnection::new(server_transport, HttpConfig::default());
+                    let mut grpc =
+                        RuntimeUnaryServer::<StealGrpcRuntime>::new(ServerConfig::default());
+                    grpc.add_unary::<TestMessage, TestMessage, _>(
+                        "/test.Echo/Unary",
+                        |_cx, metadata, request| {
+                            assert_eq!(
+                                metadata.get(&HeaderName::from_static("x-request")),
+                                Some(&HeaderValue::from_static("seen"))
+                            );
+                            Ok(UnaryReply::new(TestMessage {
+                                value: format!("steal {}", request.value),
+                            }))
+                        },
+                    );
+                    grpc.serve_one(cx, &mut http).unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn_stealable(move |cx| {
+                    let client_fd = cx.socket_from_owned_fd(client_fd).unwrap();
+                    let client_transport = RuntimeStackTransport::plaintext_socket(client_fd);
+                    let http =
+                        h2::RuntimeClientConnection::new(client_transport, HttpConfig::default());
+                    let mut client = RuntimeUnaryClient::new(http, ClientConfig::default());
+                    let mut metadata = Metadata::new();
+                    metadata
+                        .insert(
+                            HeaderName::from_static("x-request"),
+                            HeaderValue::from_static("seen"),
+                        )
+                        .unwrap();
+                    let response: UnaryResponse<TestMessage> = client
+                        .call(
+                            cx,
+                            "/test.Echo/Unary",
+                            metadata,
+                            &TestMessage {
+                                value: "runtime".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                    client.close(cx).unwrap();
+                    response.message.value
+                });
+
+                server.join(cx);
+                assert_eq!(client.join(cx), "steal runtime");
+            });
+        });
+    }
+
+    #[test]
+    fn server_streaming_runs_on_stealing_runtime() {
+        let (client_fd, server_fd) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::empty(),
+            None,
+        )
+        .unwrap();
+        let mut runtime = StealRuntime::with_config(StealRuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..StealRuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn_stealable(move |cx| {
+                    let server_fd = cx.socket_from_owned_fd(server_fd).unwrap();
+                    let server_transport = RuntimeStackTransport::plaintext_socket(server_fd);
+                    let mut http =
+                        h2::RuntimeServerConnection::new(server_transport, HttpConfig::default());
+                    let mut grpc =
+                        RuntimeUnaryServer::<StealGrpcRuntime>::new(ServerConfig::default());
+                    grpc.add_server_streaming::<TestMessage, TestMessage, _, _>(
+                        "/test.Echo/Stream",
+                        |_cx, _metadata, request| {
+                            let values = [
+                                format!("{}-one", request.value),
+                                format!("{}-two", request.value),
+                            ];
+                            let mut index = 0;
+                            let stream = move |_cx: &kimojio_stack_steal::RuntimeContext<'_>| {
+                                let Some(value) = values.get(index).cloned() else {
+                                    return Ok(None);
+                                };
+                                index += 1;
+                                Ok(Some(TestMessage { value }))
+                            };
+                            Ok(ServerStreamingReply::new(stream))
+                        },
+                    );
+                    grpc.serve_one(cx, &mut http).unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn_stealable(move |cx| {
+                    let client_fd = cx.socket_from_owned_fd(client_fd).unwrap();
+                    let client_transport = RuntimeStackTransport::plaintext_socket(client_fd);
+                    let http =
+                        h2::RuntimeClientConnection::new(client_transport, HttpConfig::default());
+                    let mut client = RuntimeUnaryClient::new(http, ClientConfig::default());
+                    let mut stream = client
+                        .call_server_streaming::<_, TestMessage>(
+                            cx,
+                            "/test.Echo/Stream",
+                            Metadata::new(),
+                            &TestMessage {
+                                value: "steal".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                    let first = stream.next(cx).unwrap().unwrap().value;
+                    let second = stream.next(cx).unwrap().unwrap().value;
+                    assert!(stream.next(cx).unwrap().is_none());
+                    drop(stream);
+                    client.close(cx).unwrap();
+                    (first, second)
+                });
+
+                server.join(cx);
+                assert_eq!(
+                    client.join(cx),
+                    ("steal-one".to_owned(), "steal-two".to_owned())
+                );
             });
         });
     }
