@@ -299,7 +299,12 @@ impl Waitable for RuntimeWaitableAdapter<'_> {
 }
 
 /// Runtime-neutral waitable result for a pending socket read.
-pub trait RuntimeReadResult<B>: RuntimeWaitable + Waitable {
+///
+/// Result handles are waited through [`RuntimeWaitable`]. Stack-core runtimes may
+/// also implement [`Waitable`] on concrete result types, but non-stack adapters do
+/// not need to expose stack-core waiter compatibility just to satisfy this
+/// runtime-neutral trait.
+pub trait RuntimeReadResult<B>: RuntimeWaitable {
     /// Output produced when the read operation completes.
     type Output;
 
@@ -327,7 +332,12 @@ where
 }
 
 /// Runtime-neutral waitable result for a pending socket write.
-pub trait RuntimeWriteResult<B>: RuntimeWaitable + Waitable {
+///
+/// Result handles are waited through [`RuntimeWaitable`]. Stack-core runtimes may
+/// also implement [`Waitable`] on concrete result types, but non-stack adapters do
+/// not need to expose stack-core waiter compatibility just to satisfy this
+/// runtime-neutral trait.
+pub trait RuntimeWriteResult<B>: RuntimeWaitable {
     /// Output produced when the write operation completes.
     type Output;
 
