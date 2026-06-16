@@ -3,13 +3,17 @@
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use clap::Parser;
 
+#[path = "../tls_support.rs"]
+mod tls_support;
+
 #[derive(Debug, Parser)]
-#[command(version, about = "Blocking std TCP echo latency client")]
+#[command(version, about = "Blocking TCP/TLS echo latency client")]
 struct Args {
     /// Echo server address.
     #[arg(long, default_value = "127.0.0.1:9000")]
@@ -30,6 +34,22 @@ struct Args {
     /// Enable TCP_NODELAY on the client socket.
     #[arg(long, default_value_t = true)]
     nodelay: bool,
+
+    /// Use TLS over the TCP connection.
+    #[arg(long)]
+    tls: bool,
+
+    /// Server name used for TLS SNI/certificate validation.
+    #[arg(long, default_value = "localhost")]
+    tls_server_name: String,
+
+    /// Disable TLS certificate verification. Intended for self-signed benchmark certificates.
+    #[arg(long)]
+    tls_insecure: bool,
+
+    /// PEM CA certificate to trust for TLS verification.
+    #[arg(long)]
+    tls_ca_cert: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -44,21 +64,40 @@ fn main() -> Result<()> {
         .set_nodelay(args.nodelay)
         .context("failed to set TCP_NODELAY")?;
 
+    let (mut samples, measured_elapsed) = if args.tls {
+        let connector =
+            tls_support::client_connector(args.tls_insecure, args.tls_ca_cert.as_deref())?;
+        let mut stream = connector
+            .connect(&args.tls_server_name, stream)
+            .map_err(|error| anyhow!("TLS client handshake failed: {error}"))?;
+        run_benchmark(&args, &mut stream, &payload, &mut response)?
+    } else {
+        run_benchmark(&args, &mut stream, &payload, &mut response)?
+    };
+
+    print_summary(&args, &mut samples, measured_elapsed);
+    Ok(())
+}
+
+fn run_benchmark<S: Read + Write>(
+    args: &Args,
+    stream: &mut S,
+    payload: &[u8],
+    response: &mut [u8],
+) -> Result<(Vec<Duration>, Duration)> {
     for _ in 0..args.warmup {
-        round_trip(&mut stream, &payload, &mut response)?;
+        round_trip(stream, payload, response)?;
     }
 
     let mut samples = Vec::with_capacity(args.iterations);
     let measured_start = Instant::now();
     for _ in 0..args.iterations {
         let start = Instant::now();
-        round_trip(&mut stream, &payload, &mut response)?;
+        round_trip(stream, payload, response)?;
         samples.push(start.elapsed());
     }
     let measured_elapsed = measured_start.elapsed();
-
-    print_summary(&args, &mut samples, measured_elapsed);
-    Ok(())
+    Ok((samples, measured_elapsed))
 }
 
 fn validate_args(args: &Args) -> Result<()> {
@@ -79,7 +118,7 @@ fn make_payload(len: usize) -> Vec<u8> {
     payload
 }
 
-fn round_trip(stream: &mut TcpStream, payload: &[u8], response: &mut [u8]) -> Result<()> {
+fn round_trip<S: Read + Write>(stream: &mut S, payload: &[u8], response: &mut [u8]) -> Result<()> {
     stream.write_all(payload).context("write failed")?;
     stream.read_exact(response).context("read_exact failed")?;
     ensure!(
@@ -104,6 +143,7 @@ fn print_summary(args: &Args, samples: &mut [Duration], measured_elapsed: Durati
     println!("warmup_iterations={}", args.warmup);
     println!("measured_iterations={}", args.iterations);
     println!("tcp_nodelay={}", args.nodelay);
+    println!("tls={}", args.tls);
     println!("elapsed_ms={:.3}", measured_elapsed.as_secs_f64() * 1_000.0);
     println!("round_trips_per_sec={msgs_per_sec:.2}");
     println!("echo_payload_mib_per_sec={mib_per_sec:.2}");

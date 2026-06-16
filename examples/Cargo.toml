@@ -5,19 +5,21 @@ edition = "2024"
 publish = false
 
 [features]
-tls = ["kimojio/tls", "dep:openssl"]
+tls = ["kimojio/tls"]
 virtual-clock = ["kimojio/virtual-clock"]
 
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
 futures.workspace = true
-kimojio.workspace = true
+kimojio = { workspace = true, features = ["tls"] }
 kimojio-stack.workspace = true
 kimojio-stack-steal.workspace = true
-openssl = { workspace = true, optional = true }
+kimojio-stack-tls.workspace = true
+openssl.workspace = true
 rustix.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread"] }
+tokio-openssl = "0.6"
 
 [[bin]]
 name = "copyfile"

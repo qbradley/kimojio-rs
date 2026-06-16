@@ -3,19 +3,24 @@
 
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
-use kimojio_stack::{Runtime, RuntimeContext};
+use kimojio_stack::{Runtime, RuntimeContext, SocketIoRuntime};
 use kimojio_stack_steal::{
     Ring, RingFd, Runtime as StealRuntime, RuntimeConfig as StealRuntimeConfig,
     RuntimeContext as StealContext, StealPolicy,
 };
+use kimojio_stack_tls::{RuntimeTlsStream, TlsContext as StackTlsContext};
 use rustix::fd::OwnedFd;
 use rustix::net::{
     self, AddressFamily, Shutdown, SocketType, ipproto,
     sockopt::{set_socket_reuseaddr, set_tcp_nodelay},
 };
+
+#[path = "../tls_support.rs"]
+mod tls_support;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum RuntimeKind {
@@ -55,6 +60,18 @@ struct Args {
     /// Enable TCP_NODELAY on accepted sockets.
     #[arg(long, default_value_t = true)]
     nodelay: bool,
+
+    /// Serve TLS instead of plaintext TCP.
+    #[arg(long)]
+    tls: bool,
+
+    /// PEM certificate chain for --tls.
+    #[arg(long)]
+    cert: Option<PathBuf>,
+
+    /// PEM private key for --tls.
+    #[arg(long)]
+    key: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -81,6 +98,7 @@ fn validate_args(args: &Args) -> Result<()> {
 }
 
 fn run_pinned(args: Args) -> Result<()> {
+    let tls_mode = tls_support::TlsMode::from_args(args.tls, &args.cert, &args.key)?;
     let mut runtime = Runtime::new();
     runtime.block_on(|cx| {
         let listener = create_stack_listener(cx, args.addr, args.backlog)?;
@@ -89,8 +107,11 @@ fn run_pinned(args: Args) -> Result<()> {
             .try_into()
             .context("listener address was not an IP socket address")?;
         println!(
-            "tcp-echo-stack-host runtime=pinned listening={} buffer_size={} nodelay={}",
-            local_addr, args.buffer_size, args.nodelay
+            "tcp-echo-stack-host runtime=pinned listening={} buffer_size={} nodelay={} tls={}",
+            local_addr,
+            args.buffer_size,
+            args.nodelay,
+            tls_mode.is_tls()
         );
 
         cx.scope(|scope| {
@@ -107,8 +128,11 @@ fn run_pinned(args: Args) -> Result<()> {
                 }
                 accepted += 1;
                 let buffer_size = args.buffer_size;
+                let tls_mode = tls_mode.clone();
                 let handler = scope.spawn(move |cx| {
-                    if let Err(error) = handle_pinned_connection(cx, connection, buffer_size) {
+                    if let Err(error) =
+                        handle_pinned_connection(cx, connection, buffer_size, tls_mode)
+                    {
                         eprintln!("pinned echo handler failed: {error:#}");
                     }
                 });
@@ -150,17 +174,36 @@ fn handle_pinned_connection(
     cx: &RuntimeContext<'_>,
     connection: OwnedFd,
     buffer_size: usize,
+    tls_mode: tls_support::TlsMode,
 ) -> Result<()> {
-    let echo_result = echo_pinned(cx, &connection, buffer_size);
-    let shutdown_result = cx
-        .shutdown(&connection, Shutdown::Write)
-        .context("connection shutdown failed");
-    let close_result = cx.close(connection).context("connection close failed");
+    match tls_mode {
+        tls_support::TlsMode::Plain => {
+            let echo_result = echo_pinned(cx, &connection, buffer_size);
+            let shutdown_result = cx
+                .shutdown(&connection, Shutdown::Write)
+                .context("connection shutdown failed");
+            let close_result = cx.close(connection).context("connection close failed");
 
-    echo_result?;
-    shutdown_result?;
-    close_result?;
-    Ok(())
+            echo_result?;
+            shutdown_result?;
+            close_result?;
+            Ok(())
+        }
+        tls_support::TlsMode::Tls { cert, key } => {
+            let context = StackTlsContext::from_openssl(tls_support::server_context(&cert, &key)?);
+            let mut stream = context
+                .server(cx, buffer_size, connection)
+                .context("TLS server handshake failed")?;
+            let echo_result = echo_stack_tls(cx, &mut stream, buffer_size);
+            let shutdown_result = stream.shutdown(cx).context("TLS shutdown failed");
+            let close_result = stream.close(cx).context("connection close failed");
+
+            echo_result?;
+            shutdown_result?;
+            close_result?;
+            Ok(())
+        }
+    }
 }
 
 fn echo_pinned(cx: &RuntimeContext<'_>, connection: &OwnedFd, buffer_size: usize) -> Result<()> {
@@ -186,6 +229,7 @@ fn write_all_pinned(cx: &RuntimeContext<'_>, connection: &OwnedFd, mut bytes: &[
 }
 
 fn run_steal(args: Args) -> Result<()> {
+    let tls_mode = tls_support::TlsMode::from_args(args.tls, &args.cert, &args.key)?;
     let listener =
         TcpListener::bind(args.addr).with_context(|| format!("bind failed for {}", args.addr))?;
     let local_addr = listener
@@ -199,8 +243,12 @@ fn run_steal(args: Args) -> Result<()> {
     });
 
     println!(
-        "tcp-echo-stack-host runtime=steal listening={} workers={} buffer_size={} nodelay={}",
-        local_addr, args.workers, args.buffer_size, args.nodelay
+        "tcp-echo-stack-host runtime=steal listening={} workers={} buffer_size={} nodelay={} tls={}",
+        local_addr,
+        args.workers,
+        args.buffer_size,
+        args.nodelay,
+        tls_mode.is_tls()
     );
     println!(
         "note: stack-steal currently uses std blocking accept; connected socket I/O runs on worker rings"
@@ -223,8 +271,9 @@ fn run_steal(args: Args) -> Result<()> {
                 }
                 accepted += 1;
                 let buffer_size = args.buffer_size;
+                let tls_mode = tls_mode.clone();
                 let handler = scope.spawn_stealable(move |cx| {
-                    if let Err(error) = handle_steal_connection(cx, stream, buffer_size) {
+                    if let Err(error) = handle_steal_connection(cx, stream, buffer_size, tls_mode) {
                         eprintln!("steal echo handler failed for {peer}: {error:#}");
                     }
                 });
@@ -244,19 +293,38 @@ fn handle_steal_connection(
     cx: &StealContext<'_>,
     stream: TcpStream,
     buffer_size: usize,
+    tls_mode: tls_support::TlsMode,
 ) -> Result<()> {
-    let fd = RingFd::from_owned(OwnedFd::from(stream));
-    let ring = cx.create_worker_ring();
-    let echo_result = echo_steal(cx, &ring, &fd, buffer_size);
-    let shutdown_result = ring
-        .shutdown(cx, &fd, Shutdown::Write)
-        .context("connection shutdown failed");
-    let close_result = ring.close(cx, fd).context("connection close failed");
+    match tls_mode {
+        tls_support::TlsMode::Plain => {
+            let fd = RingFd::from_owned(OwnedFd::from(stream));
+            let ring = cx.create_worker_ring();
+            let echo_result = echo_steal(cx, &ring, &fd, buffer_size);
+            let shutdown_result = ring
+                .shutdown(cx, &fd, Shutdown::Write)
+                .context("connection shutdown failed");
+            let close_result = ring.close(cx, fd).context("connection close failed");
 
-    echo_result?;
-    shutdown_result?;
-    close_result?;
-    Ok(())
+            echo_result?;
+            shutdown_result?;
+            close_result?;
+            Ok(())
+        }
+        tls_support::TlsMode::Tls { cert, key } => {
+            let context = StackTlsContext::from_openssl(tls_support::server_context(&cert, &key)?);
+            let mut stream = context
+                .server_with_runtime(cx, buffer_size, OwnedFd::from(stream))
+                .context("TLS server handshake failed")?;
+            let echo_result = echo_stack_tls(cx, &mut stream, buffer_size);
+            let shutdown_result = stream.shutdown(cx).context("TLS shutdown failed");
+            let close_result = stream.close(cx).context("connection close failed");
+
+            echo_result?;
+            shutdown_result?;
+            close_result?;
+            Ok(())
+        }
+    }
 }
 
 fn echo_steal(
@@ -291,4 +359,20 @@ fn write_all_steal(
         bytes = &bytes[written..];
     }
     Ok(())
+}
+
+fn echo_stack_tls<R, S>(cx: &R, stream: &mut RuntimeTlsStream<S>, buffer_size: usize) -> Result<()>
+where
+    R: SocketIoRuntime<Socket = S>,
+{
+    let mut buffer = vec![0_u8; buffer_size];
+    loop {
+        let read = stream.read(cx, &mut buffer).context("TLS read failed")?;
+        if read == 0 {
+            return Ok(());
+        }
+        stream
+            .write(cx, &buffer[..read])
+            .context("TLS write failed")?;
+    }
 }

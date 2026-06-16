@@ -4,6 +4,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
@@ -18,10 +19,24 @@ func main() {
 	bufferSize := flag.Int("buffer-size", 16*1024, "per-connection read buffer size")
 	maxConnections := flag.Uint64("max-connections", 0, "stop after accepting this many connections; 0 means unlimited")
 	noDelay := flag.Bool("nodelay", true, "enable TCP_NODELAY on accepted sockets")
+	useTLS := flag.Bool("tls", false, "serve TLS instead of plaintext TCP")
+	certPath := flag.String("cert", "", "PEM certificate chain for -tls")
+	keyPath := flag.String("key", "", "PEM private key for -tls")
 	flag.Parse()
 
 	if *bufferSize <= 0 {
 		log.Fatalf("-buffer-size must be greater than zero")
+	}
+	var tlsConfig *tls.Config
+	if *useTLS {
+		if *certPath == "" || *keyPath == "" {
+			log.Fatalf("-cert and -key are required when -tls is enabled")
+		}
+		cert, err := tls.LoadX509KeyPair(*certPath, *keyPath)
+		if err != nil {
+			log.Fatalf("load TLS certificate/key failed: %v", err)
+		}
+		tlsConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 	}
 
 	listener, err := net.Listen("tcp", *addr)
@@ -30,7 +45,7 @@ func main() {
 	}
 	defer listener.Close()
 
-	fmt.Printf("tcp_echo_host_go listening=%s buffer_size=%d nodelay=%t\n", listener.Addr(), *bufferSize, *noDelay)
+	fmt.Printf("tcp_echo_host_go listening=%s buffer_size=%d nodelay=%t tls=%t\n", listener.Addr(), *bufferSize, *noDelay, *useTLS)
 
 	var accepted uint64
 	var wg sync.WaitGroup
@@ -51,6 +66,9 @@ func main() {
 				_ = conn.Close()
 				continue
 			}
+		}
+		if tlsConfig != nil {
+			conn = tls.Server(conn, tlsConfig)
 		}
 		atomic.AddUint64(&accepted, 1)
 		wg.Add(1)
