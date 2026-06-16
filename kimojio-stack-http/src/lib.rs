@@ -278,6 +278,82 @@ mod tests {
         RuntimeAgnostic,
     }
 
+    #[derive(Clone, Copy)]
+    struct AllocationBudget {
+        max_operations: usize,
+        max_bytes: usize,
+        rationale: &'static str,
+    }
+
+    #[derive(Clone, Copy)]
+    struct AllocationDeltaBudget {
+        max_extra_operations: usize,
+        max_extra_bytes: usize,
+        rationale: &'static str,
+    }
+
+    #[derive(Clone, Copy)]
+    struct SourceSurface {
+        name: &'static str,
+        source: &'static str,
+    }
+
+    #[derive(Clone, Copy)]
+    struct ForbiddenSourcePattern {
+        pattern: &'static str,
+        reason: &'static str,
+    }
+
+    const LOCAL_LOOP_WARMUP_ROUNDS: u64 = 2;
+    const LOCAL_LOOP_MEASURED_ROUNDS: u64 = 4;
+    const TLS_PORTABILITY_WARMUP_ROUNDS: u64 = 1;
+    const TLS_PORTABILITY_MEASURED_ROUNDS: u64 = 2;
+    const HTTP1_WARMED_LOCAL_LOOP_BUDGET: AllocationBudget = AllocationBudget {
+        max_operations: 256,
+        max_bytes: 256 * 1024,
+        rationale: "HTTP/1 warmed-loop budget tracks the current parser/header/body allocation \
+            profile; the runtime-agnostic migration must not add a new hot-path allocation class.",
+    };
+    const H2_WARMED_LOCAL_LOOP_BUDGET: AllocationBudget = AllocationBudget {
+        max_operations: 512,
+        max_bytes: 512 * 1024,
+        rationale: "HTTP/2 warmed-loop budget includes stream/frame/header bookkeeping and is \
+            intentionally higher than HTTP/1 while still catching large portability regressions.",
+    };
+    const RUNTIME_AGNOSTIC_TLS_DELTA_BUDGET: AllocationDeltaBudget = AllocationDeltaBudget {
+        max_extra_operations: 32,
+        max_extra_bytes: 32 * 1024,
+        rationale: "Runtime-agnostic TLS may pay small wrapper bookkeeping costs, but it must stay \
+            within the same allocation class as the stack-core transport wrappers.",
+    };
+    const PORTABILITY_SOURCE_SCAN_LIMITS: &str = "This is a lexical scan of selected production \
+        portability surfaces. It catches obvious heap-erased dynamic dispatch and helper-thread \
+        additions, but it can false-positive in comments and cannot prove absence through macros or \
+        transitive dependencies.";
+    const PORTABILITY_FORBIDDEN_PATTERNS: &[ForbiddenSourcePattern] = &[
+        ForbiddenSourcePattern {
+            pattern: "Box<dyn",
+            reason: "runtime-neutral HTTP portability surfaces should use generic/static dispatch, \
+                not heap-erased trait objects",
+        },
+        ForbiddenSourcePattern {
+            pattern: "Arc<dyn",
+            reason: "shared trait-object dispatch would hide portability overhead from callers",
+        },
+        ForbiddenSourcePattern {
+            pattern: "Box::new",
+            reason: "new heap allocation in these surfaces must be budgeted explicitly",
+        },
+        ForbiddenSourcePattern {
+            pattern: "thread::spawn",
+            reason: "portable transports must not hide helper OS threads",
+        },
+        ForbiddenSourcePattern {
+            pattern: "helper thread",
+            reason: "helper-thread behavior must not be introduced implicitly",
+        },
+    ];
+
     fn server_tls_transport(
         cx: &RuntimeContext<'_>,
         context: &TlsContext,
@@ -796,9 +872,6 @@ mod tests {
 
     #[test]
     fn allocation_http1_warmed_local_loop_records_current_hot_path_allocations() {
-        const WARMUP_ROUNDS: u64 = 2;
-        const MEASURED_ROUNDS: u64 = 4;
-
         let counts = Runtime::new().block_on(|cx| {
             let (client_transport, server_transport) = socket_transport_pair();
             let request = request("/allocation-http1", b"ping");
@@ -808,7 +881,7 @@ mod tests {
                 let server = scope.spawn(move |cx| {
                     let mut server =
                         http1::ServerConnection::new(server_transport, HttpConfig::default());
-                    for _ in 0..WARMUP_ROUNDS + MEASURED_ROUNDS {
+                    for _ in 0..LOCAL_LOOP_WARMUP_ROUNDS + LOCAL_LOOP_MEASURED_ROUNDS {
                         let request = server.read_request(cx).unwrap().unwrap();
                         black_box(request.body().len());
                         server.write_response(cx, &response).unwrap();
@@ -818,12 +891,12 @@ mod tests {
 
                 let mut client =
                     http1::ClientConnection::new(client_transport, HttpConfig::default());
-                for _ in 0..WARMUP_ROUNDS {
+                for _ in 0..LOCAL_LOOP_WARMUP_ROUNDS {
                     black_box(client.send(cx, &request).unwrap());
                 }
 
                 let (_, counts) = allocation_tracking::measure(|| {
-                    for _ in 0..MEASURED_ROUNDS {
+                    for _ in 0..LOCAL_LOOP_MEASURED_ROUNDS {
                         black_box(client.send(cx, &request).unwrap());
                     }
                 });
@@ -833,18 +906,15 @@ mod tests {
             })
         });
 
-        assert!(counts.allocating_operations() <= 256, "{counts:?}");
-        assert!(
-            counts.allocated_or_reallocated_bytes() <= 256 * 1024,
-            "{counts:?}"
+        assert_allocation_budget(
+            "HTTP/1 warmed local loop",
+            counts,
+            HTTP1_WARMED_LOCAL_LOOP_BUDGET,
         );
     }
 
     #[test]
     fn allocation_h2_warmed_local_loop_records_current_hot_path_allocations() {
-        const WARMUP_ROUNDS: u64 = 2;
-        const MEASURED_ROUNDS: u64 = 4;
-
         let counts = Runtime::new().block_on(|cx| {
             let (client_transport, server_transport) = socket_transport_pair();
             let request = request("/allocation-h2", b"ping");
@@ -854,7 +924,7 @@ mod tests {
                 let server = scope.spawn(move |cx| {
                     let mut server =
                         h2::ServerConnection::new(server_transport, HttpConfig::default());
-                    for _ in 0..WARMUP_ROUNDS + MEASURED_ROUNDS {
+                    for _ in 0..LOCAL_LOOP_WARMUP_ROUNDS + LOCAL_LOOP_MEASURED_ROUNDS {
                         let incoming = server.accept(cx).unwrap().unwrap();
                         black_box(incoming.request.body().len());
                         server
@@ -865,12 +935,12 @@ mod tests {
                 });
 
                 let mut client = h2::ClientConnection::new(client_transport, HttpConfig::default());
-                for _ in 0..WARMUP_ROUNDS {
+                for _ in 0..LOCAL_LOOP_WARMUP_ROUNDS {
                     black_box(client.send(cx, &request).unwrap());
                 }
 
                 let (_, counts) = allocation_tracking::measure(|| {
-                    for _ in 0..MEASURED_ROUNDS {
+                    for _ in 0..LOCAL_LOOP_MEASURED_ROUNDS {
                         black_box(client.send(cx, &request).unwrap());
                     }
                 });
@@ -880,10 +950,10 @@ mod tests {
             })
         });
 
-        assert!(counts.allocating_operations() <= 512, "{counts:?}");
-        assert!(
-            counts.allocated_or_reallocated_bytes() <= 512 * 1024,
-            "{counts:?}"
+        assert_allocation_budget(
+            "HTTP/2 warmed local loop",
+            counts,
+            H2_WARMED_LOCAL_LOOP_BUDGET,
         );
     }
 
@@ -892,47 +962,125 @@ mod tests {
         let concrete = measure_http1_tls_allocations(TlsTransportPath::StackCoreWrappers);
         let runtime_agnostic = measure_http1_tls_allocations(TlsTransportPath::RuntimeAgnostic);
 
-        assert!(
-            runtime_agnostic.allocating_operations() <= concrete.allocating_operations() + 32,
-            "concrete={concrete:?} runtime_agnostic={runtime_agnostic:?}"
-        );
-        assert!(
-            runtime_agnostic.allocated_or_reallocated_bytes()
-                <= concrete.allocated_or_reallocated_bytes() + 32 * 1024,
-            "concrete={concrete:?} runtime_agnostic={runtime_agnostic:?}"
+        assert_allocation_delta_budget(
+            "runtime-agnostic HTTP/1 TLS portability layer",
+            concrete,
+            runtime_agnostic,
+            RUNTIME_AGNOSTIC_TLS_DELTA_BUDGET,
         );
     }
 
     #[test]
     fn runtime_agnostic_portability_surface_avoids_dyn_heap_and_helper_threads() {
         let surfaces = [
-            ("transport", include_str!("transport.rs")),
-            ("tls", include_str!("tls.rs")),
-            ("http1/client", include_str!("http1/client.rs")),
-            ("http1/server", include_str!("http1/server.rs")),
+            SourceSurface {
+                name: "transport",
+                source: include_str!("transport.rs"),
+            },
+            SourceSurface {
+                name: "tls",
+                source: include_str!("tls.rs"),
+            },
+            SourceSurface {
+                name: "http1/client",
+                source: include_str!("http1/client.rs"),
+            },
+            SourceSurface {
+                name: "http1/server",
+                source: include_str!("http1/server.rs"),
+            },
         ];
 
-        for (name, source) in surfaces {
-            assert!(!source.contains("Box<dyn"), "{name} contains Box<dyn");
-            assert!(!source.contains("Arc<dyn"), "{name} contains Arc<dyn");
-            assert!(!source.contains("Box::new"), "{name} contains Box::new");
-            assert!(
-                !source.contains("thread::spawn"),
-                "{name} spawns helper threads"
-            );
-            assert!(
-                !source.contains("helper thread"),
-                "{name} references helper threads"
-            );
+        for surface in surfaces {
+            assert_portability_source_surface(surface);
         }
+    }
+
+    fn assert_allocation_budget(
+        label: &str,
+        counts: allocation_tracking::AllocationCounts,
+        budget: AllocationBudget,
+    ) {
+        let operations = counts.allocating_operations();
+        assert!(
+            operations <= budget.max_operations,
+            "{label} exceeded allocation operation budget: observed {operations}, budget {}. \
+             counts={counts:?}. Rationale: {}",
+            budget.max_operations,
+            budget.rationale
+        );
+
+        let bytes = counts.allocated_or_reallocated_bytes();
+        assert!(
+            bytes <= budget.max_bytes,
+            "{label} exceeded allocation byte budget: observed {bytes}, budget {}. \
+             counts={counts:?}. Rationale: {}",
+            budget.max_bytes,
+            budget.rationale
+        );
+    }
+
+    fn assert_allocation_delta_budget(
+        label: &str,
+        baseline: allocation_tracking::AllocationCounts,
+        candidate: allocation_tracking::AllocationCounts,
+        budget: AllocationDeltaBudget,
+    ) {
+        let baseline_operations = baseline.allocating_operations();
+        let candidate_operations = candidate.allocating_operations();
+        let max_operations = baseline_operations + budget.max_extra_operations;
+        assert!(
+            candidate_operations <= max_operations,
+            "{label} exceeded allocation operation delta budget: baseline {baseline_operations}, \
+             observed {candidate_operations}, max allowed {max_operations}. baseline={baseline:?} \
+             candidate={candidate:?}. Rationale: {}",
+            budget.rationale
+        );
+
+        let baseline_bytes = baseline.allocated_or_reallocated_bytes();
+        let candidate_bytes = candidate.allocated_or_reallocated_bytes();
+        let max_bytes = baseline_bytes + budget.max_extra_bytes;
+        assert!(
+            candidate_bytes <= max_bytes,
+            "{label} exceeded allocation byte delta budget: baseline {baseline_bytes}, observed \
+             {candidate_bytes}, max allowed {max_bytes}. baseline={baseline:?} \
+             candidate={candidate:?}. Rationale: {}",
+            budget.rationale
+        );
+    }
+
+    fn assert_portability_source_surface(surface: SourceSurface) {
+        for forbidden in PORTABILITY_FORBIDDEN_PATTERNS {
+            if let Some((line_number, line)) =
+                find_source_pattern(surface.source, forbidden.pattern)
+            {
+                panic!(
+                    "{} contains forbidden portability pattern `{}` on line {}: `{}`. Reason: {}. \
+                     Scan limits: {}",
+                    surface.name,
+                    forbidden.pattern,
+                    line_number,
+                    line.trim(),
+                    forbidden.reason,
+                    PORTABILITY_SOURCE_SCAN_LIMITS
+                );
+            }
+        }
+    }
+
+    fn find_source_pattern<'source>(
+        source: &'source str,
+        pattern: &str,
+    ) -> Option<(usize, &'source str)> {
+        source
+            .lines()
+            .enumerate()
+            .find_map(|(index, line)| line.contains(pattern).then_some((index + 1, line)))
     }
 
     fn measure_http1_tls_allocations(
         path: TlsTransportPath,
     ) -> allocation_tracking::AllocationCounts {
-        const WARMUP_ROUNDS: u64 = 1;
-        const MEASURED_ROUNDS: u64 = 2;
-
         let (server_ctx, client_ctx) = make_contexts();
         let (client_fd, server_fd) = socketpair(
             AddressFamily::UNIX,
@@ -950,7 +1098,7 @@ mod tests {
                     let transport = server_tls_transport(cx, &server_ctx, server_fd, path);
                     let mut server =
                         http1::RuntimeServerConnection::new(transport, HttpConfig::default());
-                    for _ in 0..WARMUP_ROUNDS + MEASURED_ROUNDS {
+                    for _ in 0..TLS_PORTABILITY_WARMUP_ROUNDS + TLS_PORTABILITY_MEASURED_ROUNDS {
                         server
                             .serve_one(cx, |request| {
                                 assert_eq!(request.uri(), "/allocation-runtime-agnostic-tls");
@@ -965,12 +1113,12 @@ mod tests {
                 let transport = client_tls_transport(cx, &client_ctx, client_fd, path);
                 let mut client =
                     http1::RuntimeClientConnection::new(transport, HttpConfig::default());
-                for _ in 0..WARMUP_ROUNDS {
+                for _ in 0..TLS_PORTABILITY_WARMUP_ROUNDS {
                     black_box(client.send(cx, &request).unwrap());
                 }
 
                 let (_, counts) = allocation_tracking::measure(|| {
-                    for _ in 0..MEASURED_ROUNDS {
+                    for _ in 0..TLS_PORTABILITY_MEASURED_ROUNDS {
                         black_box(client.send(cx, &request).unwrap());
                     }
                 });

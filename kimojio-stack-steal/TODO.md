@@ -254,7 +254,7 @@ waiters that could allocate per park. HTTP deadlines now use runtime-neutral
 - If allocation-free waits are required, add a regression for blocked HTTP/TLS
   deadline waits.
 
-### 11. Make portability-overhead tests less brittle
+### 11. [done] Make portability-overhead tests less brittle
 
 **Why:** Source substring checks and unexplained allocation tolerances can
 false-positive or hide the actual portability budget.
