@@ -16,6 +16,7 @@ use tonic_prost::ProstCodec;
 pub const SERVICE_NAME: &str = "interop.TestService";
 pub const UNARY_PATH: &str = "/interop.TestService/Unary";
 pub const STREAM_PATH: &str = "/interop.TestService/Stream";
+pub const CLIENT_STREAM_PATH: &str = "/interop.TestService/ClientStream";
 
 #[derive(Clone, PartialEq, Message)]
 pub struct TestRequest {
@@ -78,6 +79,16 @@ impl Service<http::Request<TonicBody>> for TonicTestServer {
                     let mut grpc = tonic::server::Grpc::new(codec);
                     Ok(grpc
                         .server_streaming(TonicServerStreaming { behavior }, request)
+                        .await)
+                })
+            }
+            CLIENT_STREAM_PATH => {
+                let behavior = self.behavior.clone();
+                Box::pin(async move {
+                    let codec = ProstCodec::<TestResponse, TestRequest>::default();
+                    let mut grpc = tonic::server::Grpc::new(codec);
+                    Ok(grpc
+                        .client_streaming(TonicClientStreaming { behavior }, request)
                         .await)
                 })
             }
@@ -204,6 +215,65 @@ impl tonic::server::ServerStreamingService<TestRequest> for TonicServerStreaming
     }
 }
 
+#[derive(Clone)]
+struct TonicClientStreaming {
+    behavior: Arc<TonicBehavior>,
+}
+
+impl tonic::server::ClientStreamingService<TestRequest> for TonicClientStreaming {
+    type Response = TestResponse;
+    type Future = BoxFuture<Response<Self::Response>, Status>;
+
+    fn call(&mut self, request: Request<tonic::Streaming<TestRequest>>) -> Self::Future {
+        let behavior = self.behavior.clone();
+        Box::pin(async move {
+            assert_eq!(request.metadata().get("x-request").unwrap(), "stackful");
+            assert_eq!(
+                request
+                    .metadata()
+                    .get_bin("trace-bin")
+                    .unwrap()
+                    .to_bytes()
+                    .unwrap()
+                    .as_ref(),
+                b"trace"
+            );
+
+            let mut stream = request.into_inner();
+            let mut values = Vec::new();
+            while let Some(request) = stream.message().await? {
+                values.push(request.value);
+            }
+
+            match &*behavior {
+                TonicBehavior::Success => {
+                    let mut response = Response::new(TestResponse {
+                        value: format!("tonic {}", values.join("+")),
+                    });
+                    response
+                        .metadata_mut()
+                        .insert("x-tonic", MetadataValue::from_static("yes"));
+                    response
+                        .metadata_mut()
+                        .insert_bin("trace-bin", MetadataValue::from_bytes(b"tonic-response"));
+                    Ok(response)
+                }
+                TonicBehavior::Error => {
+                    let mut metadata = tonic::metadata::MetadataMap::new();
+                    metadata.insert("x-error", MetadataValue::from_static("tonic"));
+                    metadata.insert_bin("error-bin", MetadataValue::from_bytes(b"details"));
+                    Err(Status::with_details_and_metadata(
+                        Code::Unavailable,
+                        "tonic client stream down",
+                        bytes::Bytes::from_static(b"client-stream-opaque"),
+                        metadata,
+                    ))
+                }
+            }
+        })
+    }
+}
+
 pub async fn tonic_unary_call(
     channel: Channel,
     request: Request<TestRequest>,
@@ -231,6 +301,22 @@ pub async fn tonic_server_streaming_call(
     grpc.server_streaming(
         request,
         PathAndQuery::from_static(STREAM_PATH),
+        ProstCodec::<TestRequest, TestResponse>::default(),
+    )
+    .await
+}
+
+pub async fn tonic_client_streaming_call(
+    channel: Channel,
+    request: Request<impl Stream<Item = TestRequest> + Send + 'static>,
+) -> Result<Response<TestResponse>, Status> {
+    let mut grpc = tonic::client::Grpc::new(channel);
+    grpc.ready()
+        .await
+        .map_err(|error| Status::unavailable(error.to_string()))?;
+    grpc.client_streaming(
+        request,
+        PathAndQuery::from_static(CLIENT_STREAM_PATH),
         ProstCodec::<TestRequest, TestResponse>::default(),
     )
     .await

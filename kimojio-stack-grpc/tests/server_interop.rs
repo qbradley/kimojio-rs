@@ -9,8 +9,8 @@ use http::HeaderName;
 use interop_proto::{TestRequest, TestResponse};
 use kimojio_stack::{Runtime, channel};
 use kimojio_stack_grpc::{
-    Status, StatusCode, UnaryReply, UnaryServer, server::ReceiverStream, server::ServerConfig,
-    server::ServerStreamingReply,
+    ClientStreamingRequest, Status, StatusCode, UnaryReply, UnaryServer, server::ReceiverStream,
+    server::ServerConfig, server::ServerStreamingReply,
 };
 use kimojio_stack_http::{HttpConfig, StackTransport, h2};
 use tonic::{Code, Request, metadata::MetadataValue, transport::Endpoint};
@@ -86,6 +86,43 @@ fn tonic_client_reads_stackful_server_streaming_success_with_metadata() {
 }
 
 #[test]
+fn tonic_client_streams_to_stackful_grpc_server_success_with_metadata() {
+    let (addr_tx, addr_rx) = mpsc::channel();
+    let server = spawn_stackful_server(StackfulBehavior::ClientStreamSuccess, addr_tx);
+    let addr = addr_rx.recv().unwrap();
+
+    let response = run_tonic_client_streaming_client(addr, ["one", "two"]).unwrap();
+
+    server.join().unwrap();
+    assert_eq!(response.get_ref().value, "stackful one+two");
+    assert_eq!(
+        response.metadata().get("x-stackful").unwrap(),
+        MetadataValue::from_static("yes")
+    );
+    assert_eq!(
+        response.metadata().get("x-trailer").unwrap(),
+        MetadataValue::from_static("done")
+    );
+}
+
+#[test]
+fn tonic_client_receives_stackful_client_streaming_error_status() {
+    let (addr_tx, addr_rx) = mpsc::channel();
+    let server = spawn_stackful_server(StackfulBehavior::ClientStreamError, addr_tx);
+    let addr = addr_rx.recv().unwrap();
+
+    let status = run_tonic_client_streaming_client(addr, ["one"]).unwrap_err();
+
+    server.join().unwrap();
+    assert_eq!(status.code(), Code::Unavailable);
+    assert_eq!(status.message(), "stackful client stream down");
+    assert_eq!(
+        status.metadata().get("x-error").unwrap(),
+        MetadataValue::from_static("stackful")
+    );
+}
+
+#[test]
 fn tonic_client_receives_stackful_server_streaming_error_status() {
     let (addr_tx, addr_rx) = mpsc::channel();
     let server = spawn_stackful_server(StackfulBehavior::StreamError, addr_tx);
@@ -109,6 +146,8 @@ enum StackfulBehavior {
     Error,
     StreamSuccess,
     StreamError,
+    ClientStreamSuccess,
+    ClientStreamError,
 }
 
 fn spawn_stackful_server(
@@ -196,7 +235,10 @@ fn spawn_stackful_server(
                                 .unwrap();
                             Err(status)
                         }
-                        StackfulBehavior::StreamSuccess | StackfulBehavior::StreamError => {
+                        StackfulBehavior::StreamSuccess
+                        | StackfulBehavior::StreamError
+                        | StackfulBehavior::ClientStreamSuccess
+                        | StackfulBehavior::ClientStreamError => {
                             panic!("unexpected unary behavior")
                         }
                     }
@@ -262,12 +304,108 @@ fn spawn_stackful_server(
                     }
                 },
             );
+            grpc.add_client_streaming::<TestRequest, TestResponse, _>(
+                interop_proto::CLIENT_STREAM_PATH,
+                move |cx, metadata, mut request: ClientStreamingRequest<'_, TestRequest>| {
+                    assert_eq!(
+                        metadata.get(&HeaderName::from_static("x-request")),
+                        Some(&http::HeaderValue::from_static("tonic"))
+                    );
+                    assert_eq!(
+                        metadata
+                            .get_bin(&HeaderName::from_static("trace-bin"))
+                            .unwrap()
+                            .as_deref(),
+                        Some(b"trace".as_slice())
+                    );
+
+                    let mut values = Vec::new();
+                    while let Some(message) = request.next(cx)? {
+                        values.push(message.value);
+                    }
+
+                    match behavior {
+                        StackfulBehavior::ClientStreamSuccess => {
+                            let mut reply = UnaryReply::new(TestResponse {
+                                value: format!("stackful {}", values.join("+")),
+                            });
+                            reply
+                                .metadata
+                                .insert(
+                                    HeaderName::from_static("x-stackful"),
+                                    http::HeaderValue::from_static("yes"),
+                                )
+                                .unwrap();
+                            reply
+                                .trailers
+                                .insert(
+                                    HeaderName::from_static("x-trailer"),
+                                    http::HeaderValue::from_static("done"),
+                                )
+                                .unwrap();
+                            Ok(reply)
+                        }
+                        StackfulBehavior::ClientStreamError => {
+                            let mut status =
+                                Status::new(StatusCode::Unavailable, "stackful client stream down");
+                            status
+                                .metadata_mut()
+                                .insert(
+                                    HeaderName::from_static("x-error"),
+                                    http::HeaderValue::from_static("stackful"),
+                                )
+                                .unwrap();
+                            Err(status)
+                        }
+                        _ => panic!("unexpected client streaming behavior"),
+                    }
+                },
+            );
             grpc.serve_one(cx, &mut http).unwrap();
             http.goaway(cx, 1, 0).unwrap();
             http.shutdown_write_and_close_after_peer(cx).unwrap();
             cx.close(listener).unwrap();
         });
     })
+}
+
+fn run_tonic_client_streaming_client<const N: usize>(
+    addr: SocketAddr,
+    values: [&str; N],
+) -> Result<tonic::Response<TestResponse>, tonic::Status> {
+    std::thread::spawn({
+        let values = values.map(str::to_owned);
+        move || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async move {
+                    let channel = Endpoint::from_shared(format!("http://{addr}"))
+                        .unwrap()
+                        .connect()
+                        .await
+                        .unwrap();
+                    let stream = tonic::codegen::tokio_stream::iter(
+                        values
+                            .into_iter()
+                            .map(|value| TestRequest { value })
+                            .collect::<Vec<_>>(),
+                    );
+                    let mut request = Request::new(stream);
+                    request
+                        .metadata_mut()
+                        .insert("x-request", MetadataValue::from_static("tonic"));
+                    request
+                        .metadata_mut()
+                        .insert_bin("trace-bin", MetadataValue::from_bytes(b"trace"));
+                    interop_proto::tonic_client_streaming_call(channel, request).await
+                })
+        }
+    })
+    .join()
+    .unwrap()
 }
 
 fn run_tonic_streaming_client(

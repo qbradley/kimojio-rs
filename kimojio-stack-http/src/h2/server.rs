@@ -25,23 +25,90 @@ pub struct IncomingRequest {
     pub request: Request<Body>,
 }
 
+/// Inbound request headers for a request body stream.
+#[derive(Debug)]
+pub struct IncomingRequestHead {
+    /// Stream ID used to read request DATA events and send the response.
+    pub stream_id: StreamId,
+    /// Request head with an empty body marker.
+    pub request: Request<()>,
+}
+
+/// Incremental request event returned by [`RuntimeServerConnection::read_request_event`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum RequestStreamEvent {
+    /// One DATA payload for the request stream.
+    Data(Bytes),
+    /// Terminal request trailers.
+    ///
+    /// Empty trailers represent a DATA frame with `END_STREAM` and no trailer
+    /// HEADERS.
+    Trailers(Trailers),
+}
+
+struct QueuedRequestStreamEvent {
+    event: RequestStreamEvent,
+    data_len: usize,
+    update_stream_window: bool,
+}
+
 struct PendingRequest {
     headers: Option<Vec<Header>>,
-    body: BodyBuilder,
+    body: Option<BodyBuilder>,
+    events: VecDeque<QueuedRequestStreamEvent>,
+    head_delivered: bool,
 }
 
 impl PendingRequest {
     fn new(limits: BodyLimits) -> Self {
         Self {
             headers: None,
-            body: BodyBuilder::new(limits),
+            body: Some(BodyBuilder::new(limits)),
+            events: VecDeque::new(),
+            head_delivered: false,
         }
+    }
+
+    fn is_streaming(&self) -> bool {
+        self.body.is_none()
+    }
+
+    fn push_data_event(&mut self, data: Bytes, update_stream_window: bool) {
+        let data_len = data.len();
+        if data_len != 0 {
+            self.events.push_back(QueuedRequestStreamEvent {
+                event: RequestStreamEvent::Data(data),
+                data_len,
+                update_stream_window,
+            });
+        }
+    }
+
+    fn push_precredited_data_event(&mut self, data: Bytes) {
+        if !data.is_empty() {
+            self.events.push_back(QueuedRequestStreamEvent {
+                event: RequestStreamEvent::Data(data),
+                data_len: 0,
+                update_stream_window: false,
+            });
+        }
+    }
+
+    fn push_trailers_event(&mut self, trailers: Trailers) {
+        self.events.push_back(QueuedRequestStreamEvent {
+            event: RequestStreamEvent::Trailers(trailers),
+            data_len: 0,
+            update_stream_window: false,
+        });
     }
 }
 
 /// Low-level HTTP/2 server connection over a stack transport.
 ///
-/// The server accepts one completed request at a time with [`accept`](Self::accept).
+/// The server can accept one completed, buffered request at a time with
+/// [`accept`](Self::accept), or it can accept only the request head with
+/// [`accept_request_headers`](Self::accept_request_headers) and consume the body
+/// incrementally with [`read_request_event`](Self::read_request_event).
 /// Responses can be sent as a single buffered body with
 /// [`send_response`](Self::send_response) or incrementally with
 /// [`send_response_headers`](Self::send_response_headers),
@@ -53,6 +120,7 @@ pub struct RuntimeServerConnection<S> {
     state: ConnectionState,
     initialized: bool,
     pending: BTreeMap<StreamId, PendingRequest>,
+    ready_heads: VecDeque<StreamId>,
     completed: VecDeque<IncomingRequest>,
     reset_streams: BTreeMap<StreamId, Error>,
     goaway: Option<Error>,
@@ -80,6 +148,7 @@ impl<S> RuntimeServerConnection<S> {
             state: ConnectionState::new(settings).expect("valid HTTP/2 local settings"),
             initialized: false,
             pending: BTreeMap::new(),
+            ready_heads: VecDeque::new(),
             completed: VecDeque::new(),
             reset_streams: BTreeMap::new(),
             goaway: None,
@@ -97,6 +166,7 @@ impl<S> RuntimeServerConnection<S> {
     {
         self.ensure_initialized(cx)?;
         if let Some(request) = self.completed.pop_front() {
+            self.ready_heads.retain(|id| *id != request.stream_id);
             return Ok(Some(request));
         }
         loop {
@@ -111,11 +181,89 @@ impl<S> RuntimeServerConnection<S> {
             };
             self.process_frame(cx, frame)?;
             if let Some(request) = self.completed.pop_front() {
+                self.ready_heads.retain(|id| *id != request.stream_id);
                 return Ok(Some(request));
             }
             if self.goaway.is_some() && self.pending.is_empty() {
                 return Ok(None);
             }
+        }
+    }
+
+    /// Accepts the next request head without buffering the request body.
+    ///
+    /// After this returns `Some`, callers must consume the matching body with
+    /// [`read_request_event`](Self::read_request_event) before sending a response
+    /// for protocols that require full request consumption.
+    pub fn accept_request_headers(
+        &mut self,
+        cx: &impl HttpRuntime<S>,
+    ) -> Result<Option<IncomingRequestHead>, Error>
+    where
+        S: RuntimeSocket,
+    {
+        self.ensure_initialized(cx)?;
+        if let Some(head) = self.pop_request_head()? {
+            return Ok(Some(head));
+        }
+        loop {
+            let frame = match codec::read_frame(
+                cx,
+                &mut self.transport,
+                self.state.local_settings().max_frame_size,
+            ) {
+                Ok(frame) => frame,
+                Err(Error::Eof) if self.pending.is_empty() => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            self.process_frame(cx, frame)?;
+            if let Some(head) = self.pop_request_head()? {
+                return Ok(Some(head));
+            }
+            if self.goaway.is_some() && self.pending.is_empty() {
+                return Ok(None);
+            }
+        }
+    }
+
+    /// Reads the next DATA or terminal trailers event for a request stream.
+    pub fn read_request_event(
+        &mut self,
+        cx: &impl HttpRuntime<S>,
+        stream_id: StreamId,
+    ) -> Result<RequestStreamEvent, Error>
+    where
+        S: RuntimeSocket,
+    {
+        self.ensure_initialized(cx)?;
+        if self
+            .pending
+            .get(&stream_id)
+            .is_some_and(|pending| !pending.head_delivered)
+        {
+            return Err(Error::Protocol("request headers not read"));
+        }
+
+        loop {
+            if let Some(event) = self.pop_request_streaming_event(cx, stream_id)? {
+                return Ok(event);
+            }
+            if let Some(error) = self.reset_streams.remove(&stream_id) {
+                self.pending.remove(&stream_id);
+                return Err(error);
+            }
+            let frame = match codec::read_frame(
+                cx,
+                &mut self.transport,
+                self.state.local_settings().max_frame_size,
+            ) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    self.pending.remove(&stream_id);
+                    return Err(error);
+                }
+            };
+            self.process_frame(cx, frame)?;
         }
     }
 
@@ -495,6 +643,7 @@ impl<S> RuntimeServerConnection<S> {
                 let stream_id = StreamId::new(frame.stream_id)?;
                 self.state.remove_stream(stream_id);
                 self.pending.remove(&stream_id);
+                self.ready_heads.retain(|id| *id != stream_id);
                 self.completed
                     .retain(|request| request.stream_id != stream_id);
                 self.reset_streams
@@ -550,8 +699,13 @@ impl<S> RuntimeServerConnection<S> {
                 .ok_or(Error::Protocol("unknown stream"))?
                 .receive_headers(true, end_stream)?;
             pending.headers = Some(headers);
+            self.ready_heads.push_back(stream_id);
             if end_stream {
-                self.complete_request(stream_id)?;
+                if pending.is_streaming() {
+                    self.complete_streaming_request(stream_id, Trailers::new())?;
+                } else {
+                    self.complete_request(stream_id)?;
+                }
             }
         } else {
             if !end_stream {
@@ -560,8 +714,13 @@ impl<S> RuntimeServerConnection<S> {
             self.state
                 .stream_mut(stream_id)
                 .ok_or(Error::Protocol("unknown stream"))?
-                .receive_trailers(headers)?;
-            self.complete_request(stream_id)?;
+                .receive_trailers(headers.clone())?;
+            let trailers = codec::trailers_from_headers(headers)?;
+            if pending.is_streaming() {
+                self.complete_streaming_request(stream_id, trailers)?;
+            } else {
+                self.complete_request(stream_id)?;
+            }
         }
         Ok(())
     }
@@ -587,15 +746,27 @@ impl<S> RuntimeServerConnection<S> {
             .receive_data(&data, end_stream, limits)?;
         let data_len = data.len();
         self.state.consume_inbound_connection_window(data_len)?;
-        self.state.queue_connection_window_update(data_len)?;
-        pending.body.append(&data)?;
-        let should_update =
-            !end_stream && self.state.queue_stream_window_update_to_target(stream_id)?;
-        if data_len != 0 || should_update {
-            codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
+        if let Some(body) = pending.body.as_mut() {
+            self.state.queue_connection_window_update(data_len)?;
+            body.append(&data)?;
+            let should_update =
+                !end_stream && self.state.queue_stream_window_update_to_target(stream_id)?;
+            if data_len != 0 || should_update {
+                codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
+            }
+        } else if !data.is_empty() {
+            pending.push_data_event(data, !end_stream);
         }
         if end_stream {
-            self.complete_request(stream_id)?;
+            if self
+                .pending
+                .get(&stream_id)
+                .is_some_and(PendingRequest::is_streaming)
+            {
+                self.complete_streaming_request(stream_id, Trailers::new())?;
+            } else {
+                self.complete_request(stream_id)?;
+            }
         }
         Ok(())
     }
@@ -608,10 +779,101 @@ impl<S> RuntimeServerConnection<S> {
         let headers = pending
             .headers
             .ok_or(Error::Protocol("request headers missing"))?;
-        let request = codec::request_from_headers(headers, pending.body.finish())?;
+        let body = pending
+            .body
+            .ok_or(Error::Protocol("request body state missing"))?
+            .finish();
+        let request = codec::request_from_headers(headers, body)?;
         self.completed
             .push_back(IncomingRequest { stream_id, request });
         Ok(())
+    }
+
+    fn complete_streaming_request(
+        &mut self,
+        stream_id: StreamId,
+        trailers: Trailers,
+    ) -> Result<(), Error> {
+        self.pending
+            .get_mut(&stream_id)
+            .ok_or(Error::Protocol("request state missing"))?
+            .push_trailers_event(trailers);
+        Ok(())
+    }
+
+    fn pop_request_head(&mut self) -> Result<Option<IncomingRequestHead>, Error> {
+        while let Some(stream_id) = self.ready_heads.pop_front() {
+            if let Some(pending) = self.pending.get_mut(&stream_id) {
+                if pending.head_delivered {
+                    continue;
+                }
+                let headers = pending
+                    .headers
+                    .clone()
+                    .ok_or(Error::Protocol("request headers missing"))?;
+                pending.head_delivered = true;
+                if let Some(body) = pending.body.take() {
+                    let bytes = body.finish().into_bytes();
+                    pending.push_precredited_data_event(bytes);
+                }
+                let request = codec::request_from_headers(headers, ())?;
+                return Ok(Some(IncomingRequestHead { stream_id, request }));
+            }
+            if let Some(position) = self
+                .completed
+                .iter()
+                .position(|request| request.stream_id == stream_id)
+            {
+                let completed = self
+                    .completed
+                    .remove(position)
+                    .ok_or(Error::Protocol("completed request state missing"))?;
+                let (parts, body) = completed.request.into_parts();
+                let mut pending = PendingRequest {
+                    headers: None,
+                    body: None,
+                    events: VecDeque::new(),
+                    head_delivered: true,
+                };
+                pending.push_precredited_data_event(body.into_bytes());
+                pending.push_trailers_event(Trailers::new());
+                self.pending.insert(stream_id, pending);
+                return Ok(Some(IncomingRequestHead {
+                    stream_id,
+                    request: Request::from_parts(parts, ()),
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    fn pop_request_streaming_event(
+        &mut self,
+        cx: &impl HttpRuntime<S>,
+        stream_id: StreamId,
+    ) -> Result<Option<RequestStreamEvent>, Error>
+    where
+        S: RuntimeSocket,
+    {
+        let Some(queued) = self
+            .pending
+            .get_mut(&stream_id)
+            .and_then(|pending| pending.events.pop_front())
+        else {
+            return Ok(None);
+        };
+
+        if queued.data_len != 0 {
+            self.state.queue_connection_window_update(queued.data_len)?;
+            if queued.update_stream_window {
+                self.state.queue_stream_window_update_to_target(stream_id)?;
+            }
+            codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
+        }
+        if matches!(queued.event, RequestStreamEvent::Trailers(_)) {
+            self.pending.remove(&stream_id);
+        }
+        Ok(Some(queued.event))
     }
 
     fn check_stream_reset(&mut self, stream_id: StreamId) -> Result<(), Error> {

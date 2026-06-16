@@ -51,6 +51,25 @@ jobs:
 
     - name: Run kimojio-stack-steal all-feature tests
       run: cargo +${{ matrix.rust }} test -p kimojio-stack-steal --all-targets --all-features
+
+    - name: Install Go for object gateway comparison
+      if: matrix.rust == env.DEFAULT_RUST_VERSION
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: examples/go/object_gateway/go.mod
+
+    - name: Install protoc for Go object gateway generation
+      if: matrix.rust == env.DEFAULT_RUST_VERSION
+      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+    - name: Validate Go object gateway comparison
+      if: matrix.rust == env.DEFAULT_RUST_VERSION
+      working-directory: examples/go/object_gateway
+      run: |
+        go test ./...
+        go build ./...
+        go generate ./...
+        git diff --exit-code -- proto
      
   coverage:
     if: github.repository == 'Azure/kimojio-rs'

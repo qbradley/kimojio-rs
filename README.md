@@ -24,8 +24,8 @@ The workspace includes low-level stackful networking crates for applications
 that need explicit scheduling and predictable latency:
 
 - `kimojio-stack-http` provides HTTP/1.1 and HTTP/2 client/server foundations.
-- `kimojio-stack-grpc` provides unary gRPC client/server foundations over the
-  HTTP/2 transport.
+- `kimojio-stack-grpc` provides unary, client-streaming, and server-streaming
+  gRPC client/server foundations over the HTTP/2 transport.
 - `kimojio-stack-opentelemetry` provides low-level OpenTelemetry Protocol logs
   and metrics export over the stackful gRPC transport.
 - `kimojio-stack-storage` provides low-level durable object-storage request
@@ -38,10 +38,13 @@ See the [Stack OpenTelemetry Guide][stack-opentelemetry-guide] for supported
 telemetry signals, export behavior, and receiver interoperability testing.
 See the [Stackful Storage Guide][stack-storage-guide] for supported storage
 operation families, retry behavior, and integration-test gates.
+See the [Stackful Object Gateway Guide][stack-object-gateway-guide] for the
+canonical multi-runtime example, conformance matrix, and workload commands.
 
 [stack-http-grpc-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-http-grpc.md
 [stack-opentelemetry-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-opentelemetry.md
 [stack-storage-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-storage.md
+[stack-object-gateway-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-object-gateway.md
 
 ## Stackful Work-Stealing Runtime
 

@@ -175,6 +175,113 @@ fn stackful_grpc_client_reads_tonic_server_streaming_success_with_metadata() {
 }
 
 #[test]
+fn stackful_grpc_client_sends_client_stream_to_tonic_server() {
+    let (addr_tx, addr_rx) = mpsc::channel();
+    let (server, shutdown) = spawn_tonic_server(TonicBehavior::Success, addr_tx);
+    let addr = addr_rx.recv().unwrap();
+
+    let response = Runtime::new().block_on(|cx| {
+        let transport = stack_connect(cx, addr);
+        let http = h2::ClientConnection::new(transport, HttpConfig::default());
+        let mut client = UnaryClient::new(http, ClientConfig::default());
+        let mut metadata = Metadata::new();
+        metadata
+            .insert(
+                HeaderName::from_static("x-request"),
+                http::HeaderValue::from_static("stackful"),
+            )
+            .unwrap();
+        metadata
+            .insert_bin(HeaderName::from_static("trace-bin"), b"trace")
+            .unwrap();
+        let response = client
+            .call_client_streaming::<TestRequest, interop_proto::TestResponse, _>(
+                cx,
+                interop_proto::CLIENT_STREAM_PATH,
+                metadata,
+                [
+                    TestRequest {
+                        value: "one".to_owned(),
+                    },
+                    TestRequest {
+                        value: "two".to_owned(),
+                    },
+                ],
+            )
+            .unwrap();
+        client.close(cx).unwrap();
+        response
+    });
+
+    shutdown.send(()).unwrap();
+    server.join().unwrap();
+    assert_eq!(response.message.value, "tonic one+two");
+    assert_eq!(response.status.code(), StatusCode::Ok);
+    assert_eq!(
+        response.metadata.get(&HeaderName::from_static("x-tonic")),
+        Some(&http::HeaderValue::from_static("yes"))
+    );
+    assert_eq!(
+        response
+            .metadata
+            .get_bin(&HeaderName::from_static("trace-bin"))
+            .unwrap()
+            .as_deref(),
+        Some(b"tonic-response".as_slice())
+    );
+}
+
+#[test]
+fn stackful_grpc_client_receives_tonic_client_streaming_error_status() {
+    let (addr_tx, addr_rx) = mpsc::channel();
+    let (server, shutdown) = spawn_tonic_server(TonicBehavior::Error, addr_tx);
+    let addr = addr_rx.recv().unwrap();
+
+    let error = Runtime::new().block_on(|cx| {
+        let transport = stack_connect(cx, addr);
+        let http = h2::ClientConnection::new(transport, HttpConfig::default());
+        let mut client = UnaryClient::new(http, ClientConfig::default());
+        let mut metadata = Metadata::new();
+        metadata
+            .insert(
+                HeaderName::from_static("x-request"),
+                http::HeaderValue::from_static("stackful"),
+            )
+            .unwrap();
+        metadata
+            .insert_bin(HeaderName::from_static("trace-bin"), b"trace")
+            .unwrap();
+        let error = client
+            .call_client_streaming::<TestRequest, interop_proto::TestResponse, _>(
+                cx,
+                interop_proto::CLIENT_STREAM_PATH,
+                metadata,
+                [TestRequest {
+                    value: "one".to_owned(),
+                }],
+            )
+            .unwrap_err();
+        client.close(cx).unwrap();
+        error
+    });
+
+    shutdown.send(()).unwrap();
+    server.join().unwrap();
+    match error {
+        Error::Status(status) => {
+            assert_eq!(status.code(), StatusCode::Unavailable);
+            assert_eq!(status.message(), "tonic client stream down");
+            assert_eq!(status.details(), b"client-stream-opaque");
+            assert_eq!(
+                status.metadata().get(&HeaderName::from_static("x-error")),
+                Some(&http::HeaderValue::from_static("tonic"))
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn stackful_grpc_client_receives_tonic_server_streaming_error_status() {
     let (addr_tx, addr_rx) = mpsc::channel();
     let (server, shutdown) = spawn_tonic_server(TonicBehavior::Error, addr_tx);

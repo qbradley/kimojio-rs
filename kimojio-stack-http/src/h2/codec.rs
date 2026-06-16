@@ -8,7 +8,7 @@ use http::{
 };
 use kimojio_stack::RuntimeSocket;
 
-use crate::{Body, Error, HttpConfig, HttpRuntime, LimitKind, RuntimeStackTransport, Trailers};
+use crate::{Error, HttpConfig, HttpRuntime, LimitKind, RuntimeStackTransport, Trailers};
 
 use super::{
     CLIENT_PREFACE, ConnectionState, Frame, FrameFlags, FramePayload, FrameType, Header, Setting,
@@ -254,7 +254,7 @@ fn ensure_header_block_capacity(current: usize, next: usize, limit: usize) -> Re
     }
 }
 
-pub(super) fn request_headers(request: &Request<Body>) -> Result<Vec<Header>, Error> {
+pub(super) fn request_headers<B>(request: &Request<B>) -> Result<Vec<Header>, Error> {
     let mut headers = Vec::with_capacity(request.headers().len() + 4);
     headers.push(Header::new(
         ":method",
@@ -308,10 +308,7 @@ pub(super) fn trailers_headers(trailers: &Trailers) -> Result<Vec<Header>, Error
     Ok(headers)
 }
 
-pub(super) fn request_from_headers(
-    headers: Vec<Header>,
-    body: Body,
-) -> Result<Request<Body>, Error> {
+pub(super) fn request_from_headers<B>(headers: Vec<Header>, body: B) -> Result<Request<B>, Error> {
     let mut method = None;
     let mut path = None;
     let mut scheme = None;

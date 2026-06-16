@@ -10,16 +10,33 @@ virtual-clock = ["kimojio/virtual-clock"]
 
 [dependencies]
 anyhow.workspace = true
+bytes.workspace = true
 clap.workspace = true
 futures.workspace = true
+http.workspace = true
 kimojio = { workspace = true, features = ["tls"] }
 kimojio-stack.workspace = true
+kimojio-stack-grpc.workspace = true
+kimojio-stack-http.workspace = true
+kimojio-stack-opentelemetry.workspace = true
+kimojio-stack-storage.workspace = true
 kimojio-stack-steal.workspace = true
 kimojio-stack-tls.workspace = true
 openssl.workspace = true
+prost.workspace = true
 rustix.workspace = true
-tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "sync"] }
 tokio-openssl = "0.6"
+tonic.workspace = true
+tonic-prost.workspace = true
+axum = "0.8.9"
+azure_storage_blobs = "0.21.0"
+opentelemetry_sdk = "0.32.1"
+tokio-stream = { version = "0.1", features = ["net"] }
+tower = "0.5"
+
+[dev-dependencies]
+criterion.workspace = true
 
 [[bin]]
 name = "copyfile"
@@ -52,6 +69,34 @@ name = "tcp-echo-tokio-host"
 path = "src/bin/tcp_echo_tokio_host.rs"
 
 [[bin]]
+name = "object-gateway-contract-check"
+path = "src/bin/object_gateway_contract_check.rs"
+
+[[bin]]
+name = "object-gateway-conformance"
+path = "src/bin/object_gateway_conformance.rs"
+
+[[bin]]
+name = "object-gateway-stack-host"
+path = "src/bin/object_gateway_stack_host.rs"
+
+[[bin]]
+name = "object-gateway-tokio-host"
+path = "src/bin/object_gateway_tokio_host.rs"
+
+[[bin]]
+name = "object-gateway-client"
+path = "src/bin/object_gateway_client.rs"
+
+[[bin]]
+name = "object-gateway-workload"
+path = "src/bin/object_gateway_workload.rs"
+
+[[bin]]
 name = "virtual-time"
 path = "src/bin/virtual_time.rs"
 required-features = ["virtual-clock"]
+
+[[bench]]
+name = "object_gateway"
+harness = false

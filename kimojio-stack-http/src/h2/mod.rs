@@ -32,7 +32,10 @@ pub use client::{
 pub use connection::ConnectionState;
 pub use frame::{Frame, FrameFlags, FramePayload, FrameType};
 pub use hpack::Header;
-pub use server::{IncomingRequest, RuntimeServerConnection, ServerConnection};
+pub use server::{
+    IncomingRequest, IncomingRequestHead, RequestStreamEvent, RuntimeServerConnection,
+    ServerConnection,
+};
 pub use settings::{Setting, SettingId, Settings};
 pub use stream::{FlowControlWindow, Stream, StreamId, StreamState};
 
@@ -105,8 +108,8 @@ mod tests {
     };
 
     use super::{
-        ClientConnection, ConnectionState, ERROR_CODE_CANCEL, Frame, Header, ResponseStreamEvent,
-        ServerConnection, Setting, SettingId, Settings, StreamId, codec,
+        ClientConnection, ConnectionState, ERROR_CODE_CANCEL, Frame, Header, RequestStreamEvent,
+        ResponseStreamEvent, ServerConnection, Setting, SettingId, Settings, StreamId, codec,
     };
 
     fn body(bytes: &[u8]) -> Body {
@@ -164,6 +167,147 @@ mod tests {
                 });
 
                 server.join(cx);
+                let response = client.join(cx);
+                assert_eq!(response.status(), StatusCode::OK);
+                assert_eq!(response.body().as_bytes(), b"pong");
+            });
+        });
+    }
+
+    #[test]
+    fn h2_request_stream_delivers_data_chunks_incrementally() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut server = ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = server.accept_request_headers(cx).unwrap().unwrap();
+                    assert_eq!(incoming.request.method(), "POST");
+                    assert_eq!(incoming.request.uri(), "/upload");
+
+                    let first = server.read_request_event(cx, incoming.stream_id).unwrap();
+                    let second = server.read_request_event(cx, incoming.stream_id).unwrap();
+                    let terminal = server.read_request_event(cx, incoming.stream_id).unwrap();
+
+                    assert_eq!(
+                        first,
+                        RequestStreamEvent::Data(Bytes::from_static(b"hello "))
+                    );
+                    assert_eq!(
+                        second,
+                        RequestStreamEvent::Data(Bytes::from_static(b"world"))
+                    );
+                    assert_eq!(terminal, RequestStreamEvent::Trailers(Trailers::new()));
+
+                    let response = Response::builder()
+                        .status(StatusCode::OK)
+                        .header(CONTENT_TYPE, "text/plain")
+                        .body(body(b"done"))
+                        .unwrap();
+                    server
+                        .send_response(cx, incoming.stream_id, &response)
+                        .unwrap();
+                    server.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut client = ClientConnection::new(client_transport, HttpConfig::default());
+                    let request = Request::builder()
+                        .method("POST")
+                        .uri("/upload")
+                        .body(())
+                        .unwrap();
+                    let stream_id = client.send_request_headers(cx, &request).unwrap();
+                    client
+                        .send_request_data(cx, stream_id, Bytes::from_static(b"hello "))
+                        .unwrap();
+                    client
+                        .send_request_data(cx, stream_id, Bytes::from_static(b"world"))
+                        .unwrap();
+                    client.finish_request_stream(cx, stream_id).unwrap();
+                    let response = client.read_response_with_trailers(cx, stream_id).unwrap();
+                    client.close(cx).unwrap();
+                    response
+                });
+
+                server.join(cx);
+                let response = client.join(cx);
+                assert_eq!(response.response.status(), StatusCode::OK);
+                assert_eq!(response.response.body().as_bytes(), b"done");
+            });
+        });
+    }
+
+    #[test]
+    fn h2_request_stream_cancel_allows_follow_up_request() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+        let (first_chunk_tx, first_chunk_rx) = channel::bounded::<()>(1);
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut server = ServerConnection::new(server_transport, HttpConfig::default());
+                    let incoming = server.accept_request_headers(cx).unwrap().unwrap();
+                    assert_eq!(incoming.request.method(), "POST");
+                    assert_eq!(incoming.request.uri(), "/cancel");
+
+                    let first = server.read_request_event(cx, incoming.stream_id).unwrap();
+                    assert_eq!(
+                        first,
+                        RequestStreamEvent::Data(Bytes::from_static(b"partial"))
+                    );
+                    first_chunk_tx.send(cx, ()).unwrap();
+                    let reset_kind = server
+                        .read_request_event(cx, incoming.stream_id)
+                        .unwrap_err()
+                        .kind();
+
+                    let follow_up = server.accept(cx).unwrap().unwrap();
+                    assert_eq!(follow_up.request.method(), "POST");
+                    assert_eq!(follow_up.request.uri(), "/follow");
+                    assert_eq!(follow_up.request.body().as_bytes(), b"ping");
+                    let response = Response::builder()
+                        .status(StatusCode::OK)
+                        .header(CONTENT_TYPE, "text/plain")
+                        .body(body(b"pong"))
+                        .unwrap();
+                    server
+                        .send_response(cx, follow_up.stream_id, &response)
+                        .unwrap();
+                    server.shutdown_write_and_close_after_peer(cx).unwrap();
+                    reset_kind
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut client = ClientConnection::new(client_transport, HttpConfig::default());
+                    let request = Request::builder()
+                        .method("POST")
+                        .uri("/cancel")
+                        .body(())
+                        .unwrap();
+                    let stream_id = client.send_request_headers(cx, &request).unwrap();
+                    client
+                        .send_request_data(cx, stream_id, Bytes::from_static(b"partial"))
+                        .unwrap();
+                    first_chunk_rx.recv(cx).unwrap();
+                    client
+                        .cancel_response_stream(cx, stream_id, ERROR_CODE_CANCEL)
+                        .unwrap();
+
+                    let follow_up = Request::builder()
+                        .method("POST")
+                        .uri("/follow")
+                        .body(body(b"ping"))
+                        .unwrap();
+                    let response = client.send(cx, &follow_up).unwrap();
+                    client.close(cx).unwrap();
+                    response
+                });
+
+                assert_eq!(server.join(cx), ErrorKind::PeerReset);
                 let response = client.join(cx);
                 assert_eq!(response.status(), StatusCode::OK);
                 assert_eq!(response.body().as_bytes(), b"pong");

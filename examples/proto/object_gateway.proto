@@ -1,0 +1,120 @@
+syntax = "proto3";
+
+package kimojio.examples.object_gateway.v1;
+
+option go_package = "github.com/Azure/kimojio-rs/examples/go/object_gateway/proto;objectgatewayv1";
+
+service ObjectGateway {
+  rpc Put(stream PutChunk) returns (PutResponse);
+  rpc Get(GetRequest) returns (stream GetChunk);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc List(ListRequest) returns (ListResponse);
+  rpc Copy(CopyRequest) returns (CopyResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message ObjectIdentity {
+  string namespace = 1;
+  string name = 2;
+}
+
+message ObjectMetadata {
+  ObjectIdentity object = 1;
+  uint64 size_bytes = 2;
+  uint64 generation = 3;
+  string etag = 4;
+  string content_type = 5;
+  map<string, string> user_metadata = 6;
+}
+
+message OperationStatus {
+  ObjectStatusCode code = 1;
+  string message = 2;
+  StorageStatusClass storage_class = 3;
+}
+
+enum ObjectStatusCode {
+  OBJECT_STATUS_OK = 0;
+  OBJECT_STATUS_NOT_FOUND = 1;
+  OBJECT_STATUS_SIZE_LIMIT = 2;
+  OBJECT_STATUS_STORAGE_TIMEOUT = 3;
+  OBJECT_STATUS_STORAGE_RETRIABLE = 4;
+  OBJECT_STATUS_STORAGE_NON_RETRIABLE = 5;
+  OBJECT_STATUS_DEADLINE_EXCEEDED = 6;
+  OBJECT_STATUS_CANCELLED = 7;
+  OBJECT_STATUS_INTERNAL = 8;
+}
+
+enum StorageStatusClass {
+  STORAGE_STATUS_NONE = 0;
+  STORAGE_STATUS_TIMEOUT = 1;
+  STORAGE_STATUS_RETRIABLE = 2;
+  STORAGE_STATUS_NON_RETRIABLE = 3;
+}
+
+message PutChunk {
+  ObjectIdentity object = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+  bool finish = 4;
+  string content_type = 5;
+  map<string, string> user_metadata = 6;
+}
+
+message PutResponse {
+  OperationStatus status = 1;
+  ObjectMetadata metadata = 2;
+}
+
+message GetRequest {
+  ObjectIdentity object = 1;
+  uint32 max_chunk_bytes = 2;
+}
+
+message GetChunk {
+  OperationStatus status = 1;
+  ObjectMetadata metadata = 2;
+  uint64 offset = 3;
+  bytes data = 4;
+  bool finish = 5;
+}
+
+message DeleteRequest {
+  ObjectIdentity object = 1;
+}
+
+message DeleteResponse {
+  OperationStatus status = 1;
+}
+
+message ListRequest {
+  string namespace = 1;
+  string prefix = 2;
+  uint32 max_results = 3;
+}
+
+message ListResponse {
+  OperationStatus status = 1;
+  repeated ObjectMetadata objects = 2;
+}
+
+message CopyRequest {
+  ObjectIdentity source = 1;
+  ObjectIdentity destination = 2;
+}
+
+message CopyResponse {
+  OperationStatus status = 1;
+  ObjectMetadata metadata = 2;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ready = 1;
+  bool shutting_down = 2;
+  uint64 in_flight = 3;
+  uint64 completed = 4;
+  uint64 failed = 5;
+  string version = 6;
+}

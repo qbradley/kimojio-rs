@@ -105,6 +105,13 @@ impl PendingResponse {
 /// stream ID. The implementation processes frames for all streams while waiting
 /// for any one stream, keeping flow control and peer settings current.
 ///
+/// # Incremental request streaming
+///
+/// Use [`send_request_headers`](Self::send_request_headers), followed by
+/// [`send_request_data`](Self::send_request_data) and
+/// [`finish_request_stream`](Self::finish_request_stream), when a protocol needs
+/// to stream one request body over multiple DATA frames.
+///
 /// # Incremental response streaming
 ///
 /// Use [`read_response_headers`](Self::read_response_headers) followed by
@@ -222,9 +229,84 @@ impl<S> RuntimeClientConnection<S> {
             self.state.peer_settings().max_frame_size,
         )?;
         if !end_stream {
-            self.write_data(cx, stream_id, body)?;
+            self.write_data(cx, stream_id, body, true)?;
         }
         Ok(stream_id)
+    }
+
+    /// Starts a request body stream by sending request HEADERS without
+    /// `END_STREAM`.
+    ///
+    /// Use [`send_request_data`](Self::send_request_data) to send DATA chunks and
+    /// [`finish_request_stream`](Self::finish_request_stream) to half-close the
+    /// request once all chunks have been written.
+    pub fn send_request_headers(
+        &mut self,
+        cx: &impl HttpRuntime<S>,
+        request: &Request<()>,
+    ) -> Result<StreamId, Error>
+    where
+        S: RuntimeSocket,
+    {
+        self.ensure_initialized(cx)?;
+        let stream_id = StreamId::new(self.next_stream_id)?;
+        self.next_stream_id = self
+            .next_stream_id
+            .checked_add(2)
+            .ok_or(Error::Protocol("HTTP/2 stream id overflow"))?;
+        self.state.open_outbound_stream(stream_id)?;
+
+        let headers = codec::request_headers(request)?;
+        let block = self.state.encode_header_block(&headers);
+        self.state
+            .stream_mut(stream_id)
+            .ok_or(Error::Protocol("unknown stream"))?
+            .send_headers(false)?;
+        codec::write_header_block(
+            cx,
+            &mut self.transport,
+            stream_id,
+            Bytes::from(block),
+            false,
+            self.state.peer_settings().max_frame_size,
+        )?;
+        Ok(stream_id)
+    }
+
+    /// Sends one DATA chunk on a request body stream.
+    pub fn send_request_data(
+        &mut self,
+        cx: &impl HttpRuntime<S>,
+        stream_id: StreamId,
+        data: Bytes,
+    ) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
+        self.ensure_initialized(cx)?;
+        self.write_data(cx, stream_id, data, false)
+    }
+
+    /// Finishes a request body stream with an empty DATA frame carrying
+    /// `END_STREAM`.
+    pub fn finish_request_stream(
+        &mut self,
+        cx: &impl HttpRuntime<S>,
+        stream_id: StreamId,
+    ) -> Result<(), Error>
+    where
+        S: RuntimeSocket,
+    {
+        self.ensure_initialized(cx)?;
+        self.state
+            .stream_mut(stream_id)
+            .ok_or(Error::Protocol("unknown stream"))?
+            .send_data(true)?;
+        codec::write_frame(
+            cx,
+            &mut self.transport,
+            &Frame::data(stream_id, Bytes::new(), true),
+        )
     }
 
     /// Reads a buffered response body for a previously sent stream.
@@ -500,6 +582,7 @@ impl<S> RuntimeClientConnection<S> {
         cx: &impl HttpRuntime<S>,
         stream_id: StreamId,
         mut body: Bytes,
+        end_stream_on_last: bool,
     ) -> Result<(), Error>
     where
         S: RuntimeSocket,
@@ -520,7 +603,7 @@ impl<S> RuntimeClientConnection<S> {
                 .len()
                 .min(capacity)
                 .min(self.state.peer_settings().max_frame_size as usize);
-            let end_stream = chunk_len == body.len();
+            let end_stream = end_stream_on_last && chunk_len == body.len();
             self.state.consume_outbound_window(stream_id, chunk_len)?;
             self.state
                 .stream_mut(stream_id)

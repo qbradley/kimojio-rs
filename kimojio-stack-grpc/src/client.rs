@@ -14,7 +14,7 @@ use prost::Message;
 
 use crate::{Error, Metadata, Status, StatusCode as GrpcStatusCode, codec, status::GRPC_STATUS};
 
-/// Shared configuration for unary gRPC clients.
+/// Shared configuration for stackful gRPC clients.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientConfig {
     /// Maximum encoded gRPC message length, excluding the five-byte gRPC frame header.
@@ -84,7 +84,7 @@ pub struct RuntimeServerStreamingResponse<'a, S, M> {
 
 /// Low-level gRPC client over one runtime-backed HTTP/2 connection.
 ///
-/// The client name is historical: it supports both unary calls and
+/// The client name is historical: it supports unary, client-streaming, and
 /// server-streaming calls. It owns the HTTP/2 connection and does not perform
 /// background reads, retries, or automatic reconnects.
 ///
@@ -130,6 +130,54 @@ impl<S> RuntimeUnaryClient<S> {
         let body = codec::encode_message(request, self.config.max_message_len)?;
         let http_request = build_request(path, metadata, body)?;
         let stream_id = self.http.send_request(cx, &http_request)?;
+        let response = self.http.read_response_with_trailers(cx, stream_id)?;
+        parse_response(response, self.config.max_message_len)
+    }
+
+    /// Performs one client-streaming RPC.
+    ///
+    /// The method sends request metadata, then encodes each item from
+    /// `requests` as one gRPC message frame on the request body stream. The
+    /// response is parsed as a unary response after the request stream is
+    /// half-closed.
+    pub fn call_client_streaming<Req, Resp, I>(
+        &mut self,
+        cx: &impl HttpRuntime<S>,
+        path: &str,
+        metadata: Metadata,
+        requests: I,
+    ) -> Result<UnaryResponse<Resp>, Error>
+    where
+        S: RuntimeSocket,
+        Req: Message,
+        Resp: Message + Default,
+        I: IntoIterator<Item = Req>,
+    {
+        let http_request = build_request_head(path, metadata)?;
+        let stream_id = self.http.send_request_headers(cx, &http_request)?;
+        for request in requests {
+            let body = match codec::encode_message(&request, self.config.max_message_len) {
+                Ok(body) => body,
+                Err(error) => {
+                    let _ = self
+                        .http
+                        .cancel_response_stream(cx, stream_id, h2::ERROR_CODE_CANCEL);
+                    return Err(error);
+                }
+            };
+            if let Err(error) = self.http.send_request_data(cx, stream_id, body) {
+                let _ = self
+                    .http
+                    .cancel_response_stream(cx, stream_id, h2::ERROR_CODE_CANCEL);
+                return Err(error.into());
+            }
+        }
+        if let Err(error) = self.http.finish_request_stream(cx, stream_id) {
+            let _ = self
+                .http
+                .cancel_response_stream(cx, stream_id, h2::ERROR_CODE_CANCEL);
+            return Err(error.into());
+        }
         let response = self.http.read_response_with_trailers(cx, stream_id)?;
         parse_response(response, self.config.max_message_len)
     }
@@ -367,6 +415,23 @@ fn build_request(
     }
     builder
         .body(body)
+        .map_err(|_| Error::Protocol("failed to build gRPC request"))
+}
+
+fn build_request_head(path: &str, metadata: Metadata) -> Result<Request<()>, Error> {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header(CONTENT_TYPE, "application/grpc")
+        .header(TE, "trailers");
+    for (name, value) in metadata.into_http_headers() {
+        let Some(name) = name else {
+            return Err(Error::Protocol("metadata continuation header unsupported"));
+        };
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(())
         .map_err(|_| Error::Protocol("failed to build gRPC request"))
 }
 

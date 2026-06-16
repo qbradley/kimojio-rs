@@ -3,10 +3,11 @@
 
 //! Low-level gRPC foundations for `kimojio-stack`.
 //!
-//! The crate implements unary and server-streaming gRPC over the stackful HTTP/2
-//! client/server primitives. It does not generate service code, start a runtime,
-//! manage connection pools, or hide background tasks. Callers provide Prost
-//! message types, explicit metadata, and stackful HTTP/2 connections.
+//! The crate implements unary, client-streaming, and server-streaming gRPC over
+//! the stackful HTTP/2 client/server primitives. It does not generate service
+//! code, start a runtime, manage connection pools, or hide background tasks.
+//! Callers provide Prost message types, explicit metadata, and stackful HTTP/2
+//! connections.
 //!
 //! # Client sketch
 //!
@@ -91,8 +92,8 @@ pub use codec::{decode_message, encode_message};
 pub use error::{Error, ErrorKind};
 pub use metadata::Metadata;
 pub use server::{
-    GrpcRuntime, ReceiverStream, RuntimeUnaryServer, ServerConfig, ServerStream,
-    ServerStreamingReply, StackGrpcRuntime, UnaryReply, UnaryServer,
+    ClientStreamingRequest, GrpcRuntime, ReceiverStream, RuntimeUnaryServer, ServerConfig,
+    ServerStream, ServerStreamingReply, StackGrpcRuntime, UnaryReply, UnaryServer,
 };
 pub use status::{Status, StatusCode};
 
@@ -209,7 +210,7 @@ mod tests {
     use bytes::{Bytes, BytesMut};
     use http::{
         HeaderName, HeaderValue, Request, Response, StatusCode as HttpStatusCode,
-        header::CONTENT_TYPE,
+        header::{CONTENT_TYPE, TE},
     };
     use kimojio_stack::{Runtime, SocketIoRuntime, channel};
     use kimojio_stack_http::{
@@ -390,6 +391,230 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn client_streaming_handler_decodes_ordered_messages_metadata_and_trailers() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let mut grpc = UnaryServer::new(ServerConfig::default());
+                    grpc.add_client_streaming::<TestMessage, TestMessage, _>(
+                        "/test.Echo/ClientStream",
+                        |cx, metadata, mut request| {
+                            assert_eq!(
+                                metadata.get(&HeaderName::from_static("x-request")),
+                                Some(&HeaderValue::from_static("seen"))
+                            );
+                            let mut values = Vec::new();
+                            while let Some(message) = request.next(cx)? {
+                                values.push(message.value);
+                            }
+                            let mut reply = UnaryReply::new(TestMessage {
+                                value: values.join("+"),
+                            });
+                            reply
+                                .metadata
+                                .insert(
+                                    HeaderName::from_static("x-response"),
+                                    HeaderValue::from_static("yes"),
+                                )
+                                .unwrap();
+                            reply
+                                .trailers
+                                .insert(
+                                    HeaderName::from_static("x-trailer"),
+                                    HeaderValue::from_static("done"),
+                                )
+                                .unwrap();
+                            Ok(reply)
+                        },
+                    );
+                    grpc.serve_one(cx, &mut http).unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let http = h2::ClientConnection::new(client_transport, HttpConfig::default());
+                    let mut client = UnaryClient::new(http, ClientConfig::default());
+                    let mut metadata = Metadata::new();
+                    metadata
+                        .insert(
+                            HeaderName::from_static("x-request"),
+                            HeaderValue::from_static("seen"),
+                        )
+                        .unwrap();
+                    let response: UnaryResponse<TestMessage> = client
+                        .call_client_streaming(
+                            cx,
+                            "/test.Echo/ClientStream",
+                            metadata,
+                            [
+                                TestMessage {
+                                    value: "one".to_owned(),
+                                },
+                                TestMessage {
+                                    value: "two".to_owned(),
+                                },
+                            ],
+                        )
+                        .unwrap();
+                    client.close(cx).unwrap();
+                    response
+                });
+
+                server.join(cx);
+                let response = client.join(cx);
+                assert_eq!(response.message.value, "one+two");
+                assert_eq!(response.status.code(), StatusCode::Ok);
+                assert_eq!(
+                    response
+                        .metadata
+                        .get(&HeaderName::from_static("x-response")),
+                    Some(&HeaderValue::from_static("yes"))
+                );
+                assert_eq!(
+                    response.trailers.get(&HeaderName::from_static("x-trailer")),
+                    Some(&HeaderValue::from_static("done"))
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn client_streaming_handler_rejects_malformed_request_frame() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let mut grpc = UnaryServer::new(ServerConfig::default());
+                    grpc.add_client_streaming::<TestMessage, TestMessage, _>(
+                        "/test.Echo/ClientStream",
+                        |cx, _metadata, mut request| {
+                            let status = request.next(cx).unwrap_err();
+                            Err(status)
+                        },
+                    );
+                    grpc.serve_one(cx, &mut http).unwrap();
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ClientConnection::new(client_transport, HttpConfig::default());
+                    let request = Request::builder()
+                        .method("POST")
+                        .uri("/test.Echo/ClientStream")
+                        .header(CONTENT_TYPE, "application/grpc")
+                        .header(TE, "trailers")
+                        .body(())
+                        .unwrap();
+                    let stream_id = http.send_request_headers(cx, &request).unwrap();
+                    http.send_request_data(cx, stream_id, Bytes::from_static(&[1, 0, 0, 0, 0]))
+                        .unwrap();
+                    http.finish_request_stream(cx, stream_id).unwrap();
+                    let response = http.read_response_with_trailers(cx, stream_id).unwrap();
+                    http.close(cx).unwrap();
+                    Status::from_trailers(&response.trailers).unwrap()
+                });
+
+                server.join(cx);
+                let status = client.join(cx);
+                assert_eq!(status.code(), StatusCode::InvalidArgument);
+                assert_eq!(status.message(), "invalid request");
+            });
+        });
+    }
+
+    #[test]
+    fn client_streaming_cancellation_allows_follow_up_unary_request() {
+        let (client_transport, server_transport) = socket_transport_pair();
+        let mut runtime = Runtime::new();
+        let (first_message_tx, first_message_rx) = channel::bounded::<()>(1);
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let server = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ServerConnection::new(server_transport, HttpConfig::default());
+                    let mut grpc = UnaryServer::new(ServerConfig::default());
+                    grpc.add_client_streaming::<TestMessage, TestMessage, _>(
+                        "/test.Echo/ClientStream",
+                        move |cx, _metadata, mut request| {
+                            let first = request.next(cx)?.unwrap();
+                            assert_eq!(first.value, "partial");
+                            first_message_tx.send(cx, ()).unwrap();
+                            let status = request.next(cx).unwrap_err();
+                            assert_eq!(status.code(), StatusCode::Unavailable);
+                            Err(status)
+                        },
+                    );
+                    grpc.add_unary::<TestMessage, TestMessage, _>(
+                        "/test.Echo/Unary",
+                        |_cx, _metadata, request| {
+                            Ok(UnaryReply::new(TestMessage {
+                                value: format!("follow {}", request.value),
+                            }))
+                        },
+                    );
+                    assert!(grpc.serve_one(cx, &mut http).is_err());
+                    assert!(grpc.serve_one(cx, &mut http).unwrap());
+                    http.shutdown_write_and_close_after_peer(cx).unwrap();
+                });
+
+                let client = scope.spawn(move |cx| {
+                    let mut http =
+                        h2::ClientConnection::new(client_transport, HttpConfig::default());
+                    let request = Request::builder()
+                        .method("POST")
+                        .uri("/test.Echo/ClientStream")
+                        .header(CONTENT_TYPE, "application/grpc")
+                        .header(TE, "trailers")
+                        .body(())
+                        .unwrap();
+                    let stream_id = http.send_request_headers(cx, &request).unwrap();
+                    let frame = encode_message(
+                        &TestMessage {
+                            value: "partial".to_owned(),
+                        },
+                        1024,
+                    )
+                    .unwrap();
+                    http.send_request_data(cx, stream_id, frame).unwrap();
+                    first_message_rx.recv(cx).unwrap();
+                    http.cancel_response_stream(cx, stream_id, h2::ERROR_CODE_CANCEL)
+                        .unwrap();
+
+                    let mut client = UnaryClient::new(http, ClientConfig::default());
+                    let response: UnaryResponse<TestMessage> = client
+                        .call(
+                            cx,
+                            "/test.Echo/Unary",
+                            Metadata::new(),
+                            &TestMessage {
+                                value: "request".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                    client.close(cx).unwrap();
+                    response
+                });
+
+                server.join(cx);
+                let response = client.join(cx);
+                assert_eq!(response.message.value, "follow request");
+                assert_eq!(response.status.code(), StatusCode::Ok);
+            });
+        });
     }
 
     #[test]

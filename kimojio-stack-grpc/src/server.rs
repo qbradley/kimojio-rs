@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use http::{
     Method, Request, Response, StatusCode,
     header::{CONTENT_TYPE, TE},
@@ -27,7 +27,7 @@ impl GrpcRuntime for StackGrpcRuntime {
     type Context<'cx> = RuntimeContext<'cx>;
 }
 
-/// Shared configuration for unary gRPC servers.
+/// Shared configuration for stackful gRPC servers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServerConfig {
     /// Maximum encoded gRPC message length, excluding the five-byte gRPC frame header.
@@ -42,8 +42,8 @@ impl Default for ServerConfig {
     }
 }
 
-/// Stackful gRPC server that dispatches incoming requests to registered unary and
-/// server-streaming handlers over an HTTP/2 connection.
+/// Stackful gRPC server that dispatches incoming requests to registered unary,
+/// client-streaming, and server-streaming handlers over an HTTP/2 connection.
 ///
 /// # Runtime migration boundary
 ///
@@ -133,6 +133,34 @@ where
         );
     }
 
+    /// Registers a client-streaming handler for `path`.
+    ///
+    /// The handler consumes request messages from [`ClientStreamingRequest`] and
+    /// returns one unary response. Each inbound gRPC message is decoded as it is
+    /// read from the HTTP/2 request body, so callers can enforce bounded upload
+    /// memory by consuming one message at a time.
+    pub fn add_client_streaming<Req, Resp, F>(&mut self, path: impl Into<String>, handler: F)
+    where
+        Req: Message + Default + 'static,
+        Resp: Message + 'static,
+        F: for<'a, 's> Fn(
+                &'a R::Context<'a>,
+                Metadata,
+                ClientStreamingRequest<'s, Req>,
+            ) -> Result<UnaryReply<Resp>, Status>
+            + 'static,
+    {
+        let max_message_len = self.config.max_message_len;
+        self.handlers.insert(
+            path.into(),
+            Box::new(TypedClientStreamingHandler {
+                handler,
+                max_message_len,
+                _marker: std::marker::PhantomData,
+            }),
+        );
+    }
+
     /// Serves one HTTP/2 request through the registered handler table.
     ///
     /// Returns `Ok(false)` when the underlying HTTP/2 connection reaches clean
@@ -148,35 +176,51 @@ where
         R::Context<'cx>: HttpRuntime<S>,
         S: RuntimeSocket,
     {
-        let Some(incoming) = http.accept(cx).map_err(Error::from)? else {
+        let Some(incoming) = http.accept_request_headers(cx).map_err(Error::from)? else {
             return Ok(false);
         };
-        let result = self.dispatch(cx, incoming.request);
+        let stream_id = incoming.stream_id;
+        let result = self.dispatch(cx, http, incoming);
         match result {
-            Ok(RawResponse::Unary(reply)) => {
-                write_reply::<R, S>(cx, http, incoming.stream_id, reply)
-            }
+            Ok(RawResponse::Unary(reply)) => write_reply::<R, S>(cx, http, stream_id, reply),
             Ok(RawResponse::ServerStreaming(reply)) => {
-                write_streaming_reply::<R, S>(cx, http, incoming.stream_id, reply)
+                write_streaming_reply::<R, S>(cx, http, stream_id, reply)
             }
-            Err(status) => write_status::<R, S>(cx, http, incoming.stream_id, status),
+            Err(status) => write_status::<R, S>(cx, http, stream_id, status),
         }?;
         Ok(true)
     }
 
-    fn dispatch<'cx>(
+    fn dispatch<'cx, S>(
         &self,
         cx: &'cx R::Context<'cx>,
-        request: Request<Body>,
-    ) -> Result<RawResponse<R>, Status> {
-        validate_request(&request)?;
-        let path = request.uri().path();
+        http: &mut h2::RuntimeServerConnection<S>,
+        incoming: h2::IncomingRequestHead,
+    ) -> Result<RawResponse<R>, Status>
+    where
+        R::Context<'cx>: HttpRuntime<S>,
+        S: RuntimeSocket,
+    {
+        validate_request(&incoming.request)?;
+        let path = incoming.request.uri().path();
         let Some(handler) = self.handlers.get(path) else {
             return Err(Status::new(GrpcStatusCode::Unimplemented, "unknown method"));
         };
-        let metadata = Metadata::from_http_headers(request.headers().clone())
+        let metadata = Metadata::from_http_headers(incoming.request.headers().clone())
             .map_err(|_| Status::new(GrpcStatusCode::InvalidArgument, "invalid metadata"))?;
-        handler.call(cx, metadata, request.body().as_bytes())
+        if handler.is_client_streaming() {
+            let mut stream =
+                HttpRawClientStream::new(cx, http, incoming.stream_id, self.config.max_message_len);
+            handler.call(cx, metadata, RawRequest::Streaming(&mut stream))
+        } else {
+            let frame = collect_request_body::<R, S>(
+                cx,
+                http,
+                incoming.stream_id,
+                self.config.max_message_len,
+            )?;
+            handler.call(cx, metadata, RawRequest::Buffered(&frame))
+        }
     }
 }
 
@@ -219,6 +263,35 @@ pub struct ServerStreamingReply<S> {
     /// Trailing metadata merged with `grpc-status: 0` on clean stream completion.
     /// Ignored when the stream terminates with a yielded [`Status`] error.
     pub trailers: Metadata,
+}
+
+/// Stream of request messages passed to client-streaming handlers.
+pub struct ClientStreamingRequest<'a, M> {
+    stream: &'a mut dyn RawClientStream,
+    max_message_len: usize,
+    _marker: std::marker::PhantomData<fn() -> M>,
+}
+
+impl<M> ClientStreamingRequest<'_, M>
+where
+    M: Message + Default,
+{
+    /// Returns the next decoded request message, or `Ok(None)` when the client
+    /// has finished sending the request stream.
+    pub fn next<C>(&mut self, _cx: &C) -> Result<Option<M>, Status> {
+        let Some(frame) = self.stream.next_frame()? else {
+            return Ok(None);
+        };
+        codec::decode_message::<M>(&frame, self.max_message_len)
+            .map(Some)
+            .map_err(|error| {
+                if matches!(error, Error::SizeLimit { .. }) {
+                    Status::new(GrpcStatusCode::ResourceExhausted, "request too large")
+                } else {
+                    Status::new(GrpcStatusCode::InvalidArgument, "invalid request")
+                }
+            })
+    }
 }
 
 impl<S> ServerStreamingReply<S> {
@@ -309,13 +382,26 @@ enum RawResponse<R: GrpcRuntime> {
     ServerStreaming(RawStreamReply<R>),
 }
 
+enum RawRequest<'a> {
+    Buffered(&'a [u8]),
+    Streaming(&'a mut dyn RawClientStream),
+}
+
 trait MethodHandler<R: GrpcRuntime> {
+    fn is_client_streaming(&self) -> bool {
+        false
+    }
+
     fn call<'cx>(
         &self,
         cx: &'cx R::Context<'cx>,
         metadata: Metadata,
-        frame: &[u8],
+        request: RawRequest<'_>,
     ) -> Result<RawResponse<R>, Status>;
+}
+
+trait RawClientStream {
+    fn next_frame(&mut self) -> Result<Option<Bytes>, Status>;
 }
 
 trait RawServerStream<R: GrpcRuntime> {
@@ -339,8 +425,14 @@ where
         &self,
         cx: &'cx R::Context<'cx>,
         metadata: Metadata,
-        frame: &[u8],
+        request: RawRequest<'_>,
     ) -> Result<RawResponse<R>, Status> {
+        let RawRequest::Buffered(frame) = request else {
+            return Err(Status::new(
+                GrpcStatusCode::Internal,
+                "unexpected streaming request",
+            ));
+        };
         let request =
             codec::decode_message::<Req>(frame, self.max_message_len).map_err(|error| {
                 if matches!(error, Error::SizeLimit { .. }) {
@@ -387,8 +479,14 @@ where
         &self,
         cx: &'cx R::Context<'cx>,
         metadata: Metadata,
-        frame: &[u8],
+        request: RawRequest<'_>,
     ) -> Result<RawResponse<R>, Status> {
+        let RawRequest::Buffered(frame) = request else {
+            return Err(Status::new(
+                GrpcStatusCode::Internal,
+                "unexpected streaming request",
+            ));
+        };
         let request =
             codec::decode_message::<Req>(frame, self.max_message_len).map_err(|error| {
                 if matches!(error, Error::SizeLimit { .. }) {
@@ -405,6 +503,60 @@ where
                 max_message_len: self.max_message_len,
                 _marker: std::marker::PhantomData,
             }),
+            trailers: reply.trailers,
+        }))
+    }
+}
+
+struct TypedClientStreamingHandler<Req, Resp, F> {
+    handler: F,
+    max_message_len: usize,
+    _marker: std::marker::PhantomData<fn(Req) -> Resp>,
+}
+
+impl<R, Req, Resp, F> MethodHandler<R> for TypedClientStreamingHandler<Req, Resp, F>
+where
+    R: GrpcRuntime,
+    Req: Message + Default,
+    Resp: Message,
+    F: for<'a, 's> Fn(
+        &'a R::Context<'a>,
+        Metadata,
+        ClientStreamingRequest<'s, Req>,
+    ) -> Result<UnaryReply<Resp>, Status>,
+{
+    fn is_client_streaming(&self) -> bool {
+        true
+    }
+
+    fn call<'cx>(
+        &self,
+        cx: &'cx R::Context<'cx>,
+        metadata: Metadata,
+        request: RawRequest<'_>,
+    ) -> Result<RawResponse<R>, Status> {
+        let RawRequest::Streaming(stream) = request else {
+            return Err(Status::new(
+                GrpcStatusCode::Internal,
+                "expected streaming request",
+            ));
+        };
+        let request = ClientStreamingRequest {
+            stream,
+            max_message_len: self.max_message_len,
+            _marker: std::marker::PhantomData,
+        };
+        let reply = (self.handler)(cx, metadata, request)?;
+        let mut encoded = Vec::new();
+        reply
+            .message
+            .encode(&mut encoded)
+            .map_err(|_| Status::new(GrpcStatusCode::Internal, "encode failed"))?;
+        let message = codec::encode_bytes(&encoded, self.max_message_len)
+            .map_err(|_| Status::new(GrpcStatusCode::ResourceExhausted, "response too large"))?;
+        Ok(RawResponse::Unary(RawReply {
+            metadata: reply.metadata,
+            message,
             trailers: reply.trailers,
         }))
     }
@@ -437,13 +589,164 @@ where
     }
 }
 
-fn validate_request(request: &Request<Body>) -> Result<(), Status> {
+struct HttpRawClientStream<'a, C, S> {
+    cx: &'a C,
+    http: &'a mut h2::RuntimeServerConnection<S>,
+    stream_id: h2::StreamId,
+    max_message_len: usize,
+    data: Bytes,
+    data_offset: usize,
+    frame: BytesMut,
+    finished: bool,
+}
+
+impl<'a, C, S> HttpRawClientStream<'a, C, S> {
+    fn new(
+        cx: &'a C,
+        http: &'a mut h2::RuntimeServerConnection<S>,
+        stream_id: h2::StreamId,
+        max_message_len: usize,
+    ) -> Self {
+        Self {
+            cx,
+            http,
+            stream_id,
+            max_message_len,
+            data: Bytes::new(),
+            data_offset: 0,
+            frame: BytesMut::new(),
+            finished: false,
+        }
+    }
+
+    fn decode_buffered_frame(&mut self) -> Result<Option<Bytes>, Status> {
+        while self.data_offset < self.data.len() {
+            if self.frame.is_empty() && self.data.len() - self.data_offset >= codec::HEADER_LEN {
+                let header_end = self.data_offset + codec::HEADER_LEN;
+                let total_len = codec::frame_len(
+                    &self.data[self.data_offset..header_end],
+                    self.max_message_len,
+                )
+                .map_err(decode_status)?;
+                let frame_end = self.data_offset + total_len;
+                if frame_end <= self.data.len() {
+                    let frame = self.data.slice(self.data_offset..frame_end);
+                    self.data_offset = frame_end;
+                    return Ok(Some(frame));
+                }
+            }
+
+            if self.frame.len() < codec::HEADER_LEN {
+                let header_remaining = codec::HEADER_LEN - self.frame.len();
+                let available = self.data.len() - self.data_offset;
+                let copy_len = header_remaining.min(available);
+                self.frame
+                    .extend_from_slice(&self.data[self.data_offset..self.data_offset + copy_len]);
+                self.data_offset += copy_len;
+                if self.frame.len() < codec::HEADER_LEN {
+                    continue;
+                }
+            }
+
+            let total_len =
+                codec::frame_len(&self.frame, self.max_message_len).map_err(decode_status)?;
+            let body_remaining = total_len - self.frame.len();
+            let available = self.data.len() - self.data_offset;
+            let copy_len = body_remaining.min(available);
+            self.frame
+                .extend_from_slice(&self.data[self.data_offset..self.data_offset + copy_len]);
+            self.data_offset += copy_len;
+
+            if self.frame.len() == total_len {
+                let frame = self.frame.split().freeze();
+                return Ok(Some(frame));
+            }
+        }
+
+        self.data = Bytes::new();
+        self.data_offset = 0;
+        Ok(None)
+    }
+}
+
+impl<C, S> RawClientStream for HttpRawClientStream<'_, C, S>
+where
+    C: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
+    fn next_frame(&mut self) -> Result<Option<Bytes>, Status> {
+        if self.finished {
+            return Ok(None);
+        }
+        loop {
+            if let Some(frame) = self.decode_buffered_frame()? {
+                return Ok(Some(frame));
+            }
+            match self
+                .http
+                .read_request_event(self.cx, self.stream_id)
+                .map_err(transport_status)?
+            {
+                h2::RequestStreamEvent::Data(data) => {
+                    self.data = data;
+                    self.data_offset = 0;
+                }
+                h2::RequestStreamEvent::Trailers(_trailers) => {
+                    self.finished = true;
+                    if !self.frame.is_empty() {
+                        return Err(Status::new(
+                            GrpcStatusCode::InvalidArgument,
+                            "incomplete gRPC frame before stream trailers",
+                        ));
+                    }
+                    return Ok(None);
+                }
+            }
+        }
+    }
+}
+
+fn collect_request_body<'cx, R, S>(
+    cx: &'cx R::Context<'cx>,
+    http: &mut h2::RuntimeServerConnection<S>,
+    stream_id: h2::StreamId,
+    max_message_len: usize,
+) -> Result<Bytes, Status>
+where
+    R: GrpcRuntime,
+    R::Context<'cx>: HttpRuntime<S>,
+    S: RuntimeSocket,
+{
+    let mut body = BytesMut::new();
+    let limit = max_message_len.saturating_add(codec::HEADER_LEN);
+    loop {
+        match http
+            .read_request_event(cx, stream_id)
+            .map_err(transport_status)?
+        {
+            h2::RequestStreamEvent::Data(data) => {
+                let next_len = body.len().saturating_add(data.len());
+                if next_len > limit {
+                    return Err(Status::new(
+                        GrpcStatusCode::ResourceExhausted,
+                        "request too large",
+                    ));
+                }
+                body.extend_from_slice(&data);
+            }
+            h2::RequestStreamEvent::Trailers(_trailers) => return Ok(body.freeze()),
+        }
+    }
+}
+
+fn validate_request<B>(request: &Request<B>) -> Result<(), Status> {
     if request.method() != Method::POST {
         return Err(Status::new(
             GrpcStatusCode::InvalidArgument,
             "invalid method",
         ));
     }
+
     let content_type = request
         .headers()
         .get(CONTENT_TYPE)
@@ -462,6 +765,18 @@ fn validate_request(request: &Request<Body>) -> Result<(), Status> {
         return Err(Status::new(GrpcStatusCode::InvalidArgument, "invalid te"));
     }
     Ok(())
+}
+
+fn decode_status(error: Error) -> Status {
+    if matches!(error, Error::SizeLimit { .. }) {
+        Status::new(GrpcStatusCode::ResourceExhausted, "request too large")
+    } else {
+        Status::new(GrpcStatusCode::InvalidArgument, "invalid request")
+    }
+}
+
+fn transport_status(error: kimojio_stack_http::Error) -> Status {
+    Status::new(GrpcStatusCode::Unavailable, error.to_string())
 }
 
 fn is_grpc_content_type(value: &[u8]) -> bool {
