@@ -3,7 +3,7 @@
 
 use std::{error, fmt};
 
-use kimojio_stack::Errno;
+use kimojio_stack::{Errno, RuntimeIoErrorKind};
 
 /// Stable category for HTTP transport and protocol failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,6 +13,7 @@ pub enum ErrorKind {
     Parse,
     Protocol,
     Unsupported,
+    Runtime,
     SizeLimit,
     Eof,
     PeerReset,
@@ -36,6 +37,7 @@ pub enum Error {
     Parse(&'static str),
     Protocol(&'static str),
     Unsupported(&'static str),
+    Runtime(RuntimeIoErrorKind),
     SizeLimit {
         kind: LimitKind,
         limit: usize,
@@ -98,6 +100,7 @@ impl Error {
             Self::Parse(_) => ErrorKind::Parse,
             Self::Protocol(_) => ErrorKind::Protocol,
             Self::Unsupported(_) => ErrorKind::Unsupported,
+            Self::Runtime(_) => ErrorKind::Runtime,
             Self::SizeLimit { .. } => ErrorKind::SizeLimit,
             Self::Eof => ErrorKind::Eof,
             Self::PeerReset { .. } => ErrorKind::PeerReset,
@@ -119,6 +122,7 @@ impl fmt::Display for Error {
             Self::Parse(message) => write!(f, "HTTP parse error: {message}"),
             Self::Protocol(message) => write!(f, "HTTP protocol error: {message}"),
             Self::Unsupported(message) => write!(f, "unsupported HTTP feature: {message}"),
+            Self::Runtime(kind) => write!(f, "HTTP runtime error: {}", kind.as_str()),
             Self::SizeLimit {
                 kind,
                 limit,

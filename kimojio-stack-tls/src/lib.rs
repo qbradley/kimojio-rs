@@ -1370,6 +1370,18 @@ fn runtime_io_error_as_errno(error: RuntimeIoError) -> Errno {
     match error {
         RuntimeIoError::Io(errno) => errno,
         RuntimeIoError::Unsupported(_) => Errno::OPNOTSUPP,
+        RuntimeIoError::Runtime(kind) => match kind {
+            kimojio_stack::RuntimeIoErrorKind::QueueFull
+            | kimojio_stack::RuntimeIoErrorKind::ResourceLimit => Errno::AGAIN,
+            kimojio_stack::RuntimeIoErrorKind::FdInUse => Errno::BUSY,
+            kimojio_stack::RuntimeIoErrorKind::Canceled => Errno::CANCELED,
+            kimojio_stack::RuntimeIoErrorKind::Closed => Errno::PIPE,
+            kimojio_stack::RuntimeIoErrorKind::NoCurrentWorker
+            | kimojio_stack::RuntimeIoErrorKind::WrongWorker
+            | kimojio_stack::RuntimeIoErrorKind::WrongRuntime
+            | kimojio_stack::RuntimeIoErrorKind::NoStackfulContext
+            | kimojio_stack::RuntimeIoErrorKind::DurationOutOfRange => Errno::INVAL,
+        },
         RuntimeIoError::Other(_) => Errno::INVAL,
     }
 }

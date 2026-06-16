@@ -207,7 +207,7 @@ generic code branch on concrete stack-core sockets.
 - Search downstream crates to ensure production paths are not branching on this
   method.
 
-### 9. Preserve structured runtime diagnostics where callers need them
+### 9. [done] Preserve structured runtime diagnostics where callers need them
 
 **Why:** Several stack-steal errors collapse into `RuntimeIoError::Other` static
 strings or generic categories, losing wrong-worker, wrong-runtime, queue-full,

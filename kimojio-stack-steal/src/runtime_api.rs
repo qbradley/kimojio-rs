@@ -5,8 +5,8 @@ use std::os::fd::OwnedFd;
 use std::time::Duration;
 
 use kimojio_stack::{
-    IoReadBuffer, IoRuntime, IoWriteBuffer, RuntimeIoError, RuntimeReadResult, RuntimeSocket,
-    RuntimeWriteResult, SocketIoRuntime, StackRuntime, StackRuntimeContext,
+    IoReadBuffer, IoRuntime, IoWriteBuffer, RuntimeIoError, RuntimeIoErrorKind, RuntimeReadResult,
+    RuntimeSocket, RuntimeWriteResult, SocketIoRuntime, StackRuntime, StackRuntimeContext,
 };
 use rustix::net::Shutdown;
 
@@ -218,26 +218,28 @@ impl RuntimeContext<'_> {
     }
 }
 
+impl From<RingError> for RuntimeIoError {
+    fn from(error: RingError) -> Self {
+        runtime_io_error(error)
+    }
+}
+
 fn runtime_io_error(error: RingError) -> RuntimeIoError {
     match error {
         RingError::Io(error) => RuntimeIoError::Io(error),
-        RingError::NoCurrentWorker => {
-            RuntimeIoError::Other("worker-local ring requested outside a worker context")
-        }
-        RingError::WrongWorker { .. } => {
-            RuntimeIoError::Other("worker-local ring used from a different worker")
-        }
-        RingError::WrongRuntime => RuntimeIoError::Other("ring used from a different runtime"),
+        RingError::NoCurrentWorker => RuntimeIoError::runtime(RuntimeIoErrorKind::NoCurrentWorker),
+        RingError::WrongWorker { .. } => RuntimeIoError::runtime(RuntimeIoErrorKind::WrongWorker),
+        RingError::WrongRuntime => RuntimeIoError::runtime(RuntimeIoErrorKind::WrongRuntime),
         RingError::NoStackfulContext => {
-            RuntimeIoError::Other("pending shared-ring operation requires a stackful wait context")
+            RuntimeIoError::runtime(RuntimeIoErrorKind::NoStackfulContext)
         }
-        RingError::QueueFull => RuntimeIoError::Other("ring queue is full"),
-        RingError::ResourceLimit => RuntimeIoError::Other("shared ring resource limit reached"),
-        RingError::DurationOutOfRange => RuntimeIoError::Other("duration is out of range"),
-        RingError::FdInUse => {
-            RuntimeIoError::Other("descriptor still has cloned or pending handles")
+        RingError::QueueFull => RuntimeIoError::runtime(RuntimeIoErrorKind::QueueFull),
+        RingError::ResourceLimit => RuntimeIoError::runtime(RuntimeIoErrorKind::ResourceLimit),
+        RingError::DurationOutOfRange => {
+            RuntimeIoError::runtime(RuntimeIoErrorKind::DurationOutOfRange)
         }
-        RingError::Closed => RuntimeIoError::Other("ring is closed"),
-        RingError::Canceled => RuntimeIoError::Other("ring operation was canceled"),
+        RingError::FdInUse => RuntimeIoError::runtime(RuntimeIoErrorKind::FdInUse),
+        RingError::Closed => RuntimeIoError::runtime(RuntimeIoErrorKind::Closed),
+        RingError::Canceled => RuntimeIoError::runtime(RuntimeIoErrorKind::Canceled),
     }
 }

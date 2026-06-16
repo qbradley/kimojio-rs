@@ -463,6 +463,7 @@ fn runtime_io_error(error: RuntimeIoError) -> Error {
     match error {
         RuntimeIoError::Io(errno) => Error::io(errno),
         RuntimeIoError::Unsupported(_) => Error::Unsupported("runtime does not support socket I/O"),
+        RuntimeIoError::Runtime(kind) => Error::Runtime(kind),
         RuntimeIoError::Other(message) => Error::Protocol(message),
     }
 }

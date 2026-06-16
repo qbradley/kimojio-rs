@@ -5,11 +5,13 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use kimojio_stack::{
-    IoRuntime, Runtime as StackCoreRuntime, RuntimeCapabilities, RuntimeCapability,
-    RuntimeReadResult, RuntimeWaitable, RuntimeWriteResult, SocketIoRuntime,
-    StackRuntime as StackRuntimeTrait, StackRuntimeContext, StackfulWaitContext,
+    Errno, IoRuntime, Runtime as StackCoreRuntime, RuntimeCapabilities, RuntimeCapability,
+    RuntimeIoError, RuntimeIoErrorKind, RuntimeReadResult, RuntimeWaitable, RuntimeWriteResult,
+    SocketIoRuntime, StackRuntime as StackRuntimeTrait, StackRuntimeContext, StackfulWaitContext,
 };
-use kimojio_stack_steal::{Runtime as StealRuntime, RuntimeConfig, StealPolicy};
+use kimojio_stack_steal::{
+    RingError, RingFd, RingMode, Runtime as StealRuntime, RuntimeConfig, StealPolicy,
+};
 use rustix::pipe::pipe;
 
 fn runtime_agnostic_component<R>(runtime: &mut R, explicit_ring_io_supported: bool)
@@ -99,6 +101,95 @@ fn runtime_agnostic_component_runs_on_stealing_runtime() {
     runtime_agnostic_component(&mut runtime, true);
 }
 
+fn assert_runtime_io_kind(error: RingError, kind: RuntimeIoErrorKind) {
+    let runtime_error = RuntimeIoError::from(error);
+    assert_eq!(runtime_error.runtime_kind(), Some(kind));
+    assert_eq!(runtime_error, RuntimeIoError::Runtime(kind));
+    assert_eq!(runtime_error.to_string(), kind.as_str());
+}
+
+#[test]
+fn stealing_runtime_maps_ring_diagnostics_to_runtime_io_categories() {
+    let worker_ring = {
+        let mut runtime = StealRuntime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            assert_runtime_io_kind(
+                cx.create_ring(RingMode::WorkerLocal).unwrap_err(),
+                RuntimeIoErrorKind::NoCurrentWorker,
+            );
+            cx.scope(|scope| {
+                let handle = scope.spawn_stealable(|cx| cx.create_worker_ring());
+                handle.join(cx)
+            })
+        })
+    };
+
+    let mut same_runtime = StealRuntime::with_config(RuntimeConfig {
+        workers: NonZeroUsize::new(2).unwrap(),
+        steal_policy: StealPolicy::steal_one(),
+        ..RuntimeConfig::default()
+    });
+    same_runtime.block_on(|cx| {
+        assert_runtime_io_kind(
+            worker_ring.nop(cx).unwrap_err(),
+            RuntimeIoErrorKind::WrongRuntime,
+        );
+    });
+
+    let mut wrong_worker_runtime = StealRuntime::with_config(RuntimeConfig {
+        workers: NonZeroUsize::new(2).unwrap(),
+        steal_policy: StealPolicy::steal_one(),
+        ..RuntimeConfig::default()
+    });
+    wrong_worker_runtime.block_on(|cx| {
+        let ring = cx.scope(|scope| {
+            let handle = scope.spawn_stealable(|cx| cx.create_worker_ring());
+            handle.join(cx)
+        });
+        assert_runtime_io_kind(ring.nop(cx).unwrap_err(), RuntimeIoErrorKind::WrongWorker);
+    });
+
+    let mut full_queue_runtime = StealRuntime::with_config(RuntimeConfig {
+        max_shared_ring_queue_len: 0,
+        ..RuntimeConfig::default()
+    });
+    full_queue_runtime.block_on(|cx| {
+        let ring = cx.create_shared_ring();
+        assert_runtime_io_kind(ring.nop(cx).unwrap_err(), RuntimeIoErrorKind::QueueFull);
+    });
+
+    let mut fd_in_use_runtime = StealRuntime::new();
+    fd_in_use_runtime.block_on(|cx| {
+        let ring = cx.create_worker_ring();
+        let (read_fd, _write_fd) = pipe().unwrap();
+        let fd = RingFd::from_owned(read_fd);
+        let fd_clone = fd.clone();
+        assert_runtime_io_kind(ring.close(cx, fd).unwrap_err(), RuntimeIoErrorKind::FdInUse);
+        ring.close(cx, fd_clone).unwrap();
+    });
+
+    let mut no_stackful_context_runtime = StealRuntime::with_config(RuntimeConfig {
+        workers: NonZeroUsize::new(2).unwrap(),
+        steal_policy: StealPolicy::steal_one(),
+        ..RuntimeConfig::default()
+    });
+    no_stackful_context_runtime.block_on(|cx| {
+        let ring = cx.create_shared_ring();
+        let timeout = ring.timeout(cx, Duration::from_secs(60)).unwrap();
+        assert_runtime_io_kind(
+            timeout.wait(cx).unwrap_err(),
+            RuntimeIoErrorKind::NoStackfulContext,
+        );
+    });
+
+    assert_runtime_io_kind(RingError::Canceled, RuntimeIoErrorKind::Canceled);
+}
+
 #[test]
 fn direct_result_cancel_detaches_stealing_runtime_handle() {
     let mut runtime = StealRuntime::with_config(RuntimeConfig {
@@ -143,10 +234,12 @@ fn context_cancel_keeps_stealing_runtime_result_drainable_before_close() {
 
                 cx.cancel_read(&mut read).unwrap();
                 cx.wait_stackful(&read).unwrap();
+                let error = RuntimeReadResult::try_get(&mut read)
+                    .expect("canceled read should drain")
+                    .unwrap_err();
                 assert!(
-                    RuntimeReadResult::try_get(&mut read)
-                        .expect("canceled read should drain")
-                        .is_err()
+                    matches!(error, RuntimeIoError::Runtime(RuntimeIoErrorKind::Canceled))
+                        || matches!(error, RuntimeIoError::Io(Errno::CANCELED))
                 );
 
                 SocketIoRuntime::close(cx, read_fd).unwrap();

@@ -87,8 +87,70 @@ pub enum RuntimeIoError {
     Io(Errno),
     /// The requested runtime capability is not supported by this adapter.
     Unsupported(UnsupportedCapability),
+    /// A runtime-level precondition, lifecycle, or admission failure.
+    Runtime(RuntimeIoErrorKind),
     /// The adapter failed for a runtime-specific reason.
     Other(&'static str),
+}
+
+/// Structured runtime-level category for runtime-neutral I/O failures.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeIoErrorKind {
+    /// A worker-local ring was requested from a non-worker context.
+    NoCurrentWorker,
+    /// A worker-local ring was used from the wrong worker.
+    WrongWorker,
+    /// A runtime-affine handle was used with a different runtime instance.
+    WrongRuntime,
+    /// A pending operation requires a stackful coroutine wait context.
+    NoStackfulContext,
+    /// A runtime or ring admission queue is full.
+    QueueFull,
+    /// A runtime-level resource limit has been reached.
+    ResourceLimit,
+    /// A requested timeout duration is outside the supported range.
+    DurationOutOfRange,
+    /// A descriptor is still cloned or owned by a pending operation.
+    FdInUse,
+    /// A ring or runtime I/O resource has been closed.
+    Closed,
+    /// The operation was canceled before completion.
+    Canceled,
+}
+
+impl RuntimeIoErrorKind {
+    /// Returns an allocation-free diagnostic message for this category.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoCurrentWorker => "worker-local ring requested outside a worker context",
+            Self::WrongWorker => "worker-local ring used from a different worker",
+            Self::WrongRuntime => "ring used from a different runtime",
+            Self::NoStackfulContext => {
+                "pending shared-ring operation requires a stackful wait context"
+            }
+            Self::QueueFull => "ring queue is full",
+            Self::ResourceLimit => "shared ring resource limit reached",
+            Self::DurationOutOfRange => "duration is out of range",
+            Self::FdInUse => "descriptor still has cloned or pending handles",
+            Self::Closed => "ring is closed",
+            Self::Canceled => "ring operation was canceled",
+        }
+    }
+}
+
+impl RuntimeIoError {
+    /// Creates a structured runtime-level I/O error.
+    pub fn runtime(kind: RuntimeIoErrorKind) -> Self {
+        Self::Runtime(kind)
+    }
+
+    /// Returns the structured runtime-level category, when this is a runtime error.
+    pub fn runtime_kind(&self) -> Option<RuntimeIoErrorKind> {
+        match self {
+            Self::Runtime(kind) => Some(*kind),
+            Self::Io(_) | Self::Unsupported(_) | Self::Other(_) => None,
+        }
+    }
 }
 
 impl fmt::Display for RuntimeIoError {
@@ -96,6 +158,7 @@ impl fmt::Display for RuntimeIoError {
         match self {
             Self::Io(error) => write!(f, "runtime I/O failed: {error}"),
             Self::Unsupported(error) => error.fmt(f),
+            Self::Runtime(kind) => f.write_str(kind.as_str()),
             Self::Other(message) => f.write_str(message),
         }
     }
@@ -735,9 +798,9 @@ impl SocketIoRuntime for RuntimeContext<'_> {
     }
 
     fn close(&self, fd: Self::Socket) -> Result<(), RuntimeIoError> {
-        let fd = fd.into_owned().map_err(|_| {
-            RuntimeIoError::Other("socket handle cannot be closed while cloned or pending")
-        })?;
+        let fd = fd
+            .into_owned()
+            .map_err(|_| RuntimeIoError::runtime(RuntimeIoErrorKind::FdInUse))?;
         RuntimeContext::close(self, fd).map_err(RuntimeIoError::from)
     }
 }

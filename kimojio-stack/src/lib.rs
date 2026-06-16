@@ -272,9 +272,9 @@ pub use mutex::{Mutex, MutexGuard};
 pub use notify::{Notified, Notify};
 pub use runtime_api::{
     IoRuntime, RuntimeCapabilities, RuntimeCapability, RuntimeFamily, RuntimeIoError,
-    RuntimeReadResult, RuntimeSocket, RuntimeWaitError, RuntimeWaitable, RuntimeWaitableAdapter,
-    RuntimeWriteResult, SocketIoRuntime, StackRuntime, StackRuntimeContext, StackfulWaitContext,
-    StackfulWaitRegistration, StackfulWaiter, UnsupportedCapability,
+    RuntimeIoErrorKind, RuntimeReadResult, RuntimeSocket, RuntimeWaitError, RuntimeWaitable,
+    RuntimeWaitableAdapter, RuntimeWriteResult, SocketIoRuntime, StackRuntime, StackRuntimeContext,
+    StackfulWaitContext, StackfulWaitRegistration, StackfulWaiter, UnsupportedCapability,
 };
 pub use rwlock::{ReadLock, RwLock, RwLockReadGuard, RwLockWriteGuard, WriteLock};
 pub use semaphore::{Semaphore, SemaphorePermit};
