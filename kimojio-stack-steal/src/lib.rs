@@ -2467,9 +2467,14 @@ impl StackfulWaitContext for RuntimeContext<'_> {
     fn stackful_wait_registration(&self) -> Option<Box<dyn StackfulWaitRegistration + '_>> {
         let registration = self.inner.stackful_wait_registration()?;
         if let Some(scope) = &self.active_steal_scope {
+            if !scope.push_cancel_waiter(registration.waiter()) {
+                let immediate_wake = registration.waiter();
+                if immediate_wake.mark_ready() {
+                    immediate_wake.wake_ready();
+                }
+            }
             Some(Box::new(StealWaitRegistration {
                 inner: registration,
-                scope: Arc::clone(scope),
             }))
         } else {
             Some(registration)
@@ -2490,19 +2495,11 @@ impl StackfulWaitContext for RuntimeContext<'_> {
 
 struct StealWaitRegistration<'registration> {
     inner: Box<dyn StackfulWaitRegistration + 'registration>,
-    scope: Arc<StealScopeState>,
 }
 
 impl StackfulWaitRegistration for StealWaitRegistration<'_> {
     fn waiter(&self) -> StackfulWaiterHandle {
-        let waiter = self.inner.waiter();
-        if !self.scope.push_cancel_waiter(self.inner.waiter()) {
-            let immediate_wake = self.inner.waiter();
-            if immediate_wake.mark_ready() {
-                immediate_wake.wake_ready();
-            }
-        }
-        waiter
+        self.inner.waiter()
     }
 }
 
@@ -4168,6 +4165,7 @@ struct MultiRuntime {
     scheduler_wakes: Vec<Mutex<Option<SchedulerWake>>>,
     next_shared_ring_worker: AtomicUsize,
     local_depths: Vec<AtomicUsize>,
+    total_local_depth: AtomicUsize,
     global_depth: AtomicUsize,
     active_jobs: AtomicUsize,
     wake_state: Mutex<WakeState>,
@@ -4221,6 +4219,7 @@ impl MultiRuntime {
             scheduler_wakes: (0..worker_count).map(|_| Mutex::new(None)).collect(),
             next_shared_ring_worker: AtomicUsize::new(0),
             local_depths: (0..worker_count).map(|_| AtomicUsize::new(0)).collect(),
+            total_local_depth: AtomicUsize::new(0),
             global_depth: AtomicUsize::new(0),
             active_jobs: AtomicUsize::new(0),
             wake_state: Mutex::new(WakeState::default()),
@@ -4366,11 +4365,15 @@ impl MultiRuntime {
     }
 
     fn reserve_local(&self, worker: usize) -> Option<usize> {
-        Self::reserve_depth(&self.local_depths[worker], self.config.max_worker_queue_len)
+        let depth =
+            Self::reserve_depth(&self.local_depths[worker], self.config.max_worker_queue_len)?;
+        self.total_local_depth.fetch_add(1, Ordering::Relaxed);
+        Some(depth)
     }
 
     fn release_local(&self, worker: usize, count: usize) {
         Self::release_depth(&self.local_depths[worker], count);
+        Self::release_depth(&self.total_local_depth, count);
     }
 
     fn reserve_global(&self) -> Option<usize> {
@@ -4704,6 +4707,9 @@ impl MultiRuntime {
         if self.config.steal_policy == StealPolicy::Disabled {
             return None;
         }
+        if self.stealable_depth_excluding(worker.index()) == 0 {
+            return None;
+        }
 
         for victim in self.victims(worker, idle_iterations) {
             self.metrics.steal_attempts.fetch_add(1, Ordering::Relaxed);
@@ -4720,6 +4726,12 @@ impl MultiRuntime {
         }
 
         None
+    }
+
+    fn stealable_depth_excluding(&self, worker: usize) -> usize {
+        self.total_local_depth
+            .load(Ordering::Acquire)
+            .saturating_sub(self.local_depths[worker].load(Ordering::Acquire))
     }
 
     fn victims(&self, worker: WorkerId, idle_iterations: usize) -> VictimIter {
@@ -5945,6 +5957,30 @@ mod tests {
         assert!(!runtime.should_poll_global(1));
         runtime.global_depth.store(1, Ordering::Relaxed);
         assert!(runtime.should_poll_global(1));
+    }
+
+    #[test]
+    fn idle_steal_skips_crossbeam_scan_when_no_local_work_exists() {
+        let workers = (0..4)
+            .map(|_| CrossbeamWorker::new_lifo())
+            .collect::<Vec<_>>();
+        let stealers = workers
+            .iter()
+            .map(CrossbeamWorker::stealer)
+            .collect::<Vec<_>>();
+        let runtime = MultiRuntime::with_runtime_id(
+            RuntimeConfig {
+                workers: NonZeroUsize::new(4).unwrap(),
+                steal_policy: StealPolicy::steal_one(),
+                ..RuntimeConfig::default()
+            },
+            RuntimeId::next(),
+            stealers,
+        );
+
+        assert!(runtime.take_job(WorkerId(0), &workers[0], 0).is_none());
+        assert_eq!(runtime.metrics.steal_attempts.load(Ordering::Relaxed), 0);
+        assert_eq!(runtime.metrics.failed_steals.load(Ordering::Relaxed), 0);
     }
 
     #[test]

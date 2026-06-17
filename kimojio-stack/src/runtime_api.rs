@@ -21,7 +21,7 @@ use rustix::net::Shutdown;
 
 use crate::{
     Errno, ExternalWaitRegistration, ExternalWaiter, IoFd, IoReadBuffer, IoResult, IoWriteBuffer,
-    ReadOutput, Runtime, RuntimeContext, Timeout, WaitRegistration, Waitable, WriteOutput,
+    RawIo, ReadOutput, Runtime, RuntimeContext, Timeout, WaitRegistration, Waitable, WriteOutput,
 };
 
 /// Explicit runtime capability queried from a runtime/context handle.
@@ -200,6 +200,16 @@ impl fmt::Display for RuntimeWaitError {
 }
 
 impl Error for RuntimeWaitError {}
+
+fn runtime_wait_to_io_error(error: RuntimeWaitError) -> RuntimeIoError {
+    match error {
+        RuntimeWaitError::Unsupported(error) => RuntimeIoError::Unsupported(error),
+        RuntimeWaitError::Empty => RuntimeIoError::Other("deadline wait requires waitables"),
+        RuntimeWaitError::NoStackfulContext { .. } => {
+            RuntimeIoError::runtime(RuntimeIoErrorKind::NoStackfulContext)
+        }
+    }
+}
 
 /// Explicit capability-query surface for runtime/context adapters.
 pub trait RuntimeCapabilities {
@@ -473,6 +483,79 @@ pub trait SocketIoRuntime: IoRuntime {
     ) -> Result<Self::WriteResult<B>, RuntimeIoError>
     where
         B: IoWriteBuffer + Send + 'static;
+
+    /// Reads from `fd` with a relative timeout.
+    ///
+    /// Runtime adapters may override this to avoid owned-buffer fallback copies
+    /// while still racing the I/O operation with a stackful timer.
+    fn read_with_timeout(
+        &self,
+        fd: &Self::Socket,
+        buf: &mut [u8],
+        timeout: Duration,
+    ) -> Result<usize, RuntimeIoError>
+    where
+        Self: StackfulWaitContext,
+        Self::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
+    {
+        let timer = self.sleep_async(timeout)?;
+        let mut pending = self.read_async(fd, vec![0_u8; buf.len()])?;
+        loop {
+            if let Some(result) = RuntimeReadResult::try_get(&mut pending) {
+                let output = result?;
+                let amount = output.bytes;
+                buf[..amount].copy_from_slice(&output.buffer[..amount]);
+                return Ok(amount);
+            }
+            let waitables: [&dyn RuntimeWaitable; 2] = [&pending, &timer];
+            if self
+                .wait_any_stackful(&waitables)
+                .map_err(runtime_wait_to_io_error)?
+                == 1
+            {
+                self.cancel_read(&mut pending)?;
+                self.wait_stackful(&pending)
+                    .map_err(runtime_wait_to_io_error)?;
+                let _ = RuntimeReadResult::try_get(&mut pending);
+                return Err(RuntimeIoError::Io(Errno::TIME));
+            }
+        }
+    }
+
+    /// Writes to `fd` with a relative timeout.
+    ///
+    /// Runtime adapters may override this to avoid owned-buffer fallback copies
+    /// while still racing the I/O operation with a stackful timer.
+    fn write_with_timeout(
+        &self,
+        fd: &Self::Socket,
+        buf: &[u8],
+        timeout: Duration,
+    ) -> Result<usize, RuntimeIoError>
+    where
+        Self: StackfulWaitContext,
+        Self::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
+    {
+        let timer = self.sleep_async(timeout)?;
+        let mut pending = self.write_async(fd, Vec::from(buf))?;
+        loop {
+            if let Some(result) = RuntimeWriteResult::try_get(&mut pending) {
+                return result.map(|output| output.bytes);
+            }
+            let waitables: [&dyn RuntimeWaitable; 2] = [&pending, &timer];
+            if self
+                .wait_any_stackful(&waitables)
+                .map_err(runtime_wait_to_io_error)?
+                == 1
+            {
+                self.cancel_write(&mut pending)?;
+                self.wait_stackful(&pending)
+                    .map_err(runtime_wait_to_io_error)?;
+                let _ = RuntimeWriteResult::try_get(&mut pending);
+                return Err(RuntimeIoError::Io(Errno::TIME));
+            }
+        }
+    }
 
     /// Requests cancellation of a pending read.
     ///
@@ -787,6 +870,30 @@ impl IoRuntime for RuntimeContext<'_> {
     }
 }
 
+fn raw_io_with_timeout(
+    cx: &RuntimeContext<'_>,
+    pending: &mut RawIo,
+    timer: &Timeout,
+) -> Result<u32, RuntimeIoError> {
+    loop {
+        if let Some(result) = pending.try_wait() {
+            return result.map_err(RuntimeIoError::from);
+        }
+        let waitables: [&dyn RuntimeWaitable; 2] = [pending, timer];
+        if cx
+            .wait_any_stackful(&waitables)
+            .map_err(runtime_wait_to_io_error)?
+            == 1
+        {
+            cx.cancel_raw_io(pending).map_err(RuntimeIoError::from)?;
+            cx.wait_stackful(pending)
+                .map_err(runtime_wait_to_io_error)?;
+            let _ = pending.try_wait();
+            return Err(RuntimeIoError::Io(Errno::TIME));
+        }
+    }
+}
+
 impl SocketIoRuntime for RuntimeContext<'_> {
     type Socket = IoFd;
     type ReadResult<B>
@@ -830,6 +937,36 @@ impl SocketIoRuntime for RuntimeContext<'_> {
         B: IoWriteBuffer + Send + 'static,
     {
         Ok(RuntimeContext::write_async(self, fd, buffer))
+    }
+
+    fn read_with_timeout(
+        &self,
+        fd: &Self::Socket,
+        buf: &mut [u8],
+        timeout: Duration,
+    ) -> Result<usize, RuntimeIoError>
+    where
+        Self: StackfulWaitContext,
+        Self::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
+    {
+        let timer = self.timeout(timeout);
+        let mut pending = unsafe { self.submit_raw_read(fd, buf.as_mut_ptr(), buf.len()) };
+        raw_io_with_timeout(self, &mut pending, &timer).map(|amount| amount as usize)
+    }
+
+    fn write_with_timeout(
+        &self,
+        fd: &Self::Socket,
+        buf: &[u8],
+        timeout: Duration,
+    ) -> Result<usize, RuntimeIoError>
+    where
+        Self: StackfulWaitContext,
+        Self::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
+    {
+        let timer = self.timeout(timeout);
+        let mut pending = unsafe { self.submit_raw_write(fd, buf.as_ptr(), buf.len()) };
+        raw_io_with_timeout(self, &mut pending, &timer).map(|amount| amount as usize)
     }
 
     fn cancel_read<B>(&self, read: &mut Self::ReadResult<B>) -> Result<(), RuntimeIoError>

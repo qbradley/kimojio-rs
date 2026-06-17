@@ -250,10 +250,10 @@ where
     let expected_key = key.clone();
     let mut outcome =
         match read_put_chunks::<R>(cx, state.size_limits, expected_key, first, &mut request)? {
-            Ok(chunks) => {
-                let mut chunks = chunks.into_iter();
+            Ok(body) => {
+                let body = body.into_bytes();
                 let mut storage = state.storage_mut();
-                storage.put_stream(key, content_type, || Ok::<_, Status>(chunks.next()))?
+                storage.put_body(key, content_type, body)
             }
             Err(error) => OperationOutcome::failure(ObjectOperation::Put, error),
         };
@@ -265,17 +265,34 @@ where
     }))
 }
 
+struct ValidatedPutBody {
+    chunks: Vec<Bytes>,
+    total_len: usize,
+}
+
+impl ValidatedPutBody {
+    fn into_bytes(self) -> Bytes {
+        let mut body = Vec::with_capacity(self.total_len);
+        for chunk in self.chunks {
+            body.extend_from_slice(&chunk);
+        }
+        debug_assert_eq!(body.len(), self.total_len);
+        Bytes::from(body)
+    }
+}
+
 fn read_put_chunks<'cx, R>(
     cx: &'cx R::Context<'cx>,
     limits: ObjectSizeLimits,
     expected_key: ObjectKey,
     first: proto::PutChunk,
     request: &mut ClientStreamingRequest<'_, proto::PutChunk>,
-) -> Result<Result<Vec<Bytes>, ObjectErrorClass>, Status>
+) -> Result<Result<ValidatedPutBody, ObjectErrorClass>, Status>
 where
     R: GrpcRuntime,
 {
     let mut chunks = Vec::new();
+    let mut total_len = 0usize;
     let mut next_offset = 0u64;
     let mut finished = false;
     let mut failure = None;
@@ -309,6 +326,7 @@ where
             {
                 failure = Some(error);
             } else {
+                total_len = total_len.saturating_add(chunk_len);
                 chunks.push(current.data);
             }
         }
@@ -318,7 +336,7 @@ where
     }
     Ok(match failure {
         Some(error) => Err(error),
-        None => Ok(chunks),
+        None => Ok(ValidatedPutBody { chunks, total_len }),
     })
 }
 

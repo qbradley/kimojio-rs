@@ -5,8 +5,9 @@ use std::os::fd::OwnedFd;
 use std::time::Duration;
 
 use kimojio_stack::{
-    IoReadBuffer, IoRuntime, IoWriteBuffer, RuntimeIoError, RuntimeIoErrorKind, RuntimeReadResult,
-    RuntimeSocket, RuntimeWriteResult, SocketIoRuntime, StackRuntime, StackRuntimeContext,
+    IoReadBuffer, IoRuntime, IoWriteBuffer, RawIo, RuntimeIoError, RuntimeIoErrorKind,
+    RuntimeReadResult, RuntimeSocket, RuntimeWriteResult, SocketIoRuntime, StackRuntime,
+    StackRuntimeContext, StackfulWaitContext, WaitError, Waitable,
 };
 use rustix::net::Shutdown;
 
@@ -116,6 +117,42 @@ where
     }
 }
 
+fn local_wait_to_io_error(error: WaitError) -> RuntimeIoError {
+    match error {
+        WaitError::TimedOut => RuntimeIoError::Io(kimojio_stack::Errno::TIME),
+        WaitError::Empty => RuntimeIoError::Other("deadline wait requires waitables"),
+    }
+}
+
+fn raw_io_with_timeout(
+    cx: &RuntimeContext<'_>,
+    pending: &mut RawIo,
+    timer: &kimojio_stack::Timeout,
+) -> Result<u32, RuntimeIoError> {
+    loop {
+        if let Some(result) = pending.try_wait() {
+            return result.map_err(RuntimeIoError::from);
+        }
+        let waitables: [&dyn Waitable; 2] = [pending, timer];
+        if cx
+            .inner
+            .wait_any(&waitables, None)
+            .map_err(local_wait_to_io_error)?
+            == 1
+        {
+            cx.inner
+                .cancel_raw_io(pending)
+                .map_err(RuntimeIoError::from)?;
+            let waitables: [&dyn Waitable; 1] = [pending];
+            cx.inner
+                .wait_all(&waitables, None)
+                .map_err(local_wait_to_io_error)?;
+            let _ = pending.try_wait();
+            return Err(RuntimeIoError::Io(kimojio_stack::Errno::TIME));
+        }
+    }
+}
+
 impl SocketIoRuntime for RuntimeContext<'_> {
     type Socket = RingFd;
     type ReadResult<B>
@@ -167,6 +204,38 @@ impl SocketIoRuntime for RuntimeContext<'_> {
         self.socket_ring()
             .and_then(|ring| ring.write_async(self, fd, buffer))
             .map_err(runtime_io_error)
+    }
+
+    fn read_with_timeout(
+        &self,
+        fd: &Self::Socket,
+        buf: &mut [u8],
+        timeout: Duration,
+    ) -> Result<usize, RuntimeIoError>
+    where
+        Self: StackfulWaitContext,
+        Self::ReadResult<Vec<u8>>:
+            RuntimeReadResult<Vec<u8>, Output = kimojio_stack::ReadOutput<Vec<u8>>>,
+    {
+        let timer = self.inner.timeout(timeout);
+        let mut pending = unsafe { self.inner.submit_raw_read(fd, buf.as_mut_ptr(), buf.len()) };
+        raw_io_with_timeout(self, &mut pending, &timer).map(|amount| amount as usize)
+    }
+
+    fn write_with_timeout(
+        &self,
+        fd: &Self::Socket,
+        buf: &[u8],
+        timeout: Duration,
+    ) -> Result<usize, RuntimeIoError>
+    where
+        Self: StackfulWaitContext,
+        Self::WriteResult<Vec<u8>>:
+            RuntimeWriteResult<Vec<u8>, Output = kimojio_stack::WriteOutput<Vec<u8>>>,
+    {
+        let timer = self.inner.timeout(timeout);
+        let mut pending = unsafe { self.inner.submit_raw_write(fd, buf.as_ptr(), buf.len()) };
+        raw_io_with_timeout(self, &mut pending, &timer).map(|amount| amount as usize)
     }
 
     fn cancel_read<B>(&self, read: &mut Self::ReadResult<B>) -> Result<(), RuntimeIoError>

@@ -22,6 +22,7 @@ kimojio-stack-opentelemetry.workspace = true
 kimojio-stack-storage.workspace = true
 kimojio-stack-steal.workspace = true
 kimojio-stack-tls.workspace = true
+mimalloc.workspace = true
 openssl.workspace = true
 prost.workspace = true
 rustix.workspace = true

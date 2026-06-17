@@ -20,6 +20,59 @@ use rustix::{fd::OwnedFd, net::Shutdown};
 
 use crate::error::Error;
 
+const READ_BUFFER_CAPACITY: usize = 16 * 1024;
+
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct ReadBuffer {
+    bytes: Vec<u8>,
+    start: usize,
+    end: usize,
+}
+
+impl ReadBuffer {
+    fn new() -> Self {
+        Self {
+            bytes: vec![0; READ_BUFFER_CAPACITY],
+            start: 0,
+            end: 0,
+        }
+    }
+
+    fn buffered_len(&self) -> usize {
+        self.end - self.start
+    }
+
+    fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
+
+    fn read_into(&mut self, buf: &mut [u8]) -> Option<usize> {
+        if self.is_empty() {
+            return None;
+        }
+        let amount = self.buffered_len().min(buf.len());
+        buf[..amount].copy_from_slice(&self.bytes[self.start..self.start + amount]);
+        self.start += amount;
+        if self.start == self.end {
+            self.start = 0;
+            self.end = 0;
+        }
+        Some(amount)
+    }
+
+    fn fill_slice(&mut self) -> &mut [u8] {
+        debug_assert!(self.is_empty());
+        &mut self.bytes
+    }
+
+    fn set_filled(&mut self, len: usize) {
+        debug_assert!(len <= self.bytes.len());
+        self.start = 0;
+        self.end = len;
+    }
+}
+
 /// Runtime capability bound used by HTTP transports with optional deadlines.
 pub trait HttpRuntime<S>: SocketIoRuntime<Socket = S> + StackfulWaitContext
 where
@@ -57,7 +110,7 @@ where
         buf: &mut [u8],
         timeout: Duration,
     ) -> Result<usize, Error> {
-        read_with_timeout(self, fd, buf, timeout)
+        SocketIoRuntime::read_with_timeout(self, fd, buf, timeout).map_err(runtime_io_error)
     }
 
     fn http_write_with_timeout(
@@ -66,7 +119,7 @@ where
         buf: &[u8],
         timeout: Duration,
     ) -> Result<usize, Error> {
-        write_with_timeout(self, fd, buf, timeout)
+        SocketIoRuntime::write_with_timeout(self, fd, buf, timeout).map_err(runtime_io_error)
     }
 }
 
@@ -78,6 +131,8 @@ pub enum RuntimeStackTransport<S> {
         fd: S,
         /// Optional absolute I/O deadline.
         deadline: Option<Instant>,
+        /// Buffered bytes already read from the socket.
+        read_buffer: ReadBuffer,
     },
     /// Stack TLS stream.
     #[cfg(feature = "tls")]
@@ -86,6 +141,8 @@ pub enum RuntimeStackTransport<S> {
         stream: RuntimeTlsStream<S>,
         /// Optional absolute I/O deadline.
         deadline: Option<Instant>,
+        /// Buffered bytes already read from the TLS stream.
+        read_buffer: ReadBuffer,
     },
 }
 
@@ -95,7 +152,11 @@ pub type StackTransport = RuntimeStackTransport<IoFd>;
 impl<S> RuntimeStackTransport<S> {
     /// Creates a plaintext transport from an existing runtime socket handle.
     pub fn plaintext_socket(fd: S) -> Self {
-        Self::Plaintext { fd, deadline: None }
+        Self::Plaintext {
+            fd,
+            deadline: None,
+            read_buffer: ReadBuffer::new(),
+        }
     }
 
     /// Creates a TLS transport from an established runtime TLS stream.
@@ -104,6 +165,7 @@ impl<S> RuntimeStackTransport<S> {
         Self::Tls {
             stream,
             deadline: None,
+            read_buffer: ReadBuffer::new(),
         }
     }
 
@@ -136,15 +198,37 @@ impl<S> RuntimeStackTransport<S> {
         S: RuntimeSocket,
     {
         match self {
-            Self::Plaintext { fd, deadline } => match remaining_io_timeout(*deadline)? {
-                Some(timeout) => cx.http_read_with_timeout(fd, buf, timeout),
-                None => cx.read(fd, buf).map_err(runtime_io_error),
-            },
+            Self::Plaintext {
+                fd,
+                deadline,
+                read_buffer,
+            } => {
+                if let Some(amount) = read_buffer.read_into(buf) {
+                    return Ok(amount);
+                }
+                if buf.len() >= READ_BUFFER_CAPACITY {
+                    return read_plaintext_direct(cx, fd, *deadline, buf);
+                }
+                let amount = read_plaintext_direct(cx, fd, *deadline, read_buffer.fill_slice())?;
+                read_buffer.set_filled(amount);
+                Ok(read_buffer.read_into(buf).unwrap_or(0))
+            }
             #[cfg(feature = "tls")]
-            Self::Tls { stream, deadline } => match remaining_io_timeout(*deadline)? {
-                Some(timeout) => tls_read_with_timeout(cx, stream, buf, timeout),
-                None => stream.read(cx, buf).map_err(Error::tls),
-            },
+            Self::Tls {
+                stream,
+                deadline,
+                read_buffer,
+            } => {
+                if let Some(amount) = read_buffer.read_into(buf) {
+                    return Ok(amount);
+                }
+                if buf.len() >= READ_BUFFER_CAPACITY {
+                    return read_tls_direct(cx, stream, *deadline, buf);
+                }
+                let amount = read_tls_direct(cx, stream, *deadline, read_buffer.fill_slice())?;
+                read_buffer.set_filled(amount);
+                Ok(read_buffer.read_into(buf).unwrap_or(0))
+            }
         }
     }
 
@@ -177,12 +261,14 @@ impl<S> RuntimeStackTransport<S> {
         S: RuntimeSocket,
     {
         match self {
-            Self::Plaintext { fd, deadline } => match remaining_io_timeout(*deadline)? {
+            Self::Plaintext { fd, deadline, .. } => match remaining_io_timeout(*deadline)? {
                 Some(timeout) => cx.http_write_with_timeout(fd, buf, timeout),
                 None => cx.write(fd, buf).map_err(runtime_io_error),
             },
             #[cfg(feature = "tls")]
-            Self::Tls { stream, deadline } => match remaining_io_timeout(*deadline)? {
+            Self::Tls {
+                stream, deadline, ..
+            } => match remaining_io_timeout(*deadline)? {
                 Some(timeout) => tls_write_with_timeout(cx, stream, buf, timeout),
                 None => stream.write(cx, buf).map_err(Error::tls),
             },
@@ -299,88 +385,37 @@ fn remaining_io_timeout(deadline: Option<Instant>) -> Result<Option<Duration>, E
     }
 }
 
-fn read_with_timeout<R, S>(
+fn read_plaintext_direct<R, S>(
     cx: &R,
     fd: &S,
+    deadline: Option<Instant>,
     buf: &mut [u8],
-    timeout: Duration,
 ) -> Result<usize, Error>
 where
-    R: SocketIoRuntime<Socket = S> + StackfulWaitContext,
+    R: HttpRuntime<S>,
     S: RuntimeSocket,
-    R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
 {
-    let timer = cx.sleep_async(timeout).map_err(runtime_io_error)?;
-    let mut pending = cx
-        .read_async(fd, vec![0_u8; buf.len()])
-        .map_err(runtime_io_error)?;
-    loop {
-        if let Some(result) = RuntimeReadResult::try_get(&mut pending) {
-            let output = result.map_err(runtime_io_error)?;
-            let amount = output.bytes;
-            buf[..amount].copy_from_slice(&output.buffer[..amount]);
-            return Ok(amount);
-        }
-        let waitables: [&dyn RuntimeWaitable; 2] = [&pending, &timer];
-        if cx
-            .wait_any_stackful(&waitables)
-            .map_err(runtime_wait_error)?
-            == 1
-        {
-            cancel_and_drain_read(cx, &mut pending)?;
-            return Err(Error::io(Errno::TIME));
-        }
+    match remaining_io_timeout(deadline)? {
+        Some(timeout) => cx.http_read_with_timeout(fd, buf, timeout),
+        None => cx.read(fd, buf).map_err(runtime_io_error),
     }
 }
 
-fn write_with_timeout<R, S>(cx: &R, fd: &S, buf: &[u8], timeout: Duration) -> Result<usize, Error>
+#[cfg(feature = "tls")]
+fn read_tls_direct<R, S>(
+    cx: &R,
+    stream: &mut RuntimeTlsStream<S>,
+    deadline: Option<Instant>,
+    buf: &mut [u8],
+) -> Result<usize, Error>
 where
-    R: SocketIoRuntime<Socket = S> + StackfulWaitContext,
+    R: HttpRuntime<S>,
     S: RuntimeSocket,
-    R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
 {
-    let timer = cx.sleep_async(timeout).map_err(runtime_io_error)?;
-    let mut pending = cx
-        .write_async(fd, Vec::from(buf))
-        .map_err(runtime_io_error)?;
-    loop {
-        if let Some(result) = RuntimeWriteResult::try_get(&mut pending) {
-            return result.map(|output| output.bytes).map_err(runtime_io_error);
-        }
-        let waitables: [&dyn RuntimeWaitable; 2] = [&pending, &timer];
-        if cx
-            .wait_any_stackful(&waitables)
-            .map_err(runtime_wait_error)?
-            == 1
-        {
-            cancel_and_drain_write(cx, &mut pending)?;
-            return Err(Error::io(Errno::TIME));
-        }
+    match remaining_io_timeout(deadline)? {
+        Some(timeout) => tls_read_with_timeout(cx, stream, buf, timeout),
+        None => stream.read(cx, buf).map_err(Error::tls),
     }
-}
-
-fn cancel_and_drain_read<R, S>(cx: &R, pending: &mut R::ReadResult<Vec<u8>>) -> Result<(), Error>
-where
-    R: SocketIoRuntime<Socket = S> + StackfulWaitContext,
-    S: RuntimeSocket,
-    R::ReadResult<Vec<u8>>: RuntimeReadResult<Vec<u8>, Output = ReadOutput<Vec<u8>>>,
-{
-    cx.cancel_read(pending).map_err(runtime_io_error)?;
-    cx.wait_stackful(pending).map_err(runtime_wait_error)?;
-    let _ = RuntimeReadResult::try_get(pending);
-    Ok(())
-}
-
-fn cancel_and_drain_write<R, S>(cx: &R, pending: &mut R::WriteResult<Vec<u8>>) -> Result<(), Error>
-where
-    R: SocketIoRuntime<Socket = S> + StackfulWaitContext,
-    S: RuntimeSocket,
-    R::WriteResult<Vec<u8>>: RuntimeWriteResult<Vec<u8>, Output = WriteOutput<Vec<u8>>>,
-{
-    cx.cancel_write(pending).map_err(runtime_io_error)?;
-    cx.wait_stackful(pending).map_err(runtime_wait_error)?;
-    let _ = RuntimeWriteResult::try_get(pending);
-    Ok(())
 }
 
 #[cfg(feature = "tls")]

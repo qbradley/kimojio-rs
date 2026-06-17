@@ -18,7 +18,7 @@ use super::settings::{SettingId, Settings};
 use super::stream::{FlowControlWindow, Stream, StreamId};
 
 const INITIAL_CONNECTION_WINDOW: u32 = 65_535;
-const STREAM_WINDOW_UPDATE_THRESHOLD_DIVISOR: i32 = 2;
+const WINDOW_UPDATE_THRESHOLD_DIVISOR: i32 = 2;
 
 /// Mutable HTTP/2 connection state shared by client and server code.
 pub struct ConnectionState {
@@ -228,6 +228,28 @@ impl ConnectionState {
         Ok(())
     }
 
+    /// Tops the connection inbound window back up toward `target`.
+    ///
+    /// Returns `true` when a WINDOW_UPDATE frame was queued.
+    pub fn queue_connection_window_update_to_target(&mut self, target: u32) -> Result<bool, Error> {
+        if target == 0 {
+            return Ok(false);
+        }
+        let threshold = (target as i32) / WINDOW_UPDATE_THRESHOLD_DIVISOR;
+        let available = self.inbound_connection_window.available();
+        if available > threshold {
+            return Ok(false);
+        }
+        let increment = target.saturating_sub(available.max(0) as u32);
+        if increment == 0 {
+            return Ok(false);
+        }
+        self.inbound_connection_window.increase(increment)?;
+        self.pending_outbound
+            .push_back(Frame::window_update(0, increment));
+        Ok(true)
+    }
+
     /// Consumes inbound connection-level window credit.
     pub fn consume_inbound_connection_window(&mut self, amount: usize) -> Result<(), Error> {
         self.inbound_connection_window.consume(amount)
@@ -264,7 +286,7 @@ impl ConnectionState {
         if target == 0 {
             return Ok(false);
         }
-        let threshold = (target as i32) / STREAM_WINDOW_UPDATE_THRESHOLD_DIVISOR;
+        let threshold = (target as i32) / WINDOW_UPDATE_THRESHOLD_DIVISOR;
         let stream = self
             .streams
             .get_mut(&stream_id)

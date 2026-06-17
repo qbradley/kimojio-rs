@@ -39,6 +39,9 @@ pub use server::{
 pub use settings::{Setting, SettingId, Settings};
 pub use stream::{FlowControlWindow, Stream, StreamId, StreamState};
 
+const MIN_FLOW_CONTROL_WINDOW_TARGET: usize = 65_535;
+const MAX_AUTO_FLOW_CONTROL_WINDOW_TARGET: usize = 16 * 1024 * 1024;
+
 /// HTTP/2 error code for stream cancellation.
 pub const ERROR_CODE_CANCEL: u32 = 8;
 
@@ -79,6 +82,16 @@ pub fn validate_client_preface(bytes: &[u8]) -> Result<(), crate::Error> {
     } else {
         Err(crate::Error::Protocol("invalid HTTP/2 client preface"))
     }
+}
+
+pub(super) fn connection_window_target(config: crate::HttpConfig) -> u32 {
+    config
+        .max_body_bytes
+        .clamp(
+            MIN_FLOW_CONTROL_WINDOW_TARGET,
+            MAX_AUTO_FLOW_CONTROL_WINDOW_TARGET,
+        )
+        .min(settings::MAX_WINDOW_SIZE as usize) as u32
 }
 
 #[cfg(test)]

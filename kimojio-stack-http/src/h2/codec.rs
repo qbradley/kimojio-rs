@@ -12,12 +12,13 @@ use crate::{Error, HttpConfig, HttpRuntime, LimitKind, RuntimeStackTransport, Tr
 
 use super::{
     CLIENT_PREFACE, ConnectionState, Frame, FrameFlags, FramePayload, FrameType, Header, Setting,
-    SettingId, Settings, StreamId, validate_client_preface,
+    SettingId, Settings, StreamId, connection_window_target, validate_client_preface,
 };
 
 pub(super) fn settings_from_config(config: HttpConfig) -> Settings {
     Settings {
         enable_push: false,
+        initial_window_size: connection_window_target(config),
         max_header_list_size: config.max_header_bytes.min(u32::MAX as usize) as u32,
         max_concurrent_streams: super::H2Config::default().max_concurrent_streams,
         ..Settings::default()

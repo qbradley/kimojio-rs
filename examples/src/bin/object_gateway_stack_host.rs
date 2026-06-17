@@ -26,6 +26,9 @@ use rustix::net::{
     sockopt::{set_socket_reuseaddr, set_tcp_nodelay},
 };
 
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum RuntimeKind {
     Stack,
@@ -82,7 +85,8 @@ fn main() -> Result<()> {
             account: "devstore".to_owned(),
         },
         version: env!("CARGO_PKG_VERSION").to_owned(),
-        request_timeout: Some(Duration::from_millis(args.request_deadline_ms)),
+        request_timeout: (args.request_deadline_ms != 0)
+            .then_some(Duration::from_millis(args.request_deadline_ms)),
     };
     match args.runtime {
         RuntimeKind::Stack => run_stack(args, gateway),
@@ -102,9 +106,6 @@ fn validate_args(args: &Args) -> Result<()> {
     }
     if args.max_object_bytes == 0 {
         bail!("--max-object-bytes must be greater than zero");
-    }
-    if args.request_deadline_ms == 0 {
-        bail!("--request-deadline-ms must be greater than zero");
     }
     Ok(())
 }

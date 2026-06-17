@@ -16,6 +16,7 @@ use crate::{
 
 use super::{
     ConnectionState, Frame, FrameFlags, FramePayload, FrameType, Header, Settings, StreamId, codec,
+    connection_window_target,
 };
 
 /// Buffered HTTP/2 response plus terminal trailers.
@@ -556,6 +557,8 @@ impl<S> RuntimeClientConnection<S> {
             &mut self.transport,
             &codec::settings_frame(self.state.local_settings()),
         )?;
+        self.state
+            .queue_connection_window_update_to_target(connection_window_target(self.config))?;
 
         let mut received_peer_settings = false;
         while !received_peer_settings {
@@ -751,11 +754,13 @@ impl<S> RuntimeClientConnection<S> {
         let data_len = data.len();
         self.state.consume_inbound_connection_window(data_len)?;
         if let Some(body) = pending.body.as_mut() {
-            self.state.queue_connection_window_update(data_len)?;
+            let mut should_flush = self
+                .state
+                .queue_connection_window_update_to_target(connection_window_target(self.config))?;
             body.append(&data)?;
-            let should_update =
+            should_flush |=
                 !end_stream && self.state.queue_stream_window_update_to_target(stream_id)?;
-            if data_len != 0 || should_update {
+            if should_flush {
                 codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
             }
         } else if !data.is_empty() {
@@ -859,10 +864,13 @@ impl<S> RuntimeClientConnection<S> {
         };
 
         if queued.data_len != 0 {
-            self.state.queue_connection_window_update(queued.data_len)?;
-            let should_update = queued.update_stream_window
-                && self.state.queue_stream_window_update_to_target(stream_id)?;
-            if should_update || queued.data_len != 0 {
+            let mut should_flush = self
+                .state
+                .queue_connection_window_update_to_target(connection_window_target(self.config))?;
+            if queued.update_stream_window {
+                should_flush |= self.state.queue_stream_window_update_to_target(stream_id)?;
+            }
+            if should_flush {
                 codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
             }
         }

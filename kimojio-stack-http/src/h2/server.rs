@@ -14,6 +14,7 @@ use crate::{
 
 use super::{
     ConnectionState, Frame, FrameFlags, FramePayload, FrameType, Header, Settings, StreamId, codec,
+    connection_window_target,
 };
 
 /// Completed inbound HTTP/2 request with its stream ID.
@@ -549,6 +550,8 @@ impl<S> RuntimeServerConnection<S> {
             return Err(Error::Protocol("expected client SETTINGS"));
         }
         self.state.receive_settings(&frame)?;
+        self.state
+            .queue_connection_window_update_to_target(connection_window_target(self.config))?;
         codec::write_frame(
             cx,
             &mut self.transport,
@@ -747,11 +750,13 @@ impl<S> RuntimeServerConnection<S> {
         let data_len = data.len();
         self.state.consume_inbound_connection_window(data_len)?;
         if let Some(body) = pending.body.as_mut() {
-            self.state.queue_connection_window_update(data_len)?;
+            let mut should_flush = self
+                .state
+                .queue_connection_window_update_to_target(connection_window_target(self.config))?;
             body.append(&data)?;
-            let should_update =
+            should_flush |=
                 !end_stream && self.state.queue_stream_window_update_to_target(stream_id)?;
-            if data_len != 0 || should_update {
+            if should_flush {
                 codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
             }
         } else if !data.is_empty() {
@@ -864,11 +869,15 @@ impl<S> RuntimeServerConnection<S> {
         };
 
         if queued.data_len != 0 {
-            self.state.queue_connection_window_update(queued.data_len)?;
+            let mut should_flush = self
+                .state
+                .queue_connection_window_update_to_target(connection_window_target(self.config))?;
             if queued.update_stream_window {
-                self.state.queue_stream_window_update_to_target(stream_id)?;
+                should_flush |= self.state.queue_stream_window_update_to_target(stream_id)?;
             }
-            codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
+            if should_flush {
+                codec::flush_pending(cx, &mut self.transport, &mut self.state)?;
+            }
         }
         if matches!(queued.event, RequestStreamEvent::Trailers(_)) {
             self.pending.remove(&stream_id);

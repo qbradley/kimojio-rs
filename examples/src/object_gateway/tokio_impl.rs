@@ -27,7 +27,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::oneshot,
 };
-use tokio_stream::{Stream, wrappers::TcpListenerStream};
+use tokio_stream::{Stream, StreamExt, wrappers::TcpListenerStream};
 use tonic::{
     Code, Request, Response, Status,
     body::Body as TonicBody,
@@ -651,9 +651,14 @@ pub async fn serve_grpc_listener(
     if let Some(timeout) = state.request_timeout() {
         builder = builder.timeout(timeout);
     }
+    let incoming = TcpListenerStream::new(listener).map(|stream| {
+        let stream = stream?;
+        stream.set_nodelay(true)?;
+        Ok::<_, std::io::Error>(stream)
+    });
     builder
         .add_service(ObjectGatewayTonicServer::new(state))
-        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+        .serve_with_incoming_shutdown(incoming, async {
             let _ = shutdown.await;
         })
         .await

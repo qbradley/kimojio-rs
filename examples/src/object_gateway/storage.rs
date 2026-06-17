@@ -90,11 +90,49 @@ impl HermeticStorage {
         if let Err(error) = self.limits.classify_object(body.len() as u64) {
             return OperationOutcome::failure(ObjectOperation::Put, error);
         }
+        self.record_and_store_body(key, content_type.into(), body)
+    }
+
+    pub fn put_chunks(
+        &mut self,
+        key: ObjectKey,
+        content_type: impl Into<String>,
+        chunks: Vec<Bytes>,
+        total_len: usize,
+    ) -> OperationOutcome<ObjectMetadata> {
+        if let Some(outcome) = self.maybe_fail(ObjectOperation::Put) {
+            return outcome;
+        }
+        if let Err(error) = self.limits.classify_object(total_len as u64) {
+            return OperationOutcome::failure(ObjectOperation::Put, error);
+        }
+        let mut body = Vec::with_capacity(total_len);
+        let mut total = 0u64;
+        for chunk in chunks {
+            if let Err(error) = self.limits.classify_chunk(chunk.len()) {
+                return OperationOutcome::failure(ObjectOperation::Put, error);
+            }
+            total = total.saturating_add(chunk.len() as u64);
+            if let Err(error) = self.limits.classify_object(total) {
+                return OperationOutcome::failure(ObjectOperation::Put, error);
+            }
+            body.extend_from_slice(&chunk);
+        }
+        debug_assert_eq!(body.len(), total_len);
+        self.record_and_store_body(key, content_type.into(), Bytes::from(body))
+    }
+
+    fn record_and_store_body(
+        &mut self,
+        key: ObjectKey,
+        content_type: String,
+        body: Bytes,
+    ) -> OperationOutcome<ObjectMetadata> {
         let object = self.object_ref(&key);
         let metadata = MetadataMap::new();
         let request = match block_upload_request(BlockUpload {
             object: &object,
-            body: ReplayBody::from_vec(body.to_vec()),
+            body: ReplayBody::from_bytes(body.clone()),
             metadata: &metadata,
             lease: None,
             conditions: None,
@@ -116,7 +154,7 @@ impl HermeticStorage {
             size_bytes: body.len() as u64,
             generation: self.generation,
             etag: format!("etag-{}", self.generation),
-            content_type: content_type.into(),
+            content_type,
             user_metadata: BTreeMap::new(),
         };
         self.objects.insert(
@@ -178,43 +216,7 @@ impl GatewayStorage for HermeticStorage {
             body.extend_from_slice(&chunk);
         }
 
-        let object = self.object_ref(&key);
-        let metadata = MetadataMap::new();
-        let request = match block_upload_request(BlockUpload {
-            object: &object,
-            body: ReplayBody::from_vec(body.clone()),
-            metadata: &metadata,
-            lease: None,
-            conditions: None,
-            if_not_exists: false,
-        }) {
-            Ok(request) => request,
-            Err(_) => {
-                return Ok(OperationOutcome::failure(
-                    ObjectOperation::Put,
-                    ObjectErrorClass::StorageNonRetriable,
-                ));
-            }
-        };
-        self.record(request);
-
-        self.generation += 1;
-        let metadata = ObjectMetadata {
-            key: key.clone(),
-            size_bytes: total,
-            generation: self.generation,
-            etag: format!("etag-{}", self.generation),
-            content_type: content_type.into(),
-            user_metadata: BTreeMap::new(),
-        };
-        self.objects.insert(
-            key,
-            StoredObject {
-                data: Bytes::from(body),
-                metadata: metadata.clone(),
-            },
-        );
-        Ok(OperationOutcome::success(ObjectOperation::Put, metadata))
+        Ok(self.record_and_store_body(key, content_type.into(), Bytes::from(body)))
     }
 
     fn get_object(&mut self, key: &ObjectKey) -> OperationOutcome<ObjectSnapshot> {

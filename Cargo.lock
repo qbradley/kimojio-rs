@@ -710,6 +710,7 @@ dependencies = [
  "kimojio-stack-steal",
  "kimojio-stack-storage",
  "kimojio-stack-tls",
+ "mimalloc",
  "openssl",
  "opentelemetry_sdk",
  "prost",
