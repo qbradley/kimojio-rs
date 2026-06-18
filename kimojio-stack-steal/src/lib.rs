@@ -608,10 +608,46 @@ impl RuntimeContext<'_> {
         self.inner.nop()
     }
 
+    /// Submits an io_uring no-op linked to a non-firing timeout and waits for
+    /// the no-op completion.
+    #[doc(hidden)]
+    pub fn nop_with_link_timeout(&self, timeout: Duration) -> Result<(), Errno> {
+        self.inner
+            .submit_no_payload_nop_with_timeout(timeout)
+            .wait(self.inner)
+    }
+
+    /// Submits an io_uring no-op and races it with a separate timeout.
+    #[doc(hidden)]
+    pub fn nop_with_select_timeout(&self, timeout: Duration) -> Result<(), Errno> {
+        let timer = self.inner.timeout(timeout);
+        let mut pending = self.inner.submit_no_payload_nop();
+        loop {
+            if let Some(result) = pending.try_wait() {
+                return result;
+            }
+            let waitables: [&dyn Waitable; 2] = [&pending, &timer];
+            let ready = self
+                .inner
+                .wait_any(&waitables, None)
+                .expect("no-payload timeout race wait failed");
+            if ready == 1 {
+                pending.cancel_and_wait(self.inner)?;
+                return Err(Errno::TIME);
+            }
+        }
+    }
+
     /// Starts an internal no-payload no-op.
     #[doc(hidden)]
     pub fn submit_no_payload_nop(&self) -> NoPayloadIo {
         self.inner.submit_no_payload_nop()
+    }
+
+    /// Starts an internal no-payload no-op with a linked kernel timeout.
+    #[doc(hidden)]
+    pub fn submit_no_payload_nop_with_timeout(&self, timeout: Duration) -> NoPayloadIo {
+        self.inner.submit_no_payload_nop_with_timeout(timeout)
     }
 
     /// Starts an internal no-payload timeout.
@@ -631,6 +667,26 @@ impl RuntimeContext<'_> {
         unsafe { self.inner.submit_raw_read(fd, buffer, len) }
     }
 
+    /// Starts an internal raw read with a linked kernel timeout.
+    ///
+    /// # Safety
+    ///
+    /// `buffer` must be valid for writes of `len` bytes until the operation
+    /// completes or is detached with equivalent ownership.
+    #[doc(hidden)]
+    pub unsafe fn submit_raw_read_with_timeout(
+        &self,
+        fd: &impl AsFd,
+        buffer: *mut u8,
+        len: usize,
+        timeout: Duration,
+    ) -> RawIo {
+        unsafe {
+            self.inner
+                .submit_raw_read_with_timeout(fd, buffer, len, timeout)
+        }
+    }
+
     /// Starts an internal raw write.
     ///
     /// # Safety
@@ -640,6 +696,26 @@ impl RuntimeContext<'_> {
     #[doc(hidden)]
     pub unsafe fn submit_raw_write(&self, fd: &impl AsFd, buffer: *const u8, len: usize) -> RawIo {
         unsafe { self.inner.submit_raw_write(fd, buffer, len) }
+    }
+
+    /// Starts an internal raw write with a linked kernel timeout.
+    ///
+    /// # Safety
+    ///
+    /// `buffer` must be valid for reads of `len` bytes until the operation
+    /// completes or is detached with equivalent ownership.
+    #[doc(hidden)]
+    pub unsafe fn submit_raw_write_with_timeout(
+        &self,
+        fd: &impl AsFd,
+        buffer: *const u8,
+        len: usize,
+        timeout: Duration,
+    ) -> RawIo {
+        unsafe {
+            self.inner
+                .submit_raw_write_with_timeout(fd, buffer, len, timeout)
+        }
     }
 
     /// Starts an internal raw socket shutdown.

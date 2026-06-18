@@ -252,7 +252,7 @@ use rustix_uring::opcode;
 use rustix_uring::{
     Probe,
     cqueue::Entry as Cqe,
-    squeue::Entry128 as Sqe,
+    squeue::{Entry128 as Sqe, Flags},
     types::{CancelBuilder, Fd, Fixed, FutexWaitV, OpenHow, Timespec},
 };
 
@@ -853,6 +853,28 @@ impl RuntimeContext<'_> {
         )
     }
 
+    /// Starts an internal no-payload no-op linked to a timeout.
+    ///
+    /// The timeout CQE carries null user data and is reaped only for in-flight
+    /// accounting. The returned handle completes with the no-op result, or
+    /// `Err(Errno::TIME)` if the linked timeout cancels the operation first.
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn submit_no_payload_nop_with_timeout(&self, duration: Duration) -> NoPayloadIo {
+        let state = self.acquire_io_state();
+        let user_data = self.submit_io_state_with_link_timeout(
+            opcode::Nop::new().build(),
+            Rc::clone(&state),
+            duration,
+        );
+        NoPayloadIo::new(
+            Rc::downgrade(&self.core),
+            state,
+            IoCancelKind::Async(user_data),
+            NoPayloadResultKind::Unit,
+        )
+    }
+
     /// Submits an unstable internal no-payload io_uring timeout without waiting.
     ///
     /// The returned handle follows the same timeout result, cancellation, and
@@ -892,6 +914,29 @@ impl RuntimeContext<'_> {
         self.submit_raw_io(entry, true, true)
     }
 
+    /// Submits an internal read linked to a timeout.
+    ///
+    /// # Safety
+    ///
+    /// `buffer` must satisfy the same requirements as
+    /// [`RuntimeContext::submit_raw_read`].
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub unsafe fn submit_raw_read_with_timeout(
+        &self,
+        fd: &impl AsFd,
+        buffer: *mut u8,
+        len: usize,
+        timeout: Duration,
+    ) -> RawIo {
+        let len = u32::try_from(len).expect("io_uring read length exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::Read::new(Fd(fd), buffer, len)
+            .offset(u64::MAX)
+            .build();
+        self.submit_raw_io_with_link_timeout(entry, true, true, timeout)
+    }
+
     /// Submits an unstable internal write operation without waiting.
     ///
     /// # Safety
@@ -913,6 +958,29 @@ impl RuntimeContext<'_> {
             .offset(u64::MAX)
             .build();
         self.submit_raw_io(entry, true, true)
+    }
+
+    /// Submits an internal write linked to a timeout.
+    ///
+    /// # Safety
+    ///
+    /// `buffer` must satisfy the same requirements as
+    /// [`RuntimeContext::submit_raw_write`].
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub unsafe fn submit_raw_write_with_timeout(
+        &self,
+        fd: &impl AsFd,
+        buffer: *const u8,
+        len: usize,
+        timeout: Duration,
+    ) -> RawIo {
+        let len = u32::try_from(len).expect("io_uring write length exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::Write::new(Fd(fd), buffer, len)
+            .offset(u64::MAX)
+            .build();
+        self.submit_raw_io_with_link_timeout(entry, true, true, timeout)
     }
 
     /// Submits an unstable internal shutdown operation without waiting.
@@ -949,6 +1017,24 @@ impl RuntimeContext<'_> {
     ) -> RawIo {
         let state = self.acquire_io_state();
         let user_data = self.submit_io_state(entry, Rc::clone(&state));
+        RawIo::new(
+            Rc::downgrade(&self.core),
+            state,
+            IoCancelKind::Async(user_data),
+            requires_payload_on_detach,
+            cancelable,
+        )
+    }
+
+    fn submit_raw_io_with_link_timeout(
+        &self,
+        entry: impl Into<Sqe>,
+        requires_payload_on_detach: bool,
+        cancelable: bool,
+        timeout: Duration,
+    ) -> RawIo {
+        let state = self.acquire_io_state();
+        let user_data = self.submit_io_state_with_link_timeout(entry, Rc::clone(&state), timeout);
         RawIo::new(
             Rc::downgrade(&self.core),
             state,
@@ -2255,6 +2341,17 @@ impl RuntimeContext<'_> {
 
     fn submit_io_state(&self, entry: impl Into<Sqe>, state: Rc<IoState>) -> io_uring_user_data {
         self.core.borrow_mut().submit_io_state(entry, state)
+    }
+
+    fn submit_io_state_with_link_timeout(
+        &self,
+        entry: impl Into<Sqe>,
+        state: Rc<IoState>,
+        duration: Duration,
+    ) -> io_uring_user_data {
+        self.core
+            .borrow_mut()
+            .submit_io_state_with_link_timeout(entry, state, duration)
     }
 
     pub(crate) fn submit_timeout(&self, duration: Duration) -> TimeoutState {
@@ -3872,7 +3969,7 @@ impl IoState {
 
     fn complete(&self, result: KernelIoResult) {
         let mut inner = self.inner.borrow_mut();
-        inner.result = Some(result);
+        inner.result = Some(inner.map_completion_result(result));
         inner.registered_resources.complete_all();
         inner.waiters.wake_all();
         inner.stackful_waiters.wake_all();
@@ -3913,6 +4010,13 @@ impl IoState {
             .into()
     }
 
+    fn link_timeout_entry(&self) -> Sqe {
+        let inner = self.inner.borrow();
+        opcode::LinkTimeout::new(inner.timeout.as_ref().expect("timeout missing timespec"))
+            .build()
+            .into()
+    }
+
     fn timeout_update_entry(&self, user_data: io_uring_user_data) -> Sqe {
         let inner = self.inner.borrow();
         opcode::TimeoutUpdate::new(
@@ -3944,6 +4048,10 @@ impl IoState {
         self.inner.borrow_mut().cancel_operation = true;
     }
 
+    fn mark_linked_timeout_operation(&self) {
+        self.inner.borrow_mut().linked_timeout_operation = true;
+    }
+
     fn cancel_requested(&self) -> bool {
         self.inner.borrow().cancel_requested
     }
@@ -3966,6 +4074,7 @@ struct IoStateInner {
     registered_resources: RegisteredResources,
     cancel_requested: bool,
     cancel_operation: bool,
+    linked_timeout_operation: bool,
 }
 
 impl IoStateInner {
@@ -3979,6 +4088,7 @@ impl IoStateInner {
             registered_resources: RegisteredResources::new(),
             cancel_requested: false,
             cancel_operation: false,
+            linked_timeout_operation: false,
         }
     }
 
@@ -3991,6 +4101,16 @@ impl IoStateInner {
         self.registered_resources.clear();
         self.cancel_requested = false;
         self.cancel_operation = false;
+        self.linked_timeout_operation = false;
+    }
+
+    fn map_completion_result(&self, result: KernelIoResult) -> KernelIoResult {
+        if self.linked_timeout_operation && !self.cancel_requested && result == Err(Errno::CANCELED)
+        {
+            Err(Errno::TIME)
+        } else {
+            result
+        }
     }
 }
 
@@ -5344,6 +5464,28 @@ impl Scheduler {
         user_data
     }
 
+    fn submit_io_state_with_link_timeout(
+        &mut self,
+        entry: impl Into<Sqe>,
+        state: Rc<IoState>,
+        duration: Duration,
+    ) -> io_uring_user_data {
+        assert!(
+            self.supports_opcode(opcode::LinkTimeout::CODE),
+            "io_uring link timeout opcode is not supported by this kernel"
+        );
+        let user_data = io_state_user_data(&state);
+        let _ = Rc::into_raw(Rc::clone(&state));
+        state.set_timeout(Timespec::from(duration));
+        state.mark_linked_timeout_operation();
+        let entries = [
+            entry.into().user_data(user_data).flags(Flags::IO_LINK),
+            state.link_timeout_entry(),
+        ];
+        self.submit_linked_io(&entries);
+        user_data
+    }
+
     fn submit_cancel(
         &mut self,
         state: &Rc<IoState>,
@@ -5495,6 +5637,17 @@ impl Scheduler {
         self.in_flight_io += 1;
     }
 
+    fn submit_linked_io(&mut self, entries: &[Sqe; 2]) {
+        let push_result = unsafe { self.ring.submission().push_multiple(entries) };
+        if push_result.is_err() {
+            self.submit_and_wait(0);
+            unsafe { self.ring.submission().push_multiple(entries) }
+                .expect("failed to push linked io_uring SQEs after submitting pending entries");
+        }
+
+        self.in_flight_io += entries.len();
+    }
+
     fn submit_and_wait(&self, want: usize) -> usize {
         match self.ring.submitter().submit_and_wait(want) {
             Ok(submitted) => submitted,
@@ -5527,12 +5680,14 @@ impl Scheduler {
         };
 
         for cqe in self.ring.completion() {
-            let state = cqe.user_data_ptr() as *const IoState;
-            assert!(!state.is_null(), "io_uring CQE missing user data");
             self.in_flight_io = self
                 .in_flight_io
                 .checked_sub(1)
                 .expect("io_uring in-flight count underflow");
+            let state = cqe.user_data_ptr() as *const IoState;
+            if state.is_null() {
+                continue;
+            }
             self.completed_io.push(CompletedIo {
                 state,
                 result: cqe.result(),
@@ -6666,6 +6821,45 @@ mod tests {
             cx.submit_no_payload_timeout(Duration::ZERO)
                 .wait(cx)
                 .unwrap();
+        });
+    }
+
+    #[test]
+    fn linked_timeout_nop_completes_before_timeout() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            if !cx.supports_io_uring_opcode(rustix_uring::opcode::LinkTimeout::CODE) {
+                return;
+            }
+            cx.submit_no_payload_nop_with_timeout(Duration::from_secs(1))
+                .wait(cx)
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn linked_timeout_maps_canceled_primary_to_timeout() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            if !cx.supports_io_uring_opcode(rustix_uring::opcode::LinkTimeout::CODE) {
+                return;
+            }
+            let (read_fd, write_fd) = pipe().unwrap();
+            let mut buffer = [0_u8; 1];
+            let result = unsafe {
+                cx.submit_raw_read_with_timeout(
+                    &read_fd,
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                    Duration::from_millis(1),
+                )
+            }
+            .wait(cx);
+            assert_eq!(result, Err(Errno::TIME));
+            cx.close(read_fd).unwrap();
+            cx.close(write_fd).unwrap();
         });
     }
 

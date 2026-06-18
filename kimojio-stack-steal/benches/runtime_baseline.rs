@@ -12,6 +12,11 @@ use kimojio_stack_steal::{RingMode, Runtime, RuntimeConfig, StealPolicy};
 
 const RAW_SCHEDULER_OPS_PER_ITER: u64 = 256;
 
+fn steal_supports_link_timeout() -> bool {
+    let mut runtime = Runtime::new();
+    runtime.block_on(|cx| cx.supports_io_uring_opcode(rustix_uring::opcode::LinkTimeout::CODE))
+}
+
 fn runtime_baseline(c: &mut Criterion) {
     c.bench_function("runtime/block_on_empty", |b| {
         b.iter(|| {
@@ -176,6 +181,24 @@ fn runtime_baseline(c: &mut Criterion) {
             b.iter(|| ring.sleep(cx, Duration::from_millis(0)).unwrap());
         });
     });
+
+    c.bench_function("ring/embedded_nop_select_timeout_not_fired", |b| {
+        let mut runtime = Runtime::new();
+        runtime.block_on(|cx| {
+            cx.nop_with_select_timeout(Duration::from_secs(1)).unwrap();
+            b.iter(|| cx.nop_with_select_timeout(Duration::from_secs(1)).unwrap());
+        });
+    });
+
+    if steal_supports_link_timeout() {
+        c.bench_function("ring/embedded_nop_link_timeout_not_fired", |b| {
+            let mut runtime = Runtime::new();
+            runtime.block_on(|cx| {
+                cx.nop_with_link_timeout(Duration::from_secs(1)).unwrap();
+                b.iter(|| cx.nop_with_link_timeout(Duration::from_secs(1)).unwrap());
+            });
+        });
+    }
 
     c.bench_function("ring/shared_worker_owned_nop", |b| {
         let mut runtime = Runtime::with_config(RuntimeConfig {

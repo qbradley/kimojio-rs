@@ -27,6 +27,11 @@ fn run_stackful_registered(
     runtime.block_on(f)
 }
 
+fn stack_supports_link_timeout() -> bool {
+    let mut runtime = Runtime::new();
+    runtime.block_on(|cx| cx.supports_io_uring_opcode(rustix_uring::opcode::LinkTimeout::CODE))
+}
+
 fn bench_runtime(c: &mut Criterion) {
     c.bench_function("runtime/block_on_empty", |b| {
         b.iter(|| {
@@ -349,6 +354,48 @@ fn bench_io(c: &mut Criterion) {
             })
         });
     });
+
+    c.bench_function("io_uring/no_payload_nop_select_timeout_not_fired", |b| {
+        b.iter_custom(|iters| {
+            run_stackful(|cx| {
+                let pending = cx.submit_no_payload_nop();
+                let timer = cx.submit_no_payload_timeout(Duration::from_secs(1));
+                let waitables: [&dyn Waitable; 2] = [&pending, &timer];
+                assert_eq!(cx.wait_any(&waitables, None).unwrap(), 0);
+                pending.wait(cx).unwrap();
+
+                let start = Instant::now();
+                for _ in 0..iters {
+                    let pending = cx.submit_no_payload_nop();
+                    let timer = cx.submit_no_payload_timeout(Duration::from_secs(1));
+                    let waitables: [&dyn Waitable; 2] = [&pending, &timer];
+                    assert_eq!(cx.wait_any(&waitables, None).unwrap(), 0);
+                    pending.wait(cx).unwrap();
+                }
+                start.elapsed()
+            })
+        });
+    });
+
+    if stack_supports_link_timeout() {
+        c.bench_function("io_uring/no_payload_nop_link_timeout_not_fired", |b| {
+            b.iter_custom(|iters| {
+                run_stackful(|cx| {
+                    cx.submit_no_payload_nop_with_timeout(Duration::from_secs(1))
+                        .wait(cx)
+                        .unwrap();
+
+                    let start = Instant::now();
+                    for _ in 0..iters {
+                        cx.submit_no_payload_nop_with_timeout(Duration::from_secs(1))
+                            .wait(cx)
+                            .unwrap();
+                    }
+                    start.elapsed()
+                })
+            });
+        });
+    }
 
     c.bench_function("io_uring/pipe_write_read", |b| {
         b.iter_custom(|iters| {
