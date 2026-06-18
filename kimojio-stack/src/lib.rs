@@ -179,11 +179,14 @@
 //! # Allocation model
 //!
 //! Setup paths allocate: the runtime owns scheduler containers and io_uring,
-//! initial coroutine spawns allocate guarded stacks and join state, and channels
-//! own their shared state. Completed coroutine stacks are retained in a bounded
-//! runtime-local cache so hot spawn paths can reuse guard-protected stacks
-//! without paying `mmap`, `mprotect`, and `munmap` per short-lived coroutine.
+//! initial coroutine spawns allocate guarded stacks and join state, scopes own
+//! their structured-concurrency state, and channels own their shared state.
+//! Completed coroutine stacks and completed scope states are retained in bounded
+//! runtime-local caches so hot spawn/scope paths can reuse guarded stacks and
+//! scope bookkeeping without paying setup allocation per short-lived operation.
 //! These allocations are expected and bounded by runtime structure.
+//! [`RuntimeContext::pool_diagnostics`] exposes a read-only snapshot of retained
+//! scheduler pool capacity for observability; it is not allocator accounting.
 //!
 //! Hot I/O paths are designed to avoid Rust heap allocation after warmup. The
 //! scheduler reuses I/O operation state through an internal pool, reuses
@@ -285,6 +288,8 @@ pub use watch::{WatchReceiver, WatchSender};
 const DEFAULT_STACK_SIZE: usize = 64 * 1024;
 const DEFAULT_RING_ENTRIES: u32 = 128;
 const DEFAULT_STACK_CACHE_CAPACITY: usize = 1024;
+const DEFAULT_SCOPE_STATE_CACHE_CAPACITY: usize = 1024;
+const DEFAULT_SCOPE_STATE_COLLECTION_CACHE_CAPACITY: usize = 32;
 const WAITER_COMPACT_THRESHOLD: usize = 32;
 
 #[cfg(test)]
@@ -552,6 +557,51 @@ pub struct IoCounters {
     pub original_completions_after_cancel: usize,
 }
 
+/// Snapshot of runtime-owned scheduler pool state.
+///
+/// This diagnostic surface reports retained capacity owned by the active
+/// [`Runtime::block_on`] invocation. It is intended for observability and tests,
+/// not as exact allocator accounting. Fields may grow as this alpha runtime adds
+/// more internal pools.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct PoolDiagnostics {
+    /// Number of task slots retained by the scheduler.
+    pub task_slots: usize,
+    /// Capacity of the task-slot vector.
+    pub task_slot_capacity: usize,
+    /// Number of reusable task slots currently on the free list.
+    pub free_task_slots: usize,
+    /// Number of waiter token slots retained by the scheduler.
+    pub wait_token_slots: usize,
+    /// Capacity of the waiter-token vector.
+    pub wait_token_slot_capacity: usize,
+    /// Number of reusable waiter token slots currently on the free list.
+    pub free_wait_token_slots: usize,
+    /// Number of completed coroutine stacks currently cached.
+    pub cached_stacks: usize,
+    /// Maximum completed coroutine stacks retained by this runtime.
+    pub max_cached_stacks: usize,
+    /// Number of completed scope states currently cached.
+    pub cached_scope_states: usize,
+    /// Maximum completed scope states retained by this runtime.
+    pub max_cached_scope_states: usize,
+    /// Number of completed I/O states currently cached.
+    pub cached_io_states: usize,
+    /// Capacity of the I/O state pool.
+    pub io_state_pool_capacity: usize,
+    /// Number of completion scratch records currently held.
+    pub completion_scratch_len: usize,
+    /// Capacity of the reusable completion scratch storage.
+    pub completion_scratch_capacity: usize,
+    /// Number of detached I/O operations awaiting completion/reap.
+    pub detached_pending_io: usize,
+    /// Registered fixed-file slots currently free for reuse.
+    pub registered_file_free_slots: usize,
+    /// Registered fixed-buffer slots currently free for reuse.
+    pub registered_buffer_free_slots: usize,
+}
+
 /// Controls whether the scheduler busy-polls for pending I/O completions.
 ///
 /// Busy polling avoids putting the OS thread to sleep while an io_uring
@@ -709,28 +759,34 @@ impl RuntimeContext<'_> {
     where
         F: for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> T,
     {
-        let state = Rc::new(ScopeState::default());
+        let state = self.core.borrow_mut().acquire_scope_state();
         self.active_scopes.borrow_mut().push(Rc::clone(&state));
-        let scope = Scope {
-            core: Rc::clone(&self.core),
-            state: Rc::clone(&state),
-            stack_size: self.stack_size,
-            _scope: PhantomData,
-            _env: PhantomData,
+        let result = {
+            let scope = Scope {
+                core: Rc::clone(&self.core),
+                state: Rc::clone(&state),
+                stack_size: self.stack_size,
+                _scope: PhantomData,
+                _env: PhantomData,
+            };
+            let result = panic::catch_unwind(AssertUnwindSafe(|| f(&scope)));
+            self.wait_for_scope(&state);
+            result
         };
 
-        let result = panic::catch_unwind(AssertUnwindSafe(|| f(&scope)));
-        self.wait_for_scope(&state);
         let popped = self
             .active_scopes
             .borrow_mut()
             .pop()
             .expect("active scope stack underflow");
         debug_assert!(Rc::ptr_eq(&popped, &state));
+        drop(popped);
+        let child_panic_payload = state.take_panic_payload();
+        self.core.borrow_mut().recycle_scope_state(state);
 
         match result {
             Ok(output) => {
-                if let Some(payload) = state.take_panic_payload() {
+                if let Some(payload) = child_panic_payload {
                     panic::resume_unwind(payload);
                 }
                 output
@@ -2048,6 +2104,11 @@ impl RuntimeContext<'_> {
     /// Returns a snapshot of runtime I/O lifecycle counters.
     pub fn io_counters(&self) -> IoCounters {
         self.core.borrow().io_counters()
+    }
+
+    /// Returns a read-only snapshot of runtime-owned scheduler pool state.
+    pub fn pool_diagnostics(&self) -> PoolDiagnostics {
+        self.core.borrow().pool_diagnostics()
     }
 
     /// Attempts to cancel a pending [`IoResult`] without consuming its handle.
@@ -4288,6 +4349,20 @@ impl ScopeState {
         }
     }
 
+    fn reset_for_reuse(&self) {
+        let mut inner = self.inner.borrow_mut();
+        debug_assert_eq!(inner.remaining, 0, "recycling active scope state");
+        inner.waiters.clear();
+        inner.panic_payloads.clear();
+        if inner.panic_payloads.capacity() > DEFAULT_SCOPE_STATE_COLLECTION_CACHE_CAPACITY {
+            inner.panic_payloads.shrink_to(0);
+        }
+        inner.task_ids.clear();
+        if inner.task_ids.capacity() > DEFAULT_SCOPE_STATE_COLLECTION_CACHE_CAPACITY {
+            inner.task_ids.shrink_to(0);
+        }
+    }
+
     fn remove_panic_payload(&self, id: TaskKey, panic_payload: &Rc<RefCell<Option<PanicPayload>>>) {
         let mut inner = self.inner.borrow_mut();
         if let Some(removed) = inner.panic_payloads.remove(&id) {
@@ -5058,6 +5133,7 @@ struct Scheduler {
     registered_file_free: Vec<u32>,
     registered_buffer_free: Vec<u16>,
     stack_pool: StackPool,
+    scope_state_pool: Vec<Rc<ScopeState>>,
     io_state_pool: Vec<Rc<IoState>>,
     completed_io: Vec<CompletedIo>,
     detached_io: Vec<DetachedIo>,
@@ -5105,6 +5181,7 @@ impl Scheduler {
             registered_file_free: (0..config.registered_file_slots).rev().collect(),
             registered_buffer_free: (0..config.registered_buffer_slots).rev().collect(),
             stack_pool: StackPool::new(config.max_cached_stacks),
+            scope_state_pool: Vec::with_capacity(DEFAULT_SCOPE_STATE_CACHE_CAPACITY),
             io_state_pool: Vec::with_capacity(config.ring_entries as usize),
             completed_io: Vec::with_capacity(config.ring_entries as usize),
             detached_io: Vec::new(),
@@ -5142,6 +5219,21 @@ impl Scheduler {
         TaskKey {
             slot,
             generation: self.task_generations[slot],
+        }
+    }
+
+    fn acquire_scope_state(&mut self) -> Rc<ScopeState> {
+        self.scope_state_pool
+            .pop()
+            .unwrap_or_else(|| Rc::new(ScopeState::default()))
+    }
+
+    fn recycle_scope_state(&mut self, state: Rc<ScopeState>) {
+        if Rc::strong_count(&state) == 1
+            && self.scope_state_pool.len() < DEFAULT_SCOPE_STATE_CACHE_CAPACITY
+        {
+            state.reset_for_reuse();
+            self.scope_state_pool.push(state);
         }
     }
 
@@ -5438,6 +5530,28 @@ impl Scheduler {
         IoCounters {
             detached_pending: self.detached_io.len(),
             ..self.io_counters
+        }
+    }
+
+    fn pool_diagnostics(&self) -> PoolDiagnostics {
+        PoolDiagnostics {
+            task_slots: self.tasks.len(),
+            task_slot_capacity: self.tasks.capacity(),
+            free_task_slots: self.free_tasks.len(),
+            wait_token_slots: self.wait_tokens.len(),
+            wait_token_slot_capacity: self.wait_tokens.capacity(),
+            free_wait_token_slots: self.free_wait_tokens.len(),
+            cached_stacks: self.stack_pool.stacks.len(),
+            max_cached_stacks: self.stack_pool.capacity,
+            cached_scope_states: self.scope_state_pool.len(),
+            max_cached_scope_states: DEFAULT_SCOPE_STATE_CACHE_CAPACITY,
+            cached_io_states: self.io_state_pool.len(),
+            io_state_pool_capacity: self.io_state_pool.capacity(),
+            completion_scratch_len: self.completed_io.len(),
+            completion_scratch_capacity: self.completed_io.capacity(),
+            detached_pending_io: self.detached_io.len(),
+            registered_file_free_slots: self.registered_file_free.len(),
+            registered_buffer_free_slots: self.registered_buffer_free.len(),
         }
     }
 
@@ -7024,6 +7138,107 @@ mod tests {
     }
 
     #[test]
+    fn completed_scope_states_are_reused_after_scope_churn() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            assert_eq!(cx.core.borrow().scope_state_pool.len(), 0);
+            for _ in 0..64 {
+                cx.scope(|_| ());
+            }
+            assert_eq!(cx.core.borrow().scope_state_pool.len(), 1);
+        });
+    }
+
+    #[test]
+    fn pool_diagnostics_reports_retained_scheduler_pools() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            max_cached_stacks: 1,
+            registered_file_slots: 2,
+            registered_buffer_slots: 3,
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            let initial = cx.pool_diagnostics();
+            assert_eq!(initial.cached_scope_states, 0);
+            assert_eq!(
+                initial.max_cached_scope_states,
+                super::DEFAULT_SCOPE_STATE_CACHE_CAPACITY
+            );
+            assert_eq!(initial.cached_stacks, 0);
+            assert_eq!(initial.max_cached_stacks, 1);
+            assert_eq!(initial.registered_file_free_slots, 2);
+            assert_eq!(initial.registered_buffer_free_slots, 3);
+
+            cx.scope(|_| ());
+            let after_scope = cx.pool_diagnostics();
+            assert_eq!(after_scope.cached_scope_states, 1);
+
+            cx.scope(|scope| {
+                let worker = scope.spawn(|_| 1);
+                assert_eq!(worker.join(cx), 1);
+            });
+
+            let after_spawn = cx.pool_diagnostics();
+            assert_eq!(after_spawn.task_slots, 1);
+            assert_eq!(after_spawn.free_task_slots, 1);
+            assert_eq!(after_spawn.cached_stacks, 1);
+            assert_eq!(after_spawn.max_cached_stacks, 1);
+            assert_eq!(after_spawn.cached_scope_states, 1);
+            assert!(after_spawn.task_slot_capacity >= after_spawn.task_slots);
+            assert!(after_spawn.wait_token_slot_capacity >= after_spawn.wait_token_slots);
+            assert!(after_spawn.io_state_pool_capacity >= after_spawn.cached_io_states);
+            assert!(after_spawn.completion_scratch_capacity >= after_spawn.completion_scratch_len);
+        });
+    }
+
+    #[test]
+    fn pool_diagnostics_does_not_mutate_io_counters() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let before = cx.io_counters();
+            let diagnostics = cx.pool_diagnostics();
+            let after = cx.io_counters();
+
+            assert_eq!(before, after);
+            assert_eq!(diagnostics.detached_pending_io, before.detached_pending);
+        });
+    }
+
+    #[test]
+    fn recycled_scope_states_do_not_keep_large_tracking_maps() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let mut handles = Vec::new();
+                for _ in 0..128 {
+                    handles.push(scope.spawn(|_| ()));
+                }
+                for handle in handles {
+                    handle.join(cx);
+                }
+            });
+
+            let scheduler = cx.core.borrow();
+            let state = scheduler
+                .scope_state_pool
+                .last()
+                .expect("scope state should be recycled");
+            let inner = state.inner.borrow();
+            assert!(
+                inner.panic_payloads.capacity()
+                    <= super::DEFAULT_SCOPE_STATE_COLLECTION_CACHE_CAPACITY
+            );
+            assert!(
+                inner.task_ids.capacity() <= super::DEFAULT_SCOPE_STATE_COLLECTION_CACHE_CAPACITY
+            );
+        });
+    }
+
+    #[test]
     fn completed_coroutine_stacks_are_reused_after_spawn_churn() {
         let mut runtime = Runtime::with_config(RuntimeConfig {
             max_cached_stacks: 1,
@@ -7431,6 +7646,25 @@ mod tests {
         let payload = result.expect_err("unjoined task panic should propagate through scope");
         let message = payload.downcast_ref::<&str>().copied();
         assert_eq!(message, Some("unjoined child panic"));
+    }
+
+    #[test]
+    fn unjoined_child_can_use_outer_scope_for_nested_spawn_after_scope_body_returns() {
+        let mut runtime = Runtime::new();
+
+        let output = runtime.block_on(|cx| {
+            let mut nested_output = 0;
+            cx.scope(|scope| {
+                scope.spawn(|cx| {
+                    cx.yield_now();
+                    let nested = scope.spawn(|_| 7);
+                    nested_output = nested.join(cx);
+                });
+            });
+            nested_output
+        });
+
+        assert_eq!(output, 7);
     }
 
     #[test]

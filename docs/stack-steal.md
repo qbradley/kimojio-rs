@@ -62,6 +62,16 @@ operations locally; multi-worker runtimes assign each shared ring to a real owne
 worker and use bounded per-ring queues, bounded submitted-operation tracking,
 deduplicated pending worker commands, and worker wakeups for submission and
 completion routing.
+Successful shared synchronous read/write calls also reuse a tiny
+`RuntimeContext`-owned payload cache after warmup: one read buffer and one write
+buffer per context, exact-size only, up to 64 KiB capacity each. This removes the
+large per-call `Vec` payload allocation from repeated same-size sync operations
+without changing shared async operation ownership; `Arc`/queued-operation state
+for cross-worker async routing remains a visible shared-ring cost.
+Worker command queues also retain their configured `max_shared_ring_queue_len`
+capacity across drain cycles using worker-local scratch storage. This avoids
+regrowing the runtime-owned command queue after warmup without changing queue
+bounds or adding a new configuration knob.
 
 The runtime also implements the shared `kimojio-stack::runtime_api` socket I/O
 contract used by the runtime-agnostic HTTP/1.1+TLS slice. Worker code routes
@@ -82,6 +92,11 @@ continuations do not migrate between workers.
 The worker pool uses crossbeam work-stealing deques plus a global injector.
 Worker-local schedulers reuse completed guarded stacks through `kimojio-stack`
 so hot local spawns avoid per-task stack `mmap`/`mprotect`/`munmap`.
+Use `Runtime::metrics()` after `block_on` for completed-run scheduler and
+stealing counters. Use `RuntimeContext::pool_diagnostics()` during `block_on`
+when code needs a read-only snapshot of embedded stack scheduler pools and the
+current context's bounded shared-sync payload cache; context-local cache values
+are not aggregated into `Runtime::metrics()`.
 
 Benchmarks for local scheduling, raw scheduler queue movement, full stealable
 handoff, rings, metrics, and channels are available with:
@@ -97,7 +112,8 @@ allocation, task allocation, joins, or OS wakeups. Use the
 `scheduler/spawn_stealable_*` benchmarks for full runtime handoff costs.
 Ring benchmarks separate `ring/owned_worker_local_*` from
 `ring/shared_worker_owned_*` so worker-local io_uring costs are not conflated
-with shared-ring routing and synchronization costs.
+with shared-ring routing, retained worker command-queue capacity, and
+synchronization costs.
 
 Runtime-agnostic downstream benchmark coverage lives in the downstream crates and
 uses explicit labels:

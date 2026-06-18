@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 use criterion::{Criterion, criterion_group, criterion_main};
 use kimojio_stack::channel::cross_thread;
 use kimojio_stack_steal::bench_support::RawSchedulerQueues;
-use kimojio_stack_steal::{RingMode, Runtime, RuntimeConfig, StealPolicy};
+use kimojio_stack_steal::{RingFd, RingMode, Runtime, RuntimeConfig, StealPolicy};
+use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
+use rustix::pipe::pipe;
 
 const RAW_SCHEDULER_OPS_PER_ITER: u64 = 256;
 
@@ -55,6 +57,16 @@ fn runtime_baseline(c: &mut Criterion) {
                     });
                     handle.join(cx)
                 }));
+            });
+        });
+    });
+
+    c.bench_function("scheduler/scope_empty", |b| {
+        let mut runtime = Runtime::new();
+        runtime.block_on(|cx| {
+            b.iter(|| {
+                cx.scope(|_| black_box(()));
+                black_box(());
             });
         });
     });
@@ -230,6 +242,85 @@ fn runtime_baseline(c: &mut Criterion) {
             });
         });
     });
+
+    c.bench_function("ring/shared_worker_owned_pipe_write_read", |b| {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let (read_fd, write_fd) = pipe().unwrap();
+            let read_fd = RingFd::from_owned(read_fd);
+            let write_fd = RingFd::from_owned(write_fd);
+            let mut read_buffer = [0_u8; 1];
+            cx.scope(|scope| {
+                let bench = scope.spawn(|cx| {
+                    ring.write(cx, &write_fd, &[1]).unwrap();
+                    ring.read(cx, &read_fd, &mut read_buffer).unwrap();
+                    b.iter(|| {
+                        ring.write(cx, &write_fd, &[1]).unwrap();
+                        ring.read(cx, &read_fd, &mut read_buffer).unwrap();
+                        black_box(read_buffer[0]);
+                    });
+                });
+                bench.join(cx);
+            });
+        });
+    });
+
+    for (label, payload_size) in [("8k", 8 * 1024_usize), ("64k", 64 * 1024_usize)] {
+        let name = format!("ring/shared_worker_owned_socketpair_write_read_{label}");
+        c.bench_function(&name, |b| {
+            let mut runtime = Runtime::with_config(RuntimeConfig {
+                workers: NonZeroUsize::new(2).unwrap(),
+                steal_policy: StealPolicy::steal_one(),
+                ..RuntimeConfig::default()
+            });
+            runtime.block_on(|cx| {
+                let ring = cx.create_shared_ring();
+                let (left_fd, right_fd) = socketpair(
+                    AddressFamily::UNIX,
+                    SocketType::STREAM,
+                    SocketFlags::empty(),
+                    None,
+                )
+                .unwrap();
+                let left_fd = RingFd::from_owned(left_fd);
+                let right_fd = RingFd::from_owned(right_fd);
+                let write_buffer = vec![1_u8; payload_size];
+                let mut read_buffer = vec![0_u8; payload_size];
+                cx.scope(|scope| {
+                    let bench = scope.spawn(|cx| {
+                        assert_eq!(
+                            ring.write(cx, &left_fd, write_buffer.as_slice()).unwrap(),
+                            payload_size
+                        );
+                        assert_eq!(
+                            ring.read(cx, &right_fd, read_buffer.as_mut_slice())
+                                .unwrap(),
+                            payload_size
+                        );
+                        b.iter(|| {
+                            assert_eq!(
+                                ring.write(cx, &left_fd, black_box(write_buffer.as_slice()))
+                                    .unwrap(),
+                                payload_size
+                            );
+                            assert_eq!(
+                                ring.read(cx, &right_fd, read_buffer.as_mut_slice())
+                                    .unwrap(),
+                                payload_size
+                            );
+                            black_box(read_buffer[0]);
+                        });
+                    });
+                    bench.join(cx);
+                });
+            });
+        });
+    }
 
     c.bench_function("metrics/steal_counters_snapshot", |b| {
         let mut runtime = Runtime::with_config(RuntimeConfig {

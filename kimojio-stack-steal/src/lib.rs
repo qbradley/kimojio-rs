@@ -76,6 +76,17 @@
 //! behavior is selected explicitly with [`StealPolicy`], and [`Runtime::metrics`]
 //! reports queue, steal, completion, and utilization data so applications can
 //! measure policy effects instead of relying on hidden scheduler heuristics.
+//! Shared synchronous ring read/write uses a fixed internal per-context payload
+//! cache for successful same-size operations: one read buffer and one write
+//! buffer up to 64 KiB each. Shared async operation state and cross-worker
+//! ownership remain explicit costs.
+//! Worker shared-ring command queues retain their configured capacity across
+//! drain cycles, bounded by [`RuntimeConfig::max_shared_ring_queue_len`].
+//! [`RuntimeContext::pool_diagnostics`] exposes the current context's embedded
+//! stack scheduler pools and shared synchronous payload cache as a read-only
+//! snapshot. Context-local cache values are not aggregated into
+//! [`Runtime::metrics`], which reports completed-run scheduler and stealing
+//! counters.
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -117,6 +128,8 @@ pub mod runtime_api;
 const NO_WORKER: usize = usize::MAX;
 const DEFAULT_QUEUE_CAPACITY: usize = 1024;
 const DEFAULT_SHARED_RING_QUEUE_CAPACITY: usize = 1024;
+const SHARED_SYNC_BUFFER_CACHE_ENTRIES: usize = 1;
+const SHARED_SYNC_BUFFER_MAX_CAPACITY: usize = 64 * 1024;
 static NEXT_RUNTIME_ID: AtomicUsize = AtomicUsize::new(1);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -203,6 +216,72 @@ impl Default for RuntimeConfig {
             max_global_queue_len: DEFAULT_QUEUE_CAPACITY,
             max_shared_ring_queue_len: DEFAULT_SHARED_RING_QUEUE_CAPACITY,
         }
+    }
+}
+
+#[derive(Default)]
+struct SharedSyncBufferCache {
+    read: Vec<Vec<u8>>,
+    write: Vec<Vec<u8>>,
+    #[cfg(test)]
+    read_reuses: usize,
+    #[cfg(test)]
+    write_reuses: usize,
+}
+
+impl SharedSyncBufferCache {
+    fn acquire_read(&mut self, len: usize) -> Vec<u8> {
+        if let Some(index) = self.read.iter().position(|buffer| buffer.len() == len) {
+            #[cfg(test)]
+            {
+                self.read_reuses += 1;
+            }
+            self.read.swap_remove(index)
+        } else {
+            vec![0_u8; len]
+        }
+    }
+
+    fn acquire_write(&mut self, buf: &[u8]) -> Vec<u8> {
+        if let Some(index) = self
+            .write
+            .iter()
+            .position(|buffer| buffer.len() == buf.len())
+        {
+            #[cfg(test)]
+            {
+                self.write_reuses += 1;
+            }
+            let mut buffer = self.write.swap_remove(index);
+            buffer.copy_from_slice(buf);
+            buffer
+        } else {
+            buf.to_vec()
+        }
+    }
+
+    fn recycle_read(&mut self, buffer: Vec<u8>) {
+        if buffer.capacity() <= SHARED_SYNC_BUFFER_MAX_CAPACITY
+            && self.read.len() < SHARED_SYNC_BUFFER_CACHE_ENTRIES
+        {
+            self.read.push(buffer);
+        }
+    }
+
+    fn recycle_write(&mut self, buffer: Vec<u8>) {
+        if buffer.capacity() <= SHARED_SYNC_BUFFER_MAX_CAPACITY
+            && self.write.len() < SHARED_SYNC_BUFFER_CACHE_ENTRIES
+        {
+            self.write.push(buffer);
+        }
+    }
+
+    fn read_capacity(&self) -> usize {
+        self.read.iter().map(Vec::capacity).sum()
+    }
+
+    fn write_capacity(&self) -> usize {
+        self.write.iter().map(Vec::capacity).sum()
     }
 }
 
@@ -293,6 +372,31 @@ pub struct RuntimeMetrics {
     pub last_steal_victim: Option<WorkerId>,
     /// Per-worker completed worker-pool job counts for utilization visibility.
     pub worker_completed_tasks: Vec<usize>,
+}
+
+/// Snapshot of runtime-context-owned pool state.
+///
+/// This diagnostic surface combines the embedded stack runtime's scheduler pool
+/// snapshot with the current context's shared synchronous ring payload cache.
+/// It is read-only observability, not allocator accounting. Fields may grow as
+/// this alpha runtime adds more internal pools.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct PoolDiagnostics {
+    /// Embedded stack runtime scheduler-pool diagnostics.
+    pub stack: kimojio_stack::PoolDiagnostics,
+    /// Number of cached shared synchronous read buffers in this context.
+    pub shared_sync_read_buffers: usize,
+    /// Total retained capacity of cached shared synchronous read buffers.
+    pub shared_sync_read_capacity: usize,
+    /// Number of cached shared synchronous write buffers in this context.
+    pub shared_sync_write_buffers: usize,
+    /// Total retained capacity of cached shared synchronous write buffers.
+    pub shared_sync_write_capacity: usize,
+    /// Maximum cached buffers retained per read/write direction in one context.
+    pub max_shared_sync_buffers_per_direction: usize,
+    /// Maximum retained capacity for each shared synchronous cached buffer.
+    pub max_shared_sync_buffer_capacity: usize,
 }
 
 impl Default for RuntimeMetrics {
@@ -389,6 +493,7 @@ impl Runtime {
                 local_shared_operations: Some(Rc::clone(&local_shared_operations)),
                 shared_ring_queue_capacity: self.config.max_shared_ring_queue_len,
                 socket_ring: RefCell::new(None),
+                shared_sync_buffers: RefCell::new(SharedSyncBufferCache::default()),
             };
             let output = panic::catch_unwind(AssertUnwindSafe(|| main(&cx)));
             local_shared_operations.close_all();
@@ -423,6 +528,7 @@ impl Runtime {
                     local_shared_operations: None,
                     shared_ring_queue_capacity: self.config.max_shared_ring_queue_len,
                     socket_ring: RefCell::new(None),
+                    shared_sync_buffers: RefCell::new(SharedSyncBufferCache::default()),
                 };
                 main(&cx)
             })
@@ -461,6 +567,7 @@ pub struct RuntimeContext<'cx> {
     local_shared_operations: Option<Rc<LocalSharedOperations>>,
     shared_ring_queue_capacity: usize,
     socket_ring: RefCell<Option<Ring>>,
+    shared_sync_buffers: RefCell<SharedSyncBufferCache>,
 }
 
 impl RuntimeContext<'_> {
@@ -601,6 +708,22 @@ impl RuntimeContext<'_> {
     pub fn create_shared_ring(&self) -> Ring {
         self.create_ring(RingMode::Shared)
             .expect("shared ring creation failed")
+    }
+
+    fn acquire_shared_sync_read_buffer(&self, len: usize) -> Vec<u8> {
+        self.shared_sync_buffers.borrow_mut().acquire_read(len)
+    }
+
+    fn recycle_shared_sync_read_buffer(&self, buffer: Vec<u8>) {
+        self.shared_sync_buffers.borrow_mut().recycle_read(buffer);
+    }
+
+    fn acquire_shared_sync_write_buffer(&self, buf: &[u8]) -> Vec<u8> {
+        self.shared_sync_buffers.borrow_mut().acquire_write(buf)
+    }
+
+    fn recycle_shared_sync_write_buffer(&self, buffer: Vec<u8>) {
+        self.shared_sync_buffers.borrow_mut().recycle_write(buffer);
     }
 
     /// Submits an io_uring no-op and waits for completion.
@@ -1229,6 +1352,21 @@ impl RuntimeContext<'_> {
         self.inner.io_counters()
     }
 
+    /// Returns a read-only snapshot of stack and context-local pool state.
+    pub fn pool_diagnostics(&self) -> PoolDiagnostics {
+        let stack = self.inner.pool_diagnostics();
+        let shared_sync_buffers = self.shared_sync_buffers.borrow();
+        PoolDiagnostics {
+            stack,
+            shared_sync_read_buffers: shared_sync_buffers.read.len(),
+            shared_sync_read_capacity: shared_sync_buffers.read_capacity(),
+            shared_sync_write_buffers: shared_sync_buffers.write.len(),
+            shared_sync_write_capacity: shared_sync_buffers.write_capacity(),
+            max_shared_sync_buffers_per_direction: SHARED_SYNC_BUFFER_CACHE_ENTRIES,
+            max_shared_sync_buffer_capacity: SHARED_SYNC_BUFFER_MAX_CAPACITY,
+        }
+    }
+
     /// Attempts to cancel a pending [`IoResult`] without consuming its handle.
     pub fn cancel_io<T, B>(&self, io: &IoResult<T, B>) -> Result<(), Errno> {
         if let Some(inner) = io.as_inner() {
@@ -1678,9 +1816,11 @@ impl Ring {
                 cx.inner.read(fd, buf).map_err(RingError::from)
             }
             RingInner::Shared(_) => {
-                let read = self.read_async(cx, fd, vec![0_u8; buf.len()])?.get(cx)?;
+                let buffer = cx.acquire_shared_sync_read_buffer(buf.len());
+                let read = self.read_async(cx, fd, buffer)?.get(cx)?;
                 let bytes = read.bytes;
                 buf[..bytes].copy_from_slice(&read.buffer[..bytes]);
+                cx.recycle_shared_sync_read_buffer(read.buffer);
                 Ok(bytes)
             }
         }
@@ -1698,10 +1838,13 @@ impl Ring {
                 ensure_owner(*runtime_id, *owner, cx)?;
                 cx.inner.write(fd, buf).map_err(RingError::from)
             }
-            RingInner::Shared(_) => self
-                .write_async(cx, fd, buf.to_vec())?
-                .get(cx)
-                .map(|output| output.bytes),
+            RingInner::Shared(_) => {
+                let buffer = cx.acquire_shared_sync_write_buffer(buf);
+                let output = self.write_async(cx, fd, buffer)?.get(cx)?;
+                let bytes = output.bytes;
+                cx.recycle_shared_sync_write_buffer(output.buffer);
+                Ok(bytes)
+            }
         }
     }
 
@@ -2636,6 +2779,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                         local_shared_operations,
                         shared_ring_queue_capacity,
                         socket_ring: RefCell::new(None),
+                        shared_sync_buffers: RefCell::new(SharedSyncBufferCache::default()),
                     };
                     f(&cx)
                 }
@@ -2746,6 +2890,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                         local_shared_operations,
                         shared_ring_queue_capacity,
                         socket_ring: RefCell::new(None),
+                        shared_sync_buffers: RefCell::new(SharedSyncBufferCache::default()),
                     };
                     f(&cx)
                 }
@@ -4527,15 +4672,20 @@ impl MultiRuntime {
         worker: WorkerId,
         root: &kimojio_stack::RuntimeContext<'_>,
         active: &mut Vec<ActiveSharedOperation>,
+        shared_command_scratch: &mut VecDeque<Arc<SharedRingCore>>,
     ) -> bool {
-        let cores = {
+        // The scratch queue is swapped with the mutex-protected worker queue so
+        // the preallocated worker capacity stays behind for future commands.
+        // It must be empty on entry and is drained before returning.
+        debug_assert!(shared_command_scratch.is_empty());
+        {
             let mut queue = self.shared_ring_queues[worker.index()]
                 .lock()
                 .expect("shared ring command queue mutex poisoned");
-            std::mem::take(&mut *queue)
-        };
+            std::mem::swap(&mut *queue, shared_command_scratch);
+        }
         let mut made_progress = false;
-        for core in cores {
+        while let Some(core) = shared_command_scratch.pop_front() {
             core.clear_driver_queued();
             while let Some(operation) = core.pop_queued() {
                 made_progress = true;
@@ -4589,6 +4739,7 @@ impl MultiRuntime {
                 active.push(active_operation);
             }
         }
+        debug_assert!(shared_command_scratch.is_empty());
         made_progress
     }
 
@@ -4596,17 +4747,22 @@ impl MultiRuntime {
         &self,
         worker: WorkerId,
         active: &mut Vec<ActiveSharedOperation>,
+        shared_command_scratch: &mut VecDeque<Arc<SharedRingCore>>,
     ) {
-        let cores = {
+        // See `drain_shared_ring_commands`: this scratch queue is empty on
+        // entry, receives queued commands by swap, then is drained before exit.
+        debug_assert!(shared_command_scratch.is_empty());
+        {
             let mut queue = self.shared_ring_queues[worker.index()]
                 .lock()
                 .expect("shared ring command queue mutex poisoned");
-            std::mem::take(&mut *queue)
-        };
-        for core in cores {
+            std::mem::swap(&mut *queue, shared_command_scratch);
+        }
+        while let Some(core) = shared_command_scratch.pop_front() {
             core.clear_driver_queued();
             core.close();
         }
+        debug_assert!(shared_command_scratch.is_empty());
         for mut operation in active.drain(..) {
             operation.state().close();
             operation.cancel();
@@ -4645,66 +4801,82 @@ impl MultiRuntime {
                 self.install_scheduler_wake(worker, root.internal_scheduler_wake());
             root.scope(|scope| {
                 let mut active_shared = Vec::new();
+                let mut shared_command_scratch =
+                    VecDeque::with_capacity(self.config.max_shared_ring_queue_len);
                 let mut idle_iterations = 0_usize;
                 loop {
                     if self.shutdown.load(Ordering::Acquire) {
-                        self.close_worker_shared_operations(worker, &mut active_shared);
+                        self.close_worker_shared_operations(
+                            worker,
+                            &mut active_shared,
+                            &mut shared_command_scratch,
+                        );
                         break;
                     }
 
                     let observed_wake = self.wake_epoch();
-                    let mut made_progress =
-                        self.drain_shared_ring_commands(worker, root, &mut active_shared);
+                    let mut made_progress = self.drain_shared_ring_commands(
+                        worker,
+                        root,
+                        &mut active_shared,
+                        &mut shared_command_scratch,
+                    );
                     made_progress |= Self::poll_active_shared_operations(root, &mut active_shared);
 
-                    let spawned =
-                        if let Some(ready) = self.take_job(worker, &local_queue, idle_iterations) {
-                            let QueuedJob {
-                                owner,
-                                job,
+                    let spawned = if let Some(ready) =
+                        self.take_job(worker, &local_queue, idle_iterations)
+                    {
+                        let QueuedJob {
+                            owner,
+                            job,
+                            active_steal_scope,
+                        } = ready.queued;
+                        self.metrics
+                            .record_execution(owner, worker, ready.stolen_from);
+                        let runtime = Arc::clone(self);
+                        scope.spawn(move |inner| {
+                            let runtime_id = runtime.runtime_id;
+                            let shared_ring_queue_capacity =
+                                runtime.config.max_shared_ring_queue_len;
+                            let cx = RuntimeContext {
+                                inner,
+                                runtime_id,
+                                worker,
+                                steal_runtime: Some(runtime),
                                 active_steal_scope,
-                            } = ready.queued;
-                            self.metrics
-                                .record_execution(owner, worker, ready.stolen_from);
-                            let runtime = Arc::clone(self);
-                            scope.spawn(move |inner| {
-                                let runtime_id = runtime.runtime_id;
-                                let shared_ring_queue_capacity =
-                                    runtime.config.max_shared_ring_queue_len;
-                                let cx = RuntimeContext {
-                                    inner,
-                                    runtime_id,
-                                    worker,
-                                    steal_runtime: Some(runtime),
-                                    active_steal_scope,
-                                    local_shared_operations: None,
-                                    shared_ring_queue_capacity,
-                                    socket_ring: RefCell::new(None),
-                                };
-                                let runtime = cx
-                                    .steal_runtime
-                                    .as_ref()
-                                    .expect("worker context missing runtime");
-                                let active_job = ActiveJobGuard { runtime };
-                                job(&cx);
-                                drop(active_job);
-                                runtime
-                                    .metrics
-                                    .completed_tasks
-                                    .fetch_add(1, Ordering::Relaxed);
-                                runtime.metrics.record_completion(worker);
-                            });
-                            true
-                        } else {
-                            false
-                        };
+                                local_shared_operations: None,
+                                shared_ring_queue_capacity,
+                                socket_ring: RefCell::new(None),
+                                shared_sync_buffers: RefCell::new(SharedSyncBufferCache::default()),
+                            };
+                            let runtime = cx
+                                .steal_runtime
+                                .as_ref()
+                                .expect("worker context missing runtime");
+                            let active_job = ActiveJobGuard { runtime };
+                            job(&cx);
+                            drop(active_job);
+                            runtime
+                                .metrics
+                                .completed_tasks
+                                .fetch_add(1, Ordering::Relaxed);
+                            runtime.metrics.record_completion(worker);
+                        });
+                        true
+                    } else {
+                        false
+                    };
                     made_progress |= spawned;
 
                     made_progress |= root.internal_scheduler_tick();
                     made_progress |= Self::poll_active_shared_operations(root, &mut active_shared);
 
                     if self.shutdown.load(Ordering::Acquire) {
-                        self.close_worker_shared_operations(worker, &mut active_shared);
+                        self.close_worker_shared_operations(
+                            worker,
+                            &mut active_shared,
+                            &mut shared_command_scratch,
+                        );
                         break;
                     }
 
@@ -5335,7 +5507,7 @@ pub mod bench_support {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::collections::HashSet;
+    use std::collections::{HashSet, VecDeque};
     use std::ffi::c_void;
     use std::num::NonZeroUsize;
     use std::os::fd::AsRawFd;
@@ -6476,6 +6648,282 @@ mod tests {
     }
 
     #[test]
+    fn shared_sync_buffers_reused_for_multi_worker_shared_ring() {
+        let (read_fd, write_fd) = pipe().unwrap();
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let shared_io = scope.spawn(move |cx| {
+                    let ring = cx.create_shared_ring();
+                    let read_fd = RingFd::from_owned(read_fd);
+                    let write_fd = RingFd::from_owned(write_fd);
+                    let mut read_buffer = [0_u8; 4];
+
+                    ring.write(cx, &write_fd, b"ping").unwrap();
+                    assert_eq!(ring.read(cx, &read_fd, &mut read_buffer).unwrap(), 4);
+                    assert_eq!(&read_buffer, b"ping");
+
+                    {
+                        let cache = cx.shared_sync_buffers.borrow();
+                        assert_eq!(cache.write.len(), 1);
+                        assert_eq!(cache.read.len(), 1);
+                        assert_eq!(cache.write_reuses, 0);
+                        assert_eq!(cache.read_reuses, 0);
+                    }
+
+                    ring.write(cx, &write_fd, b"pong").unwrap();
+                    assert_eq!(ring.read(cx, &read_fd, &mut read_buffer).unwrap(), 4);
+                    assert_eq!(&read_buffer, b"pong");
+
+                    let cache = cx.shared_sync_buffers.borrow();
+                    assert_eq!(cache.write.len(), 1);
+                    assert_eq!(cache.read.len(), 1);
+                    assert_eq!(cache.write_reuses, 1);
+                    assert_eq!(cache.read_reuses, 1);
+
+                    ring.close(cx, read_fd).unwrap();
+                    ring.close(cx, write_fd).unwrap();
+                });
+                shared_io.join(cx);
+            });
+        });
+    }
+
+    #[test]
+    fn shared_sync_buffers_reused_for_stealable_worker_shared_ring() {
+        let (read_fd, write_fd) = pipe().unwrap();
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let shared_io = scope.spawn_stealable(move |cx| {
+                    assert!(matches!(cx.execution_place(), ExecutionPlace::Worker(_)));
+                    let ring = cx.create_shared_ring();
+                    let read_fd = RingFd::from_owned(read_fd);
+                    let write_fd = RingFd::from_owned(write_fd);
+                    let mut read_buffer = [0_u8; 4];
+
+                    ring.write(cx, &write_fd, b"ping").unwrap();
+                    assert_eq!(ring.read(cx, &read_fd, &mut read_buffer).unwrap(), 4);
+                    assert_eq!(&read_buffer, b"ping");
+
+                    {
+                        let cache = cx.shared_sync_buffers.borrow();
+                        assert_eq!(cache.write.len(), 1);
+                        assert_eq!(cache.read.len(), 1);
+                        assert_eq!(cache.write_reuses, 0);
+                        assert_eq!(cache.read_reuses, 0);
+                    }
+
+                    ring.write(cx, &write_fd, b"pong").unwrap();
+                    assert_eq!(ring.read(cx, &read_fd, &mut read_buffer).unwrap(), 4);
+                    assert_eq!(&read_buffer, b"pong");
+
+                    let cache = cx.shared_sync_buffers.borrow();
+                    assert_eq!(cache.write.len(), 1);
+                    assert_eq!(cache.read.len(), 1);
+                    assert_eq!(cache.write_reuses, 1);
+                    assert_eq!(cache.read_reuses, 1);
+                    drop(cache);
+
+                    ring.close(cx, read_fd).unwrap();
+                    ring.close(cx, write_fd).unwrap();
+                });
+                shared_io.join(cx);
+            });
+        });
+    }
+
+    #[test]
+    fn shared_sync_buffers_reused_for_single_worker_shared_ring() {
+        let (read_fd, write_fd) = pipe().unwrap();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let read_fd = RingFd::from_owned(read_fd);
+            let write_fd = RingFd::from_owned(write_fd);
+            let mut read_buffer = [0_u8; 4];
+
+            ring.write(cx, &write_fd, b"ping").unwrap();
+            assert_eq!(ring.read(cx, &read_fd, &mut read_buffer).unwrap(), 4);
+            ring.write(cx, &write_fd, b"pong").unwrap();
+            assert_eq!(ring.read(cx, &read_fd, &mut read_buffer).unwrap(), 4);
+            assert_eq!(&read_buffer, b"pong");
+
+            let cache = cx.shared_sync_buffers.borrow();
+            assert_eq!(cache.write.len(), 1);
+            assert_eq!(cache.read.len(), 1);
+            assert_eq!(cache.write_reuses, 1);
+            assert_eq!(cache.read_reuses, 1);
+
+            ring.close(cx, read_fd).unwrap();
+            ring.close(cx, write_fd).unwrap();
+        });
+    }
+
+    #[test]
+    fn pool_diagnostics_reports_shared_sync_buffer_cache() {
+        let (read_fd, write_fd) = pipe().unwrap();
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let ring = cx.create_shared_ring();
+            let read_fd = RingFd::from_owned(read_fd);
+            let write_fd = RingFd::from_owned(write_fd);
+            let mut read_buffer = [0_u8; 4];
+
+            let initial = cx.pool_diagnostics();
+            assert_eq!(initial.shared_sync_read_buffers, 0);
+            assert_eq!(initial.shared_sync_write_buffers, 0);
+            assert_eq!(
+                initial.max_shared_sync_buffers_per_direction,
+                super::SHARED_SYNC_BUFFER_CACHE_ENTRIES
+            );
+            assert_eq!(
+                initial.max_shared_sync_buffer_capacity,
+                super::SHARED_SYNC_BUFFER_MAX_CAPACITY
+            );
+
+            ring.write(cx, &write_fd, b"ping").unwrap();
+            assert_eq!(ring.read(cx, &read_fd, &mut read_buffer).unwrap(), 4);
+
+            let diagnostics = cx.pool_diagnostics();
+            assert_eq!(diagnostics.shared_sync_write_buffers, 1);
+            assert_eq!(diagnostics.shared_sync_read_buffers, 1);
+            assert!(diagnostics.shared_sync_write_capacity >= 4);
+            assert!(diagnostics.shared_sync_read_capacity >= 4);
+            assert_eq!(diagnostics.stack.cached_scope_states, 0);
+
+            ring.close(cx, read_fd).unwrap();
+            ring.close(cx, write_fd).unwrap();
+        });
+    }
+
+    #[test]
+    fn pool_diagnostics_reports_oversized_shared_sync_buffers_absent() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            let mut read = Vec::with_capacity(super::SHARED_SYNC_BUFFER_MAX_CAPACITY + 1);
+            read.resize(1, 0);
+            let mut write = Vec::with_capacity(super::SHARED_SYNC_BUFFER_MAX_CAPACITY + 1);
+            write.resize(1, 0);
+
+            {
+                let mut cache = cx.shared_sync_buffers.borrow_mut();
+                cache.recycle_read(read);
+                cache.recycle_write(write);
+            }
+
+            let diagnostics = cx.pool_diagnostics();
+            assert_eq!(diagnostics.shared_sync_read_buffers, 0);
+            assert_eq!(diagnostics.shared_sync_read_capacity, 0);
+            assert_eq!(diagnostics.shared_sync_write_buffers, 0);
+            assert_eq!(diagnostics.shared_sync_write_capacity, 0);
+        });
+    }
+
+    #[test]
+    fn pool_diagnostics_preserves_runtime_metrics_semantics() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::Disabled,
+            ..RuntimeConfig::default()
+        });
+
+        let output = runtime.block_on(|cx| {
+            let _ = cx.pool_diagnostics();
+            cx.scope(|scope| {
+                let handle = scope.spawn_stealable(|_| 7);
+                handle.join(cx)
+            })
+        });
+
+        assert_eq!(output, 7);
+        let metrics = runtime.metrics();
+        assert_eq!(metrics.worker_count, 2);
+        assert_eq!(metrics.steal_policy, StealPolicy::Disabled);
+        assert_eq!(metrics.completed_tasks, 1);
+        assert_eq!(metrics.worker_completed_tasks.iter().sum::<usize>(), 1);
+    }
+
+    #[test]
+    fn shared_sync_buffer_cache_drops_oversized_buffers() {
+        let mut cache = super::SharedSyncBufferCache::default();
+
+        cache.recycle_read(vec![0_u8; super::SHARED_SYNC_BUFFER_MAX_CAPACITY + 1]);
+        cache.recycle_write(vec![0_u8; super::SHARED_SYNC_BUFFER_MAX_CAPACITY + 1]);
+        assert!(cache.read.is_empty());
+        assert!(cache.write.is_empty());
+
+        let mut read = Vec::with_capacity(super::SHARED_SYNC_BUFFER_MAX_CAPACITY + 1);
+        read.resize(1, 0);
+        let mut write = Vec::with_capacity(super::SHARED_SYNC_BUFFER_MAX_CAPACITY + 1);
+        write.resize(1, 0);
+        cache.recycle_read(read);
+        cache.recycle_write(write);
+        assert!(cache.read.is_empty());
+        assert!(cache.write.is_empty());
+    }
+
+    #[test]
+    fn shared_sync_error_does_not_return_buffer_to_cache() {
+        let (read_fd, write_fd) = pipe().unwrap();
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let shared_io = scope.spawn(move |cx| {
+                    let ring = cx.create_shared_ring();
+                    let read_fd = RingFd::from_owned(read_fd);
+                    let write_fd = RingFd::from_owned(write_fd);
+                    let mut read_buffer = [0_u8; 4];
+
+                    ring.write(cx, &write_fd, b"warm").unwrap();
+                    assert_eq!(ring.read(cx, &read_fd, &mut read_buffer).unwrap(), 4);
+                    {
+                        let cache = cx.shared_sync_buffers.borrow();
+                        assert_eq!(cache.write.len(), 1);
+                        assert_eq!(cache.read.len(), 1);
+                    }
+
+                    match &ring.inner {
+                        RingInner::Shared(shared) => shared.core.close(),
+                        RingInner::WorkerLocal { .. } => unreachable!("expected shared ring"),
+                    }
+
+                    assert_eq!(ring.write(cx, &write_fd, b"fail"), Err(RingError::Closed));
+                    assert_eq!(
+                        ring.read(cx, &read_fd, &mut read_buffer),
+                        Err(RingError::Closed)
+                    );
+
+                    let cache = cx.shared_sync_buffers.borrow();
+                    assert!(cache.write.is_empty());
+                    assert!(cache.read.is_empty());
+                    assert_eq!(cache.write_reuses, 1);
+                    assert_eq!(cache.read_reuses, 1);
+                });
+                shared_io.join(cx);
+            });
+        });
+    }
+
+    #[test]
     fn shared_ring_dropped_pending_read_retains_buffer_until_reap() {
         let (read_fd, _write_fd) = pipe().unwrap();
         let drops = Arc::new(AtomicUsize::new(0));
@@ -6809,6 +7257,96 @@ mod tests {
             runtime.submit_shared_ring(WorkerId(0), &second),
             Err(RingError::QueueFull)
         );
+    }
+
+    #[test]
+    fn shared_ring_driver_commands_retain_queue_capacity_after_drain() {
+        const QUEUE_CAPACITY: usize = 4;
+
+        let worker = CrossbeamWorker::new_fifo();
+        let runtime = MultiRuntime::with_runtime_id(
+            RuntimeConfig {
+                workers: NonZeroUsize::new(1).unwrap(),
+                max_shared_ring_queue_len: QUEUE_CAPACITY,
+                ..RuntimeConfig::default()
+            },
+            RuntimeId(1),
+            vec![worker.stealer()],
+        );
+        let first = Arc::new(SharedRingCore::new(QUEUE_CAPACITY, SharedRingWake::Local));
+        let second = Arc::new(SharedRingCore::new(QUEUE_CAPACITY, SharedRingWake::Local));
+
+        assert_eq!(runtime.submit_shared_ring(WorkerId(0), &first), Ok(()));
+
+        let mut root = StackRuntime::new();
+        root.block_on(|root| {
+            let mut active = Vec::new();
+            let mut queued = VecDeque::with_capacity(QUEUE_CAPACITY);
+            assert!(!runtime.drain_shared_ring_commands(
+                WorkerId(0),
+                root,
+                &mut active,
+                &mut queued,
+            ));
+            assert!(active.is_empty());
+            assert!(queued.is_empty());
+            assert!(queued.capacity() >= QUEUE_CAPACITY);
+        });
+
+        let queue = runtime.shared_ring_queues[0]
+            .lock()
+            .expect("shared ring command queue mutex poisoned");
+        assert!(queue.is_empty());
+        assert!(queue.capacity() >= QUEUE_CAPACITY);
+        drop(queue);
+
+        assert_eq!(runtime.submit_shared_ring(WorkerId(0), &second), Ok(()));
+        let queue = runtime.shared_ring_queues[0]
+            .lock()
+            .expect("shared ring command queue mutex poisoned");
+        assert_eq!(queue.len(), 1);
+        assert!(queue.capacity() >= QUEUE_CAPACITY);
+    }
+
+    #[test]
+    fn shared_ring_driver_commands_retain_queue_capacity_after_close_cleanup() {
+        const QUEUE_CAPACITY: usize = 4;
+
+        let worker = CrossbeamWorker::new_fifo();
+        let runtime = MultiRuntime::with_runtime_id(
+            RuntimeConfig {
+                workers: NonZeroUsize::new(1).unwrap(),
+                max_shared_ring_queue_len: QUEUE_CAPACITY,
+                ..RuntimeConfig::default()
+            },
+            RuntimeId(1),
+            vec![worker.stealer()],
+        );
+        let first = Arc::new(SharedRingCore::new(QUEUE_CAPACITY, SharedRingWake::Local));
+        let second = Arc::new(SharedRingCore::new(QUEUE_CAPACITY, SharedRingWake::Local));
+
+        assert_eq!(runtime.submit_shared_ring(WorkerId(0), &first), Ok(()));
+
+        let mut active = Vec::new();
+        let mut queued = VecDeque::with_capacity(QUEUE_CAPACITY);
+        runtime.close_worker_shared_operations(WorkerId(0), &mut active, &mut queued);
+        assert!(queued.is_empty());
+        assert!(queued.capacity() >= QUEUE_CAPACITY);
+        assert!(first.is_closed());
+
+        let queue = runtime.shared_ring_queues[0]
+            .lock()
+            .expect("shared ring command queue mutex poisoned");
+        assert!(queue.is_empty());
+        assert!(queue.capacity() >= QUEUE_CAPACITY);
+        drop(queue);
+
+        assert_eq!(runtime.submit_shared_ring(WorkerId(0), &second), Ok(()));
+        let queue = runtime.shared_ring_queues[0]
+            .lock()
+            .expect("shared ring command queue mutex poisoned");
+        assert_eq!(queue.len(), 1);
+        assert!(queue.capacity() >= QUEUE_CAPACITY);
     }
 
     #[test]

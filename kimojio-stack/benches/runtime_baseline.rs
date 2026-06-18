@@ -86,6 +86,19 @@ fn bench_scheduler(c: &mut Criterion) {
         });
     });
 
+    c.bench_function("scheduler/scope_empty", |b| {
+        b.iter_custom(|iters| {
+            run_stackful(|cx| {
+                let start = Instant::now();
+                for _ in 0..iters {
+                    cx.scope(|_| black_box(()));
+                    black_box(());
+                }
+                start.elapsed()
+            })
+        });
+    });
+
     c.bench_function("scheduler/spawn_join", |b| {
         b.iter_custom(|iters| {
             run_stackful(|cx| {

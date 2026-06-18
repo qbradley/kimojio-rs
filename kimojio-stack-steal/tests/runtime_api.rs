@@ -221,6 +221,88 @@ fn runtime_agnostic_component_runs_on_stealing_runtime() {
     runtime_agnostic_component(&mut runtime, true);
 }
 
+#[test]
+fn shared_sync_allocation_reuses_payload_vec_after_warmup() {
+    const PAYLOAD_LEN: usize = 8192;
+
+    let (read_fd, write_fd) = pipe().unwrap();
+    let mut runtime = StealRuntime::with_config(RuntimeConfig {
+        workers: NonZeroUsize::new(2).unwrap(),
+        steal_policy: StealPolicy::steal_one(),
+        ..RuntimeConfig::default()
+    });
+
+    runtime.block_on(|cx| {
+        cx.scope(|scope| {
+            let measured = scope.spawn(move |cx| {
+                let ring = cx.create_shared_ring();
+                let read_fd = RingFd::from_owned(read_fd);
+                let write_fd = RingFd::from_owned(write_fd);
+                let payload = vec![7_u8; PAYLOAD_LEN];
+                let mut read_buffer = [0_u8; PAYLOAD_LEN];
+
+                ring.write(cx, &write_fd, &payload).unwrap();
+                assert_eq!(
+                    ring.read(cx, &read_fd, &mut read_buffer).unwrap(),
+                    PAYLOAD_LEN
+                );
+                assert_eq!(&read_buffer, payload.as_slice());
+
+                let ((), counts) = allocation_tracking::measure(|| {
+                    ring.write(cx, &write_fd, &payload).unwrap();
+                    assert_eq!(
+                        ring.read(cx, &read_fd, &mut read_buffer).unwrap(),
+                        PAYLOAD_LEN
+                    );
+                    assert_eq!(&read_buffer, payload.as_slice());
+                });
+
+                assert!(
+                    counts.allocated_or_reallocated_bytes() < PAYLOAD_LEN,
+                    "shared sync payload Vecs should be reused after warmup; counts={counts:?}"
+                );
+
+                ring.close(cx, read_fd).unwrap();
+                ring.close(cx, write_fd).unwrap();
+            });
+            measured.join(cx);
+        });
+    });
+}
+
+#[test]
+fn shared_ring_command_queue_allocation_reuses_driver_queue_after_warmup() {
+    const OPERATIONS: usize = 16;
+
+    let mut runtime = StealRuntime::with_config(RuntimeConfig {
+        workers: NonZeroUsize::new(2).unwrap(),
+        steal_policy: StealPolicy::steal_one(),
+        ..RuntimeConfig::default()
+    });
+
+    runtime.block_on(|cx| {
+        cx.scope(|scope| {
+            let measured = scope.spawn(|cx| {
+                let ring = cx.create_shared_ring();
+
+                ring.nop(cx).unwrap();
+                let ((), counts) = allocation_tracking::measure(|| {
+                    for _ in 0..OPERATIONS {
+                        ring.nop(cx).unwrap();
+                    }
+                });
+
+                assert!(
+                    counts.allocating_operations() <= OPERATIONS * 3,
+                    "warmed shared-ring nop should not regrow the driver command queue; counts={counts:?}"
+                );
+            });
+
+            measured.join(cx);
+        });
+    });
+}
+
 fn assert_runtime_io_kind(error: RingError, kind: RuntimeIoErrorKind) {
     let runtime_error = RuntimeIoError::from(error);
     assert_eq!(runtime_error.runtime_kind(), Some(kind));
