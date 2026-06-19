@@ -7,7 +7,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use kimojio_stack::RuntimeContext;
 use libsqlite3_sys as ffi;
 
-use crate::{file, path};
+use crate::{
+    diagnostics::{self, Counter},
+    file, path,
+};
 
 pub const KIMOJIO_STACK_VFS_NAME: &str = "kimojio-stack";
 const KIMOJIO_STACK_VFS_NAME_C: &CStr = c"kimojio-stack";
@@ -97,6 +100,7 @@ unsafe extern "C" fn x_open(
     flags: c_int,
     out_flags: *mut c_int,
 ) -> c_int {
+    diagnostics::bump(Counter::Open);
     clear_last_error();
     if sqlite_file.is_null() {
         set_last_error("xOpen failed: SQLite provided a null sqlite3_file pointer");
@@ -154,6 +158,7 @@ unsafe extern "C" fn x_delete(
     z_name: *const c_char,
     sync_dir: c_int,
 ) -> c_int {
+    diagnostics::bump(Counter::Delete);
     clear_last_error();
     let Some(path) = (unsafe { path::path_from_c(z_name) }) else {
         set_last_error("xDelete failed: SQLite provided an empty path");
@@ -182,6 +187,7 @@ unsafe extern "C" fn x_access(
     _flags: c_int,
     out: *mut c_int,
 ) -> c_int {
+    diagnostics::bump(Counter::Access);
     clear_last_error();
     if out.is_null() {
         set_last_error("xAccess failed: SQLite provided a null output pointer");

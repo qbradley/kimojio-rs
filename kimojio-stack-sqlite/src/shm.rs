@@ -16,6 +16,7 @@ use crate::path;
 pub struct ShmState {
     path: Option<PathBuf>,
     fd: Option<OwnedFd>,
+    size: Option<u64>,
     nofollow: bool,
     owner: usize,
     maps: Vec<Option<Mapping>>,
@@ -31,6 +32,7 @@ impl ShmState {
         Self {
             path: None,
             fd: None,
+            size: None,
             nofollow,
             owner,
             maps: Vec::new(),
@@ -110,21 +112,23 @@ impl ShmState {
             let open_result = RuntimeContext::with_current(|cx| {
                 cx.open(&shm_path, open_flags, Mode::RUSR | Mode::WUSR)
                     .and_then(|fd| {
-                        let size = cx.fstat(&fd, StatxFlags::BASIC_STATS)?.stx_size;
-                        if size < needed {
+                        let current_size = cx.fstat(&fd, StatxFlags::BASIC_STATS)?.stx_size;
+                        if current_size < needed {
                             if extend == 0 {
                                 cx.close(fd)?;
                                 return Ok(None);
                             }
                             cx.ftruncate(&fd, needed)?;
+                            Ok(Some((fd, needed)))
+                        } else {
+                            Ok(Some((fd, current_size)))
                         }
-                        Ok(Some(fd))
                     })
             });
             let Some(open_result) = open_result else {
                 return ffi::SQLITE_IOERR_SHMOPEN;
             };
-            let Ok(Some(fd)) = open_result else {
+            let Ok(Some((fd, size))) = open_result else {
                 return if open_result.is_ok() {
                     ffi::SQLITE_OK
                 } else {
@@ -132,16 +136,23 @@ impl ShmState {
                 };
             };
             self.fd = Some(fd);
+            self.size = Some(size);
         } else {
             let resize_result: Option<Result<bool, kimojio_stack::Errno>> =
                 RuntimeContext::with_current(|cx| {
-                    let fd = self.fd.as_ref().expect("checked above");
-                    let size = cx.fstat(fd, StatxFlags::BASIC_STATS)?.stx_size;
+                    let size = self.size.unwrap_or_else(|| {
+                        let fd = self.fd.as_ref().expect("checked above");
+                        cx.fstat(fd, StatxFlags::BASIC_STATS)
+                            .map(|stat| stat.stx_size)
+                            .unwrap_or(0)
+                    });
                     if size < needed {
                         if extend == 0 {
                             return Ok(false);
                         }
+                        let fd = self.fd.as_ref().expect("checked above");
                         cx.ftruncate(fd, needed)?;
+                        self.size = Some(needed);
                     }
                     Ok(true)
                 });

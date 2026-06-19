@@ -10,6 +10,8 @@ mod path;
 mod shm;
 pub mod vfs;
 
+pub mod diagnostics;
+
 #[cfg(feature = "rusqlite")]
 pub mod rusqlite;
 

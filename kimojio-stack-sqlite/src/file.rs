@@ -8,7 +8,12 @@ use std::sync::{Mutex, OnceLock};
 use kimojio_stack::{Mode, OFlags, OwnedFd as StackOwnedFd, RuntimeContext, StatxFlags};
 use libsqlite3_sys as ffi;
 
-use crate::{path, shm::ShmState, vfs};
+use crate::{
+    diagnostics::{self, Counter},
+    path,
+    shm::ShmState,
+    vfs,
+};
 
 static NEXT_FILE_ID: AtomicUsize = AtomicUsize::new(1);
 
@@ -28,6 +33,7 @@ pub struct KimojioFile {
     path: Option<PathBuf>,
     delete_on_close: bool,
     readonly: bool,
+    size_hint: Option<u64>,
     lock_level: c_int,
     id: usize,
     shm: ShmState,
@@ -36,6 +42,47 @@ pub struct KimojioFile {
 fn display_path(path: Option<&Path>) -> String {
     path.map(|path| path.display().to_string())
         .unwrap_or_else(|| "<temporary>".to_owned())
+}
+
+fn cached_file_size(path: Option<&Path>) -> Option<u64> {
+    let path = path?;
+    file_sizes()
+        .lock()
+        .expect("SQLite file size cache poisoned")
+        .get(path)
+        .copied()
+}
+
+fn remember_write_size(file: &mut KimojioFile, offset: u64, len: u64) {
+    let Some(end) = offset.checked_add(len) else {
+        file.size_hint = None;
+        return;
+    };
+    if file.size_hint.is_none_or(|size| end > size) {
+        file.size_hint = Some(end);
+        if let Some(path) = &file.path {
+            remember_file_size(path, end);
+        }
+    }
+}
+
+fn remember_file_size(path: &Path, size: u64) {
+    file_sizes()
+        .lock()
+        .expect("SQLite file size cache poisoned")
+        .insert(path.to_path_buf(), size);
+}
+
+fn forget_file_size(path: &Path) {
+    file_sizes()
+        .lock()
+        .expect("SQLite file size cache poisoned")
+        .remove(path);
+}
+
+fn file_sizes() -> &'static Mutex<HashMap<PathBuf, u64>> {
+    static SIZES: OnceLock<Mutex<HashMap<PathBuf, u64>>> = OnceLock::new();
+    SIZES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 pub static IO_METHODS: ffi::sqlite3_io_methods = ffi::sqlite3_io_methods {
@@ -69,6 +116,7 @@ pub unsafe fn init_file(
     nofollow: bool,
 ) {
     let id = NEXT_FILE_ID.fetch_add(1, Ordering::Relaxed);
+    let size_hint = cached_file_size(path.as_deref());
     let file = KimojioFile {
         base: ffi::sqlite3_file {
             pMethods: &IO_METHODS,
@@ -77,6 +125,7 @@ pub unsafe fn init_file(
         path,
         delete_on_close,
         readonly,
+        size_hint,
         lock_level: ffi::SQLITE_LOCK_NONE,
         id,
         shm: ShmState::new(id, nofollow),
@@ -129,6 +178,7 @@ unsafe fn file_mut(sqlite_file: *mut ffi::sqlite3_file) -> &'static mut KimojioF
 }
 
 unsafe extern "C" fn x_close(sqlite_file: *mut ffi::sqlite3_file) -> c_int {
+    diagnostics::bump(Counter::Close);
     if sqlite_file.is_null() {
         return ffi::SQLITE_OK;
     }
@@ -163,6 +213,7 @@ unsafe extern "C" fn x_read(
     amount: c_int,
     offset: ffi::sqlite3_int64,
 ) -> c_int {
+    diagnostics::bump(Counter::Read);
     if buf.is_null() || amount < 0 || offset < 0 {
         return ffi::SQLITE_IOERR_READ;
     }
@@ -213,6 +264,7 @@ unsafe extern "C" fn x_write(
     amount: c_int,
     offset: ffi::sqlite3_int64,
 ) -> c_int {
+    diagnostics::bump(Counter::Write);
     if buf.is_null() || amount < 0 || offset < 0 {
         return ffi::SQLITE_IOERR_WRITE;
     }
@@ -239,7 +291,10 @@ unsafe extern "C" fn x_write(
         Ok(true)
     });
     match result {
-        Some(Ok(true)) => ffi::SQLITE_OK,
+        Some(Ok(true)) => {
+            remember_write_size(file, offset as u64, input.len() as u64);
+            ffi::SQLITE_OK
+        }
         Some(Ok(false)) => {
             vfs::set_last_error(format!(
                 "xWrite failed for {} at offset {offset}: zero-byte progress",
@@ -268,6 +323,7 @@ unsafe extern "C" fn x_truncate(
     sqlite_file: *mut ffi::sqlite3_file,
     size: ffi::sqlite3_int64,
 ) -> c_int {
+    diagnostics::bump(Counter::Truncate);
     if size < 0 {
         return ffi::SQLITE_IOERR_TRUNCATE;
     }
@@ -277,7 +333,13 @@ unsafe extern "C" fn x_truncate(
     };
     let result = RuntimeContext::with_current(|cx| cx.ftruncate(fd, size as u64));
     match result {
-        Some(Ok(())) => ffi::SQLITE_OK,
+        Some(Ok(())) => {
+            file.size_hint = Some(size as u64);
+            if let Some(path) = &file.path {
+                remember_file_size(path, size as u64);
+            }
+            ffi::SQLITE_OK
+        }
         Some(Err(err)) => {
             vfs::set_last_error(format!(
                 "xTruncate failed for {} to size {size}: {err}",
@@ -296,6 +358,7 @@ unsafe extern "C" fn x_truncate(
 }
 
 unsafe extern "C" fn x_sync(sqlite_file: *mut ffi::sqlite3_file, _flags: c_int) -> c_int {
+    diagnostics::bump(Counter::Sync);
     let file = unsafe { file_mut(sqlite_file) };
     let Some(fd) = file.fd.as_ref() else {
         return ffi::SQLITE_IOERR_FSYNC;
@@ -324,16 +387,27 @@ unsafe extern "C" fn x_file_size(
     sqlite_file: *mut ffi::sqlite3_file,
     size: *mut ffi::sqlite3_int64,
 ) -> c_int {
+    diagnostics::bump(Counter::FileSize);
     if size.is_null() {
         return ffi::SQLITE_IOERR_FSTAT;
     }
     let file = unsafe { file_mut(sqlite_file) };
+    if let Some(size_hint) = file.size_hint {
+        unsafe {
+            *size = size_hint as ffi::sqlite3_int64;
+        }
+        return ffi::SQLITE_OK;
+    }
     let Some(fd) = file.fd.as_ref() else {
         return ffi::SQLITE_IOERR_FSTAT;
     };
     let result = RuntimeContext::with_current(|cx| cx.fstat(fd, StatxFlags::BASIC_STATS));
     match result {
         Some(Ok(stat)) => {
+            file.size_hint = Some(stat.stx_size);
+            if let Some(path) = &file.path {
+                remember_file_size(path, stat.stx_size);
+            }
             unsafe {
                 *size = stat.stx_size as ffi::sqlite3_int64;
             }
@@ -357,11 +431,13 @@ unsafe extern "C" fn x_file_size(
 }
 
 unsafe extern "C" fn x_lock(sqlite_file: *mut ffi::sqlite3_file, lock: c_int) -> c_int {
+    diagnostics::bump(Counter::Lock);
     let file = unsafe { file_mut(sqlite_file) };
     lock_file(file, lock)
 }
 
 unsafe extern "C" fn x_unlock(sqlite_file: *mut ffi::sqlite3_file, lock: c_int) -> c_int {
+    diagnostics::bump(Counter::Unlock);
     let file = unsafe { file_mut(sqlite_file) };
     unlock_file(file, lock)
 }
@@ -370,6 +446,7 @@ unsafe extern "C" fn x_check_reserved_lock(
     sqlite_file: *mut ffi::sqlite3_file,
     out: *mut c_int,
 ) -> c_int {
+    diagnostics::bump(Counter::CheckReservedLock);
     if out.is_null() {
         return ffi::SQLITE_IOERR_CHECKRESERVEDLOCK;
     }
@@ -431,6 +508,7 @@ unsafe extern "C" fn x_shm_map(
     extend: c_int,
     out: *mut *mut raw_c_void,
 ) -> c_int {
+    diagnostics::bump(Counter::ShmMap);
     let file = unsafe { file_mut(sqlite_file) };
     unsafe {
         file.shm
@@ -444,6 +522,7 @@ unsafe extern "C" fn x_shm_lock(
     n: c_int,
     flags: c_int,
 ) -> c_int {
+    diagnostics::bump(Counter::ShmLock);
     let file = unsafe { file_mut(sqlite_file) };
     file.shm.lock(offset, n, flags)
 }
@@ -454,6 +533,7 @@ unsafe extern "C" fn x_shm_barrier(sqlite_file: *mut ffi::sqlite3_file) {
 }
 
 unsafe extern "C" fn x_shm_unmap(sqlite_file: *mut ffi::sqlite3_file, delete_flag: c_int) -> c_int {
+    diagnostics::bump(Counter::ShmUnmap);
     let file = unsafe { file_mut(sqlite_file) };
     unsafe { file.shm.unmap(delete_flag != 0) }
 }
@@ -694,7 +774,10 @@ fn lock_table() -> &'static Mutex<HashMap<PathBuf, FileLockState>> {
 pub fn delete_path(path: &Path) -> c_int {
     let result = RuntimeContext::with_current(|cx| cx.unlink(path));
     match result {
-        Some(Ok(())) => ffi::SQLITE_OK,
+        Some(Ok(())) => {
+            forget_file_size(path);
+            ffi::SQLITE_OK
+        }
         Some(Err(err)) if err == kimojio_stack::Errno::NOENT => ffi::SQLITE_IOERR_DELETE_NOENT,
         Some(Err(_)) | None => ffi::SQLITE_IOERR_DELETE,
     }

@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use kimojio_stack::Runtime as StackRuntime;
+use kimojio_stack::{BusyPoll, Runtime as StackRuntime};
+use kimojio_stack_sqlite::diagnostics;
 use kimojio_stack_sqlite::rusqlite as stack_sqlite;
 use kimojio_stack_steal::Runtime as StealRuntime;
 use rusqlite::Connection;
@@ -15,7 +16,19 @@ enum RuntimeMode {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse()?;
-    let (result, elapsed) = run_mode(args.runtime, &args.path, args.iterations)?;
+    if args.counters {
+        diagnostics::reset_counters();
+    }
+    diagnostics::set_counters_enabled(args.counters);
+    let (result, elapsed) = run_mode(
+        args.runtime,
+        &args.path,
+        args.iterations,
+        args.busy_poll,
+        args.sqpoll_idle,
+        args.synchronous,
+    )?;
+    let counters = diagnostics::counters();
 
     print!(
         "runtime={:?} path={} rows={} integrity={} elapsed_ms={:.3}",
@@ -27,8 +40,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     if args.runtime != RuntimeMode::DefaultVfs {
         let default_path = comparison_path(&args.path);
-        let (default_result, default_elapsed) =
-            run_mode(RuntimeMode::DefaultVfs, &default_path, args.iterations)?;
+        let (default_result, default_elapsed) = run_mode(
+            RuntimeMode::DefaultVfs,
+            &default_path,
+            args.iterations,
+            false,
+            None,
+            args.synchronous,
+        )?;
         let ratio = elapsed.as_secs_f64() / default_elapsed.as_secs_f64().max(f64::EPSILON);
         print!(
             " default_vfs_path={} default_vfs_rows={} default_vfs_ms={:.3} ratio_vs_default={:.3}",
@@ -36,6 +55,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             default_result.rows,
             default_elapsed.as_secs_f64() * 1000.0,
             ratio
+        );
+    }
+    if args.counters {
+        print!(
+            " counters={{open:{},close:{},read:{},write:{},truncate:{},sync:{},file_size:{},lock:{},unlock:{},check_reserved_lock:{},access:{},delete:{},shm_map:{},shm_lock:{},shm_unmap:{}}}",
+            counters.open,
+            counters.close,
+            counters.read,
+            counters.write,
+            counters.truncate,
+            counters.sync,
+            counters.file_size,
+            counters.lock,
+            counters.unlock,
+            counters.check_reserved_lock,
+            counters.access,
+            counters.delete,
+            counters.shm_map,
+            counters.shm_lock,
+            counters.shm_unmap
         );
     }
     println!();
@@ -46,24 +85,46 @@ fn run_mode(
     runtime: RuntimeMode,
     path: &std::path::Path,
     iterations: usize,
+    busy_poll: bool,
+    sqpoll_idle: Option<u32>,
+    synchronous: Synchronous,
 ) -> Result<(Summary, std::time::Duration), Box<dyn std::error::Error>> {
     let result = match runtime {
         RuntimeMode::Stack => {
-            let mut runtime = StackRuntime::new();
+            let mut runtime = if busy_poll || sqpoll_idle.is_some() {
+                let mut config = kimojio_stack::RuntimeConfig::default();
+                if busy_poll {
+                    config.busy_poll = BusyPoll::Always;
+                }
+                config.sqpoll_idle = sqpoll_idle;
+                StackRuntime::with_config(config)
+            } else {
+                StackRuntime::new()
+            };
             runtime.block_on(|_| {
                 let started = Instant::now();
-                run_kimojio_workload(path, iterations).map(|summary| (summary, started.elapsed()))
+                run_kimojio_workload(path, iterations, synchronous)
+                    .map(|summary| (summary, started.elapsed()))
             })
         }
         RuntimeMode::Steal => {
-            let mut runtime = StealRuntime::new();
+            let mut runtime = if busy_poll || sqpoll_idle.is_some() {
+                let mut config = kimojio_stack_steal::RuntimeConfig::default();
+                if busy_poll {
+                    config.busy_poll = kimojio_stack_steal::BusyPoll::Always;
+                }
+                config.sqpoll_idle = sqpoll_idle;
+                StealRuntime::with_config(config)
+            } else {
+                StealRuntime::new()
+            };
             runtime.block_on(|cx| {
                 cx.scope(|scope| {
                     let path = path.to_path_buf();
                     scope
                         .spawn_local(move |_| {
                             let started = Instant::now();
-                            run_kimojio_workload(&path, iterations)
+                            run_kimojio_workload(&path, iterations, synchronous)
                                 .map(|summary| (summary, started.elapsed()))
                         })
                         .join(cx)
@@ -72,36 +133,51 @@ fn run_mode(
         }
         RuntimeMode::DefaultVfs => {
             let started = Instant::now();
-            run_default_workload(path, iterations).map(|summary| (summary, started.elapsed()))
+            run_default_workload(path, iterations, synchronous)
+                .map(|summary| (summary, started.elapsed()))
         }
     }?;
     Ok(result)
 }
 
-fn run_kimojio_workload(path: &std::path::Path, iterations: usize) -> rusqlite::Result<Summary> {
+fn run_kimojio_workload(
+    path: &std::path::Path,
+    iterations: usize,
+    synchronous: Synchronous,
+) -> rusqlite::Result<Summary> {
     let conn = stack_sqlite::open(path)?;
-    run_workload(&conn, iterations)?;
+    run_workload(&conn, iterations, synchronous)?;
     drop(conn);
 
     let conn = stack_sqlite::open(path)?;
     summarize(&conn)
 }
 
-fn run_default_workload(path: &std::path::Path, iterations: usize) -> rusqlite::Result<Summary> {
+fn run_default_workload(
+    path: &std::path::Path,
+    iterations: usize,
+    synchronous: Synchronous,
+) -> rusqlite::Result<Summary> {
     let conn = Connection::open(path)?;
-    run_workload(&conn, iterations)?;
+    run_workload(&conn, iterations, synchronous)?;
     drop(conn);
 
     let conn = Connection::open(path)?;
     summarize(&conn)
 }
 
-fn run_workload(conn: &Connection, iterations: usize) -> rusqlite::Result<()> {
-    conn.execute_batch(
+fn run_workload(
+    conn: &Connection,
+    iterations: usize,
+    synchronous: Synchronous,
+) -> rusqlite::Result<()> {
+    conn.execute_batch(&format!(
         "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous={};
          CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY, value TEXT NOT NULL);
          DELETE FROM items;",
-    )?;
+        synchronous.as_pragma()
+    ))?;
     let mut insert = conn.prepare("INSERT INTO items(value) VALUES (?1)")?;
     conn.execute_batch("BEGIN IMMEDIATE")?;
     for index in 0..iterations {
@@ -127,6 +203,10 @@ struct Args {
     runtime: RuntimeMode,
     path: PathBuf,
     iterations: usize,
+    counters: bool,
+    busy_poll: bool,
+    sqpoll_idle: Option<u32>,
+    synchronous: Synchronous,
 }
 
 impl Args {
@@ -134,6 +214,10 @@ impl Args {
         let mut runtime = RuntimeMode::Stack;
         let mut path = None;
         let mut iterations = 100_usize;
+        let mut counters = false;
+        let mut busy_poll = false;
+        let mut sqpoll_idle = None;
+        let mut synchronous = Synchronous::Full;
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -155,6 +239,24 @@ impl Args {
                     };
                     iterations = value.parse()?;
                 }
+                "--counters" => {
+                    counters = true;
+                }
+                "--busy-poll" => {
+                    busy_poll = true;
+                }
+                "--sqpoll-idle-ms" => {
+                    let Some(value) = args.next() else {
+                        return Err("--sqpoll-idle-ms requires an integer".into());
+                    };
+                    sqpoll_idle = Some(value.parse()?);
+                }
+                "--synchronous" => {
+                    let Some(value) = args.next() else {
+                        return Err("--synchronous requires full, normal, or off".into());
+                    };
+                    synchronous = parse_synchronous(&value)?;
+                }
                 "--help" | "-h" => {
                     print_usage();
                     std::process::exit(0);
@@ -174,7 +276,39 @@ impl Args {
             runtime,
             path,
             iterations,
+            counters,
+            busy_poll,
+            sqpoll_idle,
+            synchronous,
         })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Synchronous {
+    Full,
+    Normal,
+    Off,
+}
+
+impl Synchronous {
+    fn as_pragma(self) -> &'static str {
+        match self {
+            Self::Full => "FULL",
+            Self::Normal => "NORMAL",
+            Self::Off => "OFF",
+        }
+    }
+}
+
+fn parse_synchronous(value: &str) -> Result<Synchronous, Box<dyn std::error::Error>> {
+    match value {
+        "full" | "FULL" => Ok(Synchronous::Full),
+        "normal" | "NORMAL" => Ok(Synchronous::Normal),
+        "off" | "OFF" => Ok(Synchronous::Off),
+        _ => {
+            Err(format!("unsupported synchronous mode {value:?}; use full, normal, or off").into())
+        }
     }
 }
 
@@ -190,7 +324,8 @@ fn parse_runtime(value: &str) -> Result<RuntimeMode, Box<dyn std::error::Error>>
 fn print_usage() {
     println!(
         "Usage: cargo run -p kimojio-stack-sqlite --example rusqlite_vfs -- \\
-         --runtime <stack|steal|default-vfs> [--path PATH] [--iterations N]"
+         --runtime <stack|steal|default-vfs> [--path PATH] [--iterations N] \\
+         [--busy-poll] [--sqpoll-idle-ms N] [--synchronous full|normal|off] [--counters]"
     );
 }
 

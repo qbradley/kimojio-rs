@@ -518,6 +518,11 @@ pub struct RuntimeConfig {
     pub ring_enter_policy: RingEnterPolicy,
     /// Policy controlling whether pending I/O completions are busy-polled.
     pub busy_poll: BusyPoll,
+    /// Optional io_uring SQPOLL idle timeout in milliseconds.
+    ///
+    /// SQPOLL uses a kernel thread to poll the submission queue, reducing
+    /// syscall overhead for many small I/O operations at the cost of CPU.
+    pub sqpoll_idle: Option<u32>,
     /// Number of fixed-file slots to register with io_uring.
     pub registered_file_slots: u32,
     /// Number of fixed-buffer slots to register with io_uring.
@@ -532,6 +537,7 @@ impl Default for RuntimeConfig {
             ring_entries: DEFAULT_RING_ENTRIES,
             ring_enter_policy: RingEnterPolicy::default(),
             busy_poll: BusyPoll::default(),
+            sqpoll_idle: None,
             registered_file_slots: 0,
             registered_buffer_slots: 0,
         }
@@ -5312,7 +5318,11 @@ struct Scheduler {
 
 impl Scheduler {
     fn new(config: RuntimeConfig) -> Self {
-        let ring = IoUring::builder()
+        let mut builder = IoUring::builder();
+        if let Some(idle) = config.sqpoll_idle {
+            builder.setup_sqpoll(idle);
+        }
+        let ring = builder
             .build(config.ring_entries)
             .expect("failed to create io_uring");
         let mut probe = Probe::new();

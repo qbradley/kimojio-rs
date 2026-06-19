@@ -106,7 +106,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker as CrossbeamWorker};
 pub use kimojio_stack::{
-    AddressFamily, AtFlags, EpollCtlOp, EpollEvent, EpollEventData, EpollEventFlags,
+    AddressFamily, AtFlags, BusyPoll, EpollCtlOp, EpollEvent, EpollEventData, EpollEventFlags,
     FallocateFlags, FileAdvice, FutexWaitFlags, FutexWaitvFlags, IoCounters, IoFd, IoVec,
     MemoryAdvice, Mode, MsgHdr, OFlags, Protocol, RecvFlags, RegisteredBuffer, RegisteredFd,
     RenameFlags, ResolveFlags, SendFlags, SocketType, StackUsage, Statx, StatxFlags,
@@ -190,6 +190,12 @@ pub struct RuntimeConfig {
     pub registered_file_slots: u32,
     /// Number of fixed-buffer slots to register with each embedded io_uring runtime.
     pub registered_buffer_slots: u16,
+    /// Policy controlling whether worker-local embedded runtimes busy-poll
+    /// pending I/O completions.
+    pub busy_poll: BusyPoll,
+    /// Optional io_uring SQPOLL idle timeout in milliseconds for each embedded
+    /// worker-local runtime.
+    pub sqpoll_idle: Option<u32>,
     /// Number of worker threads requested for the runtime.
     pub workers: NonZeroUsize,
     /// Policy controlling how queued work may be stolen.
@@ -210,6 +216,8 @@ impl Default for RuntimeConfig {
             max_cached_stacks_per_worker: 1024,
             registered_file_slots: 0,
             registered_buffer_slots: 0,
+            busy_poll: BusyPoll::Never,
+            sqpoll_idle: None,
             workers: NonZeroUsize::new(1).expect("one is nonzero"),
             steal_policy: StealPolicy::Disabled,
             max_worker_queue_len: DEFAULT_QUEUE_CAPACITY,
@@ -547,6 +555,8 @@ impl Runtime {
         config.max_cached_stacks = self.config.max_cached_stacks_per_worker;
         config.registered_file_slots = self.config.registered_file_slots;
         config.registered_buffer_slots = self.config.registered_buffer_slots;
+        config.busy_poll = self.config.busy_poll;
+        config.sqpoll_idle = self.config.sqpoll_idle;
         kimojio_stack::Runtime::with_config(config)
     }
 }

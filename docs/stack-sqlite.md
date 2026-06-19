@@ -59,10 +59,24 @@ cargo run -p kimojio-stack-sqlite --example rusqlite_vfs -- --runtime default-vf
 ```
 
 The stack and steal example modes run the same workload through SQLite's default
-VFS and print `ratio_vs_default`. The current initial release validation for a
-500-row workload measured about 5.407x default-VFS latency for stack and 5.391x
-for stack-steal, so the first implementation is correct and scheduler-friendly
-but still needs performance tuning to meet the 2x target.
+VFS and print `ratio_vs_default`.
+
+For many tiny SQLite callbacks, io_uring submit/wait overhead dominates. Use
+runtime polling knobs when benchmarking latency-sensitive SQLite work:
+
+```sh
+cargo run --release -p kimojio-stack-sqlite --example rusqlite_vfs -- \
+  --runtime stack --iterations 10000 --busy-poll --sqpoll-idle-ms 1000
+cargo run --release -p kimojio-stack-sqlite --example rusqlite_vfs -- \
+  --runtime steal --iterations 10000 --busy-poll --sqpoll-idle-ms 1000
+```
+
+On the local validation host, a 10,000-row single-transaction WAL/FULL workload
+measured about 1.80x default-VFS latency for stack and 1.85x for stack-steal with
+busy-poll plus SQPOLL. A 500-row workload remained fixed-overhead dominated at
+about 3.21x for stack because it issued only 17 reads, 25 writes, and 9 syncs;
+this is useful for understanding startup/small-transaction overhead but is not
+representative of steady-state transaction throughput.
 
 ## Current limits
 
@@ -73,6 +87,8 @@ but still needs performance tuning to meet the 2x target.
   file-identity lock keys are added.
 - WAL `-shm` files are memory-mapped; file creation and sizing use runtime I/O,
   while mapping and page faults are synchronous OS memory behavior.
+- `--busy-poll` and `--sqpoll-idle-ms` reduce latency by spending CPU. SQPOLL
+  support depends on kernel configuration and permissions.
 - SQLite CPU execution and SQLite mutex waits remain synchronous while the
   current coroutine is inside SQLite.
 - The VFS deliberately fails outside runtime context and does not provide a
