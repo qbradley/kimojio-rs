@@ -265,24 +265,22 @@ impl ApplicationBio {
         Some(result)
     }
 
-    fn with_read_buffer<R>(&self, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
-        let _guard = self.enter_callback(ApplicationBioDirection::Read);
+    fn read_lease(&self) -> Option<ApplicationBioReadLease<'_>> {
+        let guard = self.enter_callback(ApplicationBioDirection::Read);
         let mut buf = null_mut();
         let size = unsafe { BIO_nread0(self.bio.as_ptr(), &mut buf) };
         if size <= 0 {
             return None;
         }
 
-        let buffer = unsafe { std::slice::from_raw_parts(buf.cast(), size as usize) };
-        Some(f(buffer))
-    }
-
-    fn consume_read_buffer(&self, amount: usize) {
-        let _guard = self.enter_callback(ApplicationBioDirection::Read);
-        let amount = c_int_len(amount).expect("BIO read length exceeds c_int");
-        let mut buf = null_mut();
-        let read = unsafe { BIO_nread(self.bio.as_ptr(), &mut buf, amount) };
-        assert_eq!(read, amount);
+        let buffer = NonNull::new(buf.cast())?;
+        Some(ApplicationBioReadLease {
+            bio: self.bio,
+            buffer,
+            len: size as usize,
+            _guard: guard,
+            _not_send: PhantomData,
+        })
     }
 
     fn enter_callback(
@@ -358,6 +356,29 @@ impl ApplicationBioWriteLease<'_> {
         let mut buf = null_mut();
         let written = unsafe { BIO_nwrite(self.bio.as_ptr(), &mut buf, amount) };
         assert_eq!(written, amount);
+    }
+}
+
+pub struct ApplicationBioReadLease<'a> {
+    bio: NonNull<ffi::BIO>,
+    buffer: NonNull<u8>,
+    len: usize,
+    _guard: ApplicationBioCallbackGuard<'a>,
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl AsRef<[u8]> for ApplicationBioReadLease<'_> {
+    fn as_ref(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.buffer.as_ptr(), self.len) }
+    }
+}
+
+impl ApplicationBioReadLease<'_> {
+    pub fn consume(self, amount: usize) {
+        let amount = c_int_len(amount).expect("BIO read length exceeds c_int");
+        let mut buf = null_mut();
+        let read = unsafe { BIO_nread(self.bio.as_ptr(), &mut buf, amount) };
+        assert_eq!(read, amount);
     }
 }
 
@@ -460,16 +481,12 @@ macro_rules! impl_tls_server_methods {
                 self.inner.write_lease()
             }
 
+            pub fn read_lease(&self) -> Option<ApplicationBioReadLease<'_>> {
+                self.inner.read_lease()
+            }
+
             pub fn push_bytes(&self, bytes: &[u8]) -> Option<usize> {
                 self.inner.push_bytes(bytes)
-            }
-
-            pub fn copy_pull_buffer(&self) -> Option<Vec<u8>> {
-                self.inner.copy_pull_buffer()
-            }
-
-            pub fn use_pull_buffer(&mut self, amount: usize) {
-                self.inner.use_pull_buffer(amount);
             }
         }
     };
@@ -554,21 +571,16 @@ impl TlsServerInner {
         self.application_bio.write_lease()
     }
 
+    fn read_lease(&self) -> Option<ApplicationBioReadLease<'_>> {
+        self.application_bio.read_lease()
+    }
+
     fn push_bytes(&self, bytes: &[u8]) -> Option<usize> {
         self.application_bio.with_write_buffer(|buffer| {
             let amount = bytes.len().min(buffer.len());
             buffer[..amount].copy_from_slice(&bytes[..amount]);
             (amount, amount)
         })
-    }
-
-    fn copy_pull_buffer(&self) -> Option<Vec<u8>> {
-        self.application_bio
-            .with_read_buffer(|buffer| buffer.to_vec())
-    }
-
-    fn use_pull_buffer(&self, amount: usize) {
-        self.application_bio.consume_read_buffer(amount);
     }
 }
 

@@ -14,7 +14,7 @@ use crate::{
     operations, try_clone_owned_fd,
 };
 use futures::TryFutureExt;
-use kimojio_tls::{ApplicationBioWriteLease, TlsServer, TlsServerShared};
+use kimojio_tls::{ApplicationBioReadLease, ApplicationBioWriteLease, TlsServer, TlsServerShared};
 use std::borrow::Borrow;
 use std::io::IoSlice;
 use std::rc::Rc;
@@ -79,8 +79,7 @@ trait TlsIo {
     fn write(&mut self, buffer: &[u8]) -> kimojio_tls::Response;
     fn shutdown(&mut self) -> kimojio_tls::Response;
     fn write_lease(&self) -> Option<ApplicationBioWriteLease<'_>>;
-    fn copy_pull_buffer(&self) -> Option<Vec<u8>>;
-    fn use_pull_buffer(&mut self, amount: usize);
+    fn read_lease(&self) -> Option<ApplicationBioReadLease<'_>>;
 }
 
 impl TlsIo for TlsServer {
@@ -100,12 +99,8 @@ impl TlsIo for TlsServer {
         self.write_lease()
     }
 
-    fn copy_pull_buffer(&self) -> Option<Vec<u8>> {
-        self.copy_pull_buffer()
-    }
-
-    fn use_pull_buffer(&mut self, amount: usize) {
-        self.use_pull_buffer(amount);
+    fn read_lease(&self) -> Option<ApplicationBioReadLease<'_>> {
+        self.read_lease()
     }
 }
 
@@ -126,12 +121,8 @@ impl TlsIo for TlsServerShared {
         self.write_lease()
     }
 
-    fn copy_pull_buffer(&self) -> Option<Vec<u8>> {
-        self.copy_pull_buffer()
-    }
-
-    fn use_pull_buffer(&mut self, amount: usize) {
-        self.use_pull_buffer(amount);
+    fn read_lease(&self) -> Option<ApplicationBioReadLease<'_>> {
+        self.read_lease()
     }
 }
 
@@ -253,12 +244,12 @@ async fn try_write(
         // buffer by the length of the full buffer copied into the BIO rather than
         // the amount of data written to the socket here. Need to fully exhaust
         // the BIO here to keep the bookkeeping in sync
-        while let Some(buffer) = ssl.copy_pull_buffer() {
-            let amount = operations::write_with_deadline(socket, &buffer, deadline).await?;
+        while let Some(lease) = ssl.read_lease() {
+            let amount = operations::write_with_deadline(socket, lease.as_ref(), deadline).await?;
             if amount == 0 {
                 return Err(Errno::from_raw_os_error(libc::EPIPE));
             }
-            ssl.use_pull_buffer(amount);
+            lease.consume(amount);
         }
         Ok(())
     } else {
