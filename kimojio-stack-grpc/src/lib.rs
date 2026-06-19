@@ -9,6 +9,13 @@
 //! Callers provide Prost message types, explicit metadata, and stackful HTTP/2
 //! connections.
 //!
+//! Use this crate when you want a small gRPC protocol layer that fits the
+//! explicit stackful runtime model. It is closer to a transport toolkit than to
+//! Tonic: generated service traits, interceptors, tower middleware, load
+//! balancing, retry policy, and channel management are intentionally out of
+//! scope. Higher-level code can build those policies around the connection and
+//! server objects exported here.
+//!
 //! # Client sketch
 //!
 //! ```no_run
@@ -38,6 +45,10 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! The client sketch assumes the caller has already connected a socket and built
+//! a `kimojio-stack-http` HTTP/2 transport. That setup is application-specific:
+//! the gRPC layer only serializes metadata/messages and drives HTTP/2 streams.
 //!
 //! # Server sketch
 //!

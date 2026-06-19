@@ -7,7 +7,7 @@
 //! are not directly retried by [`RetryPolicy`](crate::RetryPolicy); use
 //! [`classify_page_write_failure`] or [`classify_sequence_number_failure`] to
 //! decide whether to refresh properties before attempting recovery. Page storage
-//! currently travels through the storage [`Transport`](crate::Transport)
+//! currently travels through the storage [`Transport`]
 //! boundary; direct file or disk runtime capabilities are intentionally separate
 //! future work.
 //!

@@ -11,6 +11,12 @@
 //! one attempt from stackful code, and helpers preserve diagnostics and retry
 //! eligibility so higher-level policy can stay visible to the caller.
 //!
+//! Use this crate as a storage protocol toolkit for stackful services that need
+//! object/blob-style operations but do not want a hidden HTTP client, background
+//! retry loop, or opaque buffer ownership. It is not a full cloud SDK: account
+//! discovery, credential loading, service-specific pagination orchestration, and
+//! global client lifecycle remain application concerns.
+//!
 //! # Success path
 //!
 //! 1. Build stable identifiers such as [`AccountId`], [`ContainerName`],
@@ -45,6 +51,10 @@
 //! }).unwrap();
 //! assert_eq!(request.method, "PUT");
 //! ```
+//!
+//! To execute a request, pass the generated parts to a [`Transport`] such as
+//! [`StackHttpTransport`] from inside a stackful coroutine. Downloads should use
+//! chunk callbacks when objects can be larger than memory budgets.
 //!
 //! # Cost and safety model
 //!

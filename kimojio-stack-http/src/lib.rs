@@ -3,13 +3,21 @@
 
 //! Stackful HTTP foundations for `kimojio-stack`.
 //!
-//! This crate provides low-level transport, buffering, error, and protocol
-//! boundary types used by the HTTP/1.1 and HTTP/2 implementations.
+//! This crate is the HTTP layer for applications that choose the stackful
+//! Kimojio runtime model. It provides low-level transport, buffering, error, and
+//! protocol boundary types for HTTP/1.1 and HTTP/2, while keeping socket
+//! ownership and scheduling policy explicit.
 //!
 //! It intentionally exposes connection objects instead of a global client,
 //! background connection pool, or async runtime integration. Callers decide how
 //! sockets are opened, whether TLS is used, how connections are shared, and where
 //! response bodies are buffered or streamed.
+//!
+//! Use this crate when you already have a connected stackful socket/TLS stream
+//! and want HTTP protocol handling without switching to Tokio, Hyper, or a hidden
+//! worker thread. Do not use it as a high-level web framework: routing,
+//! connection pooling, retries, DNS, and service lifecycle are deliberately left
+//! to application code or higher-level crates.
 //!
 //! # Choosing a layer
 //!
@@ -29,7 +37,7 @@
 //!   runtime-neutral timer waitable, so active read/write timeouts can cancel and
 //!   drain before close without zero-duration polling loops.
 //!
-//! # Example
+//! # Quick client example
 //!
 //! ```no_run
 //! use http::Request;
@@ -52,6 +60,16 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Limitations
+//!
+//! - The crate does not open TCP sockets, resolve DNS, or manage pools.
+//! - Buffered responses are bounded by [`BodyLimits`]; use chunk callbacks or
+//!   HTTP/2 streaming when payloads may be large.
+//! - HTTP/2 support exposes stream-level primitives but does not hide
+//!   backpressure or flow-control decisions.
+//! - TLS support is behind the `tls` feature and uses `kimojio-stack-tls`
+//!   streams supplied by the caller.
 //!
 //! # Body and streaming behavior
 //!

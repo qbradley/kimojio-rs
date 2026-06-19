@@ -13,6 +13,11 @@
 //! unary OTLP export requests over `kimojio-stack-grpc`; traces, automatic
 //! instrumentation, periodic export, and retry policy are left to higher layers.
 //!
+//! Use this crate when you want to send explicit OTLP log or metric export
+//! requests from stackful code and keep batching, retry, sampling, and shutdown
+//! policy in your application. It is not an OpenTelemetry SDK replacement and it
+//! does not hook into Rust tracing automatically.
+//!
 //! # Runtime and instrumentation readiness
 //!
 //! OpenTelemetry inherits its runtime boundary from gRPC, which in turn owns a
@@ -50,6 +55,9 @@
 //! assert!(!encoded.is_empty());
 //! ```
 //!
+//! The encoding example is pure data construction and can run outside the
+//! runtime. Actual export requires a connected stackful gRPC/HTTP2 transport.
+//!
 //! # Exporting from a stackful client
 //!
 //! ```no_run
@@ -75,6 +83,13 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Limitations
+//!
+//! - Logs and metrics are implemented; traces are not.
+//! - Export is explicit and synchronous from the caller's stackful coroutine.
+//! - No background retry, periodic flush, sampling, or global provider is
+//!   installed by this crate.
 
 pub mod client;
 pub mod error;

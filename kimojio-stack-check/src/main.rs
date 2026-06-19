@@ -1,6 +1,42 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Command-line stack budget checker for stackful binaries.
+//!
+//! `kimojio-stack-check` reads compiler-emitted `.stack_sizes` metadata and a
+//! disassembled call graph, then reports the largest known stack usage reachable
+//! from one or more entry-point patterns. It is intended for projects using
+//! small guarded stackful coroutines where stack budgets should be validated
+//! before lowering default stack sizes.
+//!
+//! The tool is conservative: direct call edges are followed, cycles and indirect
+//! calls are reported as unknowns, and `--fail-on-unknown` can turn those
+//! unknowns into a failing gate. It does not prove stack usage for recursion,
+//! function pointers, trait-object dispatch, dynamically loaded code, or code
+//! without stack-size metadata.
+//!
+//! # Typical workflow
+//!
+//! 1. Build the target with stack-size metadata, for example with
+//!    `RUSTFLAGS="-Z emit-stack-sizes"` on nightly.
+//! 2. Preserve the `.stack_sizes` section in the final binary.
+//! 3. Run this checker against entry functions that correspond to stackful task
+//!    roots.
+//!
+//! ```sh
+//! cargo run -p kimojio-stack-check -- \
+//!   --binary target/release/object-gateway-stack-host \
+//!   --entry serve_stack_admin_listener=20480 \
+//!   --entry serve_steal_grpc_listener=20480 \
+//!   --fail-on-unknown
+//! ```
+//!
+//! # Output
+//!
+//! Each matching entry prints `frame_bytes`, `known_stack_bytes`, optional
+//! `budget_bytes`, and counts of unknown edges/cycles. Over-budget entries make
+//! the process exit with an error.
+//!
 use std::{
     collections::HashMap,
     env,

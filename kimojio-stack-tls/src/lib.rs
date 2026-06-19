@@ -11,6 +11,12 @@
 //! the OS-thread nonblocking without adding an intermediate copy between the
 //! socket and OpenSSL's encrypted buffers.
 //!
+//! Use this crate when you already use OpenSSL for TLS policy/certificates and
+//! need the resulting stream to park a stackful coroutine instead of blocking an
+//! OS thread. The crate is intentionally transport-focused: certificate stores,
+//! ALPN choices, client/server verification policy, and key material loading are
+//! configured with the normal `openssl` crate before conversion.
+//!
 //! # Success path
 //!
 //! Create an OpenSSL client or server context in ordinary OpenSSL code, convert it
