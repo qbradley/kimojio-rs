@@ -292,6 +292,10 @@ const DEFAULT_SCOPE_STATE_CACHE_CAPACITY: usize = 1024;
 const DEFAULT_SCOPE_STATE_COLLECTION_CACHE_CAPACITY: usize = 32;
 const WAITER_COMPACT_THRESHOLD: usize = 32;
 
+thread_local! {
+    static CURRENT_CONTEXT: Cell<*const ()> = const { Cell::new(std::ptr::null()) };
+}
+
 #[cfg(test)]
 #[global_allocator]
 static TEST_ALLOCATOR: allocation_tracking::CountingAllocator =
@@ -711,7 +715,10 @@ impl Runtime {
             current: CurrentTask::Root,
             active_scopes: RefCell::new(Vec::new()),
         };
-        let output = panic::catch_unwind(AssertUnwindSafe(|| main(&cx)));
+        let output = {
+            let _current_context = CurrentContextGuard::enter(&cx);
+            panic::catch_unwind(AssertUnwindSafe(|| main(&cx)))
+        };
         drain_scheduler_io(&core);
 
         let scheduler = core.borrow();
@@ -750,7 +757,113 @@ pub struct RuntimeContext<'cx> {
     active_scopes: RefCell<Vec<Rc<ScopeState>>>,
 }
 
+/// Borrowed view of the currently executing [`RuntimeContext`].
+///
+/// The borrow is valid only for the duration of the callback passed to
+/// [`RuntimeContext::with_current`].
+pub struct CurrentRuntimeContext<'cx> {
+    inner: &'cx RuntimeContext<'cx>,
+}
+
+impl<'cx> Deref for CurrentRuntimeContext<'cx> {
+    type Target = RuntimeContext<'cx>;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner
+    }
+}
+
+struct CurrentContextGuard {
+    previous: *const (),
+}
+
+impl CurrentContextGuard {
+    fn enter(cx: &RuntimeContext<'_>) -> Self {
+        let current = (cx as *const RuntimeContext<'_>).cast::<()>();
+        let previous = CURRENT_CONTEXT.with(|slot| slot.replace(current));
+        Self { previous }
+    }
+}
+
+impl Drop for CurrentContextGuard {
+    fn drop(&mut self) {
+        CURRENT_CONTEXT.with(|slot| slot.set(self.previous));
+    }
+}
+
+struct CurrentContextClearGuard {
+    previous: *const (),
+}
+
+impl CurrentContextClearGuard {
+    fn enter() -> Self {
+        let previous = CURRENT_CONTEXT.with(|slot| slot.replace(std::ptr::null()));
+        Self { previous }
+    }
+}
+
+impl Drop for CurrentContextClearGuard {
+    fn drop(&mut self) {
+        CURRENT_CONTEXT.with(|slot| slot.set(self.previous));
+    }
+}
+
+fn with_current_context_cleared<T>(f: impl FnOnce() -> T) -> T {
+    let _clear_context = CurrentContextClearGuard::enter();
+    f()
+}
+
+fn suspend_with_current_context_cleared(
+    yielder: &Yielder<ResumeAction, Suspend>,
+    suspend: Suspend,
+) -> ResumeAction {
+    let _clear_context = CurrentContextClearGuard::enter();
+    yielder.suspend(suspend)
+}
+
 impl RuntimeContext<'_> {
+    /// Invokes `f` with the runtime context currently executing on this OS thread.
+    ///
+    /// This is hidden from public API docs because it exists for synchronous
+    /// callback integrations. It returns `None` outside a running kimojio-stack
+    /// context and while the root scheduler is driving other stackful work.
+    #[doc(hidden)]
+    pub fn with_current<T>(f: impl for<'cx> FnOnce(CurrentRuntimeContext<'cx>) -> T) -> Option<T> {
+        let current = CURRENT_CONTEXT.with(Cell::get);
+        if current.is_null() {
+            return None;
+        }
+
+        unsafe fn call_with_current<T>(
+            current: *const (),
+            f: impl for<'cx> FnOnce(CurrentRuntimeContext<'cx>) -> T,
+        ) -> T {
+            struct ErasedContext(*const ());
+
+            impl ErasedContext {
+                unsafe fn get<'cx>(&self) -> CurrentRuntimeContext<'cx> {
+                    CurrentRuntimeContext {
+                        // SAFETY: `CURRENT_CONTEXT` is set only by
+                        // `CurrentContextGuard` while a root or coroutine
+                        // `RuntimeContext` is actively executing user code on
+                        // this OS thread. The higher-ranked callback prevents a
+                        // safe caller from returning a borrow tied to this
+                        // context.
+                        inner: unsafe { &*(self.0.cast::<RuntimeContext<'cx>>()) },
+                    }
+                }
+            }
+
+            // SAFETY: The erased pointer came from `CurrentContextGuard::enter`
+            // for the currently executing runtime context on this OS thread.
+            f(unsafe { ErasedContext(current).get() })
+        }
+
+        // SAFETY: The pointer is either null (handled above) or installed by
+        // `CurrentContextGuard::enter` for this OS thread.
+        Some(unsafe { call_with_current(current, f) })
+    }
+
     /// Creates a structured concurrency scope.
     ///
     /// All stackful coroutines spawned through the scope finish before this
@@ -844,7 +957,7 @@ impl RuntimeContext<'_> {
     #[allow(dead_code)]
     pub fn internal_scheduler_tick(&self) -> bool {
         let made_progress = match self.current {
-            CurrentTask::Root => drive_scheduler(&self.core),
+            CurrentTask::Root => with_current_context_cleared(|| drive_scheduler(&self.core)),
             CurrentTask::Coroutine { id, yielder, stack } => {
                 suspend_task(id, yielder, stack, Suspend::Ready);
                 true
@@ -1527,6 +1640,24 @@ impl RuntimeContext<'_> {
         .map(|_| ())
     }
 
+    /// Gets extended status for an open file descriptor using `statx(2)` with
+    /// `AT_EMPTY_PATH`.
+    pub fn fstat(&self, fd: &impl AsFd, mask: StatxFlags) -> Result<Statx, Errno> {
+        if !self.core.borrow().supports_opcode(opcode::Statx::CODE) {
+            return fs::statx(fd.as_fd(), c"", AtFlags::EMPTY_PATH, mask);
+        }
+
+        let mut statx = MaybeUninit::<Statx>::zeroed();
+        self.submit_and_wait_for_io(
+            opcode::Statx::new(Fd(fd.as_fd().as_raw_fd()), c"".as_ptr(), statx.as_mut_ptr())
+                .flags(AtFlags::EMPTY_PATH)
+                .mask(mask)
+                .build(),
+        )?;
+
+        Ok(unsafe { statx.assume_init() })
+    }
+
     /// Splices data between file descriptors using io_uring.
     pub fn splice(
         &self,
@@ -1703,6 +1834,20 @@ impl RuntimeContext<'_> {
             .map(|result| result as usize)
     }
 
+    /// Reads from `fd` into `buf` at an explicit file offset using io_uring.
+    ///
+    /// This does not update the descriptor's current file offset.
+    pub fn pread(&self, fd: &impl AsFd, buf: &mut [u8], offset: u64) -> Result<usize, Errno> {
+        let len = u32::try_from(buf.len()).expect("io_uring read length exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::Read::new(Fd(fd), buf.as_mut_ptr(), len)
+            .offset(offset)
+            .build();
+
+        self.submit_and_wait_for_io(entry)
+            .map(|result| result as usize)
+    }
+
     /// Vectored read from `fd` into `iovecs` using io_uring.
     pub fn readv(&self, fd: &impl AsFd, iovecs: &mut [IoVec]) -> Result<usize, Errno> {
         let len = u32::try_from(iovecs.len()).expect("io_uring readv iovec count exceeds u32::MAX");
@@ -1870,6 +2015,20 @@ impl RuntimeContext<'_> {
         let fd = fd.as_fd().as_raw_fd();
         let entry = opcode::Write::new(Fd(fd), buf.as_ptr(), len)
             .offset(u64::MAX)
+            .build();
+
+        self.submit_and_wait_for_io(entry)
+            .map(|result| result as usize)
+    }
+
+    /// Writes `buf` to `fd` at an explicit file offset using io_uring.
+    ///
+    /// This does not update the descriptor's current file offset.
+    pub fn pwrite(&self, fd: &impl AsFd, buf: &[u8], offset: u64) -> Result<usize, Errno> {
+        let len = u32::try_from(buf.len()).expect("io_uring write length exceeds u32::MAX");
+        let fd = fd.as_fd().as_raw_fd();
+        let entry = opcode::Write::new(Fd(fd), buf.as_ptr(), len)
+            .offset(offset)
             .build();
 
         self.submit_and_wait_for_io(entry)
@@ -2462,7 +2621,7 @@ impl RuntimeContext<'_> {
         match self.current {
             CurrentTask::Root => {
                 assert!(
-                    drive_scheduler(&self.core),
+                    with_current_context_cleared(|| drive_scheduler(&self.core)),
                     "kimojio-stack runtime deadlocked: no runnable stackful coroutines"
                 );
             }
@@ -2598,6 +2757,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
 
                 let result = panic::catch_unwind(AssertUnwindSafe(|| {
                     handle_resume_action(id, yielder, stack_tracker, Suspend::Ready, action);
+                    let _current_context = CurrentContextGuard::enter(&cx);
                     f(&cx)
                 }));
                 let result = match result {
@@ -6004,7 +6164,7 @@ fn suspend_task(
     stack: StackTracker,
     suspend: Suspend,
 ) {
-    let action = yielder.suspend(suspend);
+    let action = suspend_with_current_context_cleared(yielder, suspend);
     handle_resume_action(id, yielder, stack, suspend, action);
 }
 
@@ -6019,8 +6179,8 @@ fn handle_resume_action(
         match action {
             ResumeAction::Run => return,
             ResumeAction::Interrupt(interrupt) => {
-                interrupt(TaskInterrupt::new(id, stack));
-                action = yielder.suspend(suspend);
+                with_current_context_cleared(|| interrupt(TaskInterrupt::new(id, stack)));
+                action = suspend_with_current_context_cleared(yielder, suspend);
             }
         }
     }
@@ -6746,6 +6906,68 @@ mod tests {
             "kimojio-stack-{name}-{}-{nanos}",
             std::process::id()
         ))
+    }
+
+    fn runtime_context_addr(cx: &RuntimeContext<'_>) -> usize {
+        (cx as *const RuntimeContext<'_>).cast::<()>() as usize
+    }
+
+    #[test]
+    fn current_context_is_visible_only_while_runtime_code_executes() {
+        assert!(RuntimeContext::with_current(|_| ()).is_none());
+
+        let mut runtime = Runtime::new();
+        let visible = runtime.block_on(|cx| {
+            let root_addr = runtime_context_addr(cx);
+            let root_current =
+                RuntimeContext::with_current(|current| runtime_context_addr(&current));
+            let child_current = cx.scope(|scope| {
+                scope
+                    .spawn(|cx| {
+                        RuntimeContext::with_current(|current| runtime_context_addr(&current))
+                            == Some(runtime_context_addr(cx))
+                    })
+                    .join(cx)
+            });
+
+            root_current == Some(root_addr) && child_current
+        });
+
+        assert!(visible);
+        assert!(RuntimeContext::with_current(|_| ()).is_none());
+    }
+
+    #[test]
+    fn current_context_is_cleared_while_coroutine_is_parked() {
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let (ready_tx, ready_rx) = once::channel();
+                let (release_tx, release_rx) = once::channel();
+                let sleeper = scope.spawn(move |cx| {
+                    let sleeper_addr = runtime_context_addr(cx);
+                    ready_tx.send(sleeper_addr).unwrap();
+                    release_rx.recv(cx).unwrap();
+                    RuntimeContext::with_current(|current| runtime_context_addr(&current))
+                        == Some(sleeper_addr)
+                });
+
+                let sleeper_addr = ready_rx.recv(cx).unwrap();
+                cx.yield_now();
+
+                let observer = scope.spawn(move |cx| {
+                    RuntimeContext::with_current(|current| runtime_context_addr(&current))
+                        == Some(runtime_context_addr(cx))
+                        && RuntimeContext::with_current(|current| runtime_context_addr(&current))
+                            != Some(sleeper_addr)
+                });
+                assert!(observer.join(cx));
+
+                release_tx.send(()).unwrap();
+                assert!(sleeper.join(cx));
+            });
+        });
     }
 
     #[test]
@@ -7964,6 +8186,49 @@ mod tests {
             let (_, wait_entries) = cx.core.borrow().ring_enter_counts();
             assert!(wait_entries != 0);
         });
+    }
+
+    #[test]
+    fn positioned_io_preserves_file_offset_and_fstat_reports_size() {
+        let root = unique_temp_dir("positioned");
+        let file = root.join("file");
+        let _ = std::fs::remove_dir_all(&root);
+
+        let mut runtime = Runtime::new();
+
+        runtime.block_on(|cx| {
+            cx.mkdir(&root, Mode::RWXU).unwrap();
+            let fd = cx
+                .open(
+                    &file,
+                    OFlags::CREATE | OFlags::RDWR | OFlags::TRUNC,
+                    Mode::RUSR | Mode::WUSR,
+                )
+                .unwrap();
+
+            assert_eq!(cx.pwrite(&fd, b"world", 5).unwrap(), 5);
+            assert_eq!(cx.pwrite(&fd, b"hello", 0).unwrap(), 5);
+            let stat = cx.fstat(&fd, StatxFlags::BASIC_STATS).unwrap();
+            assert_eq!(stat.stx_size, 10);
+
+            let mut prefix = [0_u8; 5];
+            assert_eq!(cx.read(&fd, &mut prefix).unwrap(), 5);
+            assert_eq!(&prefix, b"hello");
+
+            let mut positioned = [0_u8; 5];
+            assert_eq!(cx.pread(&fd, &mut positioned, 5).unwrap(), 5);
+            assert_eq!(&positioned, b"world");
+
+            let mut suffix = [0_u8; 5];
+            assert_eq!(cx.read(&fd, &mut suffix).unwrap(), 5);
+            assert_eq!(&suffix, b"world");
+
+            cx.close(fd).unwrap();
+            cx.unlink(&file).unwrap();
+            cx.rmdir(&root).unwrap();
+        });
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

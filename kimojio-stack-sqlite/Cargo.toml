@@ -1,0 +1,25 @@
+[package]
+name = "kimojio-stack-sqlite"
+version = "0.0.1-alpha.0"
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "SQLite VFS integration for kimojio-stack"
+publish = false
+
+[features]
+default = ["rusqlite"]
+rusqlite = ["dep:rusqlite"]
+
+[dependencies]
+kimojio-stack.workspace = true
+libc.workspace = true
+libsqlite3-sys.workspace = true
+rusqlite = { workspace = true, optional = true }
+rustix = { workspace = true, features = ["fs", "mm", "rand"] }
+
+[dev-dependencies]
+kimojio-stack-steal.workspace = true
+tempfile.workspace = true

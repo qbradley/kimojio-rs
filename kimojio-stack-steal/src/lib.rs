@@ -1089,6 +1089,11 @@ impl RuntimeContext<'_> {
         self.inner.sync_file_range(fd, offset, len, flags)
     }
 
+    /// Gets extended status for an open file descriptor.
+    pub fn fstat(&self, fd: &impl AsFd, mask: StatxFlags) -> Result<Statx, Errno> {
+        self.inner.fstat(fd, mask)
+    }
+
     /// Splices data between file descriptors.
     pub fn splice(
         &self,
@@ -1170,6 +1175,11 @@ impl RuntimeContext<'_> {
         self.inner.read(fd, buf)
     }
 
+    /// Reads from `fd` into `buf` at an explicit file offset.
+    pub fn pread(&self, fd: &impl AsFd, buf: &mut [u8], offset: u64) -> Result<usize, Errno> {
+        self.inner.pread(fd, buf, offset)
+    }
+
     /// Vectored read from `fd` into `iovecs`.
     pub fn readv(&self, fd: &impl AsFd, iovecs: &mut [IoVec]) -> Result<usize, Errno> {
         self.inner.readv(fd, iovecs)
@@ -1239,6 +1249,11 @@ impl RuntimeContext<'_> {
     /// Writes `buf` to `fd`.
     pub fn write(&self, fd: &impl AsFd, buf: &[u8]) -> Result<usize, Errno> {
         self.inner.write(fd, buf)
+    }
+
+    /// Writes `buf` to `fd` at an explicit file offset.
+    pub fn pwrite(&self, fd: &impl AsFd, buf: &[u8], offset: u64) -> Result<usize, Errno> {
+        self.inner.pwrite(fd, buf, offset)
     }
 
     /// Vectored write from `iovecs` to `fd`.
@@ -5674,7 +5689,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_context_filesystem_and_vectored_io_parity() {
+    fn direct_context_positioned_filesystem_and_vectored_io_parity() {
         let root = unique_temp_dir("direct-fs");
         let file = root.join("file");
         let renamed = root.join("renamed");
@@ -5690,7 +5705,16 @@ mod tests {
                     Mode::RUSR | Mode::WUSR,
                 )
                 .unwrap();
-            assert_eq!(cx.write(&fd, b"hello").unwrap(), 5);
+            assert_eq!(cx.pwrite(&fd, b"world", 5).unwrap(), 5);
+            assert_eq!(cx.pwrite(&fd, b"hello", 0).unwrap(), 5);
+            let stat = cx.fstat(&fd, StatxFlags::BASIC_STATS).unwrap();
+            assert_eq!(stat.stx_size, 10);
+            let mut prefix = [0_u8; 5];
+            assert_eq!(cx.read(&fd, &mut prefix).unwrap(), 5);
+            assert_eq!(&prefix, b"hello");
+            let mut suffix = [0_u8; 5];
+            assert_eq!(cx.pread(&fd, &mut suffix, 5).unwrap(), 5);
+            assert_eq!(&suffix, b"world");
             cx.ftruncate(&fd, 3).unwrap();
             cx.fsync(&fd).unwrap();
             let stat = cx

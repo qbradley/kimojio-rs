@@ -8,6 +8,7 @@ members = [
     "kimojio-stack-grpc",
     "kimojio-stack-http",
     "kimojio-stack-opentelemetry",
+    "kimojio-stack-sqlite",
     "kimojio-stack-storage",
     "kimojio-stack-tls",
     "kimojio-stack-check",
@@ -56,6 +57,7 @@ kimojio-stack-storage = { path = "kimojio-stack-storage", version = "0.0.1-alpha
 kimojio-stack-tls = { path = "kimojio-stack-tls", version = "0.0.1-alpha.0" }
 kimojio-tls = { path = "kimojio-tls", version = "0.16.5" }
 libc = "0.2"
+libsqlite3-sys = { version = "0.35.0", features = ["bundled"] }
 mimalloc = "0.1"
 openssl = "0.10"
 opentelemetry-proto = { version = "0.32", default-features = false }
@@ -63,6 +65,7 @@ pin-project-lite = "0.2"
 prost = "0.14"
 rcgen = { version = "0.14", features = ["x509-parser"] }
 roaring = "0.11"
+rusqlite = "0.37.0"
 serde_json = "1"
 rustix = { version = "1", features = [
     "io_uring",

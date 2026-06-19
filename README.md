@@ -30,6 +30,8 @@ that need explicit scheduling and predictable latency:
   and metrics export over the stackful gRPC transport.
 - `kimojio-stack-storage` provides low-level durable object-storage request
   foundations over the stackful HTTP transport.
+- `kimojio-stack-sqlite` provides a SQLite VFS for rusqlite-backed local
+  databases inside stackful runtimes.
 
 See the [Stackful HTTP and gRPC Guide][stack-http-grpc-guide] for supported
 protocol features, transport setup, interoperability guarantees, and current
@@ -40,11 +42,14 @@ See the [Stackful Storage Guide][stack-storage-guide] for supported storage
 operation families, retry behavior, and integration-test gates.
 See the [Stackful Object Gateway Guide][stack-object-gateway-guide] for the
 canonical multi-runtime example, conformance matrix, and workload commands.
+See the [Stackful SQLite VFS Guide][stack-sqlite-guide] for rusqlite setup,
+runtime requirements, validation commands, and current limitations.
 
 [stack-http-grpc-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-http-grpc.md
 [stack-opentelemetry-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-opentelemetry.md
 [stack-storage-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-storage.md
 [stack-object-gateway-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-object-gateway.md
+[stack-sqlite-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-sqlite.md
 
 ## Stackful Work-Stealing Runtime
 
