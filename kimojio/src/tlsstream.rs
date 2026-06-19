@@ -14,7 +14,7 @@ use crate::{
     operations, try_clone_owned_fd,
 };
 use futures::TryFutureExt;
-use kimojio_tls::{TlsServer, TlsServerShared};
+use kimojio_tls::{ApplicationBioWriteLease, TlsServer, TlsServerShared};
 use std::borrow::Borrow;
 use std::io::IoSlice;
 use std::rc::Rc;
@@ -78,8 +78,7 @@ trait TlsIo {
     fn read(&mut self, buffer: &mut [u8]) -> kimojio_tls::Response;
     fn write(&mut self, buffer: &[u8]) -> kimojio_tls::Response;
     fn shutdown(&mut self) -> kimojio_tls::Response;
-    fn push_buffer_capacity(&self) -> Option<usize>;
-    fn push_bytes(&self, bytes: &[u8]) -> Option<usize>;
+    fn write_lease(&self) -> Option<ApplicationBioWriteLease<'_>>;
     fn copy_pull_buffer(&self) -> Option<Vec<u8>>;
     fn use_pull_buffer(&mut self, amount: usize);
 }
@@ -97,12 +96,8 @@ impl TlsIo for TlsServer {
         self.shutdown()
     }
 
-    fn push_buffer_capacity(&self) -> Option<usize> {
-        self.push_buffer_capacity()
-    }
-
-    fn push_bytes(&self, bytes: &[u8]) -> Option<usize> {
-        self.push_bytes(bytes)
+    fn write_lease(&self) -> Option<ApplicationBioWriteLease<'_>> {
+        self.write_lease()
     }
 
     fn copy_pull_buffer(&self) -> Option<Vec<u8>> {
@@ -127,12 +122,8 @@ impl TlsIo for TlsServerShared {
         self.shutdown()
     }
 
-    fn push_buffer_capacity(&self) -> Option<usize> {
-        self.push_buffer_capacity()
-    }
-
-    fn push_bytes(&self, bytes: &[u8]) -> Option<usize> {
-        self.push_bytes(bytes)
+    fn write_lease(&self) -> Option<ApplicationBioWriteLease<'_>> {
+        self.write_lease()
     }
 
     fn copy_pull_buffer(&self) -> Option<Vec<u8>> {
@@ -238,16 +229,12 @@ async fn try_read(
 ) -> Result<(), Errno> {
     let socket = socket.read_socket().await?;
     if let Some(socket) = socket.borrow() {
-        if let Some(capacity) = ssl.push_buffer_capacity() {
-            let mut buffer = vec![0; capacity];
-            let amount = operations::read_with_deadline(socket, &mut buffer, deadline).await?;
+        if let Some(mut lease) = ssl.write_lease() {
+            let amount = operations::read_with_deadline(socket, lease.as_mut(), deadline).await?;
             if amount == 0 {
                 return Err(Errno::from_raw_os_error(libc::EPIPE));
             }
-            let pushed = ssl
-                .push_bytes(&buffer[..amount])
-                .expect("BIO write buffer disappeared after socket read");
-            assert_eq!(pushed, amount);
+            lease.commit(amount);
         }
         Ok(())
     } else {

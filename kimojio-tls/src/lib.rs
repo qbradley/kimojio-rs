@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 use std::ffi::CStr;
+use std::marker::PhantomData;
 use std::os::raw::{c_char, c_int, c_ulong};
 use std::ptr::{NonNull, null_mut};
 use std::{cell::Cell, rc::Rc};
@@ -211,7 +212,8 @@ fn c_int_len(len: usize) -> Result<c_int, TlsServerError> {
 struct ApplicationBio {
     bio: NonNull<ffi::BIO>,
     #[cfg(debug_assertions)]
-    in_callback: Cell<bool>,
+    in_write_callback: Cell<bool>,
+    in_read_callback: Cell<bool>,
 }
 
 impl ApplicationBio {
@@ -219,7 +221,8 @@ impl ApplicationBio {
         Self {
             bio,
             #[cfg(debug_assertions)]
-            in_callback: Cell::new(false),
+            in_write_callback: Cell::new(false),
+            in_read_callback: Cell::new(false),
         }
     }
 
@@ -227,8 +230,26 @@ impl ApplicationBio {
         self.with_write_buffer(|buffer| (0, buffer.len()))
     }
 
+    fn write_lease(&self) -> Option<ApplicationBioWriteLease<'_>> {
+        let guard = self.enter_callback(ApplicationBioDirection::Write);
+        let mut buf = null_mut();
+        let size = unsafe { BIO_nwrite0(self.bio.as_ptr(), &mut buf) };
+        if size <= 0 {
+            return None;
+        }
+
+        let buffer = NonNull::new(buf.cast())?;
+        Some(ApplicationBioWriteLease {
+            bio: self.bio,
+            buffer,
+            len: size as usize,
+            _guard: guard,
+            _not_send: PhantomData,
+        })
+    }
+
     fn with_write_buffer<R>(&self, f: impl FnOnce(&mut [u8]) -> (usize, R)) -> Option<R> {
-        let _guard = self.enter_callback();
+        let _guard = self.enter_callback(ApplicationBioDirection::Write);
         let mut buf = null_mut();
         let size = unsafe { BIO_nwrite0(self.bio.as_ptr(), &mut buf) };
         if size <= 0 {
@@ -245,7 +266,7 @@ impl ApplicationBio {
     }
 
     fn with_read_buffer<R>(&self, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
-        let _guard = self.enter_callback();
+        let _guard = self.enter_callback(ApplicationBioDirection::Read);
         let mut buf = null_mut();
         let size = unsafe { BIO_nread0(self.bio.as_ptr(), &mut buf) };
         if size <= 0 {
@@ -257,22 +278,34 @@ impl ApplicationBio {
     }
 
     fn consume_read_buffer(&self, amount: usize) {
-        let _guard = self.enter_callback();
+        let _guard = self.enter_callback(ApplicationBioDirection::Read);
         let amount = c_int_len(amount).expect("BIO read length exceeds c_int");
         let mut buf = null_mut();
         let read = unsafe { BIO_nread(self.bio.as_ptr(), &mut buf, amount) };
         assert_eq!(read, amount);
     }
 
-    fn enter_callback(&self) -> ApplicationBioCallbackGuard<'_> {
-        #[cfg(debug_assertions)]
-        {
-            assert!(
-                !self.in_callback.replace(true),
-                "reentrant OpenSSL BIO callback access"
-            );
+    fn enter_callback(
+        &self,
+        direction: ApplicationBioDirection,
+    ) -> ApplicationBioCallbackGuard<'_> {
+        match direction {
+            ApplicationBioDirection::Read => assert!(
+                !self.in_read_callback.replace(true),
+                "reentrant OpenSSL BIO read-buffer access"
+            ),
+            ApplicationBioDirection::Write => {
+                #[cfg(debug_assertions)]
+                assert!(
+                    !self.in_write_callback.replace(true),
+                    "reentrant OpenSSL BIO write-buffer access"
+                );
+            }
         }
-        ApplicationBioCallbackGuard { bio: self }
+        ApplicationBioCallbackGuard {
+            bio: self,
+            direction,
+        }
     }
 }
 
@@ -282,14 +315,49 @@ impl Drop for ApplicationBio {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ApplicationBioDirection {
+    Read,
+    Write,
+}
+
 struct ApplicationBioCallbackGuard<'a> {
     bio: &'a ApplicationBio,
+    direction: ApplicationBioDirection,
 }
 
 impl Drop for ApplicationBioCallbackGuard<'_> {
     fn drop(&mut self) {
-        #[cfg(debug_assertions)]
-        self.bio.in_callback.set(false);
+        match self.direction {
+            ApplicationBioDirection::Read => self.bio.in_read_callback.set(false),
+            ApplicationBioDirection::Write => {
+                #[cfg(debug_assertions)]
+                self.bio.in_write_callback.set(false);
+            }
+        }
+    }
+}
+
+pub struct ApplicationBioWriteLease<'a> {
+    bio: NonNull<ffi::BIO>,
+    buffer: NonNull<u8>,
+    len: usize,
+    _guard: ApplicationBioCallbackGuard<'a>,
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl AsMut<[u8]> for ApplicationBioWriteLease<'_> {
+    fn as_mut(&mut self) -> &mut [u8] {
+        unsafe { std::slice::from_raw_parts_mut(self.buffer.as_ptr(), self.len) }
+    }
+}
+
+impl ApplicationBioWriteLease<'_> {
+    pub fn commit(self, amount: usize) {
+        let amount = c_int_len(amount).expect("BIO write length exceeds c_int");
+        let mut buf = null_mut();
+        let written = unsafe { BIO_nwrite(self.bio.as_ptr(), &mut buf, amount) };
+        assert_eq!(written, amount);
     }
 }
 
@@ -388,6 +456,10 @@ macro_rules! impl_tls_server_methods {
                 self.inner.push_buffer_capacity()
             }
 
+            pub fn write_lease(&self) -> Option<ApplicationBioWriteLease<'_>> {
+                self.inner.write_lease()
+            }
+
             pub fn push_bytes(&self, bytes: &[u8]) -> Option<usize> {
                 self.inner.push_bytes(bytes)
             }
@@ -476,6 +548,10 @@ impl TlsServerInner {
 
     fn push_buffer_capacity(&self) -> Option<usize> {
         self.application_bio.available_write_len()
+    }
+
+    fn write_lease(&self) -> Option<ApplicationBioWriteLease<'_>> {
+        self.application_bio.write_lease()
     }
 
     fn push_bytes(&self, bytes: &[u8]) -> Option<usize> {
@@ -594,10 +670,16 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
-    #[should_panic(expected = "reentrant OpenSSL BIO callback access")]
+    #[should_panic(expected = "reentrant OpenSSL BIO write-buffer access")]
     fn debug_rejects_reentrant_bio_access() {
         let server = test_tls_server(false);
-        let _guard = server.inner.application_bio.enter_callback();
-        let _reentrant = server.inner.application_bio.enter_callback();
+        let _guard = server
+            .inner
+            .application_bio
+            .enter_callback(ApplicationBioDirection::Write);
+        let _reentrant = server
+            .inner
+            .application_bio
+            .enter_callback(ApplicationBioDirection::Write);
     }
 }
