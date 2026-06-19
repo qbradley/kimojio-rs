@@ -12,6 +12,10 @@ use kimojio_stack::RuntimeSocket;
 
 use crate::{Body, BodyBuilder, BodyLimits, Error, HttpRuntime, LimitKind, RuntimeStackTransport};
 
+use super::read_buf::{DEFAULT_READ_CHUNK_SIZE, read_into_empty, read_more};
+
+const LINE_READ_CHUNK_SIZE: usize = 1024;
+
 /// HTTP/1.1 body framing strategy for a message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BodyKind {
@@ -138,17 +142,24 @@ where
     let mut remaining = len;
     if !read_buf.is_empty() {
         let amount = read_buf.len().min(remaining);
-        on_chunk(Bytes::copy_from_slice(&read_buf[..amount]))?;
+        let chunk = Bytes::copy_from_slice(&read_buf[..amount]);
         read_buf.drain(..amount);
         remaining -= amount;
+        on_chunk(chunk)?;
     }
-    let mut buf = [0_u8; 16 * 1024];
     while remaining != 0 {
-        let amount = transport.read(cx, &mut buf[..remaining.min(16 * 1024)])?;
+        let amount = read_into_empty(
+            cx,
+            transport,
+            read_buf,
+            remaining.min(DEFAULT_READ_CHUNK_SIZE),
+        )?;
         if amount == 0 {
             return Err(Error::Eof);
         }
-        on_chunk(Bytes::copy_from_slice(&buf[..amount]))?;
+        let chunk = Bytes::copy_from_slice(&read_buf[..amount]);
+        read_buf.clear();
+        on_chunk(chunk)?;
         remaining -= amount;
     }
     Ok(())
@@ -240,13 +251,14 @@ where
         read_buf.clear();
     }
 
-    let mut buf = [0_u8; 16 * 1024];
     loop {
-        let amount = transport.read(cx, &mut buf)?;
+        let amount = read_into_empty(cx, transport, read_buf, DEFAULT_READ_CHUNK_SIZE)?;
         if amount == 0 {
             return Ok(body.finish());
         }
-        body.append(&buf[..amount])?;
+        let append = body.append(&read_buf[..amount]);
+        read_buf.clear();
+        append?;
     }
 }
 
@@ -266,18 +278,23 @@ where
     if !read_buf.is_empty() {
         total_len += read_buf.len();
         limits.check_body_len(total_len)?;
-        on_chunk(Bytes::copy_from_slice(read_buf))?;
+        let chunk = Bytes::copy_from_slice(read_buf);
         read_buf.clear();
+        on_chunk(chunk)?;
     }
-    let mut buf = [0_u8; 16 * 1024];
     loop {
-        let amount = transport.read(cx, &mut buf)?;
+        let amount = read_into_empty(cx, transport, read_buf, DEFAULT_READ_CHUNK_SIZE)?;
         if amount == 0 {
             return Ok(());
         }
         total_len = total_len.saturating_add(amount);
-        limits.check_body_len(total_len)?;
-        on_chunk(Bytes::copy_from_slice(&buf[..amount]))?;
+        if let Err(error) = limits.check_body_len(total_len) {
+            read_buf.clear();
+            return Err(error);
+        }
+        let chunk = Bytes::copy_from_slice(&read_buf[..amount]);
+        read_buf.clear();
+        on_chunk(chunk)?;
     }
 }
 
@@ -352,10 +369,19 @@ where
     R: HttpRuntime<S>,
     S: RuntimeSocket,
 {
-    let mut buf = [0_u8; 16 * 1024];
     while len != 0 {
-        let amount = len.min(buf.len());
-        read_exact_into(cx, transport, read_buf, &mut buf[..amount])?;
+        let buffered = read_buf.len().min(len);
+        read_buf.drain(..buffered);
+        len -= buffered;
+        if len == 0 {
+            break;
+        }
+
+        let amount = read_into_empty(cx, transport, read_buf, len.min(DEFAULT_READ_CHUNK_SIZE))?;
+        if amount == 0 {
+            return Err(Error::Eof);
+        }
+        read_buf.clear();
         len -= amount;
     }
     Ok(())
@@ -374,13 +400,13 @@ where
     let mut total_len = read_buf.len();
     limits.check_body_len(total_len)?;
     read_buf.clear();
-    let mut buf = [0_u8; 16 * 1024];
     loop {
-        let amount = transport.read(cx, &mut buf)?;
+        let amount = read_into_empty(cx, transport, read_buf, DEFAULT_READ_CHUNK_SIZE)?;
         if amount == 0 {
             return Ok(());
         }
         total_len = total_len.saturating_add(amount);
+        read_buf.clear();
         limits.check_body_len(total_len)?;
     }
 }
@@ -429,12 +455,10 @@ where
         if read_buf.len() > limit {
             return Err(Error::size_limit(LimitKind::Headers, limit, read_buf.len()));
         }
-        let mut buf = [0_u8; 1024];
-        let amount = transport.read(cx, &mut buf)?;
+        let amount = read_more(cx, transport, read_buf, LINE_READ_CHUNK_SIZE)?;
         if amount == 0 {
             return Err(Error::Eof);
         }
-        read_buf.extend_from_slice(&buf[..amount]);
     }
 }
 

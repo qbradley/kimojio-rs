@@ -91,23 +91,24 @@ For the Object Gateway host, the practical loop is:
 # Static lower-bound check.
 cargo run -q -p kimojio-stack-check -- \
   --binary target/release/object-gateway-stack-host \
-  --entry serve_stack_grpc_listener=32K \
-  --entry serve_stack_admin_listener=32K \
-  --entry serve_steal_grpc_listener=32K \
-  --entry serve_steal_admin_listener=32K
+  --entry serve_stack_grpc_listener=20K \
+  --entry serve_stack_admin_listener=20K \
+  --entry serve_steal_grpc_listener=20K \
+  --entry serve_steal_admin_listener=20K
 
 # Runtime high-water self-check.
 cargo run --release -q -p examples --bin object-gateway-stack-host -- \
   --runtime stack \
   --grpc-addr 127.0.0.1:0 \
   --admin-addr 127.0.0.1:0 \
-  --stack-size-bytes 32768 \
+  --stack-size-bytes 20480 \
   --shutdown-after-ready \
   --print-stack-usage
 ```
 
-The standalone Object Gateway currently defaults to 32 KiB guarded coroutine
-stacks. Use `--stack-size-bytes` to tune that application budget.
+The standalone Object Gateway currently defaults to 20 KiB guarded coroutine
+stacks in release builds. Debug builds default higher because unoptimized frames
+are larger. Use `--stack-size-bytes` to tune that application budget.
 
 ## Limitations
 

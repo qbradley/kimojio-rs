@@ -17,6 +17,7 @@ use kimojio_stack::RuntimeSocket;
 use crate::{Body, BodyLimits, Error, HttpConfig, HttpRuntime, LimitKind, RuntimeStackTransport};
 
 use super::body::{BodyKind, drain_body, read_body, read_body_chunks, write_body};
+use super::read_buf::read_more;
 
 /// Parsed HTTP request plus connection-close decision.
 #[derive(Debug)]
@@ -421,15 +422,13 @@ where
             Ok(())
         }
 
-        let mut buf = vec![0_u8; config.read_buffer_size.max(1)];
-        let amount = transport.read(cx, &mut buf)?;
+        let amount = read_more(cx, transport, read_buf, config.read_buffer_size)?;
         if amount == 0 {
             if read_buf.is_empty() {
                 return Ok(None);
             }
             return Err(Error::Eof);
         }
-        read_buf.extend_from_slice(&buf[..amount]);
     }
 }
 

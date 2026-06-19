@@ -51,10 +51,11 @@ cargo run -q -p examples --bin object-gateway-stack-host -- \
   --shutdown-after-ready
 ```
 
-The stackful host defaults to 32 KiB guarded coroutine stacks for both `stack`
-and `steal` modes. Use `--stack-size-bytes` to raise or lower the application
-budget and `--print-stack-usage` with `--shutdown-after-ready` to emit
-page-granular runtime high-water diagnostics.
+The stackful host defaults to 20 KiB guarded coroutine stacks in release builds
+for both `stack` and `steal` modes. Debug builds default to 40 KiB to absorb
+larger unoptimized frames. Use `--stack-size-bytes` to raise or lower the
+application budget and `--print-stack-usage` with `--shutdown-after-ready` to
+emit page-granular runtime high-water diagnostics.
 
 Tokio comparison host self-check:
 

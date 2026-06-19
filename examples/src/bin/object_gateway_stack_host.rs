@@ -29,7 +29,10 @@ use rustix::net::{
 #[global_allocator]
 static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-const DEFAULT_STACK_SIZE_BYTES: usize = 32 * 1024;
+#[cfg(debug_assertions)]
+const DEFAULT_STACK_SIZE_BYTES: usize = 40 * 1024;
+#[cfg(not(debug_assertions))]
+const DEFAULT_STACK_SIZE_BYTES: usize = 20 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum RuntimeKind {
