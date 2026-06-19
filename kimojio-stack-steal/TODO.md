@@ -1,373 +1,213 @@
 # kimojio-stack-steal TODO
 
-Deferred follow-up work from the runtime-agnostic downstream migration workflow
-and final review. Some items touch sibling crates because `kimojio-stack-steal`
-is the companion runtime that drives the shared runtime/I/O contract.
+This file tracks remaining work for the work-stealing stackful runtime and its
+runtime-neutral integration points. Completed runtime-agnostic migration items
+have been removed; keep new items focused on gaps that still affect
+`kimojio-stack-steal` as a companion runtime for high-scale services.
 
 ## Recommended pickup order
 
-1. Tighten stack-steal shared-ring cancellation and ownership behavior.
-2. Harden the runtime-neutral result/wait API contract.
-3. Add missing TLS write-timeout and allocation/performance coverage.
-4. Continue downstream generic migration once HTTP/1+TLS is stable.
-
-## Stack-steal and runtime API hardening
-
-### 1. [done] Replace shared-buffer fd-clone retirement polling
-
-**Why:** `SharedBufferOperation::request_cancel` still waits for fd clone
-retirement with zero-duration runtime sleeps plus `thread::sleep`. This can block
-worker OS threads and can surface `FdInUse`/generic runtime errors after HTTP has
-already decided a deadline won.
-
-**Pickup notes:**
-
-- Start in `kimojio-stack-steal/src/lib.rs`:
-  - `SharedBufferOperation::request_cancel`
-  - `wait_for_fd_clone_release`
-  - shared operation state/cancel waiters near `SharedOpState`
-- Replace wall-clock polling with either:
-  - a runtime-neutral waiter that wakes when fd clone retirement is observable, or
-  - a deterministic ownership result that does not block workers and is documented
-    as the caller-visible terminal outcome.
-- Preserve the current HTTP contract: once a deadline wins, HTTP should normally
-  return `Errno::TIME` and still be able to close/reclaim the transport.
-
-**Validation to add:**
-
-- Delay shared-operation retirement past the old one-second polling window and
-  assert HTTP still returns the documented timeout/cancellation outcome.
-- Stress many stalled stack-steal HTTP/TLS connections with short deadlines and
-  assert bounded cancellation latency and worker availability.
-
-### 2. [done] Avoid fresh shared-ring core allocation for each root socket adapter call
-
-**Why:** Root/non-worker `SocketIoRuntime` adapter calls choose `RingMode::Shared`
-and currently create a fresh shared ring for each read/write/async/shutdown/close
-operation. That is expensive and can create avoidable cache traffic and queue
-allocation on hot root/shared paths.
-
-**Pickup notes:**
-
-- Start in `kimojio-stack-steal/src/runtime_api.rs`:
-  - `RuntimeContext::socket_ring`
-  - `SocketIoRuntime` read/write/read_async/write_async/shutdown/close impls
-- Design options:
-  - cache a shared ring in the socket/transport adapter;
-  - cache one root shared ring per runtime context or worker owner;
-  - make hot HTTP/TLS root use explicit/erroring and require worker-local
-    execution for latency-sensitive paths.
-- Keep costs visible. Avoid hidden helper threads or ambient runtime lookup.
-
-**Validation to add:**
-
-- Allocation-count tests for stack-steal runtime-agnostic HTTP/1+TLS and timeout
-  cases.
-- A regression that shared-ring core creation is bounded near setup, not
-  proportional to read/write calls or deadline waits.
-
-### 3. [done] Remove stack-core `Waitable` from runtime-neutral result traits
-
-**Why:** `RuntimeReadResult` and `RuntimeWriteResult` are runtime-neutral in name
-but still inherit stack-core `Waitable`, forcing non-stack runtimes to implement
-stack-core waiter compatibility.
-
-**Pickup notes:**
-
-- Start in `kimojio-stack/src/runtime_api.rs`:
-  - `RuntimeReadResult`
-  - `RuntimeWriteResult`
-  - `RuntimeWaitableAdapter`
-- Make generic HTTP/TLS code wait through `RuntimeWaitable` only.
-- Keep stack-core compatibility behind `RuntimeWaitableAdapter` or stack-specific
-  wrapper impls.
-- Audit `kimojio-stack-http`, `kimojio-stack-tls`, and `kimojio-stack-steal` for
-  direct `Waitable` bounds that should become `RuntimeWaitable`.
-
-**Validation to add:**
-
-- A fake-runtime compile/test case where read/write results implement
-  `RuntimeWaitable` but not stack-core `Waitable`.
-- HTTP/TLS runtime-generic tests proving waits still work on stack-core and
-  stack-steal.
-
-### 4. [done] Clarify or fix direct result `cancel()` semantics
-
-**Why:** The shared result trait comments say cancellation is non-consuming, but
-direct stack-core `IoResult::cancel` and stack-steal `RingIoResult::cancel`
-consume/detach state. The safer non-consuming path currently lives on
-`SocketIoRuntime::cancel_read` / `cancel_write`.
-
-**Pickup notes:**
-
-- Start in:
-  - `kimojio-stack/src/runtime_api.rs` trait comments/default impls
-  - `kimojio-stack/src/lib.rs` `IoResult::cancel`
-  - `kimojio-stack-steal/src/lib.rs` `RingIoResult::cancel`
-  - `kimojio-stack-steal/src/runtime_api.rs` `cancel_read` / `cancel_write`
-- Decide one of:
-  - make direct result cancellation truly non-consuming and drainable; or
-  - rename/reword direct cancellation as consuming/detaching and document that
-    non-consuming cancellation requires `SocketIoRuntime::cancel_*`.
+1. Finish HTTP/TLS deadline and drain integration work that still has active
+   backlog items.
+2. Profile and optimize stack-steal object-gateway streaming PUT.
+3. Add broader runtime observability and stress validation.
+4. Document release/compatibility expectations for the alpha runtime-neutral
+   API surface.
 
-**Validation to add:**
+## HTTP/TLS deadline and close-path hardening
 
-- Stack-core and stack-steal contract tests that call direct result `cancel()`,
-  then verify one deterministic drain/close behavior.
-- Tests for immediate socket close/reclaim after direct cancellation.
+### Goal
 
-### 5. [done] Clarify TLS async cancellation API ownership
+Normalize deadline, cancellation, drain, poisoning, and close behavior for
+stack-steal plaintext/TLS HTTP transports.
 
-**Why:** `TlsReadResult::cancel(&self, _cx: &R)` and
-`TlsWriteResult::cancel(&self, _cx: &R)` accept a runtime context but use the
-runtime captured when the async handle was created.
+### Current state
 
-**Pickup notes:**
+- Runtime-neutral socket read/write cancellation and drain behavior exists.
+- TLS async handles are generic enough for HTTP deadline paths.
+- Active backlog still includes Phase 9 work for HTTP TLS deadlines and
+  stack-steal timeout close/drain coverage.
 
-- Start in `kimojio-stack-tls/src/lib.rs`:
-  - `TlsReadResult::cancel`
-  - `TlsWriteResult::cancel`
-  - `TlsPendingIo::cancel`
-- Pick one API story:
-  - remove the unused context parameter;
-  - keep it but assert/enforce same-runtime semantics;
-  - document it as compatibility-only until the alpha API stabilizes.
-- Update HTTP call sites in `kimojio-stack-http/src/transport.rs` if signatures
-  change.
+### Pickup notes
 
-**Validation to add:**
+- Start in `kimojio-stack-http/src/transport.rs`,
+  `kimojio-stack-tls/src/lib.rs`, and stack-steal runtime API tests.
+- Ensure read and write deadlines return `Errno::TIME` consistently.
+- Ensure pending TLS operations are drained and streams are poisoned before
+  close/reclaim.
+- Keep root/shared-ring and worker-local paths behaviorally aligned.
 
-- Rustdoc or compile tests that show the intended cancellation call shape.
-- A regression that cancellation still poisons TLS streams and drains private
-  socket I/O on both runtime families.
+### Suggested validation
 
-### 6. [done] Add TLS write-deadline cancellation coverage
+- HTTP TLS read and write timeout tests for stack-core and stack-steal.
+- Close-after-timeout tests for worker-local and shared/root paths.
+- Stress many stalled TLS connections with short deadlines and verify bounded
+  worker availability.
 
-**Why:** Current active HTTP TLS deadline tests cover read timeouts. Write
-timeouts have distinct cancellation, drain, poisoning, and close paths.
+## Stack-steal streaming PUT performance
 
-**Pickup notes:**
+### Goal
 
-- Start in `kimojio-stack-http/tests/tls_interop.rs`.
-- Induce a pending TLS write with a peer that completes handshake but then stops
-  reading, ideally with small socket send/receive buffers via rustix sockopts.
-- Cover both stack-core and stack-steal runtime-generic transports.
-- Consider adding a direct generic `TlsWriteResult` cancellation test in
-  `kimojio-stack-tls/src/lib.rs` tests.
+Reduce stack-steal overhead on object-gateway streaming PUT workloads.
 
-**Validation to add:**
+### Current state
 
-- Assert HTTP returns `Errno::TIME`.
-- Assert the TLS stream is poisoned/non-reusable after timeout.
-- Assert `transport.close(cx)` succeeds after the timeout path.
+- Profiling/optimization backlog is active for stack-steal streaming PUT.
+- Stackful object-gateway hosts and comparison implementations exist.
+- Previous work reduced HTTP/1 stack buffers and tuned coroutine stack sizes, but
+  stack-steal streaming PUT still needs focused profiling.
 
-### 7. Add an alpha runtime API release note / no-publish decision
+### Pickup notes
 
-**Why:** The runtime API is alpha but public within the workspace. The migration
-added `RuntimeCapability::SocketIo`, runtime-neutral timers/waits, and generic
-TLS/HTTP surfaces without a consumer-facing release note or explicit no-publish
-decision.
+- Use perf/server-client profiles from object-gateway streaming PUT runs.
+- Compare stack, stack-steal, Tokio, and Go implementations with identical
+  payload/chunk shapes.
+- Look for shared-ring routing, queue contention, copy/buffer churn, TLS/HTTP2
+  framing overhead, and scheduler wake patterns.
+- Apply targeted optimizations only after profiles identify hot paths.
 
-**Pickup notes:**
+### Suggested validation
 
-- Start with `kimojio-stack/src/runtime_api.rs` rustdoc and docs that already say
-  release notes must call out breaking alpha changes.
-- Add a repository release note, changelog entry, or explicit "workspace-private;
-  no publish for this change" note.
-- Include:
-  - `RuntimeCapability::SocketIo`;
-  - runtime-neutral wait/timer handles;
-  - generic TLS async handles;
-  - HTTP/1+TLS runtime-generic surfaces;
-  - preserved stack-core aliases;
-  - deferred HTTP/2/gRPC/storage/OpenTelemetry boundaries.
+- Repeated release benchmarks for streaming PUT locally and on the remote VM.
+- Before/after p50/p95/p99 latency, throughput, CPU, allocation counts, and
+  scheduler/ring metrics.
+- Regression smoke test for the optimized path.
 
-**Validation to add:**
+## Runtime observability and diagnostics
 
-- Run the package/publish dry-run or equivalent release gate after the
-  version/no-publish decision is made.
+### Goal
 
-### 8. [done] Decide what to do with `RuntimeSocket::as_stack_io_fd`
+Make stack-steal behavior observable enough to tune production services.
 
-**Why:** The runtime-neutral socket trait exposes a stack-core escape hatch. It is
-currently useful for compatibility assertions, but it could let production
-generic code branch on concrete stack-core sockets.
+### Current state
 
-**Pickup notes:**
+- `Runtime::metrics` reports completed-run scheduler/stealing counters.
+- `RuntimeContext::pool_diagnostics` exposes local embedded scheduler pools and
+  shared sync buffer cache state.
+- There is no full live view of queue depths, wake latency, per-worker ring
+  activity, cancellation/drain counts, or stack high-water aggregation.
 
-- Start in `kimojio-stack/src/runtime_api.rs` at `RuntimeSocket::as_stack_io_fd`.
-- Options:
-  - move it to a stack-core extension trait;
-  - make it test-only;
-  - keep it and document the exact compatibility use case.
+### Pickup notes
 
-**Validation to add:**
+- Add opt-in metrics for per-worker ready queues, global queue depth, steals,
+  failed steals, wake latency, io_uring submit/completion counts, shared-ring
+  queue length, cancellation/drain outcomes, stack cache reuse, and stack
+  high-water marks.
+- Keep disabled instrumentation allocation-free and free of background work.
+- Decide how metrics integrate with `kimojio-stack-opentelemetry`.
 
-- Re-run HTTP/TLS and stack-steal runtime API tests after moving/removing it.
-- Search downstream crates to ensure production paths are not branching on this
-  method.
+### Suggested validation
 
-### 9. [done] Preserve structured runtime diagnostics where callers need them
+- Unit tests for counter increments on local, stealable, shared-ring, timeout,
+  cancellation, and close paths.
+- Object-gateway run that emits enough metrics to explain throughput and tail
+  latency.
 
-**Why:** Several stack-steal errors collapse into `RuntimeIoError::Other` static
-strings or generic categories, losing wrong-worker, wrong-runtime, queue-full,
-fd-in-use, and no-stackful-context structure.
+## Shared-ring and root-context cost model
 
-**Pickup notes:**
+### Goal
 
-- Start in:
-  - `kimojio-stack/src/runtime_api.rs` `RuntimeIoError`
-  - `kimojio-stack-steal/src/runtime_api.rs` `runtime_io_error`
-  - HTTP/TLS error mapping in `kimojio-stack-http/src/transport.rs` and
-    `kimojio-stack-tls/src/lib.rs`
-- Decide whether callers need branching on structured categories or whether
-  allocation-free static strings are an intentional alpha constraint.
+Keep shared-ring use explicit and cheap enough for runtime-neutral adapters.
 
-**Validation to add:**
+### Current state
 
-- Focused tests for wrong-runtime, wrong-worker, queue-full, fd-in-use,
-  no-stackful-context, and true cancellation.
-- Assert each maps to a documented caller-visible category.
+- Socket runtime adapters cache a context-local socket ring.
+- Shared-ring command queues retain configured capacity.
+- Root `sleep_async` / `sleep_for` still create a ring for the selected mode
+  through `create_ring`; this may be acceptable for cold paths but should be
+  measured for deadline-heavy root/shared usage.
 
-### 10. [done] Measure and reduce boxed waiter allocation on runtime-neutral waits
+### Pickup notes
 
-**Why:** `RuntimeWaitable::add_stackful_waiter` used to require boxed stackful
-waiters that could allocate per park. HTTP deadlines now use runtime-neutral
-`wait_any_stackful`, so this may become a real hot-path cost.
+- Measure root/shared timer-heavy and socket-heavy workloads before changing
+  APIs.
+- Consider caching a root timer/shared ring if measurement shows repeated
+  construction on hot paths.
+- Preserve runtime-affinity checks and no-hidden-helper-thread behavior.
 
-**Pickup notes:**
+### Suggested validation
 
-- Start in `kimojio-stack/src/runtime_api.rs`:
-  - `StackfulWaiter`
-  - `StackfulWaitRegistration`
-  - `StackfulWaitContext::wait_all_stackful`
-  - `StackfulWaitContext::wait_any_stackful`
-- Also inspect stack-steal wait registration wrappers in
-  `kimojio-stack-steal/src/lib.rs`.
-- Measure before redesigning. Candidate redesigns include waiter pooling,
-  stack-owned registration slots, or an allocation-free typed waiter handle.
+- Allocation tests proving repeated root/shared socket operations do not allocate
+  per call after warmup.
+- Timer-heavy benchmark for root/shared deadline paths.
+- Wrong-runtime and wrong-worker tests continue to produce structured errors.
 
-**Validation to add:**
+## Runtime-neutral API release discipline
 
-- Allocation instrumentation for TLS async waits/drains on stack-core and
-  stack-steal.
-- If allocation-free waits are required, add a regression for blocked HTTP/TLS
-  deadline waits.
+### Goal
 
-### 11. [done] Make portability-overhead tests less brittle
+Document the alpha runtime-neutral API surface and release/no-publish decision.
 
-**Why:** Source substring checks and unexplained allocation tolerances can
-false-positive or hide the actual portability budget.
+### Current state
 
-**Pickup notes:**
+- `runtime_api` rustdoc says the surface is alpha.
+- Public traits now cover stackful wait, scoped spawn, socket I/O, timers,
+  runtime-neutral waitables, and structured runtime I/O errors.
+- No consolidated release note describes what is stable enough to depend on and
+  what may break.
 
-- Start in `kimojio-stack-http/src/lib.rs`:
-  - allocation tolerance assertions around the runtime-agnostic HTTP/TLS tests;
-  - `runtime_agnostic_portability_surface_avoids_dyn_heap_and_helper_threads`.
-- Replace magic constants with named constants and rationale tied to the runtime
-  migration success criteria.
-- Factor source scanning into helpers with documented false-positive limits.
+### Pickup notes
 
-**Validation to add:**
+- Add a repository release note, changelog entry, or explicit no-publish note.
+- Include `RuntimeCapability::SocketIo`, runtime-neutral wait/timer handles,
+  generic TLS/HTTP/gRPC/storage/OpenTelemetry surfaces, stack-core aliases, and
+  current deferred areas.
+- Clarify semver expectations for alpha crates.
 
-- Clear failure messages and fixtures/comments documenting what the source scan
-  does and does not prove.
+### Suggested validation
 
-## Deferred downstream migration work
+- Package/publish dry-run or explicit no-publish verification.
+- `cargo test --doc`
+- `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps -p kimojio-stack -p kimojio-stack-steal`
 
-### 12. [done] Fully migrate HTTP/2 and protocol-neutral HTTP APIs
+## Stress, fault-injection, and soak tests
 
-**Why:** The current runtime-generic slice covers HTTP/1.1 plaintext/TLS. HTTP/2
-and protocol-neutral top-level client/server enums remain stack-core concrete.
+### Goal
 
-**Pickup notes:**
+Prove stack-steal remains reliable under high concurrency, cancellation, and
+failure pressure.
 
-- Start in `kimojio-stack-http/src/h2/` and protocol-neutral
-  `client`/`server` wrappers.
-- Reuse `RuntimeStackTransport<S>` and the `HttpRuntime<S>` pattern from HTTP/1.
-- Keep stack-core aliases for compatibility.
+### Current state
 
-**Validation to add:**
+- Focused tests cover many runtime and shared-ring paths.
+- Broader stress/soak validation is not yet a standard gate.
 
-- HTTP/2 request/response tests on both stack-core and stack-steal.
-- gRPC smoke tests after generic HTTP/2 wrappers exist.
+### Pickup notes
 
-### 13. [done] Fully migrate gRPC client/server APIs to generic runtime contexts
+- Add tests with many workers, many stackful tasks, frequent steals, many timers,
+  repeated cancellation/close cycles, and mixed local/shared ring operations.
+- Inject queue-full, wrong-worker, wrong-runtime, fd-in-use, closed-ring,
+  unsupported-opcode, timeout, and cancellation outcomes.
+- Keep long-running soak tests opt-in if they are too slow for default CI.
 
-**Why:** gRPC layers on HTTP/2 and still owns concrete stack-core HTTP/2
-connections.
+### Suggested validation
 
-**Pickup notes:**
+- Default stress smoke test suitable for CI.
+- Extended soak command documented for local/VM runs.
+- Metrics emitted during soak runs to aid diagnosis.
 
-- Start in `kimojio-stack-grpc/src/client.rs` and
-  `kimojio-stack-grpc/src/server.rs`.
-- Wait for generic HTTP/2 connection types, then parameterize `UnaryClient`,
-  server dispatch, and streaming response types over the runtime/socket handle.
-- Preserve current stack-core aliases and constructors.
+## Stack sizing and memory footprint for stack-steal services
 
-**Validation to add:**
+### Goal
 
-- Unary and server-streaming gRPC tests on both runtime families.
-- Existing tonic/hyper interop tests should still pass for stack-core aliases.
+Make stack-steal stack budgets and memory footprint predictable for large
+connection/task counts.
 
-### 14. [done] Fully migrate storage transports and clients to generic runtime contexts
+### Current state
 
-**Why:** Storage still depends on a concrete `StackHttpTransport` over stack-core
-HTTP clients.
+- Object-gateway release defaults and `kimojio-stack-check` workflows exist.
+- Stack-steal memory behavior was less affected by recent stack-size trimming
+  than stack-core in idle connection probes.
 
-**Pickup notes:**
+### Pickup notes
 
-- Start in `kimojio-stack-storage/src/transport.rs`.
-- Wait for generic HTTP client wrappers, then make `StackHttpTransport` generic
-  or add a generic sibling while preserving current names as aliases.
-- Keep storage-facing `Transport` domain semantics stable.
+- Add stack-check gates for representative stack-steal service entry points.
+- Measure stack cache behavior, VmSize/RSS, and high-water marks at large task
+  counts.
+- Tie recommended stack sizes to release/debug builds and documented workloads.
 
-**Validation to add:**
+### Suggested validation
 
-- Storage unit tests with stack-core aliases.
-- Runtime-generic HTTP transport tests once generic HTTP clients exist.
-- Emulator/real-storage tests remain environment-gated.
-
-### 15. [done] Fully migrate OpenTelemetry exporters to generic runtime contexts
-
-**Why:** OpenTelemetry exporters wrap gRPC unary clients, so they inherit the
-current stack-core runtime boundary.
-
-**Pickup notes:**
-
-- Start in `kimojio-stack-opentelemetry/src/client.rs`,
-  `logs.rs`, and `metrics.rs`.
-- Wait for generic gRPC APIs, then parameterize exporters over the generic gRPC
-  client or transport.
-- Keep disabled instrumentation free of allocation, background work, and helper
-  threads.
-
-**Validation to add:**
-
-- Existing log/metric unit tests.
-- Collector interop tests gated by `KIMOJIO_STACK_OTEL_RECEIVER_TESTS=1`.
-
-### 16. [done] Add runtime-agnostic TLS and HTTP read/write benchmarks
-
-**Why:** The first vertical slice now passes correctness gates, but comparative
-runtime costs need explicit labels and measurements.
-
-**Pickup notes:**
-
-- Start in:
-  - `kimojio-stack-http/benches/http_request_response.rs`
-  - `kimojio-stack-steal/benches/runtime_baseline.rs`
-  - possible new TLS-focused benchmark under `kimojio-stack-tls/benches/`
-- Label paths explicitly:
-  - stack-core;
-  - stack-steal worker-local;
-  - stack-steal shared/root;
-  - plaintext vs TLS;
-  - read/write/deadline paths.
-- Include tail-latency and allocation-sensitive measurements where practical.
-
-**Validation to add:**
-
-- Benchmark smoke mode in tests, mirroring existing Criterion `--test` coverage.
-- Document benchmark commands and expected interpretation in `docs/stack-steal.md`
-  and `docs/stack-http-grpc.md`.
+- `kimojio-stack-check` entries for stack-steal object-gateway admin/gRPC paths.
+- Idle and active connection memory probes for stack vs stack-steal.
+- Documentation updates in `docs/stack-steal.md` and object-gateway docs.
