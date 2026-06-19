@@ -32,12 +32,14 @@ impl GrpcRuntime for StackGrpcRuntime {
 pub struct StackStealGatewayConfig {
     pub workers: NonZeroUsize,
     pub gateway: StackfulGatewayConfig,
+    pub stack_size: usize,
 }
 
 impl StackStealGatewayConfig {
     pub fn runtime_config(&self) -> StealRuntimeConfig {
         StealRuntimeConfig {
             workers: self.workers,
+            stack_size: self.stack_size,
             steal_policy: StealPolicy::steal_one(),
             ..StealRuntimeConfig::default()
         }
@@ -87,9 +89,14 @@ mod tests {
         let config = StackStealGatewayConfig {
             workers,
             gateway: StackfulGatewayConfig::default(),
+            stack_size: StealRuntimeConfig::default().stack_size,
         };
 
         assert_eq!(config.runtime_config().workers, workers);
+        assert_eq!(
+            config.runtime_config().stack_size,
+            StealRuntimeConfig::default().stack_size
+        );
     }
 
     #[test]
@@ -97,6 +104,7 @@ mod tests {
         let status = stack_steal_startup_status(StackStealGatewayConfig {
             workers: NonZeroUsize::new(2).unwrap(),
             gateway: StackfulGatewayConfig::default(),
+            stack_size: StealRuntimeConfig::default().stack_size,
         });
 
         assert!(status.is_ready());

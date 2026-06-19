@@ -10,6 +10,7 @@ members = [
     "kimojio-stack-opentelemetry",
     "kimojio-stack-storage",
     "kimojio-stack-tls",
+    "kimojio-stack-check",
     "kimojio-tls",
     "perf",
     "examples",

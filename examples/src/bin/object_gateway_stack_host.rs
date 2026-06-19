@@ -17,7 +17,7 @@ use examples::object_gateway::{
     },
 };
 use http::Request;
-use kimojio_stack::{Runtime, RuntimeContext};
+use kimojio_stack::{Runtime, RuntimeConfig, RuntimeContext, StackUsage};
 use kimojio_stack_grpc::{RuntimeUnaryClient, UnaryResponse};
 use kimojio_stack_http::{Body, HttpConfig, RuntimeStackTransport, StackTransport, h2, http1};
 use kimojio_stack_steal::{RingFd, Runtime as StealRuntime, RuntimeContext as StealContext};
@@ -28,6 +28,8 @@ use rustix::net::{
 
 #[global_allocator]
 static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+const DEFAULT_STACK_SIZE_BYTES: usize = 32 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum RuntimeKind {
@@ -68,8 +70,12 @@ struct Args {
     max_chunk_bytes: usize,
     #[arg(long, default_value_t = 30_000)]
     request_deadline_ms: u64,
+    #[arg(long, default_value_t = DEFAULT_STACK_SIZE_BYTES)]
+    stack_size_bytes: usize,
     #[arg(long)]
     shutdown_after_ready: bool,
+    #[arg(long)]
+    print_stack_usage: bool,
     #[arg(long)]
     max_grpc_connections: Option<usize>,
     #[arg(long)]
@@ -107,11 +113,16 @@ fn validate_args(args: &Args) -> Result<()> {
     if args.max_object_bytes == 0 {
         bail!("--max-object-bytes must be greater than zero");
     }
+    if args.stack_size_bytes == 0 {
+        bail!("--stack-size-bytes must be greater than zero");
+    }
     Ok(())
 }
 
 fn run_stack(args: Args, gateway: StackfulGatewayConfig) -> Result<()> {
-    let mut runtime = Runtime::new();
+    let mut config = RuntimeConfig::default();
+    config.stack_size = args.stack_size_bytes;
+    let mut runtime = Runtime::with_config(config);
     runtime.block_on(|cx| {
         let grpc_listener = create_stack_listener(cx, args.grpc_addr, args.backlog)
             .context("failed to create stack gRPC listener")?;
@@ -136,6 +147,7 @@ fn run_stack(args: Args, gateway: StackfulGatewayConfig) -> Result<()> {
                 state,
                 grpc_addr,
                 admin_addr,
+                args.print_stack_usage,
             )
         } else {
             run_stack_service(
@@ -152,7 +164,11 @@ fn run_stack(args: Args, gateway: StackfulGatewayConfig) -> Result<()> {
 
 fn run_steal(args: Args, gateway: StackfulGatewayConfig) -> Result<()> {
     let workers = NonZeroUsize::new(args.workers).context("--workers must be non-zero")?;
-    let gateway = StackStealGateway::new(StackStealGatewayConfig { workers, gateway });
+    let gateway = StackStealGateway::new(StackStealGatewayConfig {
+        workers,
+        gateway,
+        stack_size: args.stack_size_bytes,
+    });
     let mut runtime = StealRuntime::with_config(gateway.runtime_config());
     runtime.block_on(|cx| {
         let grpc_listener = create_steal_listener(cx, args.grpc_addr, args.backlog)
@@ -177,6 +193,7 @@ fn run_steal(args: Args, gateway: StackfulGatewayConfig) -> Result<()> {
                 gateway.state(),
                 grpc_addr,
                 admin_addr,
+                args.print_stack_usage,
             )
         } else {
             run_steal_service(
@@ -236,6 +253,7 @@ fn run_stack_self_check(
     state: Arc<StackfulGatewayState>,
     grpc_addr: SocketAddr,
     admin_addr: SocketAddr,
+    print_stack_usage: bool,
 ) -> Result<()> {
     cx.scope(|scope| {
         let grpc_state = state.clone();
@@ -248,9 +266,14 @@ fn run_stack_self_check(
         let client =
             scope.spawn(move |cx| stack_self_check(cx, client_state, grpc_addr, admin_addr));
 
-        let client_result = client.join(cx);
-        let grpc_result = grpc.join(cx);
-        let admin_result = admin.join(cx);
+        let (client_result, client_usage) = client.join_with_stack_usage(cx);
+        let (grpc_result, grpc_usage) = grpc.join_with_stack_usage(cx);
+        let (admin_result, admin_usage) = admin.join_with_stack_usage(cx);
+        if print_stack_usage {
+            print_usage_line("stack-self-check-client", client_usage);
+            print_usage_line("stack-grpc-listener", grpc_usage);
+            print_usage_line("stack-admin-listener", admin_usage);
+        }
         client_result?;
         grpc_result?;
         admin_result
@@ -354,6 +377,7 @@ fn run_steal_self_check(
     state: Arc<StackfulGatewayState>,
     grpc_addr: SocketAddr,
     admin_addr: SocketAddr,
+    print_stack_usage: bool,
 ) -> Result<()> {
     cx.scope(|scope| {
         let grpc_state = state.clone();
@@ -368,9 +392,14 @@ fn run_steal_self_check(
         let client =
             scope.spawn_local(move |cx| steal_self_check(cx, client_state, grpc_addr, admin_addr));
 
-        let client_result = client.join(cx);
-        let grpc_result = grpc.join(cx);
-        let admin_result = admin.join(cx);
+        let (client_result, client_usage) = client.join_with_stack_usage(cx);
+        let (grpc_result, grpc_usage) = grpc.join_with_stack_usage(cx);
+        let (admin_result, admin_usage) = admin.join_with_stack_usage(cx);
+        if print_stack_usage {
+            print_usage_line("steal-self-check-client-local", client_usage);
+            print_usage_line("steal-grpc-listener-local", grpc_usage);
+            print_usage_line("steal-admin-listener-local", admin_usage);
+        }
         client_result?;
         grpc_result?;
         admin_result
@@ -616,11 +645,22 @@ fn print_startup(
     ready: bool,
 ) {
     println!(
-        "object-gateway-stack-host runtime={runtime} grpc_addr={grpc_addr} admin_addr={admin_addr} workers={} storage_client=kimojio-stack-storage storage_backend={} telemetry_sink={} ready={} deadline_ms={}",
+        "object-gateway-stack-host runtime={runtime} grpc_addr={grpc_addr} admin_addr={admin_addr} workers={} storage_client=kimojio-stack-storage storage_backend={} telemetry_sink={} ready={} deadline_ms={} stack_size_bytes={}",
         args.workers,
         StorageBackendMode::Hermetic.as_str(),
         TelemetrySinkMode::Hermetic.as_str(),
         ready,
-        Duration::from_millis(args.request_deadline_ms).as_millis()
+        Duration::from_millis(args.request_deadline_ms).as_millis(),
+        args.stack_size_bytes
+    );
+}
+
+fn print_usage_line(task: &str, usage: StackUsage) {
+    println!(
+        "object-gateway-stack-usage task={task} size_bytes={} used_bytes={} high_water_bytes={} high_water_remaining_bytes={}",
+        usage.size(),
+        usage.used(),
+        usage.high_water(),
+        usage.high_water_remaining()
     );
 }
