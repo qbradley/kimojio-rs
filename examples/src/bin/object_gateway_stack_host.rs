@@ -20,7 +20,9 @@ use http::Request;
 use kimojio_stack::{Runtime, RuntimeConfig, RuntimeContext, StackUsage};
 use kimojio_stack_grpc::{RuntimeUnaryClient, UnaryResponse};
 use kimojio_stack_http::{Body, HttpConfig, RuntimeStackTransport, StackTransport, h2, http1};
-use kimojio_stack_steal::{RingFd, Runtime as StealRuntime, RuntimeContext as StealContext};
+use kimojio_stack_steal::{
+    RingFd, Runtime as StealRuntime, RuntimeContext as StealContext, SchedulerConfig,
+};
 use rustix::net::{
     self, AddressFamily, SocketType, ipproto,
     sockopt::{set_socket_reuseaddr, set_tcp_nodelay},
@@ -38,6 +40,12 @@ const DEFAULT_STACK_SIZE_BYTES: usize = 20 * 1024;
 enum RuntimeKind {
     Stack,
     Steal,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum StealSchedulerKind {
+    Current,
+    Sfq,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -83,6 +91,8 @@ struct Args {
     max_grpc_connections: Option<usize>,
     #[arg(long)]
     max_admin_connections: Option<usize>,
+    #[arg(long, value_enum, default_value_t = StealSchedulerKind::Current)]
+    steal_scheduler: StealSchedulerKind,
 }
 
 fn main() -> Result<()> {
@@ -172,7 +182,11 @@ fn run_steal(args: Args, gateway: StackfulGatewayConfig) -> Result<()> {
         gateway,
         stack_size: args.stack_size_bytes,
     });
-    let mut runtime = StealRuntime::with_config(gateway.runtime_config());
+    let mut runtime_config = gateway.runtime_config();
+    if args.steal_scheduler == StealSchedulerKind::Sfq {
+        runtime_config.scheduler = SchedulerConfig::stochastic_fair(workers);
+    }
+    let mut runtime = StealRuntime::with_config(runtime_config);
     runtime.block_on(|cx| {
         let grpc_listener = create_steal_listener(cx, args.grpc_addr, args.backlog)
             .context("failed to create stack-steal gRPC listener")?;

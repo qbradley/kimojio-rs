@@ -14,6 +14,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, ensure};
 use bytes::Bytes;
 
+use std::num::NonZeroUsize;
+
+use kimojio_stack_steal::SchedulerConfig;
+
 use super::{
     launch::{LocalGateway, LocalRuntime, TcpGateway},
     model::{NamespaceMapping, ObjectSizeLimits},
@@ -30,6 +34,7 @@ pub enum WorkloadKind {
     SmallObject,
     StreamingLargeObject,
     Concurrent,
+    TenantSkew,
     CancellationHeavy,
     ErrorHeavy,
 }
@@ -70,6 +75,14 @@ pub const DEFAULT_WORKLOADS: &[WorkloadProfile] = &[
         memory_budget_bytes: 2048,
     },
     WorkloadProfile {
+        label: "tenant-skew",
+        kind: WorkloadKind::TenantSkew,
+        iterations: 1,
+        max_object_bytes: 8192,
+        max_chunk_bytes: 1024,
+        memory_budget_bytes: 8192,
+    },
+    WorkloadProfile {
         label: "cancellation-heavy",
         kind: WorkloadKind::CancellationHeavy,
         iterations: 4,
@@ -98,16 +111,23 @@ pub fn find_workload(label: &str) -> Option<WorkloadProfile> {
 pub enum WorkloadImplementation {
     Stack,
     StackSteal,
+    StackStealSfq,
     Tokio,
 }
 
 impl WorkloadImplementation {
-    pub const ALL: [Self; 3] = [Self::Stack, Self::StackSteal, Self::Tokio];
+    pub const ALL: [Self; 4] = [
+        Self::Stack,
+        Self::StackSteal,
+        Self::StackStealSfq,
+        Self::Tokio,
+    ];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Stack => "stack",
             Self::StackSteal => "stack-steal",
+            Self::StackStealSfq => "stack-steal-sfq",
             Self::Tokio => "tokio",
         }
     }
@@ -116,13 +136,14 @@ impl WorkloadImplementation {
         match self {
             Self::Stack => "pinned",
             Self::StackSteal => "work-stealing",
+            Self::StackStealSfq => "work-stealing-sfq",
             Self::Tokio => "multi-thread",
         }
     }
 
     const fn storage_client(self) -> &'static str {
         match self {
-            Self::Stack | Self::StackSteal => "kimojio-stack-storage",
+            Self::Stack | Self::StackSteal | Self::StackStealSfq => "kimojio-stack-storage",
             Self::Tokio => "hermetic-storage-fixture",
         }
     }
@@ -133,7 +154,9 @@ impl WorkloadImplementation {
 
     const fn telemetry_sink_mode(self) -> &'static str {
         match self {
-            Self::Stack | Self::StackSteal => "kimojio-stack-opentelemetry-hermetic",
+            Self::Stack | Self::StackSteal | Self::StackStealSfq => {
+                "kimojio-stack-opentelemetry-hermetic"
+            }
             Self::Tokio => "opentelemetry_sdk-hermetic",
         }
     }
@@ -188,6 +211,7 @@ pub struct WorkloadSummary {
     pub p50_us: u128,
     pub p95_us: u128,
     pub p99_us: u128,
+    pub fairness_ratio: Option<f64>,
     pub max_chunk_bytes: usize,
     pub memory_budget_bytes: usize,
 }
@@ -195,7 +219,7 @@ pub struct WorkloadSummary {
 impl WorkloadSummary {
     pub fn key_value_line(&self) -> String {
         format!(
-            "object-gateway-workload implementation={} runtime_mode={} storage_client={} backend_mode={} telemetry_sink_mode={} measurement_mode={} workload={} request_count={} success_count={} error_count={} canceled_count={} throughput_per_sec={:.3} tail_latency_samples={} tail_latency_confidence={} p50_us={} p95_us={} p99_us={} max_chunk_bytes={} memory_budget_bytes={}",
+            "object-gateway-workload implementation={} runtime_mode={} storage_client={} backend_mode={} telemetry_sink_mode={} measurement_mode={} workload={} request_count={} success_count={} error_count={} canceled_count={} throughput_per_sec={:.3} tail_latency_samples={} tail_latency_confidence={} p50_us={} p95_us={} p99_us={} fairness_ratio={} max_chunk_bytes={} memory_budget_bytes={}",
             self.implementation,
             self.runtime_mode,
             self.storage_client,
@@ -213,6 +237,9 @@ impl WorkloadSummary {
             self.p50_us,
             self.p95_us,
             self.p99_us,
+            self.fairness_ratio
+                .map(|ratio| format!("{ratio:.3}"))
+                .unwrap_or_else(|| "n/a".to_owned()),
             self.max_chunk_bytes,
             self.memory_budget_bytes
         )
@@ -239,6 +266,13 @@ pub fn run_implementation_profile(
             LocalRuntime::StackSteal,
             stackful_config_for(profile, "object-gateway-workload-stack-steal"),
         )),
+        WorkloadImplementation::StackStealSfq => {
+            GatewayTarget::Local(LocalGateway::new_with_steal_scheduler(
+                LocalRuntime::StackStealSfq,
+                stackful_config_for(profile, "object-gateway-workload-stack-steal-sfq"),
+                SchedulerConfig::stochastic_fair(NonZeroUsize::new(8).unwrap()),
+            ))
+        }
         WorkloadImplementation::Tokio => GatewayTarget::Tokio(TokioGateway::new(tokio_config_for(
             profile,
             "object-gateway-workload-tokio",
@@ -278,18 +312,35 @@ fn run_profile_for_target(
     let started = Instant::now();
     let mut recorder = WorkloadRecorder::default();
     let namespace = format!("wl-{}-{}", info.implementation, profile.label);
-    match profile.kind {
-        WorkloadKind::SmallObject => run_small_object(&target, &namespace, profile, &mut recorder)?,
+    let fairness_ratio = match profile.kind {
+        WorkloadKind::SmallObject => {
+            run_small_object(&target, &namespace, profile, &mut recorder)?;
+            None
+        }
         WorkloadKind::StreamingLargeObject => {
             run_streaming_large_object(&target, &namespace, profile, &mut recorder)?;
+            None
         }
-        WorkloadKind::Concurrent => run_concurrent(&target, &namespace, profile, &mut recorder)?,
+        WorkloadKind::Concurrent => {
+            run_concurrent(&target, &namespace, profile, &mut recorder)?;
+            None
+        }
+        WorkloadKind::TenantSkew => Some(run_tenant_skew(
+            &target,
+            &namespace,
+            profile,
+            &mut recorder,
+        )?),
         WorkloadKind::CancellationHeavy => {
             run_cancellation_heavy(&target, &namespace, profile, &mut recorder)?;
+            None
         }
-        WorkloadKind::ErrorHeavy => run_error_heavy(&target, &namespace, profile, &mut recorder)?,
-    }
-    Ok(recorder.finish(info.owned(), profile, started.elapsed()))
+        WorkloadKind::ErrorHeavy => {
+            run_error_heavy(&target, &namespace, profile, &mut recorder)?;
+            None
+        }
+    };
+    Ok(recorder.finish(info.owned(), profile, started.elapsed(), fairness_ratio))
 }
 
 fn run_small_object(
@@ -369,7 +420,72 @@ fn run_concurrent(
         recorder.record_status(status_code(first_response.status.as_ref()), elapsed);
         recorder.record_status(status_code(second_response.status.as_ref()), elapsed);
     }
+
     Ok(())
+}
+
+fn run_tenant_skew(
+    target: &GatewayTarget,
+    namespace: &str,
+    profile: WorkloadProfile,
+    recorder: &mut WorkloadRecorder,
+) -> Result<f64> {
+    let mut completion_rank_total = 0_usize;
+    let mut light_completion_total = 0_usize;
+    for index in 0..profile.iterations {
+        let mut puts = Vec::with_capacity(136);
+        for heavy_index in 0..128 {
+            let object = format!("heavy-{index}-{heavy_index}");
+            puts.push(TenantSkewPut {
+                namespace: namespace.to_owned(),
+                object,
+                chunks: fixed_chunks(profile.max_object_bytes as usize, profile.max_chunk_bytes),
+                tenant_key: 0,
+                light: false,
+            });
+        }
+        for light_index in 0..8 {
+            let tenant_namespace = format!("{namespace}-light-{light_index}");
+            let object = format!("light-{index}-{light_index}");
+            puts.push(TenantSkewPut {
+                namespace: tenant_namespace,
+                object,
+                chunks: fixed_chunks(profile.max_object_bytes as usize, profile.max_chunk_bytes),
+                tenant_key: light_index + 1,
+                light: true,
+            });
+        }
+        let light_flags = puts.iter().map(|put| put.light).collect::<Vec<_>>();
+        let results = target.put_many_concurrently(puts)?;
+        let mut batch_results = light_flags.into_iter().zip(results).collect::<Vec<_>>();
+        batch_results.sort_by_key(|(_, put)| put.elapsed);
+        let mut lights_seen = 0_usize;
+        for (rank, (is_light, _)) in batch_results.iter().enumerate() {
+            if *is_light {
+                lights_seen += 1;
+                if lights_seen == 8 {
+                    completion_rank_total += rank + 1;
+                    light_completion_total += lights_seen;
+                    break;
+                }
+            }
+        }
+        for (_, put) in batch_results {
+            recorder.record_status(put.value, put.elapsed);
+        }
+    }
+    if light_completion_total == 0 {
+        return Ok(0.0);
+    }
+    Ok(completion_rank_total as f64 / light_completion_total as f64)
+}
+
+struct TenantSkewPut {
+    namespace: String,
+    object: String,
+    chunks: Vec<Bytes>,
+    tenant_key: usize,
+    light: bool,
 }
 
 fn run_cancellation_heavy(
@@ -476,6 +592,58 @@ impl GatewayTarget {
             Self::Tcp(gateway) => gateway.put_pair_concurrently(namespace, first, second),
         }
     }
+
+    fn put_many_concurrently(
+        &self,
+        puts: Vec<TenantSkewPut>,
+    ) -> Result<Vec<Timed<ObjectStatusCode>>> {
+        match self {
+            Self::Local(gateway) => gateway
+                .put_many_concurrently(
+                    puts.into_iter()
+                        .map(|put| (put.namespace, put.object, put.chunks, put.tenant_key))
+                        .collect(),
+                )?
+                .into_iter()
+                .map(|(response, elapsed)| {
+                    Ok(Timed {
+                        value: status_code(response.status.as_ref()),
+                        elapsed,
+                    })
+                })
+                .collect(),
+            Self::Tokio(_) | Self::Tcp(_) => self.put_many_with_threads(puts),
+        }
+    }
+
+    fn put_many_with_threads(
+        &self,
+        puts: Vec<TenantSkewPut>,
+    ) -> Result<Vec<Timed<ObjectStatusCode>>> {
+        std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(puts.len());
+            for (index, put) in puts.into_iter().enumerate() {
+                let target = self.clone();
+                handles.push(scope.spawn(move || {
+                    let chunks = put.chunks;
+                    let put = timed(|| target.put(&put.namespace, &put.object, chunks))?;
+                    Ok::<_, anyhow::Error>((index, put))
+                }));
+            }
+            let mut results = Vec::with_capacity(handles.len());
+            results.resize_with(handles.len(), || None);
+            for handle in handles {
+                let (index, put) = handle
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("concurrent tenant-skew PUT panicked"))??;
+                results[index] = Some(put);
+            }
+            results
+                .into_iter()
+                .map(|put| put.ok_or_else(|| anyhow::anyhow!("missing tenant-skew PUT result")))
+                .collect()
+        })
+    }
 }
 
 #[derive(Default)]
@@ -509,6 +677,7 @@ impl WorkloadRecorder {
         info: WorkloadTargetMetadata,
         profile: WorkloadProfile,
         elapsed: Duration,
+        fairness_ratio: Option<f64>,
     ) -> WorkloadSummary {
         self.latencies.sort_unstable();
         let throughput_per_sec = if elapsed.is_zero() {
@@ -534,6 +703,7 @@ impl WorkloadRecorder {
             p50_us: percentile_us(&self.latencies, 50),
             p95_us: percentile_us(&self.latencies, 95),
             p99_us: percentile_us(&self.latencies, 99),
+            fairness_ratio,
             max_chunk_bytes: profile.max_chunk_bytes,
             memory_budget_bytes: profile.memory_budget_bytes,
         }

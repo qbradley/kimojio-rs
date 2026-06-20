@@ -18,6 +18,7 @@ enum Implementation {
     All,
     Stack,
     StackSteal,
+    StackStealSfq,
     Tokio,
     Go,
 }
@@ -53,6 +54,13 @@ fn main() -> Result<()> {
         Implementation::StackSteal => {
             run_rust_implementation(
                 WorkloadImplementation::StackSteal,
+                &profiles,
+                &mut summaries,
+            )?;
+        }
+        Implementation::StackStealSfq => {
+            run_rust_implementation(
+                WorkloadImplementation::StackStealSfq,
                 &profiles,
                 &mut summaries,
             )?;

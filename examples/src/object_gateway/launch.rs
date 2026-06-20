@@ -9,7 +9,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{Arc, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
@@ -20,7 +20,7 @@ use kimojio_stack_grpc::{Metadata, RuntimeUnaryClient, UnaryResponse};
 use kimojio_stack_http::{Body, HttpConfig, RuntimeStackTransport, StackTransport, h2, http1};
 use kimojio_stack_steal::{
     RingFd, Runtime as StealRuntime, RuntimeConfig as StealRuntimeConfig,
-    RuntimeContext as StealContext,
+    RuntimeContext as StealContext, SchedulerConfig, TenantId,
 };
 use rustix::net::{AddressFamily, SocketFlags, SocketType, ipproto, socketpair};
 
@@ -41,6 +41,7 @@ use super::{
 pub enum LocalRuntime {
     Stack,
     StackSteal,
+    StackStealSfq,
 }
 
 impl LocalRuntime {
@@ -48,6 +49,7 @@ impl LocalRuntime {
         match self {
             Self::Stack => "stack",
             Self::StackSteal => "stack-steal",
+            Self::StackStealSfq => "stack-steal-sfq",
         }
     }
 }
@@ -529,6 +531,7 @@ pub struct LocalGateway {
     runtime: LocalRuntime,
     state: Arc<StackfulGatewayState>,
     steal_workers: NonZeroUsize,
+    steal_scheduler: SchedulerConfig,
 }
 
 impl LocalGateway {
@@ -537,6 +540,20 @@ impl LocalGateway {
             runtime,
             state: StackfulGatewayState::new(config),
             steal_workers: NonZeroUsize::new(2).expect("non-zero default steal workers"),
+            steal_scheduler: SchedulerConfig::default(),
+        }
+    }
+
+    pub fn new_with_steal_scheduler(
+        runtime: LocalRuntime,
+        config: StackfulGatewayConfig,
+        steal_scheduler: SchedulerConfig,
+    ) -> Self {
+        Self {
+            runtime,
+            state: StackfulGatewayState::new(config),
+            steal_workers: NonZeroUsize::new(2).expect("non-zero default steal workers"),
+            steal_scheduler,
         }
     }
 
@@ -560,6 +577,15 @@ impl LocalGateway {
         self.state.telemetry()
     }
 
+    fn steal_runtime_config(&self) -> StealRuntimeConfig {
+        let mut config = StealRuntimeConfig {
+            workers: self.steal_workers,
+            ..StealRuntimeConfig::default()
+        };
+        config.scheduler = self.steal_scheduler;
+        config
+    }
+
     pub fn put(
         &self,
         namespace: &str,
@@ -570,9 +596,10 @@ impl LocalGateway {
             LocalRuntime::Stack => self.stack_rpc(1, |cx, client| {
                 Ok(client.put(cx, namespace, object, chunks)?.message)
             }),
-            LocalRuntime::StackSteal => self.steal_rpc(1, |cx, client| {
-                Ok(client.put(cx, namespace, object, chunks)?.message)
-            }),
+            LocalRuntime::StackSteal | LocalRuntime::StackStealSfq => self
+                .steal_rpc(1, |cx, client| {
+                    Ok(client.put(cx, namespace, object, chunks)?.message)
+                }),
         }
     }
 
@@ -586,9 +613,10 @@ impl LocalGateway {
             LocalRuntime::Stack => self.stack_rpc(1, |cx, client| {
                 Ok(client.get(cx, namespace, object, max_chunk_bytes)?)
             }),
-            LocalRuntime::StackSteal => self.steal_rpc(1, |cx, client| {
-                Ok(client.get(cx, namespace, object, max_chunk_bytes)?)
-            }),
+            LocalRuntime::StackSteal | LocalRuntime::StackStealSfq => self
+                .steal_rpc(1, |cx, client| {
+                    Ok(client.get(cx, namespace, object, max_chunk_bytes)?)
+                }),
         }
     }
 
@@ -602,11 +630,13 @@ impl LocalGateway {
                     client.unary(cx, proto::DELETE_PATH, &request)?;
                 Ok(response.message)
             }),
-            LocalRuntime::StackSteal => self.steal_rpc(1, |cx, client| {
-                let response: UnaryResponse<proto::DeleteResponse> =
-                    client.unary(cx, proto::DELETE_PATH, &request)?;
-                Ok(response.message)
-            }),
+            LocalRuntime::StackSteal | LocalRuntime::StackStealSfq => {
+                self.steal_rpc(1, |cx, client| {
+                    let response: UnaryResponse<proto::DeleteResponse> =
+                        client.unary(cx, proto::DELETE_PATH, &request)?;
+                    Ok(response.message)
+                })
+            }
         }
     }
 
@@ -622,11 +652,13 @@ impl LocalGateway {
                     client.unary(cx, proto::LIST_PATH, &request)?;
                 Ok(response.message)
             }),
-            LocalRuntime::StackSteal => self.steal_rpc(1, |cx, client| {
-                let response: UnaryResponse<proto::ListResponse> =
-                    client.unary(cx, proto::LIST_PATH, &request)?;
-                Ok(response.message)
-            }),
+            LocalRuntime::StackSteal | LocalRuntime::StackStealSfq => {
+                self.steal_rpc(1, |cx, client| {
+                    let response: UnaryResponse<proto::ListResponse> =
+                        client.unary(cx, proto::LIST_PATH, &request)?;
+                    Ok(response.message)
+                })
+            }
         }
     }
 
@@ -646,11 +678,13 @@ impl LocalGateway {
                     client.unary(cx, proto::COPY_PATH, &request)?;
                 Ok(response.message)
             }),
-            LocalRuntime::StackSteal => self.steal_rpc(1, |cx, client| {
-                let response: UnaryResponse<proto::CopyResponse> =
-                    client.unary(cx, proto::COPY_PATH, &request)?;
-                Ok(response.message)
-            }),
+            LocalRuntime::StackSteal | LocalRuntime::StackStealSfq => {
+                self.steal_rpc(1, |cx, client| {
+                    let response: UnaryResponse<proto::CopyResponse> =
+                        client.unary(cx, proto::COPY_PATH, &request)?;
+                    Ok(response.message)
+                })
+            }
         }
     }
 
@@ -661,11 +695,13 @@ impl LocalGateway {
                     client.unary(cx, proto::HEALTH_PATH, &proto::HealthRequest {})?;
                 Ok(response.message)
             }),
-            LocalRuntime::StackSteal => self.steal_rpc(1, |cx, client| {
-                let response: UnaryResponse<proto::HealthResponse> =
-                    client.unary(cx, proto::HEALTH_PATH, &proto::HealthRequest {})?;
-                Ok(response.message)
-            }),
+            LocalRuntime::StackSteal | LocalRuntime::StackStealSfq => {
+                self.steal_rpc(1, |cx, client| {
+                    let response: UnaryResponse<proto::HealthResponse> =
+                        client.unary(cx, proto::HEALTH_PATH, &proto::HealthRequest {})?;
+                    Ok(response.message)
+                })
+            }
         }
     }
 
@@ -680,14 +716,16 @@ impl LocalGateway {
     pub fn cancel_get_after_first_chunk(&self, namespace: &str, object: &str) -> Result<()> {
         match self.runtime {
             LocalRuntime::Stack => self.stack_cancel_get(namespace, object),
-            LocalRuntime::StackSteal => self.steal_cancel_get(namespace, object),
+            LocalRuntime::StackSteal | LocalRuntime::StackStealSfq => {
+                self.steal_cancel_get(namespace, object)
+            }
         }
     }
 
     pub fn idle_grpc_request_times_out(&self) -> Result<()> {
         match self.runtime {
             LocalRuntime::Stack => self.stack_idle_timeout(),
-            LocalRuntime::StackSteal => self.steal_idle_timeout(),
+            LocalRuntime::StackSteal | LocalRuntime::StackStealSfq => self.steal_idle_timeout(),
         }
     }
 
@@ -714,6 +752,21 @@ impl LocalGateway {
                 .map_err(|_| anyhow!("second concurrent PUT panicked"))??;
             Ok((first, second))
         })
+    }
+
+    pub fn put_many_concurrently(
+        &self,
+        puts: Vec<(String, String, Vec<Bytes>, usize)>,
+    ) -> Result<Vec<(proto::PutResponse, Duration)>> {
+        if puts.is_empty() {
+            return Ok(Vec::new());
+        }
+        match self.runtime {
+            LocalRuntime::Stack => self.stack_put_many_concurrently(puts),
+            LocalRuntime::StackSteal | LocalRuntime::StackStealSfq => {
+                self.steal_put_many_concurrently(puts)
+            }
+        }
     }
 
     pub fn admin_status_model(&self) -> AdminStatus {
@@ -762,16 +815,74 @@ impl LocalGateway {
         })
     }
 
+    fn stack_put_many_concurrently(
+        &self,
+        puts: Vec<(String, String, Vec<Bytes>, usize)>,
+    ) -> Result<Vec<(proto::PutResponse, Duration)>> {
+        let state = self.state.clone();
+        let mut runtime = Runtime::new();
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let mut servers = Vec::with_capacity(puts.len());
+                let mut clients = Vec::with_capacity(puts.len());
+                for (index, (namespace, object, chunks, _tenant_key)) in
+                    puts.into_iter().enumerate()
+                {
+                    let (client_transport, server_transport) = stack_transport_pair();
+                    let state = state.clone();
+                    servers.push(scope.spawn(move |cx| {
+                        serve_grpc_requests::<StackGrpcRuntime, _>(cx, server_transport, state, 1)
+                            .context("stack batch gRPC server failed")
+                    }));
+                    clients.push(scope.spawn(move |cx| {
+                        let http =
+                            h2::ClientConnection::new(client_transport, HttpConfig::default());
+                        let mut client = StackfulGatewayClient::new(RuntimeUnaryClient::new(
+                            http,
+                            kimojio_stack_grpc::ClientConfig::default(),
+                        ));
+                        let started = Instant::now();
+                        let result = client
+                            .put(cx, &namespace, &object, chunks)
+                            .context("stack batch PUT failed");
+                        let elapsed = started.elapsed();
+                        let close = client
+                            .close(cx)
+                            .context("stack batch gRPC client close failed");
+                        match (result, close) {
+                            (Ok(response), Ok(())) => Ok((index, response.message, elapsed)),
+                            (Err(error), _) => Err(error),
+                            (Ok(_), Err(error)) => Err(error),
+                        }
+                    }));
+                }
+
+                let mut responses = Vec::with_capacity(clients.len());
+                responses.resize_with(clients.len(), || None);
+                for client in clients {
+                    let (index, response, elapsed) = client.join(cx)?;
+                    responses[index] = Some((response, elapsed));
+                }
+                for server in servers {
+                    server.join(cx)?;
+                }
+                responses
+                    .into_iter()
+                    .map(|response| {
+                        response.ok_or_else(|| anyhow!("missing stack batch PUT response"))
+                    })
+                    .collect()
+            })
+        })
+    }
+
     fn steal_rpc<F, T>(&self, requests: usize, f: F) -> Result<T>
     where
         F: FnOnce(&StealContext<'_>, &mut StackfulGatewayClient<RingFd>) -> Result<T>,
     {
         let (client_transport, server_transport) = steal_transport_pair();
         let state = self.state.clone();
-        let mut runtime = StealRuntime::with_config(StealRuntimeConfig {
-            workers: self.steal_workers,
-            ..StealRuntimeConfig::default()
-        });
+        let mut runtime = StealRuntime::with_config(self.steal_runtime_config());
         runtime.block_on(|cx| {
             cx.scope(|scope| {
                 let server = scope.spawn_stealable(move |cx| {
@@ -810,10 +921,81 @@ impl LocalGateway {
         })
     }
 
+    fn steal_put_many_concurrently(
+        &self,
+        puts: Vec<(String, String, Vec<Bytes>, usize)>,
+    ) -> Result<Vec<(proto::PutResponse, Duration)>> {
+        let state = self.state.clone();
+        let mut runtime = StealRuntime::with_config(self.steal_runtime_config());
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let mut tenant_map = Vec::<(usize, TenantId)>::new();
+                let mut servers = Vec::with_capacity(puts.len());
+                let mut clients = Vec::with_capacity(puts.len());
+                for (index, (namespace, object, chunks, tenant_key)) in puts.into_iter().enumerate()
+                {
+                    let tenant = tenant_for_key(scope, &mut tenant_map, tenant_key);
+                    let (client_transport, server_transport) = steal_transport_pair();
+                    let state = state.clone();
+                    servers.push(scope.spawn_stealable_with_tenant(tenant, move |cx| {
+                        serve_grpc_requests::<StackStealGrpcRuntime, _>(
+                            cx,
+                            server_transport,
+                            state,
+                            1,
+                        )
+                        .context("stack-steal batch gRPC server failed")
+                    }));
+                    clients.push(scope.spawn_local_with_tenant(tenant, move |cx| {
+                        let http = h2::RuntimeClientConnection::new(
+                            client_transport,
+                            HttpConfig::default(),
+                        );
+                        let mut client = StackfulGatewayClient::new(RuntimeUnaryClient::new(
+                            http,
+                            kimojio_stack_grpc::ClientConfig::default(),
+                        ));
+                        let started = Instant::now();
+                        let result = client
+                            .put(cx, &namespace, &object, chunks)
+                            .context("stack-steal batch PUT failed");
+                        let elapsed = started.elapsed();
+                        let close = client
+                            .close(cx)
+                            .context("stack-steal batch gRPC client close failed");
+                        match (result, close) {
+                            (Ok(response), Ok(())) => Ok((index, response.message, elapsed)),
+                            (Err(error), _) => Err(error),
+                            (Ok(_), Err(error)) => Err(error),
+                        }
+                    }));
+                }
+
+                let mut responses = Vec::with_capacity(clients.len());
+                responses.resize_with(clients.len(), || None);
+                for client in clients {
+                    let (index, response, elapsed) = client.join(cx)?;
+                    responses[index] = Some((response, elapsed));
+                }
+                for server in servers {
+                    server.join(cx)?;
+                }
+                responses
+                    .into_iter()
+                    .map(|response| {
+                        response.ok_or_else(|| anyhow!("missing stack-steal batch PUT response"))
+                    })
+                    .collect()
+            })
+        })
+    }
+
     fn admin_request(&self, path: &'static str) -> Result<String> {
         match self.runtime {
             LocalRuntime::Stack => self.stack_admin_request(path),
-            LocalRuntime::StackSteal => self.steal_admin_request(path),
+            LocalRuntime::StackSteal | LocalRuntime::StackStealSfq => {
+                self.steal_admin_request(path)
+            }
         }
     }
 
@@ -837,10 +1019,7 @@ impl LocalGateway {
     fn steal_admin_request(&self, path: &'static str) -> Result<String> {
         let (client_transport, server_transport) = steal_transport_pair();
         let state = self.state.clone();
-        let mut runtime = StealRuntime::with_config(StealRuntimeConfig {
-            workers: self.steal_workers,
-            ..StealRuntimeConfig::default()
-        });
+        let mut runtime = StealRuntime::with_config(self.steal_runtime_config());
         runtime.block_on(|cx| {
             cx.scope(|scope| {
                 let server = scope.spawn_stealable(move |cx| {
@@ -896,10 +1075,7 @@ impl LocalGateway {
     fn steal_cancel_get(&self, namespace: &str, object: &str) -> Result<()> {
         let (client_transport, server_transport) = steal_transport_pair();
         let state = self.state.clone();
-        let mut runtime = StealRuntime::with_config(StealRuntimeConfig {
-            workers: self.steal_workers,
-            ..StealRuntimeConfig::default()
-        });
+        let mut runtime = StealRuntime::with_config(self.steal_runtime_config());
         runtime.block_on(|cx| {
             cx.scope(|scope| {
                 let server = scope.spawn_stealable(move |cx| {
@@ -964,10 +1140,7 @@ impl LocalGateway {
     fn steal_idle_timeout(&self) -> Result<()> {
         let (client_transport, server_transport) = steal_transport_pair();
         let state = self.state.clone();
-        let mut runtime = StealRuntime::with_config(StealRuntimeConfig {
-            workers: self.steal_workers,
-            ..StealRuntimeConfig::default()
-        });
+        let mut runtime = StealRuntime::with_config(self.steal_runtime_config());
         runtime.block_on(|cx| {
             cx.scope(|scope| {
                 let server = scope.spawn_stealable(move |cx| {
@@ -989,6 +1162,19 @@ impl LocalGateway {
             })
         })
     }
+}
+
+fn tenant_for_key(
+    scope: &kimojio_stack_steal::Scope<'_, '_>,
+    tenant_map: &mut Vec<(usize, TenantId)>,
+    key: usize,
+) -> TenantId {
+    if let Some((_, tenant)) = tenant_map.iter().find(|(candidate, _)| *candidate == key) {
+        return *tenant;
+    }
+    let tenant = scope.new_tenant_id();
+    tenant_map.push((key, tenant));
+    tenant
 }
 
 fn http1_request<S>(

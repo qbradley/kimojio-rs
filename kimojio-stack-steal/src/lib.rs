@@ -99,7 +99,7 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::panic::{self, AssertUnwindSafe};
 use std::ptr::NonNull;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread::{self, JoinHandle as ThreadJoinHandle};
 use std::time::{Duration, Instant};
@@ -138,6 +138,17 @@ struct RuntimeId(usize);
 impl RuntimeId {
     fn next() -> Self {
         Self(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// Runtime-local fairness domain identifier.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct TenantId(u64);
+
+impl TenantId {
+    /// Returns the numeric value of this runtime-local tenant identifier.
+    pub fn get(self) -> u64 {
+        self.0
     }
 }
 
@@ -200,6 +211,8 @@ pub struct RuntimeConfig {
     pub workers: NonZeroUsize,
     /// Policy controlling how queued work may be stolen.
     pub steal_policy: StealPolicy,
+    /// Ready-task scheduler configuration.
+    pub scheduler: SchedulerConfig,
     /// Maximum queued stealable jobs per worker-local queue.
     pub max_worker_queue_len: usize,
     /// Maximum queued stealable jobs in the global injector queue.
@@ -220,6 +233,7 @@ impl Default for RuntimeConfig {
             sqpoll_idle: None,
             workers: NonZeroUsize::new(1).expect("one is nonzero"),
             steal_policy: StealPolicy::Disabled,
+            scheduler: SchedulerConfig::default(),
             max_worker_queue_len: DEFAULT_QUEUE_CAPACITY,
             max_global_queue_len: DEFAULT_QUEUE_CAPACITY,
             max_shared_ring_queue_len: DEFAULT_SHARED_RING_QUEUE_CAPACITY,
@@ -349,6 +363,119 @@ impl StealPolicy {
     }
 }
 
+/// Ready-task scheduler family.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SchedulerMode {
+    /// Current local/global queue plus stealing scheduler.
+    #[default]
+    Current,
+    /// Tenant-aware stochastic fair queue scheduler.
+    StochasticFair,
+}
+
+/// Worker-side ready partition selection policy for the SFQ scheduler.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum QueueSelectionPolicy {
+    /// Use one tenant-selected partition.
+    #[default]
+    SingleChoice,
+    /// Choose the shortest partition from a tenant-selected subset.
+    RandomSubsetShortest {
+        /// Number of candidate partitions sampled for each tenant.
+        subset: NonZeroUsize,
+    },
+    /// Choose the globally shortest visible partition.
+    Shortest,
+    /// Choose a short partition while accounting for cross-worker movement cost.
+    MovementCost {
+        /// Number of candidate partitions sampled for each tenant.
+        subset: NonZeroUsize,
+        /// Queue-length penalty applied when work moves away from its home worker.
+        movement_penalty: usize,
+    },
+}
+
+/// Tenant-to-partition reassignment policy for the SFQ scheduler.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TenantReassignmentPolicy {
+    /// Keep tenant-to-partition hashing stable for the runtime invocation.
+    #[default]
+    Stable,
+    /// Advance the hash epoch after this many scheduling decisions.
+    EverySchedulingDecisions(NonZeroUsize),
+}
+
+/// Scheduler configuration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SchedulerConfig {
+    /// Scheduler family.
+    pub mode: SchedulerMode,
+    /// Number of ready-work partitions used by the SFQ scheduler.
+    pub ready_partitions: NonZeroUsize,
+    /// Worker-side partition selection policy.
+    pub selection: QueueSelectionPolicy,
+    /// Tenant reassignment policy.
+    pub reassignment: TenantReassignmentPolicy,
+}
+
+impl SchedulerConfig {
+    /// Creates a configuration for the current scheduler.
+    pub fn current() -> Self {
+        Self {
+            mode: SchedulerMode::Current,
+            ..Self::default()
+        }
+    }
+
+    /// Creates a baseline SFQ configuration with `ready_partitions` partitions.
+    pub fn stochastic_fair(ready_partitions: NonZeroUsize) -> Self {
+        Self {
+            mode: SchedulerMode::StochasticFair,
+            ready_partitions,
+            ..Self::default()
+        }
+    }
+
+    fn normalized(self, workers: NonZeroUsize) -> Self {
+        let ready_partitions = if self.mode == SchedulerMode::StochasticFair {
+            self.ready_partitions.max(workers)
+        } else {
+            self.ready_partitions
+        };
+        let selection = match self.selection {
+            QueueSelectionPolicy::RandomSubsetShortest { subset } => {
+                QueueSelectionPolicy::RandomSubsetShortest {
+                    subset: subset.min(ready_partitions),
+                }
+            }
+            QueueSelectionPolicy::MovementCost {
+                subset,
+                movement_penalty,
+            } => QueueSelectionPolicy::MovementCost {
+                subset: subset.min(ready_partitions),
+                movement_penalty,
+            },
+            selection => selection,
+        };
+        Self {
+            ready_partitions,
+            selection,
+            ..self
+        }
+    }
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            mode: SchedulerMode::Current,
+            ready_partitions: NonZeroUsize::new(1).expect("one is nonzero"),
+            selection: QueueSelectionPolicy::SingleChoice,
+            reassignment: TenantReassignmentPolicy::Stable,
+        }
+    }
+}
+
 /// Scheduler metrics from the most recent [`Runtime::block_on`] invocation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeMetrics {
@@ -356,6 +483,8 @@ pub struct RuntimeMetrics {
     pub worker_count: usize,
     /// Stealing policy used by the invocation.
     pub steal_policy: StealPolicy,
+    /// Ready-task scheduler configuration used by the invocation.
+    pub scheduler: SchedulerConfig,
     /// Number of steal attempts.
     pub steal_attempts: usize,
     /// Number of successful steals.
@@ -372,6 +501,12 @@ pub struct RuntimeMetrics {
     pub max_local_queue_depth: usize,
     /// Maximum sampled global injector queue depth.
     pub max_global_queue_depth: usize,
+    /// Maximum sampled SFQ ready partition depth.
+    pub max_sfq_partition_depth: usize,
+    /// Number of SFQ ready partition polls.
+    pub sfq_queue_polls: usize,
+    /// Final SFQ reassignment epoch observed by the runtime.
+    pub sfq_epoch: u64,
     /// Most recent owner worker observed for a completed worker-pool job.
     pub last_owner_worker: Option<WorkerId>,
     /// Most recent executing worker observed for a completed worker-pool job.
@@ -380,6 +515,10 @@ pub struct RuntimeMetrics {
     pub last_steal_victim: Option<WorkerId>,
     /// Per-worker completed worker-pool job counts for utilization visibility.
     pub worker_completed_tasks: Vec<usize>,
+    /// Number of allocated tenant identifiers observed by this runtime.
+    pub allocated_tenants: u64,
+    /// Last tenant identifier observed on a completed worker-pool job.
+    pub last_tenant: Option<TenantId>,
 }
 
 /// Snapshot of runtime-context-owned pool state.
@@ -412,6 +551,7 @@ impl Default for RuntimeMetrics {
         Self {
             worker_count: 1,
             steal_policy: StealPolicy::Disabled,
+            scheduler: SchedulerConfig::default(),
             steal_attempts: 0,
             successful_steals: 0,
             failed_steals: 0,
@@ -420,10 +560,15 @@ impl Default for RuntimeMetrics {
             rejected_tasks: 0,
             max_local_queue_depth: 0,
             max_global_queue_depth: 0,
+            max_sfq_partition_depth: 0,
+            sfq_queue_polls: 0,
+            sfq_epoch: 0,
             last_owner_worker: None,
             last_executing_worker: None,
             last_steal_victim: None,
             worker_completed_tasks: vec![0],
+            allocated_tenants: 0,
+            last_tenant: None,
         }
     }
 }
@@ -451,13 +596,15 @@ impl Runtime {
     }
 
     /// Creates a runtime with custom configuration.
-    pub fn with_config(config: RuntimeConfig) -> Self {
+    pub fn with_config(mut config: RuntimeConfig) -> Self {
+        config.scheduler = config.scheduler.normalized(config.workers);
         Self {
             id: RuntimeId::next(),
             config,
             last_metrics: RuntimeMetrics {
                 worker_count: config.workers.get(),
                 steal_policy: config.steal_policy,
+                scheduler: config.scheduler.normalized(config.workers),
                 ..RuntimeMetrics::default()
             },
         }
@@ -491,6 +638,7 @@ impl Runtime {
     {
         let mut inner = self.inner_runtime();
         let local_shared_operations = Rc::new(LocalSharedOperations::default());
+        let tenant_allocator = Arc::new(AtomicU64::new(2));
         let output = inner.block_on(|inner| {
             let cx = RuntimeContext {
                 inner,
@@ -498,6 +646,8 @@ impl Runtime {
                 worker: WorkerId(0),
                 steal_runtime: None,
                 active_steal_scope: None,
+                tenant: TenantId(1),
+                tenant_allocator: Arc::clone(&tenant_allocator),
                 local_shared_operations: Some(Rc::clone(&local_shared_operations)),
                 shared_ring_queue_capacity: self.config.max_shared_ring_queue_len,
                 socket_ring: RefCell::new(None),
@@ -513,6 +663,8 @@ impl Runtime {
         self.last_metrics = RuntimeMetrics {
             worker_count: 1,
             steal_policy: self.config.steal_policy,
+            scheduler: self.config.scheduler,
+            allocated_tenants: tenant_allocator.load(Ordering::Relaxed).saturating_sub(1),
             ..RuntimeMetrics::default()
         };
         output
@@ -524,6 +676,7 @@ impl Runtime {
     {
         let worker_pool = WorkerPool::start(self.config, self.id);
         let runtime = Arc::clone(&worker_pool.runtime);
+        let tenant_allocator = Arc::clone(&runtime.tenant_allocator);
         let mut inner = self.inner_runtime();
         let output = panic::catch_unwind(AssertUnwindSafe(|| {
             inner.block_on(|inner| {
@@ -533,6 +686,8 @@ impl Runtime {
                     worker: WorkerId(NO_WORKER),
                     steal_runtime: Some(Arc::clone(&runtime)),
                     active_steal_scope: None,
+                    tenant: TenantId(1),
+                    tenant_allocator: Arc::clone(&tenant_allocator),
                     local_shared_operations: None,
                     shared_ring_queue_capacity: self.config.max_shared_ring_queue_len,
                     socket_ring: RefCell::new(None),
@@ -574,6 +729,8 @@ pub struct RuntimeContext<'cx> {
     worker: WorkerId,
     steal_runtime: Option<Arc<MultiRuntime>>,
     active_steal_scope: Option<Arc<StealScopeState>>,
+    tenant: TenantId,
+    tenant_allocator: Arc<AtomicU64>,
     local_shared_operations: Option<Rc<LocalSharedOperations>>,
     shared_ring_queue_capacity: usize,
     socket_ring: RefCell<Option<Ring>>,
@@ -596,6 +753,8 @@ impl RuntimeContext<'_> {
                     worker: self.worker,
                     steal_runtime: self.steal_runtime.clone(),
                     active_steal_scope: self.active_steal_scope.clone(),
+                    tenant: self.tenant,
+                    tenant_allocator: Arc::clone(&self.tenant_allocator),
                     local_shared_operations: self.local_shared_operations.clone(),
                     steal_scope,
                     shared_ring_queue_capacity: self.shared_ring_queue_capacity,
@@ -637,6 +796,16 @@ impl RuntimeContext<'_> {
     pub fn execution_place(&self) -> ExecutionPlace {
         self.current_worker()
             .map_or(ExecutionPlace::Root, ExecutionPlace::Worker)
+    }
+
+    /// Returns the tenant identifier associated with the current stackful context.
+    pub fn tenant_id(&self) -> TenantId {
+        self.tenant
+    }
+
+    /// Allocates a fresh runtime-local tenant identifier.
+    pub fn new_tenant_id(&self) -> TenantId {
+        TenantId(self.tenant_allocator.fetch_add(1, Ordering::Relaxed))
     }
 
     /// Returns the worker currently executing this context.
@@ -2762,12 +2931,19 @@ pub struct Scope<'scope, 'env: 'scope> {
     worker: WorkerId,
     steal_runtime: Option<Arc<MultiRuntime>>,
     active_steal_scope: Option<Arc<StealScopeState>>,
+    tenant: TenantId,
+    tenant_allocator: Arc<AtomicU64>,
     local_shared_operations: Option<Rc<LocalSharedOperations>>,
     steal_scope: Option<NonNull<RefCell<Option<Arc<StealScopeState>>>>>,
     shared_ring_queue_capacity: usize,
 }
 
 impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
+    /// Returns the tenant identifier associated with the context that created this scope.
+    pub fn tenant_id(&self) -> TenantId {
+        self.tenant
+    }
+
     /// Spawns local stackful work in this scope.
     ///
     /// Local work is not eligible for cross-worker stealing and may capture
@@ -2786,12 +2962,25 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
         F: FnOnce(&RuntimeContext<'_>) -> T + 'scope,
         T: 'scope,
     {
+        self.spawn_local_with_tenant(self.new_tenant_id(), f)
+    }
+
+    /// Spawns local stackful work associated with `tenant`.
+    ///
+    /// Tenant identifiers on local work are attribution and propagation metadata;
+    /// local work still runs on the embedded single-threaded stack scheduler.
+    pub fn spawn_local_with_tenant<F, T>(&self, tenant: TenantId, f: F) -> JoinHandle<'scope, T>
+    where
+        F: FnOnce(&RuntimeContext<'_>) -> T + 'scope,
+        T: 'scope,
+    {
         JoinHandle {
             inner: JoinInner::Local(self.inner.spawn({
                 let runtime_id = self.runtime_id;
                 let worker = self.worker;
                 let steal_runtime = self.steal_runtime.clone();
                 let active_steal_scope = self.active_steal_scope.clone();
+                let tenant_allocator = Arc::clone(&self.tenant_allocator);
                 let local_shared_operations = self.local_shared_operations.clone();
                 let shared_ring_queue_capacity = self.shared_ring_queue_capacity;
                 move |inner| {
@@ -2801,6 +2990,8 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                         worker,
                         steal_runtime,
                         active_steal_scope,
+                        tenant,
+                        tenant_allocator,
                         local_shared_operations,
                         shared_ring_queue_capacity,
                         socket_ring: RefCell::new(None),
@@ -2821,6 +3012,15 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
         self.spawn_local(f)
     }
 
+    /// Spawns local work pinned to the current worker and associated with `tenant`.
+    pub fn spawn_pinned_with_tenant<F, T>(&self, tenant: TenantId, f: F) -> JoinHandle<'scope, T>
+    where
+        F: FnOnce(&RuntimeContext<'_>) -> T + 'scope,
+        T: 'scope,
+    {
+        self.spawn_local_with_tenant(tenant, f)
+    }
+
     /// Spawns work that satisfies the stealing eligibility boundary.
     ///
     /// Stealable work may execute on another worker and must therefore be
@@ -2839,8 +3039,17 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
         F: FnOnce(&RuntimeContext<'_>) -> T + Send + 'static,
         T: Send + 'static,
     {
+        self.spawn_stealable_with_tenant(self.new_tenant_id(), f)
+    }
+
+    /// Spawns stealable work associated with `tenant`.
+    pub fn spawn_stealable_with_tenant<F, T>(&self, tenant: TenantId, f: F) -> JoinHandle<'scope, T>
+    where
+        F: FnOnce(&RuntimeContext<'_>) -> T + Send + 'static,
+        T: Send + 'static,
+    {
         let Some(runtime) = self.steal_runtime.clone() else {
-            return self.spawn_local(f);
+            return self.spawn_local_with_tenant(tenant, f);
         };
         let steal_scope = {
             let steal_scope = self.steal_scope.expect("stealable scope state missing");
@@ -2859,6 +3068,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
         let owner = self.worker;
         let submitted = runtime.submit(
             owner,
+            tenant,
             Box::new(move |cx| {
                 let result = panic::catch_unwind(AssertUnwindSafe(|| f(cx)));
                 match result {
@@ -2897,12 +3107,27 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
         F: FnOnce(&RuntimeContext<'_>) -> T + 'scope,
         T: 'scope,
     {
+        self.spawn_with_stack_size_and_tenant(stack_size, self.new_tenant_id(), f)
+    }
+
+    /// Spawns local stackful work with custom stack size and `tenant` metadata.
+    pub fn spawn_with_stack_size_and_tenant<F, T>(
+        &self,
+        stack_size: usize,
+        tenant: TenantId,
+        f: F,
+    ) -> JoinHandle<'scope, T>
+    where
+        F: FnOnce(&RuntimeContext<'_>) -> T + 'scope,
+        T: 'scope,
+    {
         JoinHandle {
             inner: JoinInner::Local(self.inner.spawn_with_stack_size(stack_size, {
                 let runtime_id = self.runtime_id;
                 let worker = self.worker;
                 let steal_runtime = self.steal_runtime.clone();
                 let active_steal_scope = self.active_steal_scope.clone();
+                let tenant_allocator = Arc::clone(&self.tenant_allocator);
                 let local_shared_operations = self.local_shared_operations.clone();
                 let shared_ring_queue_capacity = self.shared_ring_queue_capacity;
                 move |inner| {
@@ -2912,6 +3137,8 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                         worker,
                         steal_runtime,
                         active_steal_scope,
+                        tenant,
+                        tenant_allocator,
                         local_shared_operations,
                         shared_ring_queue_capacity,
                         socket_ring: RefCell::new(None),
@@ -2921,6 +3148,11 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
                 }
             })),
         }
+    }
+
+    /// Allocates a fresh runtime-local tenant identifier.
+    pub fn new_tenant_id(&self) -> TenantId {
+        TenantId(self.tenant_allocator.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -4228,16 +4460,38 @@ enum SubmitError {
 
 struct QueuedJob {
     owner: WorkerId,
+    tenant: TenantId,
     job: Job,
     active_steal_scope: Option<Arc<StealScopeState>>,
+    #[cfg(test)]
+    sequence: usize,
 }
 
 impl QueuedJob {
-    fn new(owner: WorkerId, job: Job, active_steal_scope: Option<Arc<StealScopeState>>) -> Self {
+    fn new(
+        owner: WorkerId,
+        tenant: TenantId,
+        job: Job,
+        active_steal_scope: Option<Arc<StealScopeState>>,
+    ) -> Self {
         Self {
             owner,
+            tenant,
             job,
             active_steal_scope,
+            #[cfg(test)]
+            sequence: 0,
+        }
+    }
+
+    #[cfg(test)]
+    fn new_for_test(owner: WorkerId, tenant: TenantId, sequence: usize) -> Self {
+        Self {
+            owner,
+            tenant,
+            job: Box::new(|_| {}),
+            active_steal_scope: None,
+            sequence,
         }
     }
 }
@@ -4405,8 +4659,14 @@ impl ActiveSharedOperation {
 struct MultiRuntime {
     runtime_id: RuntimeId,
     config: RuntimeConfig,
+    tenant_allocator: Arc<AtomicU64>,
     stealers: Vec<Stealer<QueuedJob>>,
     global: Injector<QueuedJob>,
+    sfq_queues: Vec<Mutex<VecDeque<QueuedJob>>>,
+    sfq_depths: Vec<AtomicUsize>,
+    total_sfq_depth: AtomicUsize,
+    sfq_decisions: AtomicU64,
+    sfq_worker_cursors: Vec<AtomicUsize>,
     shared_ring_queues: Vec<Mutex<VecDeque<Arc<SharedRingCore>>>>,
     scheduler_wakes: Vec<Mutex<Option<SchedulerWake>>>,
     next_shared_ring_worker: AtomicUsize,
@@ -4433,6 +4693,13 @@ struct VictimIter {
     victims: usize,
 }
 
+fn mix64(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
 impl Iterator for VictimIter {
     type Item = usize;
 
@@ -4457,8 +4724,18 @@ impl MultiRuntime {
         Self {
             runtime_id,
             config,
+            tenant_allocator: Arc::new(AtomicU64::new(2)),
             stealers,
             global: Injector::new(),
+            sfq_queues: (0..config.scheduler.ready_partitions.get())
+                .map(|_| Mutex::new(VecDeque::new()))
+                .collect(),
+            sfq_depths: (0..config.scheduler.ready_partitions.get())
+                .map(|_| AtomicUsize::new(0))
+                .collect(),
+            total_sfq_depth: AtomicUsize::new(0),
+            sfq_decisions: AtomicU64::new(0),
+            sfq_worker_cursors: (0..worker_count).map(|_| AtomicUsize::new(0)).collect(),
             shared_ring_queues: (0..worker_count)
                 .map(|_| Mutex::new(VecDeque::with_capacity(config.max_shared_ring_queue_len)))
                 .collect(),
@@ -4536,6 +4813,7 @@ impl MultiRuntime {
     fn submit(
         &self,
         owner: WorkerId,
+        tenant: TenantId,
         job: Job,
         active_steal_scope: Option<Arc<StealScopeState>>,
     ) -> Result<(), SubmitError> {
@@ -4556,9 +4834,21 @@ impl MultiRuntime {
         } else {
             owner.index() % self.stealers.len()
         };
+        if self.config.scheduler.mode == SchedulerMode::StochasticFair {
+            let job = QueuedJob::new(WorkerId(owner), tenant, job, active_steal_scope);
+            if let Err(job) = self.submit_sfq(job) {
+                self.release_active();
+                self.metrics.rejected_tasks.fetch_add(1, Ordering::Relaxed);
+                drop(job);
+                return Err(SubmitError::QueueFull);
+            }
+            self.wake_one();
+            return Ok(());
+        }
+
         let submitted_from_owner_worker = self.config.steal_policy != StealPolicy::Disabled
             && CURRENT_WORKER.with(|current| current.get()) == Some(owner);
-        let job = QueuedJob::new(WorkerId(owner), job, active_steal_scope);
+        let job = QueuedJob::new(WorkerId(owner), tenant, job, active_steal_scope);
         let result = if submitted_from_owner_worker {
             self.submit_local_current(owner, job)
         } else {
@@ -4571,6 +4861,19 @@ impl MultiRuntime {
             return Err(SubmitError::QueueFull);
         }
         self.wake_one();
+        Ok(())
+    }
+
+    fn submit_sfq(&self, job: QueuedJob) -> Result<(), QueuedJob> {
+        let partition = self.select_sfq_enqueue_partition(job.tenant, job.owner);
+        let Some(depth) = self.reserve_sfq_partition(partition) else {
+            return Err(job);
+        };
+        self.metrics.record_sfq_partition_depth(depth);
+        self.sfq_queues[partition]
+            .lock()
+            .expect("SFQ ready queue mutex poisoned")
+            .push_back(job);
         Ok(())
     }
 
@@ -4853,11 +5156,13 @@ impl MultiRuntime {
                     {
                         let QueuedJob {
                             owner,
+                            tenant,
                             job,
                             active_steal_scope,
+                            ..
                         } = ready.queued;
                         self.metrics
-                            .record_execution(owner, worker, ready.stolen_from);
+                            .record_execution(owner, worker, ready.stolen_from, tenant);
                         let runtime = Arc::clone(self);
                         scope.spawn(move |inner| {
                             let runtime_id = runtime.runtime_id;
@@ -4867,8 +5172,10 @@ impl MultiRuntime {
                                 inner,
                                 runtime_id,
                                 worker,
-                                steal_runtime: Some(runtime),
+                                steal_runtime: Some(Arc::clone(&runtime)),
                                 active_steal_scope,
+                                tenant,
+                                tenant_allocator: Arc::clone(&runtime.tenant_allocator),
                                 local_shared_operations: None,
                                 shared_ring_queue_capacity,
                                 socket_ring: RefCell::new(None),
@@ -4922,6 +5229,10 @@ impl MultiRuntime {
         local_queue: &CrossbeamWorker<QueuedJob>,
         idle_iterations: usize,
     ) -> Option<ReadyJob> {
+        if self.config.scheduler.mode == SchedulerMode::StochasticFair {
+            return self.take_sfq_job(worker, idle_iterations);
+        }
+
         if let Some(job) = self.pop_local(worker, local_queue) {
             return Some(ReadyJob {
                 queued: job,
@@ -4942,6 +5253,171 @@ impl MultiRuntime {
         }
 
         self.steal(worker, local_queue, idle_iterations)
+    }
+
+    fn take_sfq_job(&self, worker: WorkerId, idle_iterations: usize) -> Option<ReadyJob> {
+        if self.total_sfq_depth.load(Ordering::Acquire) == 0 {
+            return None;
+        }
+
+        self.record_sfq_scheduling_decision();
+        let partitions = self.sfq_queues.len();
+        let start = self.select_sfq_dequeue_start(worker, idle_iterations);
+        for offset in 0..partitions {
+            self.metrics.sfq_queue_polls.fetch_add(1, Ordering::Relaxed);
+            let partition = (start + offset) % partitions;
+            let mut queue = self.sfq_queues[partition]
+                .lock()
+                .expect("SFQ ready queue mutex poisoned");
+            if let Some(job) = queue.pop_front() {
+                drop(queue);
+                self.release_sfq_partition(partition);
+                return Some(ReadyJob {
+                    queued: job,
+                    stolen_from: None,
+                });
+            }
+        }
+
+        None
+    }
+
+    fn select_sfq_dequeue_start(&self, worker: WorkerId, idle_iterations: usize) -> usize {
+        let partitions = self.sfq_queues.len();
+        let cursor = self.sfq_worker_cursors[worker.index()].fetch_add(1, Ordering::Relaxed);
+        match self.config.scheduler.selection {
+            QueueSelectionPolicy::SingleChoice => (worker.index() + cursor) % partitions,
+            QueueSelectionPolicy::RandomSubsetShortest { subset } => {
+                self.sfq_shortest_dequeue_subset_with_cost(worker, cursor, subset.get(), |_| 0)
+            }
+            QueueSelectionPolicy::Shortest => self
+                .sfq_shortest_non_empty()
+                .unwrap_or((worker.index() + cursor + idle_iterations) % partitions),
+            QueueSelectionPolicy::MovementCost {
+                subset,
+                movement_penalty,
+            } => {
+                let home = worker.index() % partitions;
+                self.sfq_shortest_dequeue_subset_with_cost(
+                    worker,
+                    cursor,
+                    subset.get(),
+                    |partition| usize::from(partition != home) * movement_penalty,
+                )
+            }
+        }
+    }
+
+    fn sfq_shortest_dequeue_subset_with_cost(
+        &self,
+        worker: WorkerId,
+        cursor: usize,
+        subset: usize,
+        cost: impl Fn(usize) -> usize,
+    ) -> usize {
+        let partitions = self.sfq_queues.len();
+        let count = subset.max(1).min(partitions);
+        (0..count)
+            .map(|offset| (worker.index() + cursor + offset) % partitions)
+            .min_by_key(|&partition| {
+                self.sfq_depths[partition].load(Ordering::Relaxed) + cost(partition)
+            })
+            .expect("SFQ dequeue subset is empty")
+    }
+
+    fn sfq_shortest_non_empty(&self) -> Option<usize> {
+        self.sfq_depths
+            .iter()
+            .enumerate()
+            .filter_map(|(partition, depth)| {
+                let depth = depth.load(Ordering::Relaxed);
+                (depth != 0).then_some((partition, depth))
+            })
+            .min_by_key(|(_, depth)| *depth)
+            .map(|(partition, _)| partition)
+    }
+
+    fn select_sfq_enqueue_partition(&self, tenant: TenantId, owner: WorkerId) -> usize {
+        let scheduler = self.config.scheduler;
+        match scheduler.selection {
+            QueueSelectionPolicy::SingleChoice => self.sfq_partition(tenant, 0),
+            QueueSelectionPolicy::RandomSubsetShortest { subset } => {
+                self.sfq_shortest_subset(tenant, subset.get(), |_| 0)
+            }
+            QueueSelectionPolicy::Shortest => self.sfq_global_shortest(),
+            QueueSelectionPolicy::MovementCost {
+                subset,
+                movement_penalty,
+            } => {
+                let home = owner.index() % self.sfq_queues.len();
+                self.sfq_shortest_subset(tenant, subset.get(), |partition| {
+                    usize::from(partition != home) * movement_penalty
+                })
+            }
+        }
+    }
+
+    fn sfq_shortest_subset(
+        &self,
+        tenant: TenantId,
+        subset: usize,
+        cost: impl Fn(usize) -> usize,
+    ) -> usize {
+        let subset = subset.max(1).min(self.sfq_queues.len());
+        (0..subset)
+            .map(|offset| self.sfq_partition(tenant, offset as u64))
+            .min_by_key(|&partition| {
+                self.sfq_depths[partition].load(Ordering::Relaxed) + cost(partition)
+            })
+            .expect("SFQ subset is empty")
+    }
+
+    fn sfq_global_shortest(&self) -> usize {
+        self.sfq_depths
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, depth)| depth.load(Ordering::Relaxed))
+            .map(|(partition, _)| partition)
+            .expect("SFQ has no partitions")
+    }
+
+    fn sfq_partition(&self, tenant: TenantId, offset: u64) -> usize {
+        let epoch = self.sfq_epoch();
+        (mix64(tenant.get() ^ epoch ^ offset) as usize) % self.sfq_queues.len()
+    }
+
+    fn sfq_epoch(&self) -> u64 {
+        match self.config.scheduler.reassignment {
+            TenantReassignmentPolicy::Stable => 0,
+            TenantReassignmentPolicy::EverySchedulingDecisions(interval) => {
+                self.sfq_decisions.load(Ordering::Relaxed) / interval.get() as u64
+            }
+        }
+    }
+
+    fn record_sfq_scheduling_decision(&self) {
+        if matches!(
+            self.config.scheduler.reassignment,
+            TenantReassignmentPolicy::EverySchedulingDecisions(_)
+        ) {
+            self.sfq_decisions.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn reserve_sfq_partition(&self, partition: usize) -> Option<usize> {
+        let depth =
+            Self::reserve_depth(&self.sfq_depths[partition], self.sfq_partition_capacity())?;
+        self.total_sfq_depth.fetch_add(1, Ordering::Relaxed);
+        Some(depth)
+    }
+
+    fn sfq_partition_capacity(&self) -> usize {
+        self.active_job_limit().max(1)
+    }
+
+    fn release_sfq_partition(&self, partition: usize) {
+        Self::release_depth(&self.sfq_depths[partition], 1);
+        Self::release_depth(&self.total_sfq_depth, 1);
     }
 
     fn pop_local(
@@ -5126,6 +5602,7 @@ impl MultiRuntime {
         RuntimeMetrics {
             worker_count: self.config.workers.get(),
             steal_policy: self.config.steal_policy,
+            scheduler: self.config.scheduler,
             steal_attempts: self.metrics.steal_attempts.load(Ordering::Relaxed),
             successful_steals: self.metrics.successful_steals.load(Ordering::Relaxed),
             failed_steals: self.metrics.failed_steals.load(Ordering::Relaxed),
@@ -5134,6 +5611,14 @@ impl MultiRuntime {
             rejected_tasks: self.metrics.rejected_tasks.load(Ordering::Relaxed),
             max_local_queue_depth: self.metrics.max_local_queue_depth.load(Ordering::Relaxed),
             max_global_queue_depth: self.metrics.max_global_queue_depth.load(Ordering::Relaxed),
+            max_sfq_partition_depth: self.metrics.max_sfq_partition_depth.load(Ordering::Relaxed),
+            sfq_queue_polls: self.metrics.sfq_queue_polls.load(Ordering::Relaxed),
+            sfq_epoch: match self.config.scheduler.reassignment {
+                TenantReassignmentPolicy::Stable => 0,
+                TenantReassignmentPolicy::EverySchedulingDecisions(interval) => {
+                    self.sfq_decisions.load(Ordering::Relaxed) / interval.get() as u64
+                }
+            },
             last_owner_worker: self.metrics.load_worker(&self.metrics.last_owner_worker),
             last_executing_worker: self
                 .metrics
@@ -5145,6 +5630,11 @@ impl MultiRuntime {
                 .iter()
                 .map(|count| count.load(Ordering::Relaxed))
                 .collect(),
+            allocated_tenants: self
+                .tenant_allocator
+                .load(Ordering::Relaxed)
+                .saturating_sub(1),
+            last_tenant: self.metrics.load_tenant(&self.metrics.last_tenant),
         }
     }
 }
@@ -5158,9 +5648,12 @@ struct MultiMetrics {
     rejected_tasks: AtomicUsize,
     max_local_queue_depth: AtomicUsize,
     max_global_queue_depth: AtomicUsize,
+    max_sfq_partition_depth: AtomicUsize,
+    sfq_queue_polls: AtomicUsize,
     last_owner_worker: AtomicUsize,
     last_executing_worker: AtomicUsize,
     last_steal_victim: AtomicUsize,
+    last_tenant: AtomicU64,
     worker_completed_tasks: Vec<AtomicUsize>,
 }
 
@@ -5175,9 +5668,12 @@ impl MultiMetrics {
             rejected_tasks: AtomicUsize::new(0),
             max_local_queue_depth: AtomicUsize::new(0),
             max_global_queue_depth: AtomicUsize::new(0),
+            max_sfq_partition_depth: AtomicUsize::new(0),
+            sfq_queue_polls: AtomicUsize::new(0),
             last_owner_worker: AtomicUsize::new(NO_WORKER),
             last_executing_worker: AtomicUsize::new(NO_WORKER),
             last_steal_victim: AtomicUsize::new(NO_WORKER),
+            last_tenant: AtomicU64::new(0),
             worker_completed_tasks: (0..worker_count).map(|_| AtomicUsize::new(0)).collect(),
         }
     }
@@ -5188,6 +5684,10 @@ impl MultiMetrics {
 
     fn record_global_queue_depth(&self, depth: usize) {
         Self::record_queue_depth(&self.max_global_queue_depth, depth);
+    }
+
+    fn record_sfq_partition_depth(&self, depth: usize) {
+        Self::record_queue_depth(&self.max_sfq_partition_depth, depth);
     }
 
     fn record_queue_depth(counter: &AtomicUsize, depth: usize) {
@@ -5205,6 +5705,7 @@ impl MultiMetrics {
         owner: WorkerId,
         executing: WorkerId,
         stolen_from: Option<WorkerId>,
+        tenant: TenantId,
     ) {
         self.last_owner_worker
             .store(owner.index(), Ordering::Relaxed);
@@ -5214,6 +5715,7 @@ impl MultiMetrics {
             self.last_steal_victim
                 .store(victim.index(), Ordering::Relaxed);
         }
+        self.last_tenant.store(tenant.get(), Ordering::Relaxed);
     }
 
     fn record_completion(&self, worker: WorkerId) {
@@ -5224,6 +5726,13 @@ impl MultiMetrics {
         match counter.load(Ordering::Relaxed) {
             NO_WORKER => None,
             worker => Some(WorkerId(worker)),
+        }
+    }
+
+    fn load_tenant(&self, counter: &AtomicU64) -> Option<TenantId> {
+        match counter.load(Ordering::Relaxed) {
+            0 => None,
+            tenant => Some(TenantId(tenant)),
         }
     }
 }
@@ -5444,6 +5953,12 @@ enum StealOutcome<T> {
 /// Internal helpers used by criterion benchmarks.
 #[doc(hidden)]
 pub mod bench_support {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+    use crossbeam_queue::SegQueue;
+
     use super::{CrossbeamWorker, Injector, MultiRuntime};
 
     /// Minimal fixture for measuring only scheduler queue mechanics.
@@ -5526,6 +6041,779 @@ pub mod bench_support {
         }
     }
 
+    /// Minimal fixture for measuring tenant-partition selection mechanics
+    /// without coroutine, join-handle, worker-thread, or OS wakeup costs.
+    pub struct RawSfqQueues {
+        queues: Vec<VecDeque<usize>>,
+    }
+
+    impl RawSfqQueues {
+        /// Creates prewarmed candidate SFQ queues.
+        pub fn new(partitions: usize) -> Self {
+            assert!(
+                partitions != 0,
+                "SFQ fixture requires at least one partition"
+            );
+            let mut queues = (0..partitions)
+                .map(|_| VecDeque::with_capacity(64))
+                .collect::<Vec<_>>();
+            for (partition, queue) in queues.iter_mut().enumerate() {
+                for value in 0..partition.min(8) {
+                    queue.push_back(value);
+                }
+            }
+            Self { queues }
+        }
+
+        /// Enqueues and dequeues using one tenant-hash-selected partition.
+        pub fn single_choice_roundtrip(&mut self, tenant: u64, value: usize) -> usize {
+            let partition = self.partition(tenant, 0);
+            self.roundtrip(partition, value)
+        }
+
+        /// Enqueues into the shortest partition from a tenant-hash-selected subset.
+        pub fn random_subset_shortest_roundtrip(
+            &mut self,
+            tenant: u64,
+            subset: usize,
+            value: usize,
+        ) -> usize {
+            let partition = self.shortest_subset_partition(tenant, subset.max(1), |_| 0);
+            self.roundtrip(partition, value)
+        }
+
+        /// Enqueues into the globally shortest partition.
+        pub fn global_shortest_roundtrip(&mut self, value: usize) -> usize {
+            let partition = self
+                .queues
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, queue)| queue.len())
+                .map(|(partition, _)| partition)
+                .expect("SFQ fixture has no partitions");
+            self.roundtrip(partition, value)
+        }
+
+        /// Enqueues into the shortest tenant subset partition adjusted by a
+        /// movement penalty when the candidate is not `home_partition`.
+        pub fn movement_cost_roundtrip(
+            &mut self,
+            tenant: u64,
+            subset: usize,
+            home_partition: usize,
+            movement_penalty: usize,
+            value: usize,
+        ) -> usize {
+            let home = home_partition % self.queues.len();
+            let partition = self.shortest_subset_partition(tenant, subset.max(1), |partition| {
+                usize::from(partition != home) * movement_penalty
+            });
+            self.roundtrip(partition, value)
+        }
+
+        /// Reassigns a tenant by changing the hash epoch and returns its partition.
+        pub fn reassigned_partition(&self, tenant: u64, epoch: u64) -> usize {
+            self.partition(tenant, epoch)
+        }
+
+        fn shortest_subset_partition(
+            &self,
+            tenant: u64,
+            subset: usize,
+            cost: impl Fn(usize) -> usize,
+        ) -> usize {
+            let count = subset.min(self.queues.len());
+            (0..count)
+                .map(|offset| self.partition(tenant, offset as u64))
+                .min_by_key(|&partition| self.queues[partition].len() + cost(partition))
+                .expect("SFQ subset is empty")
+        }
+
+        fn roundtrip(&mut self, partition: usize, value: usize) -> usize {
+            let queue = &mut self.queues[partition];
+            queue.push_back(value);
+            queue.pop_front().expect("roundtrip task missing")
+        }
+
+        fn partition(&self, tenant: u64, epoch: u64) -> usize {
+            (mix64(tenant ^ epoch) as usize) % self.queues.len()
+        }
+    }
+
+    impl Default for RawSfqQueues {
+        fn default() -> Self {
+            Self::new(16)
+        }
+    }
+
+    /// Work item used by raw ready-queue candidate benchmarks.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct ReadyQueueTask {
+        /// Scheduler tenant/fairness domain.
+        pub tenant: u64,
+        /// Opaque benchmark payload.
+        pub value: usize,
+    }
+
+    impl ReadyQueueTask {
+        /// Creates a benchmark task with tenant metadata.
+        pub const fn new(tenant: u64, value: usize) -> Self {
+            Self { tenant, value }
+        }
+    }
+
+    /// Raw candidate configuration for scheduler/queue-boundary benchmarks.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct ReadyQueueConfig {
+        /// Number of logical workers consuming from the candidate.
+        pub workers: usize,
+        /// Number of scheduler-visible subqueues/partitions.
+        pub partitions: usize,
+        /// Per-queue admission capacity used by correctness and stress tests.
+        pub queue_capacity: usize,
+    }
+
+    impl ReadyQueueConfig {
+        /// Creates a queue candidate configuration.
+        pub fn new(workers: usize, partitions: usize, queue_capacity: usize) -> Self {
+            assert!(workers != 0, "ready queue candidate requires workers");
+            assert!(partitions != 0, "ready queue candidate requires partitions");
+            assert!(
+                queue_capacity != 0,
+                "ready queue candidate requires non-zero capacity"
+            );
+            Self {
+                workers,
+                partitions,
+                queue_capacity,
+            }
+        }
+    }
+
+    /// Candidate families for the scheduler/queue interface experiments.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum ReadyQueueCandidateKind {
+        /// Current global injector plus worker-local crossbeam deques.
+        CurrentGlobalLocal,
+        /// Tenant-hashed MPMC crossbeam subqueues.
+        CrossbeamQueueSubqueues,
+        /// Tenant-hashed crossbeam work-stealing deque subqueues.
+        CrossbeamStealSubqueues,
+        /// Preallocated bounded subqueues with one mutex per ring.
+        BoundedRingSubqueues,
+        /// Bounded subqueues plus a non-empty bitmap to reduce empty scans.
+        BitmapShardedSubqueues,
+    }
+
+    impl ReadyQueueCandidateKind {
+        /// Stable benchmark/report label.
+        pub const fn label(self) -> &'static str {
+            match self {
+                Self::CurrentGlobalLocal => "current_global_local",
+                Self::CrossbeamQueueSubqueues => "crossbeam_queue_subqueues",
+                Self::CrossbeamStealSubqueues => "crossbeam_steal_subqueues",
+                Self::BoundedRingSubqueues => "bounded_ring_subqueues",
+                Self::BitmapShardedSubqueues => "bitmap_sharded_subqueues",
+            }
+        }
+
+        /// All raw candidates used by the benchmark matrix.
+        pub const fn all() -> [Self; 5] {
+            [
+                Self::CurrentGlobalLocal,
+                Self::CrossbeamQueueSubqueues,
+                Self::CrossbeamStealSubqueues,
+                Self::BoundedRingSubqueues,
+                Self::BitmapShardedSubqueues,
+            ]
+        }
+    }
+
+    /// Queue mechanics boundary used by raw scheduler candidate benchmarks.
+    ///
+    /// The policy layer provides worker id, tenant id, and payload. Candidate
+    /// queues own concurrent storage, admission, dequeue, and empty-state hints.
+    pub trait ReadyQueueCandidate: Send + Sync {
+        /// Candidate label used by reports and benchmark names.
+        fn label(&self) -> &'static str;
+        /// Number of logical consumers.
+        fn workers(&self) -> usize;
+        /// Number of scheduler-visible partitions.
+        fn partitions(&self) -> usize;
+        /// Returns the partition a tenant maps to for this candidate.
+        fn partition_for(&self, tenant: u64) -> usize;
+        /// Submits from worker-affine code.
+        fn submit_worker(&self, worker: usize, task: ReadyQueueTask) -> bool;
+        /// Submits from non-worker/root code.
+        fn submit_external(&self, task: ReadyQueueTask) -> bool;
+        /// Dequeues one task for `worker`.
+        fn pop_worker(&self, worker: usize) -> Option<ReadyQueueTask>;
+        /// Best-effort total queued task count.
+        fn len_hint(&self) -> usize;
+    }
+
+    /// Builds a raw ready-queue candidate.
+    pub fn build_ready_queue_candidate(
+        kind: ReadyQueueCandidateKind,
+        config: ReadyQueueConfig,
+    ) -> Box<dyn ReadyQueueCandidate> {
+        match kind {
+            ReadyQueueCandidateKind::CurrentGlobalLocal => {
+                Box::new(CurrentGlobalLocalQueue::new(config))
+            }
+            ReadyQueueCandidateKind::CrossbeamQueueSubqueues => {
+                Box::new(CrossbeamQueueSubqueues::new(config))
+            }
+            ReadyQueueCandidateKind::CrossbeamStealSubqueues => {
+                Box::new(CrossbeamStealSubqueues::new(config))
+            }
+            ReadyQueueCandidateKind::BoundedRingSubqueues => {
+                Box::new(BoundedRingSubqueues::new(config))
+            }
+            ReadyQueueCandidateKind::BitmapShardedSubqueues => {
+                Box::new(BitmapShardedSubqueues::new(config))
+            }
+        }
+    }
+
+    struct CurrentGlobalLocalQueue {
+        config: ReadyQueueConfig,
+        global: Injector<ReadyQueueTask>,
+        workers: Vec<Mutex<CrossbeamWorker<ReadyQueueTask>>>,
+        stealers: Vec<super::Stealer<ReadyQueueTask>>,
+        local_depths: Vec<AtomicUsize>,
+        global_depth: AtomicUsize,
+        total_depth: AtomicUsize,
+    }
+
+    impl CurrentGlobalLocalQueue {
+        fn new(config: ReadyQueueConfig) -> Self {
+            let mut workers = Vec::with_capacity(config.workers);
+            let mut stealers = Vec::with_capacity(config.workers);
+            for _ in 0..config.workers {
+                let worker = CrossbeamWorker::new_lifo();
+                stealers.push(worker.stealer());
+                workers.push(Mutex::new(worker));
+            }
+            Self {
+                config,
+                global: Injector::new(),
+                workers,
+                stealers,
+                local_depths: (0..config.workers).map(|_| AtomicUsize::new(0)).collect(),
+                global_depth: AtomicUsize::new(0),
+                total_depth: AtomicUsize::new(0),
+            }
+        }
+
+        fn release_local(&self, worker: usize) {
+            release_counter(&self.local_depths[worker], 1);
+            release_counter(&self.total_depth, 1);
+        }
+
+        fn release_global(&self) {
+            release_counter(&self.global_depth, 1);
+            release_counter(&self.total_depth, 1);
+        }
+    }
+
+    impl ReadyQueueCandidate for CurrentGlobalLocalQueue {
+        fn label(&self) -> &'static str {
+            ReadyQueueCandidateKind::CurrentGlobalLocal.label()
+        }
+
+        fn workers(&self) -> usize {
+            self.config.workers
+        }
+
+        fn partitions(&self) -> usize {
+            self.config.workers + 1
+        }
+
+        fn partition_for(&self, tenant: u64) -> usize {
+            (mix64(tenant) as usize) % self.partitions()
+        }
+
+        fn submit_worker(&self, worker: usize, task: ReadyQueueTask) -> bool {
+            let worker = worker % self.config.workers;
+            if !reserve_counter(&self.local_depths[worker], self.config.queue_capacity) {
+                return false;
+            }
+            reserve_total(&self.total_depth);
+            self.workers[worker]
+                .lock()
+                .expect("current local queue mutex poisoned")
+                .push(task);
+            true
+        }
+
+        fn submit_external(&self, task: ReadyQueueTask) -> bool {
+            if !reserve_counter(&self.global_depth, self.config.queue_capacity) {
+                return false;
+            }
+            reserve_total(&self.total_depth);
+            self.global.push(task);
+            true
+        }
+
+        fn pop_worker(&self, worker: usize) -> Option<ReadyQueueTask> {
+            let worker = worker % self.config.workers;
+            if let Some(task) = self.workers[worker]
+                .lock()
+                .expect("current local queue mutex poisoned")
+                .pop()
+            {
+                self.release_local(worker);
+                return Some(task);
+            }
+
+            if let Some(task) = MultiRuntime::steal_retry(|| self.global.steal()) {
+                self.release_global();
+                return Some(task);
+            }
+
+            for offset in 1..self.config.workers {
+                let victim = (worker + offset) % self.config.workers;
+                if let Some(task) = MultiRuntime::steal_retry(|| self.stealers[victim].steal()) {
+                    self.release_local(victim);
+                    return Some(task);
+                }
+            }
+            None
+        }
+
+        fn len_hint(&self) -> usize {
+            self.total_depth.load(Ordering::Relaxed)
+        }
+    }
+
+    struct CrossbeamQueueSubqueues {
+        config: ReadyQueueConfig,
+        queues: Vec<SegQueue<ReadyQueueTask>>,
+        depths: Vec<AtomicUsize>,
+        cursors: Vec<AtomicUsize>,
+        total_depth: AtomicUsize,
+    }
+
+    impl CrossbeamQueueSubqueues {
+        fn new(config: ReadyQueueConfig) -> Self {
+            Self {
+                config,
+                queues: (0..config.partitions).map(|_| SegQueue::new()).collect(),
+                depths: (0..config.partitions)
+                    .map(|_| AtomicUsize::new(0))
+                    .collect(),
+                cursors: (0..config.workers).map(|_| AtomicUsize::new(0)).collect(),
+                total_depth: AtomicUsize::new(0),
+            }
+        }
+
+        fn submit_partition(&self, partition: usize, task: ReadyQueueTask) -> bool {
+            if !reserve_counter(&self.depths[partition], self.config.queue_capacity) {
+                return false;
+            }
+            reserve_total(&self.total_depth);
+            self.queues[partition].push(task);
+            true
+        }
+
+        fn release_partition(&self, partition: usize) {
+            release_counter(&self.depths[partition], 1);
+            release_counter(&self.total_depth, 1);
+        }
+    }
+
+    impl ReadyQueueCandidate for CrossbeamQueueSubqueues {
+        fn label(&self) -> &'static str {
+            ReadyQueueCandidateKind::CrossbeamQueueSubqueues.label()
+        }
+
+        fn workers(&self) -> usize {
+            self.config.workers
+        }
+
+        fn partitions(&self) -> usize {
+            self.config.partitions
+        }
+
+        fn partition_for(&self, tenant: u64) -> usize {
+            hash_partition(tenant, self.config.partitions)
+        }
+
+        fn submit_worker(&self, _worker: usize, task: ReadyQueueTask) -> bool {
+            self.submit_external(task)
+        }
+
+        fn submit_external(&self, task: ReadyQueueTask) -> bool {
+            self.submit_partition(self.partition_for(task.tenant), task)
+        }
+
+        fn pop_worker(&self, worker: usize) -> Option<ReadyQueueTask> {
+            scan_partitions(self.config.partitions, worker, &self.cursors, |partition| {
+                if self.depths[partition].load(Ordering::Acquire) == 0 {
+                    return None;
+                }
+                let task = self.queues[partition].pop()?;
+                self.release_partition(partition);
+                Some(task)
+            })
+        }
+
+        fn len_hint(&self) -> usize {
+            self.total_depth.load(Ordering::Relaxed)
+        }
+    }
+
+    struct CrossbeamStealSubqueues {
+        config: ReadyQueueConfig,
+        queues: Vec<Mutex<CrossbeamWorker<ReadyQueueTask>>>,
+        stealers: Vec<super::Stealer<ReadyQueueTask>>,
+        depths: Vec<AtomicUsize>,
+        cursors: Vec<AtomicUsize>,
+        total_depth: AtomicUsize,
+    }
+
+    impl CrossbeamStealSubqueues {
+        fn new(config: ReadyQueueConfig) -> Self {
+            let mut queues = Vec::with_capacity(config.partitions);
+            let mut stealers = Vec::with_capacity(config.partitions);
+            for _ in 0..config.partitions {
+                let queue = CrossbeamWorker::new_fifo();
+                stealers.push(queue.stealer());
+                queues.push(Mutex::new(queue));
+            }
+            Self {
+                config,
+                queues,
+                stealers,
+                depths: (0..config.partitions)
+                    .map(|_| AtomicUsize::new(0))
+                    .collect(),
+                cursors: (0..config.workers).map(|_| AtomicUsize::new(0)).collect(),
+                total_depth: AtomicUsize::new(0),
+            }
+        }
+
+        fn submit_partition(&self, partition: usize, task: ReadyQueueTask) -> bool {
+            if !reserve_counter(&self.depths[partition], self.config.queue_capacity) {
+                return false;
+            }
+            reserve_total(&self.total_depth);
+            self.queues[partition]
+                .lock()
+                .expect("crossbeam steal subqueue mutex poisoned")
+                .push(task);
+            true
+        }
+
+        fn release_partition(&self, partition: usize) {
+            release_counter(&self.depths[partition], 1);
+            release_counter(&self.total_depth, 1);
+        }
+    }
+
+    impl ReadyQueueCandidate for CrossbeamStealSubqueues {
+        fn label(&self) -> &'static str {
+            ReadyQueueCandidateKind::CrossbeamStealSubqueues.label()
+        }
+
+        fn workers(&self) -> usize {
+            self.config.workers
+        }
+
+        fn partitions(&self) -> usize {
+            self.config.partitions
+        }
+
+        fn partition_for(&self, tenant: u64) -> usize {
+            hash_partition(tenant, self.config.partitions)
+        }
+
+        fn submit_worker(&self, _worker: usize, task: ReadyQueueTask) -> bool {
+            self.submit_external(task)
+        }
+
+        fn submit_external(&self, task: ReadyQueueTask) -> bool {
+            self.submit_partition(self.partition_for(task.tenant), task)
+        }
+
+        fn pop_worker(&self, worker: usize) -> Option<ReadyQueueTask> {
+            scan_partitions(self.config.partitions, worker, &self.cursors, |partition| {
+                if self.depths[partition].load(Ordering::Acquire) == 0 {
+                    return None;
+                }
+                let task = MultiRuntime::steal_retry(|| self.stealers[partition].steal())?;
+                self.release_partition(partition);
+                Some(task)
+            })
+        }
+
+        fn len_hint(&self) -> usize {
+            self.total_depth.load(Ordering::Relaxed)
+        }
+    }
+
+    struct BoundedRingSubqueues {
+        config: ReadyQueueConfig,
+        queues: Vec<Mutex<VecDeque<ReadyQueueTask>>>,
+        depths: Vec<AtomicUsize>,
+        cursors: Vec<AtomicUsize>,
+        total_depth: AtomicUsize,
+    }
+
+    impl BoundedRingSubqueues {
+        fn new(config: ReadyQueueConfig) -> Self {
+            Self {
+                config,
+                queues: (0..config.partitions)
+                    .map(|_| Mutex::new(VecDeque::with_capacity(config.queue_capacity)))
+                    .collect(),
+                depths: (0..config.partitions)
+                    .map(|_| AtomicUsize::new(0))
+                    .collect(),
+                cursors: (0..config.workers).map(|_| AtomicUsize::new(0)).collect(),
+                total_depth: AtomicUsize::new(0),
+            }
+        }
+
+        fn submit_partition(&self, partition: usize, task: ReadyQueueTask) -> bool {
+            if !reserve_counter(&self.depths[partition], self.config.queue_capacity) {
+                return false;
+            }
+            reserve_total(&self.total_depth);
+            self.queues[partition]
+                .lock()
+                .expect("bounded ring subqueue mutex poisoned")
+                .push_back(task);
+            true
+        }
+
+        fn release_partition(&self, partition: usize) {
+            release_counter(&self.depths[partition], 1);
+            release_counter(&self.total_depth, 1);
+        }
+    }
+
+    impl ReadyQueueCandidate for BoundedRingSubqueues {
+        fn label(&self) -> &'static str {
+            ReadyQueueCandidateKind::BoundedRingSubqueues.label()
+        }
+
+        fn workers(&self) -> usize {
+            self.config.workers
+        }
+
+        fn partitions(&self) -> usize {
+            self.config.partitions
+        }
+
+        fn partition_for(&self, tenant: u64) -> usize {
+            hash_partition(tenant, self.config.partitions)
+        }
+
+        fn submit_worker(&self, _worker: usize, task: ReadyQueueTask) -> bool {
+            self.submit_external(task)
+        }
+
+        fn submit_external(&self, task: ReadyQueueTask) -> bool {
+            self.submit_partition(self.partition_for(task.tenant), task)
+        }
+
+        fn pop_worker(&self, worker: usize) -> Option<ReadyQueueTask> {
+            scan_partitions(self.config.partitions, worker, &self.cursors, |partition| {
+                if self.depths[partition].load(Ordering::Acquire) == 0 {
+                    return None;
+                }
+                let task = self.queues[partition]
+                    .lock()
+                    .expect("bounded ring subqueue mutex poisoned")
+                    .pop_front()?;
+                self.release_partition(partition);
+                Some(task)
+            })
+        }
+
+        fn len_hint(&self) -> usize {
+            self.total_depth.load(Ordering::Relaxed)
+        }
+    }
+
+    struct BitmapShardedSubqueues {
+        config: ReadyQueueConfig,
+        queues: Vec<Mutex<VecDeque<ReadyQueueTask>>>,
+        depths: Vec<AtomicUsize>,
+        cursors: Vec<AtomicUsize>,
+        non_empty: AtomicU64,
+        total_depth: AtomicUsize,
+    }
+
+    impl BitmapShardedSubqueues {
+        fn new(config: ReadyQueueConfig) -> Self {
+            assert!(
+                config.partitions <= u64::BITS as usize,
+                "bitmap candidate supports at most 64 partitions"
+            );
+            Self {
+                config,
+                queues: (0..config.partitions)
+                    .map(|_| Mutex::new(VecDeque::with_capacity(config.queue_capacity)))
+                    .collect(),
+                depths: (0..config.partitions)
+                    .map(|_| AtomicUsize::new(0))
+                    .collect(),
+                cursors: (0..config.workers).map(|_| AtomicUsize::new(0)).collect(),
+                non_empty: AtomicU64::new(0),
+                total_depth: AtomicUsize::new(0),
+            }
+        }
+
+        fn submit_partition(&self, partition: usize, task: ReadyQueueTask) -> bool {
+            if !reserve_counter(&self.depths[partition], self.config.queue_capacity) {
+                return false;
+            }
+            reserve_total(&self.total_depth);
+            self.queues[partition]
+                .lock()
+                .expect("bitmap subqueue mutex poisoned")
+                .push_back(task);
+            self.non_empty
+                .fetch_or(1_u64 << partition, Ordering::Release);
+            true
+        }
+
+        fn release_partition(&self, partition: usize) {
+            release_counter(&self.depths[partition], 1);
+            release_counter(&self.total_depth, 1);
+        }
+    }
+
+    impl ReadyQueueCandidate for BitmapShardedSubqueues {
+        fn label(&self) -> &'static str {
+            ReadyQueueCandidateKind::BitmapShardedSubqueues.label()
+        }
+
+        fn workers(&self) -> usize {
+            self.config.workers
+        }
+
+        fn partitions(&self) -> usize {
+            self.config.partitions
+        }
+
+        fn partition_for(&self, tenant: u64) -> usize {
+            hash_partition(tenant, self.config.partitions)
+        }
+
+        fn submit_worker(&self, _worker: usize, task: ReadyQueueTask) -> bool {
+            self.submit_external(task)
+        }
+
+        fn submit_external(&self, task: ReadyQueueTask) -> bool {
+            self.submit_partition(self.partition_for(task.tenant), task)
+        }
+
+        fn pop_worker(&self, worker: usize) -> Option<ReadyQueueTask> {
+            let cursor = self.cursors[worker % self.config.workers].fetch_add(1, Ordering::Relaxed);
+            let start = (worker + cursor) % self.config.partitions;
+            for _ in 0..self.config.partitions {
+                let mask = self.non_empty.load(Ordering::Acquire);
+                let partition = select_bitmap_partition(mask, start, self.config.partitions)?;
+                let mut queue = self.queues[partition]
+                    .lock()
+                    .expect("bitmap subqueue mutex poisoned");
+                if let Some(task) = queue.pop_front() {
+                    if queue.is_empty() {
+                        self.non_empty
+                            .fetch_and(!(1_u64 << partition), Ordering::Release);
+                    }
+                    drop(queue);
+                    self.release_partition(partition);
+                    return Some(task);
+                }
+                self.non_empty
+                    .fetch_and(!(1_u64 << partition), Ordering::Release);
+            }
+            None
+        }
+
+        fn len_hint(&self) -> usize {
+            self.total_depth.load(Ordering::Relaxed)
+        }
+    }
+
+    fn scan_partitions(
+        partitions: usize,
+        worker: usize,
+        cursors: &[AtomicUsize],
+        mut pop_partition: impl FnMut(usize) -> Option<ReadyQueueTask>,
+    ) -> Option<ReadyQueueTask> {
+        let cursor = cursors[worker % cursors.len()].fetch_add(1, Ordering::Relaxed);
+        let start = (worker + cursor) % partitions;
+        for offset in 0..partitions {
+            if let Some(task) = pop_partition((start + offset) % partitions) {
+                return Some(task);
+            }
+        }
+        None
+    }
+
+    fn select_bitmap_partition(mask: u64, start: usize, partitions: usize) -> Option<usize> {
+        if mask == 0 {
+            return None;
+        }
+        for offset in 0..partitions {
+            let partition = (start + offset) % partitions;
+            if mask & (1_u64 << partition) != 0 {
+                return Some(partition);
+            }
+        }
+        None
+    }
+
+    fn hash_partition(tenant: u64, partitions: usize) -> usize {
+        (mix64(tenant) as usize) % partitions
+    }
+
+    fn reserve_counter(counter: &AtomicUsize, capacity: usize) -> bool {
+        let mut current = counter.load(Ordering::Relaxed);
+        loop {
+            if current >= capacity {
+                return false;
+            }
+            let next = current.checked_add(1).expect("ready queue depth overflow");
+            match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    fn reserve_total(counter: &AtomicUsize) {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn release_counter(counter: &AtomicUsize, count: usize) {
+        let mut current = counter.load(Ordering::Relaxed);
+        loop {
+            let next = current
+                .checked_sub(count)
+                .expect("ready queue depth accounting underflow");
+            match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => return,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    fn mix64(mut value: u64) -> u64 {
+        value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^ (value >> 31)
+    }
+
     pub use super::StealPolicy;
 }
 
@@ -5557,10 +6845,10 @@ mod tests {
 
     use super::{
         AtFlags, CrossbeamWorker, ExecutionPlace, IoFd, IoVec, Mode, MultiRuntime, NO_WORKER,
-        OFlags, RenameFlags, Ring, RingError, RingFd, RingInner, RingMode, Runtime, RuntimeConfig,
-        RuntimeId, SharedOpLifecycle, SharedOpRoute, SharedOpState, SharedOpTestResource,
-        SharedOperation, SharedOperationKind, SharedRingCore, SharedRingWake, StatxFlags,
-        StealPolicy, WorkerId,
+        OFlags, QueuedJob, RenameFlags, Ring, RingError, RingFd, RingInner, RingMode, Runtime,
+        RuntimeConfig, RuntimeId, SchedulerConfig, SchedulerMode, SharedOpLifecycle, SharedOpRoute,
+        SharedOpState, SharedOpTestResource, SharedOperation, SharedOperationKind, SharedRingCore,
+        SharedRingWake, StatxFlags, StealPolicy, SubmitError, TenantId, WorkerId,
     };
 
     struct WaitProbe<'cx, 'a> {
@@ -5577,6 +6865,155 @@ mod tests {
             );
             cx.yield_now();
             thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn sfq_private_runtime(partitions: usize) -> (MultiRuntime, CrossbeamWorker<QueuedJob>) {
+        let local = CrossbeamWorker::new_lifo();
+        let stealer = local.stealer();
+        let config = RuntimeConfig {
+            workers: NonZeroUsize::new(1).unwrap(),
+            scheduler: SchedulerConfig {
+                mode: SchedulerMode::StochasticFair,
+                ready_partitions: NonZeroUsize::new(partitions).unwrap(),
+                ..SchedulerConfig::default()
+            },
+            ..RuntimeConfig::default()
+        };
+        (
+            MultiRuntime::with_runtime_id(config, RuntimeId::next(), vec![stealer]),
+            local,
+        )
+    }
+
+    #[test]
+    fn sfq_scheduler_dequeues_same_tenant_fifo_within_partition() {
+        let (runtime, _local) = sfq_private_runtime(1);
+        let tenant = TenantId(9);
+        for sequence in 0..4 {
+            assert!(
+                runtime
+                    .submit_sfq(QueuedJob::new_for_test(WorkerId(0), tenant, sequence))
+                    .is_ok()
+            );
+        }
+
+        let observed = (0..4)
+            .map(|_| {
+                runtime
+                    .take_sfq_job(WorkerId(0), 0)
+                    .expect("missing SFQ job")
+                    .queued
+                    .sequence
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(observed, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn sfq_scheduler_submit_rejects_after_shutdown() {
+        let (runtime, _local) = sfq_private_runtime(2);
+        runtime.shutdown.store(true, Ordering::Release);
+
+        match runtime.submit(WorkerId(0), TenantId(3), Box::new(|_| {}), None) {
+            Err(SubmitError::ShuttingDown) => {}
+            Err(SubmitError::QueueFull) => panic!("expected shutdown rejection, got queue full"),
+            Ok(()) => panic!("shutdown submission unexpectedly succeeded"),
+        }
+        assert_eq!(runtime.metrics.rejected_tasks.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn ready_queue_candidate_basic_semantics_match_interface() {
+        for kind in super::bench_support::ReadyQueueCandidateKind::all() {
+            let queue = super::bench_support::build_ready_queue_candidate(
+                kind,
+                super::bench_support::ReadyQueueConfig::new(4, 8, 16),
+            );
+            assert_eq!(queue.label(), kind.label());
+            assert_eq!(queue.workers(), 4);
+            assert!(queue.partitions() >= 1);
+            assert_eq!(queue.partition_for(42), queue.partition_for(42));
+            assert!(queue.partition_for(42) < queue.partitions());
+
+            assert!(queue.submit_worker(0, super::bench_support::ReadyQueueTask::new(1, 10)));
+            assert!(queue.submit_external(super::bench_support::ReadyQueueTask::new(2, 20)));
+            assert_eq!(queue.len_hint(), 2);
+
+            let mut values = Vec::new();
+            for worker in 0..queue.workers() {
+                while let Some(task) = queue.pop_worker(worker) {
+                    values.push(task.value);
+                }
+            }
+            values.sort_unstable();
+            assert_eq!(values, vec![10, 20], "candidate {kind:?}");
+            assert_eq!(queue.len_hint(), 0, "candidate {kind:?}");
+        }
+    }
+
+    #[test]
+    fn ready_queue_candidate_capacity_rejection_and_reuse() {
+        for kind in super::bench_support::ReadyQueueCandidateKind::all() {
+            let queue = super::bench_support::build_ready_queue_candidate(
+                kind,
+                super::bench_support::ReadyQueueConfig::new(2, 4, 1),
+            );
+            assert!(
+                queue.submit_external(super::bench_support::ReadyQueueTask::new(7, 1)),
+                "candidate {kind:?} rejected first task"
+            );
+            assert!(
+                !queue.submit_external(super::bench_support::ReadyQueueTask::new(7, 2)),
+                "candidate {kind:?} accepted beyond capacity"
+            );
+            assert_eq!(
+                queue.pop_worker(0).map(|task| task.value),
+                Some(1),
+                "candidate {kind:?} lost queued task"
+            );
+            assert!(
+                queue.submit_external(super::bench_support::ReadyQueueTask::new(7, 3)),
+                "candidate {kind:?} failed to reuse released capacity"
+            );
+            assert_eq!(queue.pop_worker(1).map(|task| task.value), Some(3));
+            assert_eq!(queue.len_hint(), 0, "candidate {kind:?}");
+        }
+    }
+
+    #[test]
+    fn ready_queue_candidate_no_lost_tasks_under_mixed_submission() {
+        for kind in super::bench_support::ReadyQueueCandidateKind::all() {
+            let queue = super::bench_support::build_ready_queue_candidate(
+                kind,
+                super::bench_support::ReadyQueueConfig::new(4, 8, 128),
+            );
+            for value in 0..64 {
+                let task = super::bench_support::ReadyQueueTask::new((value % 9 + 1) as u64, value);
+                let accepted = if value % 2 == 0 {
+                    queue.submit_worker(value % queue.workers(), task)
+                } else {
+                    queue.submit_external(task)
+                };
+                assert!(accepted, "candidate {kind:?} rejected value {value}");
+            }
+
+            let mut observed = Vec::new();
+            let mut idle_rounds = 0;
+            while observed.len() < 64 && idle_rounds < queue.workers() * 4 {
+                let before = observed.len();
+                for worker in 0..queue.workers() {
+                    while let Some(task) = queue.pop_worker(worker) {
+                        observed.push(task.value);
+                    }
+                }
+                if observed.len() == before {
+                    idle_rounds += 1;
+                }
+            }
+            observed.sort_unstable();
+            assert_eq!(observed, (0..64).collect::<Vec<_>>(), "candidate {kind:?}");
+            assert_eq!(queue.len_hint(), 0, "candidate {kind:?}");
         }
     }
 

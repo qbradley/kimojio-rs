@@ -3,20 +3,117 @@
 
 use std::hint::black_box;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use kimojio_stack::channel::cross_thread;
-use kimojio_stack_steal::bench_support::RawSchedulerQueues;
-use kimojio_stack_steal::{RingFd, RingMode, Runtime, RuntimeConfig, StealPolicy};
+use kimojio_stack_steal::bench_support::{
+    RawSchedulerQueues, RawSfqQueues, ReadyQueueCandidate, ReadyQueueCandidateKind,
+    ReadyQueueConfig, ReadyQueueTask, build_ready_queue_candidate,
+};
+use kimojio_stack_steal::{
+    QueueSelectionPolicy, RingFd, RingMode, Runtime, RuntimeConfig, SchedulerConfig, SchedulerMode,
+    StealPolicy, TenantReassignmentPolicy,
+};
 use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 use rustix::pipe::pipe;
 
 const RAW_SCHEDULER_OPS_PER_ITER: u64 = 256;
+const RAW_SFQ_OPS_PER_ITER: u64 = 512;
+const RAW_READY_QUEUE_OPS_PER_ITER: u64 = 256;
+const RAW_READY_QUEUE_BACKLOG: usize = 2048;
 
 fn steal_supports_link_timeout() -> bool {
     let mut runtime = Runtime::new();
     runtime.block_on(|cx| cx.supports_io_uring_opcode(rustix_uring::opcode::LinkTimeout::CODE))
+}
+
+fn ready_queue_worker_counts() -> Vec<usize> {
+    let available = thread::available_parallelism()
+        .map(NonZeroUsize::get)
+        .unwrap_or(1)
+        .min(32);
+    let mut counts = [1_usize, 2, 4, 8, 16, available]
+        .into_iter()
+        .filter(|count| *count <= available)
+        .collect::<Vec<_>>();
+    counts.sort_unstable();
+    counts.dedup();
+    counts
+}
+
+fn ready_queue_config(workers: usize) -> ReadyQueueConfig {
+    ReadyQueueConfig::new(workers, workers.next_power_of_two().clamp(8, 64), 4096)
+}
+
+fn ready_queue_candidate(
+    kind: ReadyQueueCandidateKind,
+    workers: usize,
+) -> Arc<dyn ReadyQueueCandidate> {
+    Arc::from(build_ready_queue_candidate(
+        kind,
+        ready_queue_config(workers),
+    ))
+}
+
+fn run_ready_queue_parallel_roundtrips(
+    kind: ReadyQueueCandidateKind,
+    workers: usize,
+    total_ops: usize,
+) -> usize {
+    let queue = ready_queue_candidate(kind, workers);
+    let per_worker = total_ops.div_ceil(workers);
+    thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        for worker in 0..workers {
+            let queue = Arc::clone(&queue);
+            handles.push(scope.spawn(move || {
+                let mut sum = 0_usize;
+                for value in 0..per_worker {
+                    let task = ReadyQueueTask::new((worker + 1) as u64, value);
+                    assert!(queue.submit_worker(worker, task));
+                    loop {
+                        if let Some(task) = queue.pop_worker(worker) {
+                            sum = sum.wrapping_add(task.value);
+                            break;
+                        }
+                        std::hint::spin_loop();
+                    }
+                }
+                sum
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("ready queue worker panicked"))
+            .fold(0_usize, usize::wrapping_add)
+    })
+}
+
+fn fill_ready_queue_backlog(queue: &dyn ReadyQueueCandidate, total: usize) {
+    for value in 0..total {
+        let tenant = (value % 257 + 1) as u64;
+        assert!(queue.submit_external(ReadyQueueTask::new(tenant, value)));
+    }
+}
+
+fn drain_ready_queue_backlog(queue: &dyn ReadyQueueCandidate, total: usize) -> usize {
+    let mut remaining = total;
+    let mut sum = 0_usize;
+    while remaining != 0 {
+        for worker in 0..queue.workers() {
+            if let Some(task) = queue.pop_worker(worker) {
+                sum = sum.wrapping_add(task.value);
+                remaining -= 1;
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+    }
+    sum
 }
 
 fn runtime_baseline(c: &mut Criterion) {
@@ -177,6 +274,399 @@ fn runtime_baseline(c: &mut Criterion) {
         });
         black_box(runtime.metrics());
     });
+
+    for workers in [1_usize, 2, 4] {
+        c.bench_function(
+            &format!("scheduler/spawn_stealable_single_tenant_throughput_{workers}_workers"),
+            |b| {
+                let mut runtime = Runtime::with_config(RuntimeConfig {
+                    workers: NonZeroUsize::new(workers).unwrap(),
+                    steal_policy: if workers == 1 {
+                        StealPolicy::Disabled
+                    } else {
+                        StealPolicy::steal_one()
+                    },
+                    ..RuntimeConfig::default()
+                });
+                runtime.block_on(|cx| {
+                    b.iter(|| {
+                        black_box(cx.scope(|scope| {
+                            let handles: [_; 32] =
+                                std::array::from_fn(|_| scope.spawn_stealable(|_| 1_usize));
+                            handles
+                                .into_iter()
+                                .map(|handle| handle.join(cx))
+                                .sum::<usize>()
+                        }));
+                    });
+                });
+                black_box(runtime.metrics());
+            },
+        );
+    }
+
+    c.bench_function("scheduler/io_readiness_timer_wakeup_batch_32", |b| {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(4).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+        runtime.block_on(|cx| {
+            b.iter(|| {
+                black_box(cx.scope(|scope| {
+                    let handles: [_; 32] = std::array::from_fn(|_| {
+                        scope.spawn_stealable(|cx| {
+                            cx.sleep(Duration::from_millis(0)).unwrap();
+                            1_usize
+                        })
+                    });
+                    handles
+                        .into_iter()
+                        .map(|handle| handle.join(cx))
+                        .sum::<usize>()
+                }));
+            });
+        });
+        black_box(runtime.metrics());
+    });
+
+    c.bench_function(
+        "scheduler/sfq_spawn_stealable_single_tenant_4_workers",
+        |b| {
+            let mut runtime = Runtime::with_config(RuntimeConfig {
+                workers: NonZeroUsize::new(4).unwrap(),
+                steal_policy: StealPolicy::Disabled,
+                scheduler: SchedulerConfig::stochastic_fair(NonZeroUsize::new(16).unwrap()),
+                ..RuntimeConfig::default()
+            });
+            runtime.block_on(|cx| {
+                b.iter(|| {
+                    black_box(cx.scope(|scope| {
+                        let tenant = cx.new_tenant_id();
+                        let handles: [_; 32] = std::array::from_fn(|_| {
+                            scope.spawn_stealable_with_tenant(tenant, |_| 1_usize)
+                        });
+                        handles
+                            .into_iter()
+                            .map(|handle| handle.join(cx))
+                            .sum::<usize>()
+                    }));
+                });
+            });
+            black_box(runtime.metrics());
+        },
+    );
+
+    for (label, selection) in [
+        ("single_choice", QueueSelectionPolicy::SingleChoice),
+        (
+            "subset_shortest_2",
+            QueueSelectionPolicy::RandomSubsetShortest {
+                subset: NonZeroUsize::new(2).unwrap(),
+            },
+        ),
+        ("shortest", QueueSelectionPolicy::Shortest),
+        (
+            "movement_cost_4",
+            QueueSelectionPolicy::MovementCost {
+                subset: NonZeroUsize::new(4).unwrap(),
+                movement_penalty: 2,
+            },
+        ),
+    ] {
+        c.bench_function(
+            &format!("scheduler/sfq_policy_{label}_single_tenant_4_workers"),
+            |b| {
+                let mut runtime = Runtime::with_config(RuntimeConfig {
+                    workers: NonZeroUsize::new(4).unwrap(),
+                    steal_policy: StealPolicy::Disabled,
+                    scheduler: SchedulerConfig {
+                        mode: SchedulerMode::StochasticFair,
+                        ready_partitions: NonZeroUsize::new(16).unwrap(),
+                        selection,
+                        reassignment: TenantReassignmentPolicy::Stable,
+                    },
+                    ..RuntimeConfig::default()
+                });
+                runtime.block_on(|cx| {
+                    b.iter(|| {
+                        black_box(cx.scope(|scope| {
+                            let tenant = cx.new_tenant_id();
+                            let handles: [_; 32] = std::array::from_fn(|_| {
+                                scope.spawn_stealable_with_tenant(tenant, |_| 1_usize)
+                            });
+                            handles
+                                .into_iter()
+                                .map(|handle| handle.join(cx))
+                                .sum::<usize>()
+                        }));
+                    });
+                });
+                black_box(runtime.metrics());
+            },
+        );
+    }
+
+    c.bench_function("scheduler/sfq_skewed_heavy_light_tenants", |b| {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(4).unwrap(),
+            steal_policy: StealPolicy::Disabled,
+            scheduler: SchedulerConfig {
+                mode: SchedulerMode::StochasticFair,
+                ready_partitions: NonZeroUsize::new(16).unwrap(),
+                selection: QueueSelectionPolicy::RandomSubsetShortest {
+                    subset: NonZeroUsize::new(2).unwrap(),
+                },
+                reassignment: TenantReassignmentPolicy::EverySchedulingDecisions(
+                    NonZeroUsize::new(10_000).unwrap(),
+                ),
+            },
+            ..RuntimeConfig::default()
+        });
+        runtime.block_on(|cx| {
+            b.iter(|| {
+                black_box(cx.scope(|scope| {
+                    let heavy = cx.new_tenant_id();
+                    let light = cx.new_tenant_id();
+                    let handles: [_; 64] = std::array::from_fn(|index| {
+                        if index < 56 {
+                            scope.spawn_stealable_with_tenant(heavy, |cx| {
+                                cx.yield_now();
+                                1_usize
+                            })
+                        } else {
+                            scope.spawn_stealable_with_tenant(light, |_| 1_usize)
+                        }
+                    });
+                    handles
+                        .into_iter()
+                        .map(|handle| handle.join(cx))
+                        .sum::<usize>()
+                }));
+            });
+        });
+        black_box(runtime.metrics());
+    });
+
+    for (label, reassignment) in [
+        ("stable", TenantReassignmentPolicy::Stable),
+        (
+            "epoch_1024",
+            TenantReassignmentPolicy::EverySchedulingDecisions(NonZeroUsize::new(1024).unwrap()),
+        ),
+        (
+            "epoch_10000",
+            TenantReassignmentPolicy::EverySchedulingDecisions(NonZeroUsize::new(10_000).unwrap()),
+        ),
+    ] {
+        c.bench_function(
+            &format!("scheduler/sfq_reassignment_{label}_collision_skew"),
+            |b| {
+                let mut runtime = Runtime::with_config(RuntimeConfig {
+                    workers: NonZeroUsize::new(4).unwrap(),
+                    steal_policy: StealPolicy::Disabled,
+                    scheduler: SchedulerConfig {
+                        mode: SchedulerMode::StochasticFair,
+                        ready_partitions: NonZeroUsize::new(2).unwrap(),
+                        selection: QueueSelectionPolicy::SingleChoice,
+                        reassignment,
+                    },
+                    ..RuntimeConfig::default()
+                });
+                runtime.block_on(|cx| {
+                    b.iter(|| {
+                        black_box(cx.scope(|scope| {
+                            let tenants: [_; 8] = std::array::from_fn(|_| cx.new_tenant_id());
+                            let handles: [_; 64] = std::array::from_fn(|index| {
+                                let tenant = tenants[index % tenants.len()];
+                                scope.spawn_stealable_with_tenant(tenant, |cx| {
+                                    cx.yield_now();
+                                    1_usize
+                                })
+                            });
+                            handles
+                                .into_iter()
+                                .map(|handle| handle.join(cx))
+                                .sum::<usize>()
+                        }));
+                    });
+                });
+                black_box(runtime.metrics());
+            },
+        );
+    }
+
+    c.bench_function("scheduler/sfq_io_readiness_timer_wakeup_batch_32", |b| {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(4).unwrap(),
+            steal_policy: StealPolicy::Disabled,
+            scheduler: SchedulerConfig::stochastic_fair(NonZeroUsize::new(16).unwrap()),
+            ..RuntimeConfig::default()
+        });
+        runtime.block_on(|cx| {
+            b.iter(|| {
+                black_box(cx.scope(|scope| {
+                    let handles: [_; 32] = std::array::from_fn(|_| {
+                        scope.spawn_stealable(|cx| {
+                            cx.sleep(Duration::from_millis(0)).unwrap();
+                            1_usize
+                        })
+                    });
+                    handles
+                        .into_iter()
+                        .map(|handle| handle.join(cx))
+                        .sum::<usize>()
+                }));
+            });
+        });
+        black_box(runtime.metrics());
+    });
+
+    c.bench_function("scheduler/raw_sfq_single_choice_roundtrip", |b| {
+        let mut queues = RawSfqQueues::new(16);
+        b.iter_custom(|iters| {
+            let start = Instant::now();
+            for value in 0..(iters * RAW_SFQ_OPS_PER_ITER) as usize {
+                black_box(
+                    queues.single_choice_roundtrip(black_box(value as u64), black_box(value)),
+                );
+            }
+            start.elapsed() / RAW_SFQ_OPS_PER_ITER as u32
+        });
+    });
+
+    c.bench_function("scheduler/raw_sfq_random_subset_shortest_2", |b| {
+        let mut queues = RawSfqQueues::new(16);
+        b.iter_custom(|iters| {
+            let start = Instant::now();
+            for value in 0..(iters * RAW_SFQ_OPS_PER_ITER) as usize {
+                black_box(queues.random_subset_shortest_roundtrip(
+                    black_box(value as u64),
+                    2,
+                    black_box(value),
+                ));
+            }
+            start.elapsed() / RAW_SFQ_OPS_PER_ITER as u32
+        });
+    });
+
+    c.bench_function("scheduler/raw_sfq_global_shortest_16", |b| {
+        let mut queues = RawSfqQueues::new(16);
+        b.iter_custom(|iters| {
+            let start = Instant::now();
+            for value in 0..(iters * RAW_SFQ_OPS_PER_ITER) as usize {
+                black_box(queues.global_shortest_roundtrip(black_box(value)));
+            }
+            start.elapsed() / RAW_SFQ_OPS_PER_ITER as u32
+        });
+    });
+
+    c.bench_function("scheduler/raw_sfq_movement_cost_subset_4", |b| {
+        let mut queues = RawSfqQueues::new(16);
+        b.iter_custom(|iters| {
+            let start = Instant::now();
+            for value in 0..(iters * RAW_SFQ_OPS_PER_ITER) as usize {
+                black_box(queues.movement_cost_roundtrip(
+                    black_box(value as u64),
+                    4,
+                    black_box(value % 16),
+                    2,
+                    black_box(value),
+                ));
+            }
+            start.elapsed() / RAW_SFQ_OPS_PER_ITER as u32
+        });
+    });
+
+    c.bench_function("scheduler/raw_sfq_reassignment_hash", |b| {
+        let queues = RawSfqQueues::new(16);
+        b.iter_custom(|iters| {
+            let start = Instant::now();
+            for value in 0..(iters * RAW_SFQ_OPS_PER_ITER) {
+                black_box(
+                    queues.reassigned_partition(black_box(value), black_box(value.rotate_left(17))),
+                );
+            }
+            start.elapsed() / RAW_SFQ_OPS_PER_ITER as u32
+        });
+    });
+
+    for kind in ReadyQueueCandidateKind::all() {
+        let label = kind.label();
+
+        c.bench_function(
+            &format!("scheduler/ready_queue/{label}/low_load_local_roundtrip"),
+            |b| {
+                let queue = ready_queue_candidate(kind, 1);
+                b.iter_custom(|iters| {
+                    let ops = (iters * RAW_READY_QUEUE_OPS_PER_ITER) as usize;
+                    let start = Instant::now();
+                    for value in 0..ops {
+                        assert!(queue.submit_worker(0, ReadyQueueTask::new(1, value)));
+                        black_box(queue.pop_worker(0).expect("ready queue task missing"));
+                    }
+                    start.elapsed() / RAW_READY_QUEUE_OPS_PER_ITER as u32
+                });
+            },
+        );
+
+        c.bench_function(
+            &format!("scheduler/ready_queue/{label}/low_load_external_handoff"),
+            |b| {
+                let queue = ready_queue_candidate(kind, 2);
+                b.iter_custom(|iters| {
+                    let ops = (iters * RAW_READY_QUEUE_OPS_PER_ITER) as usize;
+                    let start = Instant::now();
+                    for value in 0..ops {
+                        assert!(
+                            queue.submit_external(ReadyQueueTask::new(
+                                (value % 17 + 1) as u64,
+                                value
+                            ))
+                        );
+                        black_box(
+                            queue
+                                .pop_worker(value % queue.workers())
+                                .expect("ready queue task missing"),
+                        );
+                    }
+                    start.elapsed() / RAW_READY_QUEUE_OPS_PER_ITER as u32
+                });
+            },
+        );
+
+        c.bench_function(
+            &format!("scheduler/ready_queue/{label}/high_load_backlog_drain"),
+            |b| {
+                let queue = ready_queue_candidate(kind, 4);
+                b.iter_custom(|iters| {
+                    let start = Instant::now();
+                    for _ in 0..iters {
+                        fill_ready_queue_backlog(queue.as_ref(), RAW_READY_QUEUE_BACKLOG);
+                        black_box(drain_ready_queue_backlog(
+                            queue.as_ref(),
+                            RAW_READY_QUEUE_BACKLOG,
+                        ));
+                    }
+                    start.elapsed() / RAW_READY_QUEUE_BACKLOG as u32
+                });
+            },
+        );
+
+        for workers in ready_queue_worker_counts() {
+            c.bench_function(
+                &format!("scheduler/ready_queue/{label}/throughput_{workers}_workers"),
+                |b| {
+                    b.iter_custom(|iters| {
+                        let ops = (iters * RAW_READY_QUEUE_OPS_PER_ITER) as usize;
+                        let start = Instant::now();
+                        black_box(run_ready_queue_parallel_roundtrips(kind, workers, ops));
+                        start.elapsed() / RAW_READY_QUEUE_OPS_PER_ITER as u32
+                    });
+                },
+            );
+        }
+    }
 
     c.bench_function("ring/owned_worker_local_nop", |b| {
         let mut runtime = Runtime::new();
