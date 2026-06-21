@@ -16,9 +16,10 @@
 //! `kimojio_stack::RuntimeContext` or `kimojio_stack_steal::RuntimeContext`.
 //! The router never chooses a runtime for you.
 //!
-//! The routing surface includes method/path matching, nested routers, router
+//! The routing surface includes method/path matching, terminal catch-all
+//! wildcard segments such as `/account/container/*blob`, nested routers, router
 //! merging, fallback handlers, state and extension extraction, bounded body
-//! extraction, response conversion, protocol-neutral server adapters, and an
+//! extraction, response conversion, generic service server adapters, and an
 //! explicit HTTP/2 streaming adapter. The `Router` service response path is
 //! buffered; use `serve_h2_streaming_once` for end-to-end streaming chunks.
 //!
@@ -57,11 +58,14 @@
 //! # Feature coverage
 //!
 //! Supported compatibility features include method routes, nested routers,
-//! merging, fallbacks, path/query/body/state/extension extractors, direct
-//! handler conversion, response conversion, route registration errors, buffered
-//! serving, and HTTP/2 streaming serving.
+//! merging, fallbacks, wildcard path captures, path/query/body/state/extension
+//! extractors, direct handler conversion, response conversion, route
+//! registration errors, buffered generic service serving, and HTTP/2 streaming
+//! serving.
 //! Nested and merged routers currently import route tables only; child state and
 //! fallback scopes are deferred compatibility work.
+//! Use [`stack_handler_fn`] and [`steal_handler_fn`] when a closure needs the
+//! concrete runtime context lifetime inside `Runtime::block_on`.
 //!
 //! # Limitations
 //!
@@ -82,7 +86,10 @@ pub mod serve;
 
 pub use body::{StreamingBody, StreamingChunk};
 pub use extract::{BodyBytes, Extension, FromRequest, PathParams, QueryParams, State, path_params};
-pub use handler::{ExtractorHandler, Handler, HandlerFn, extractor_fn, handler_fn};
+pub use handler::{
+    ExtractorHandler, Handler, HandlerFn, StackHandlerFn, StealHandlerFn, extractor_fn, handler_fn,
+    stack_handler_fn, steal_handler_fn,
+};
 pub use rejection::{Rejection, RejectionKind};
 pub use response::{IntoResponse, ResponseResult};
 pub use router::{MethodRouter, RouteError, Router};

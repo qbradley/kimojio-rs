@@ -11,6 +11,8 @@ use kimojio_stack_router::{
     serve_h2_buffered_requests, serve_h2_streaming_once, serve_http1_one,
 };
 use kimojio_stack_steal::RingFd;
+use kimojio_stack_tower::ServiceExt;
+use kimojio_stack_tower::http::SetHeaderLayer;
 use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 
 fn stack_transport_pair() -> (StackTransport, StackTransport) {
@@ -84,6 +86,48 @@ fn server_integration_http1_stack_runtime_serves_router() {
             let response = client.join(cx);
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(body_text(response), "hello stack");
+        });
+    });
+}
+
+#[test]
+fn server_integration_http1_serves_layered_service() {
+    let (client_transport, server_transport) = stack_transport_pair();
+    let mut runtime = kimojio_stack::Runtime::new();
+
+    runtime.block_on(|cx| {
+        cx.scope(|scope| {
+            let server = scope.spawn(move |cx| {
+                let router = Router::new()
+                    .route(
+                        "/hello",
+                        Method::GET,
+                        handler_fn(|_: &_, _| Ok::<_, Rejection>("hello")),
+                    )
+                    .unwrap();
+                let mut service = router.layer(SetHeaderLayer::response(
+                    http::HeaderName::from_static("x-served"),
+                    http::HeaderValue::from_static("layered"),
+                ));
+                serve_http1_one(cx, server_transport, &mut service, HttpConfig::default()).unwrap();
+            });
+
+            let client = scope.spawn(move |cx| {
+                let mut client =
+                    http1::ClientConnection::new(client_transport, HttpConfig::default());
+                let request = Request::builder()
+                    .method(Method::GET)
+                    .uri("/hello")
+                    .body(Body::empty())
+                    .unwrap();
+                let response = client.send(cx, &request).unwrap();
+                client.close(cx).unwrap();
+                assert_eq!(response.headers().get("x-served").unwrap(), "layered");
+                response
+            });
+
+            server.join(cx);
+            assert_eq!(body_text(client.join(cx)), "hello");
         });
     });
 }

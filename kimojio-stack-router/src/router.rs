@@ -86,6 +86,7 @@ impl<Cx> Default for MethodRouter<Cx> {
 pub struct Router<Cx> {
     routes: Vec<Route<Cx>>,
     fallback: Box<dyn Handler<Cx>>,
+    fallback_handles_method_not_allowed: bool,
     state: Option<Arc<dyn Any + Send + Sync>>,
     _cx: PhantomData<fn(&Cx)>,
 }
@@ -98,6 +99,7 @@ impl<Cx> Router<Cx> {
             fallback: Box::new(handler_fn(|_: &Cx, _| {
                 Ok::<_, Rejection>(Rejection::not_found().into_response())
             })),
+            fallback_handles_method_not_allowed: false,
             state: None,
             _cx: PhantomData,
         }
@@ -129,6 +131,18 @@ impl<Cx> Router<Cx> {
     /// Sets fallback handler.
     pub fn fallback(mut self, handler: impl Handler<Cx> + 'static) -> Self {
         self.fallback = Box::new(handler);
+        self.fallback_handles_method_not_allowed = true;
+        self
+    }
+
+    /// Sets whether the fallback handles path matches with unsupported methods.
+    ///
+    /// By default the router preserves HTTP-style `405 Method Not Allowed` for a
+    /// path that exists under another method. Calling [`Router::fallback`] turns
+    /// this on so protocol adapters can map method mismatches through the same
+    /// fallback/error path as not-found requests.
+    pub fn fallback_handles_method_not_allowed(mut self, enabled: bool) -> Self {
+        self.fallback_handles_method_not_allowed = enabled;
         self
     }
 
@@ -153,7 +167,7 @@ impl<Cx> Router<Cx> {
     pub fn nest(mut self, prefix: &str, other: Router<Cx>) -> Result<Self, RouteError> {
         let prefix = normalize_prefix(prefix)?;
         for mut route in other.routes {
-            route.pattern = route.pattern.prefixed(&prefix);
+            route.pattern = route.pattern.prefixed(&prefix)?;
             self.push_existing_route(route)?;
         }
         Ok(self)
@@ -223,7 +237,7 @@ impl<Cx> Router<Cx> {
             return self.routes[index].handler.call(cx, request);
         }
 
-        if method_not_allowed {
+        if method_not_allowed && !self.fallback_handles_method_not_allowed {
             Err(Rejection::method_not_allowed())
         } else {
             self.fallback.call(cx, request)
@@ -268,11 +282,12 @@ impl RoutePattern {
         }
         let mut names = BTreeMap::new();
         let mut segments = Vec::new();
-        for segment in path
+        let raw_segments = path
             .trim_matches('/')
             .split('/')
             .filter(|segment| !segment.is_empty())
-        {
+            .collect::<Vec<_>>();
+        for (index, segment) in raw_segments.iter().copied().enumerate() {
             let segment = if let Some(name) = segment.strip_prefix(':') {
                 if name.is_empty() {
                     return Err(RouteError::new("path parameter name cannot be empty"));
@@ -281,6 +296,17 @@ impl RoutePattern {
                     return Err(RouteError::new(format!("duplicate path parameter {name}")));
                 }
                 Segment::Param(name.to_owned())
+            } else if let Some(name) = segment.strip_prefix('*') {
+                if name.is_empty() {
+                    return Err(RouteError::new("wildcard parameter name cannot be empty"));
+                }
+                if names.insert(name.to_owned(), ()).is_some() {
+                    return Err(RouteError::new(format!("duplicate path parameter {name}")));
+                }
+                if index + 1 != raw_segments.len() {
+                    return Err(RouteError::new("wildcard path segment must be last"));
+                }
+                Segment::Wildcard(name.to_owned())
             } else {
                 Segment::Literal(segment.to_owned())
             };
@@ -289,10 +315,35 @@ impl RoutePattern {
         Ok(Self { segments })
     }
 
-    fn prefixed(self, prefix: &RoutePattern) -> Self {
+    fn prefixed(self, prefix: &RoutePattern) -> Result<Self, RouteError> {
+        if prefix
+            .segments
+            .iter()
+            .any(|segment| matches!(segment, Segment::Wildcard(_)))
+        {
+            return Err(RouteError::new("nest prefix cannot contain a wildcard"));
+        }
         let mut segments = prefix.segments.clone();
         segments.extend(self.segments);
-        Self { segments }
+        Self::from_segments(segments)
+    }
+
+    fn from_segments(segments: Vec<Segment>) -> Result<Self, RouteError> {
+        let mut names = BTreeMap::new();
+        for (index, segment) in segments.iter().enumerate() {
+            match segment {
+                Segment::Literal(_) => {}
+                Segment::Param(name) | Segment::Wildcard(name) => {
+                    if names.insert(name.clone(), ()).is_some() {
+                        return Err(RouteError::new(format!("duplicate path parameter {name}")));
+                    }
+                    if matches!(segment, Segment::Wildcard(_)) && index + 1 != segments.len() {
+                        return Err(RouteError::new("wildcard path segment must be last"));
+                    }
+                }
+            }
+        }
+        Ok(Self { segments })
     }
 
     fn matches(&self, path: &str) -> Option<PathParams> {
@@ -301,15 +352,27 @@ impl RoutePattern {
             .split('/')
             .filter(|segment| !segment.is_empty())
             .collect::<Vec<_>>();
-        if path_segments.len() != self.segments.len() {
+        let has_wildcard = self
+            .segments
+            .last()
+            .is_some_and(|segment| matches!(segment, Segment::Wildcard(_)));
+        if (!has_wildcard && path_segments.len() != self.segments.len())
+            || (has_wildcard && path_segments.len() < self.segments.len().saturating_sub(1))
+        {
             return None;
         }
         let mut values = BTreeMap::new();
-        for (pattern, actual) in self.segments.iter().zip(path_segments) {
+        for (index, pattern) in self.segments.iter().enumerate() {
             match pattern {
-                Segment::Literal(expected) if expected == actual => {}
+                Segment::Wildcard(name) => {
+                    values.insert(name.clone(), path_segments[index..].join("/"));
+                    break;
+                }
+                _ if index >= path_segments.len() => return None,
+                Segment::Literal(expected) if expected == path_segments[index] => {}
                 Segment::Literal(_) => return None,
                 Segment::Param(name) => {
+                    let actual = path_segments[index];
                     values.insert(name.clone(), actual.to_owned());
                 }
             }
@@ -323,6 +386,7 @@ impl RoutePattern {
             .map(|segment| match segment {
                 Segment::Literal(value) => format!("={value}"),
                 Segment::Param(_) => ":".to_owned(),
+                Segment::Wildcard(_) => "*".to_owned(),
             })
             .collect::<Vec<_>>()
             .join("/")
@@ -341,6 +405,10 @@ impl RoutePattern {
                     path.push(':');
                     path.push_str(name);
                 }
+                Segment::Wildcard(name) => {
+                    path.push('*');
+                    path.push_str(name);
+                }
             }
         }
         path
@@ -349,7 +417,11 @@ impl RoutePattern {
     fn priority(&self) -> Vec<u8> {
         self.segments
             .iter()
-            .map(|segment| u8::from(matches!(segment, Segment::Literal(_))))
+            .map(|segment| match segment {
+                Segment::Literal(_) => 3,
+                Segment::Param(_) => 2,
+                Segment::Wildcard(_) => 1,
+            })
             .collect()
     }
 }
@@ -358,6 +430,7 @@ impl RoutePattern {
 enum Segment {
     Literal(String),
     Param(String),
+    Wildcard(String),
 }
 
 fn normalize_prefix(prefix: &str) -> Result<RoutePattern, RouteError> {

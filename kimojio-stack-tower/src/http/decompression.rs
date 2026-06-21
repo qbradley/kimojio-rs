@@ -1,12 +1,24 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#[cfg(any(
+    feature = "compression-br",
+    feature = "compression-gzip",
+    feature = "compression-zstd"
+))]
 use std::io::Read;
 
 use bytes::Bytes;
+#[cfg(feature = "compression-gzip")]
 use flate2::read::{GzDecoder, ZlibDecoder};
 use http::{Request, header};
-use kimojio_stack_http::{Body, BodyBuilder, BodyLimits};
+#[cfg(any(
+    feature = "compression-br",
+    feature = "compression-gzip",
+    feature = "compression-zstd"
+))]
+use kimojio_stack_http::BodyBuilder;
+use kimojio_stack_http::{Body, BodyLimits};
 
 use crate::{BoxError, Layer, Readiness, Service, ServiceError};
 
@@ -97,30 +109,66 @@ pub(crate) fn decode(
     bytes: &[u8],
     limits: BodyLimits,
 ) -> Result<Bytes, ServiceError> {
-    let mut reader: Box<dyn Read + '_> = match encoding {
-        Encoding::Gzip => Box::new(GzDecoder::new(bytes)),
-        Encoding::Deflate => Box::new(ZlibDecoder::new(bytes)),
-        Encoding::Brotli => Box::new(brotli::Decompressor::new(bytes, 4096)),
-        Encoding::Zstd => Box::new(
-            zstd::stream::read::Decoder::new(bytes)
-                .map_err(|_| ServiceError::InvalidRequest("zstd decompression failed"))?,
-        ),
-    };
-    let mut output = BodyBuilder::new(limits);
-    let mut chunk = [0_u8; 8192];
-    loop {
-        let read = reader.read(&mut chunk).map_err(|_| match encoding {
-            Encoding::Gzip => ServiceError::InvalidRequest("gzip decompression failed"),
-            Encoding::Deflate => ServiceError::InvalidRequest("deflate decompression failed"),
-            Encoding::Brotli => ServiceError::InvalidRequest("brotli decompression failed"),
-            Encoding::Zstd => ServiceError::InvalidRequest("zstd decompression failed"),
-        })?;
-        if read == 0 {
-            break;
-        }
-        output
-            .append(&chunk[..read])
-            .map_err(|_| ServiceError::InvalidRequest("decompressed body exceeded limit"))?;
+    #[cfg(not(any(
+        feature = "compression-br",
+        feature = "compression-gzip",
+        feature = "compression-zstd"
+    )))]
+    {
+        let _ = (encoding, bytes, limits);
+        Err(ServiceError::InvalidRequest("unsupported content encoding"))
     }
-    Ok(output.finish().into_bytes())
+    #[cfg(any(
+        feature = "compression-br",
+        feature = "compression-gzip",
+        feature = "compression-zstd"
+    ))]
+    {
+        let mut reader: Box<dyn Read + '_> = match encoding {
+            #[cfg(feature = "compression-gzip")]
+            Encoding::Gzip => Box::new(GzDecoder::new(bytes)),
+            #[cfg(not(feature = "compression-gzip"))]
+            Encoding::Gzip => {
+                return Err(ServiceError::InvalidRequest("unsupported content encoding"));
+            }
+            #[cfg(feature = "compression-gzip")]
+            Encoding::Deflate => Box::new(ZlibDecoder::new(bytes)),
+            #[cfg(not(feature = "compression-gzip"))]
+            Encoding::Deflate => {
+                return Err(ServiceError::InvalidRequest("unsupported content encoding"));
+            }
+            #[cfg(feature = "compression-br")]
+            Encoding::Brotli => Box::new(brotli::Decompressor::new(bytes, 4096)),
+            #[cfg(not(feature = "compression-br"))]
+            Encoding::Brotli => {
+                return Err(ServiceError::InvalidRequest("unsupported content encoding"));
+            }
+            #[cfg(feature = "compression-zstd")]
+            Encoding::Zstd => Box::new(
+                zstd::stream::read::Decoder::new(bytes)
+                    .map_err(|_| ServiceError::InvalidRequest("zstd decompression failed"))?,
+            ),
+            #[cfg(not(feature = "compression-zstd"))]
+            Encoding::Zstd => {
+                return Err(ServiceError::InvalidRequest("unsupported content encoding"));
+            }
+        };
+        let mut output = BodyBuilder::new(limits);
+        let mut chunk = [0_u8; 8192];
+        loop {
+            let read = reader.read(&mut chunk).map_err(|_| match encoding {
+                Encoding::Gzip => ServiceError::InvalidRequest("gzip decompression failed"),
+                Encoding::Deflate => ServiceError::InvalidRequest("deflate decompression failed"),
+                Encoding::Brotli => ServiceError::InvalidRequest("brotli decompression failed"),
+                Encoding::Zstd => ServiceError::InvalidRequest("zstd decompression failed"),
+            })?;
+            if read == 0 {
+                break;
+            }
+            output
+                .append(&chunk[..read])
+                .map_err(|_| ServiceError::InvalidRequest("decompressed body exceeded limit"))?;
+        }
+        Ok(output.finish().into_bytes())
+    }
 }

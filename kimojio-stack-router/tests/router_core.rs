@@ -7,7 +7,7 @@ use http::{HeaderMap, Method, Request, Response, StatusCode};
 use kimojio_stack_http::Body;
 use kimojio_stack_router::{
     BodyBytes, Extension, IntoResponse, MethodRouter, PathParams, QueryParams, Rejection, Router,
-    State, extractor_fn, handler_fn,
+    State, extractor_fn, handler_fn, stack_handler_fn, steal_handler_fn,
 };
 use kimojio_stack_tower::Service;
 
@@ -231,6 +231,55 @@ fn router_core_nested_routers_merge_and_fallbacks_work() {
 }
 
 #[test]
+fn router_core_wildcard_routes_capture_remainder_and_obey_precedence() {
+    let mut router = Router::new()
+        .route(
+            "/account/container/static",
+            Method::GET,
+            handler_fn(|_: &(), _| Ok::<_, Rejection>("static")),
+        )
+        .unwrap()
+        .route(
+            "/account/container/*blob",
+            Method::GET,
+            extractor_fn::<PathParams, _>(|_: &(), path: PathParams| {
+                Ok::<_, Rejection>(path.get("blob").unwrap().to_owned())
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(
+        body_text(
+            router
+                .call(
+                    &(),
+                    request(Method::GET, "/account/container/dir/blob.txt", b"")
+                )
+                .unwrap()
+        ),
+        "dir/blob.txt"
+    );
+    assert_eq!(
+        body_text(
+            router
+                .call(&(), request(Method::GET, "/account/container/static", b""))
+                .unwrap()
+        ),
+        "static"
+    );
+
+    assert!(
+        Router::<()>::new()
+            .route(
+                "/account/*blob/tail",
+                Method::GET,
+                handler_fn(|_: &(), _| Ok::<_, Rejection>("bad"))
+            )
+            .is_err()
+    );
+}
+
+#[test]
 fn router_core_method_router_adds_multiple_methods_for_one_path() {
     let methods = MethodRouter::new()
         .get(handler_fn(|_: &(), _| Ok::<_, Rejection>("get")))
@@ -397,6 +446,73 @@ fn router_core_method_not_allowed_and_extractor_failures_are_rejections() {
         .call(&(), request(Method::GET, "/state", b""))
         .unwrap_err();
     assert_eq!(state.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[test]
+fn router_core_custom_fallback_can_handle_method_mismatch() {
+    let mut router = Router::new()
+        .route(
+            "/get",
+            Method::GET,
+            handler_fn(|_: &(), _| Ok::<_, Rejection>("get")),
+        )
+        .unwrap()
+        .fallback(handler_fn(|_: &(), _| {
+            Ok::<_, Rejection>((StatusCode::NOT_FOUND, "fallback"))
+        }));
+
+    let response = router
+        .call(&(), request(Method::POST, "/get", b""))
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_text(response), "fallback");
+}
+
+#[test]
+fn router_core_runtime_handler_helpers_accept_context_lifetimes() {
+    let mut stack = kimojio_stack::Runtime::new();
+    stack.block_on(|cx| {
+        let mut router = Router::new()
+            .route(
+                "/stack",
+                Method::GET,
+                stack_handler_fn(|cx: &kimojio_stack_router::StackContext<'_>, _| {
+                    cx.yield_now();
+                    Ok::<_, Rejection>("stack")
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            body_text(
+                router
+                    .call(cx, request(Method::GET, "/stack", b""))
+                    .unwrap()
+            ),
+            "stack"
+        );
+    });
+
+    let mut steal = kimojio_stack_steal::Runtime::new();
+    steal.block_on(|cx| {
+        let mut router = Router::new()
+            .route(
+                "/steal",
+                Method::GET,
+                steal_handler_fn(|cx: &kimojio_stack_router::StealContext<'_>, _| {
+                    cx.yield_now();
+                    Ok::<_, Rejection>("steal")
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            body_text(
+                router
+                    .call(cx, request(Method::GET, "/steal", b""))
+                    .unwrap()
+            ),
+            "steal"
+        );
+    });
 }
 
 #[test]

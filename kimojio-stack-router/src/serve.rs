@@ -8,63 +8,70 @@ use kimojio_stack::RuntimeSocket;
 use kimojio_stack_http::{
     Body, BodyBuilder, Error, HttpConfig, HttpRuntime, RuntimeStackTransport, Trailers, h2, http1,
 };
+use kimojio_stack_tower::Service;
 
-use crate::{Router, StreamingBody};
+use crate::{IntoResponse, StreamingBody};
 
-/// Serves one protocol-neutral buffered request using an existing server connection.
-pub fn serve_one<Cx, S>(
+/// Serves one protocol-neutral buffered request using an existing server connection and service.
+pub fn serve_one<Cx, S, Sv>(
     cx: &Cx,
     server: &mut kimojio_stack_http::server::RuntimeServerConnection<S>,
-    router: &mut Router<Cx>,
+    service: &mut Sv,
 ) -> Result<bool, Error>
 where
     Cx: HttpRuntime<S>,
     S: RuntimeSocket,
+    Sv: Service<Cx, Request<Body>, Response = Response<Body>>,
+    Sv::Error: IntoResponse,
 {
     server.serve_one(cx, |request| {
-        Ok(router
-            .handle(cx, request)
-            .unwrap_or_else(crate::Rejection::into_response))
+        Ok(service
+            .call(cx, request)
+            .unwrap_or_else(IntoResponse::into_response))
     })
 }
 
-/// Serves one buffered HTTP/1.1 request using a transport and router.
-pub fn serve_http1_one<Cx, S>(
+/// Serves one buffered HTTP/1.1 request using a transport and service.
+pub fn serve_http1_one<Cx, S, Sv>(
     cx: &Cx,
     transport: RuntimeStackTransport<S>,
-    router: &mut Router<Cx>,
+    service: &mut Sv,
     config: HttpConfig,
 ) -> Result<bool, Error>
 where
     Cx: HttpRuntime<S>,
     S: RuntimeSocket,
+    Sv: Service<Cx, Request<Body>, Response = Response<Body>>,
+    Sv::Error: IntoResponse,
 {
     let mut server = http1::RuntimeServerConnection::new(transport, config);
     server.serve_one(cx, |request| {
-        Ok(router
-            .handle(cx, request)
-            .unwrap_or_else(crate::Rejection::into_response))
+        Ok(service
+            .call(cx, request)
+            .unwrap_or_else(IntoResponse::into_response))
     })
 }
 
-/// Serves up to `requests` buffered HTTP/2 requests and gracefully closes.
-pub fn serve_h2_buffered_requests<Cx, S>(
+/// Serves up to `requests` buffered HTTP/2 requests with a service and gracefully closes.
+pub fn serve_h2_buffered_requests<Cx, S, Sv>(
     cx: &Cx,
     transport: RuntimeStackTransport<S>,
-    router: &mut Router<Cx>,
+    service: &mut Sv,
     config: HttpConfig,
     requests: usize,
 ) -> Result<(), Error>
 where
     Cx: HttpRuntime<S>,
     S: RuntimeSocket,
+    Sv: Service<Cx, Request<Body>, Response = Response<Body>>,
+    Sv::Error: IntoResponse,
 {
     let mut server = h2::RuntimeServerConnection::new(transport, config);
     for _ in 0..requests {
         if !server.serve_one(cx, |request| {
-            Ok(router
-                .handle(cx, request)
-                .unwrap_or_else(crate::Rejection::into_response))
+            Ok(service
+                .call(cx, request)
+                .unwrap_or_else(IntoResponse::into_response))
         })? {
             break;
         }

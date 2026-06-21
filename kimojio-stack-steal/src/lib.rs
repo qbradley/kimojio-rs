@@ -86,7 +86,10 @@
 //! stack scheduler pools and shared synchronous payload cache as a read-only
 //! snapshot. Context-local cache values are not aggregated into
 //! [`Runtime::metrics`], which reports completed-run scheduler and stealing
-//! counters.
+//! counters. [`RuntimeMetrics::backpressure`] summarizes queue depths,
+//! enqueue-to-start ready wait, rejected submissions, and worker completion
+//! imbalance so connection-accept loops can distinguish worker-pool
+//! backpressure from protocol-level unread-socket bugs.
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -530,6 +533,72 @@ pub struct RuntimeMetrics {
     pub allocated_tenants: u64,
     /// Last tenant identifier observed on a completed worker-pool job.
     pub last_tenant: Option<TenantId>,
+}
+
+impl RuntimeMetrics {
+    /// Returns a compact scheduler-backpressure summary for this completed run.
+    ///
+    /// This is intended for service harnesses that accept sockets and then spawn
+    /// stealable connection jobs. If accepted connections remain unread under
+    /// load, this summary makes queueing, ready-wait, rejected submissions, and
+    /// worker imbalance visible without requiring callers to inspect every raw
+    /// metric field.
+    pub fn backpressure(&self) -> RuntimeBackpressure {
+        let max_worker_completed = self
+            .worker_completed_tasks
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or_default();
+        let min_worker_completed = self
+            .worker_completed_tasks
+            .iter()
+            .copied()
+            .min()
+            .unwrap_or_default();
+        let max_queue_depth = self
+            .max_global_queue_depth
+            .max(self.max_local_queue_depth)
+            .max(self.max_sfq_partition_depth);
+        RuntimeBackpressure {
+            queued_work_observed: max_queue_depth != 0,
+            rejected_tasks: self.rejected_tasks,
+            ready_wait_samples: self.ready_wait_samples,
+            max_ready_wait_ns: self.max_ready_wait_ns,
+            average_ready_wait_ns: (self.ready_wait_samples != 0)
+                .then_some(self.total_ready_wait_ns / self.ready_wait_samples as u128),
+            max_queue_depth,
+            max_global_queue_depth: self.max_global_queue_depth,
+            max_local_queue_depth: self.max_local_queue_depth,
+            max_sfq_partition_depth: self.max_sfq_partition_depth,
+            worker_completion_imbalance: max_worker_completed.saturating_sub(min_worker_completed),
+        }
+    }
+}
+
+/// Compact summary of worker-pool queueing and readiness delay.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RuntimeBackpressure {
+    /// Whether any global, local, or SFQ ready queue depth was sampled above zero.
+    pub queued_work_observed: bool,
+    /// Number of rejected stealable submissions.
+    pub rejected_tasks: usize,
+    /// Number of jobs with enqueue-to-start wait samples.
+    pub ready_wait_samples: usize,
+    /// Maximum enqueue-to-start wait time in nanoseconds.
+    pub max_ready_wait_ns: u128,
+    /// Average enqueue-to-start wait time in nanoseconds, if any samples exist.
+    pub average_ready_wait_ns: Option<u128>,
+    /// Maximum depth across all sampled ready queues.
+    pub max_queue_depth: usize,
+    /// Maximum sampled global injector depth.
+    pub max_global_queue_depth: usize,
+    /// Maximum sampled local queue depth.
+    pub max_local_queue_depth: usize,
+    /// Maximum sampled SFQ partition depth.
+    pub max_sfq_partition_depth: usize,
+    /// Difference between the busiest and least busy worker completion counts.
+    pub worker_completion_imbalance: usize,
 }
 
 /// Snapshot of runtime-context-owned pool state.
@@ -7525,6 +7594,44 @@ mod tests {
         assert!(runtime.metrics().max_global_queue_depth != 0);
         assert!(runtime.metrics().last_owner_worker.is_some());
         assert!(runtime.metrics().last_executing_worker.is_some());
+    }
+
+    #[test]
+    fn runtime_metrics_backpressure_summarizes_queueing_and_worker_balance() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let handles = (0..16)
+                    .map(|_| {
+                        scope.spawn_stealable(|cx| {
+                            cx.yield_now();
+                            cx.worker_id()
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                for handle in handles {
+                    handle.join(cx);
+                }
+            });
+        });
+
+        let diagnostics = runtime.metrics().backpressure();
+        assert!(diagnostics.queued_work_observed);
+        assert_ne!(diagnostics.ready_wait_samples, 0);
+        assert!(diagnostics.average_ready_wait_ns.is_some());
+        assert_eq!(diagnostics.rejected_tasks, 0);
+        assert_eq!(
+            diagnostics.max_queue_depth,
+            diagnostics
+                .max_global_queue_depth
+                .max(diagnostics.max_local_queue_depth)
+                .max(diagnostics.max_sfq_partition_depth)
+        );
     }
 
     #[test]

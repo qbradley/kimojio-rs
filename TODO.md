@@ -51,6 +51,9 @@
 - Extend router/tower framework integration with nested state/fallback scopes,
   generic serving adapters for middleware-wrapped routers, retry/hedge
   idempotency helpers, and runtime-capability-bound middleware variants.
+- Before public release, decide which compression codecs should be default
+  features versus opt-in features and add package/CI checks for the chosen
+  feature matrix.
 
 ## SQLite hardening
 

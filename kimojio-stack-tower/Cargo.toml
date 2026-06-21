@@ -11,16 +11,20 @@ publish = false
 
 [features]
 default = []
+compression = ["compression-br", "compression-gzip", "compression-zstd"]
+compression-br = ["dep:brotli"]
+compression-gzip = ["dep:flate2"]
+compression-zstd = ["dep:zstd"]
 
 [dependencies]
-brotli.workspace = true
+brotli = { workspace = true, optional = true }
 bytes.workspace = true
-flate2.workspace = true
+flate2 = { workspace = true, optional = true }
 http.workspace = true
 kimojio-stack.workspace = true
 kimojio-stack-http = { path = "../kimojio-stack-http", version = "0.0.1-alpha.0", default-features = false }
 uuid.workspace = true
-zstd.workspace = true
+zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true

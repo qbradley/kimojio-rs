@@ -72,10 +72,13 @@
 //! buffering, cooperative spawn-ready, cooperative hedge, discovery, balance, and
 //! reconnect layers.
 //!
-//! HTTP middleware covers add-extension, auth, catch-panic, compression, CORS,
-//! CSRF, decompression, follow-redirect, normalize-path, propagate-header,
-//! request-id, sensitive-headers, set-header, set-status, timeout, trace,
-//! validate-request, sessions, cache, and governor-style keyed rate limiting.
+//! HTTP middleware covers add-extension, auth, catch-panic, CORS, CSRF,
+//! follow-redirect, normalize-path, propagate-header, request-id,
+//! sensitive-headers, set-header, set-status, timeout, trace, validate-request,
+//! sessions, cache, and governor-style keyed rate limiting. Compression and
+//! decompression support is available behind codec features:
+//! `compression-gzip`, `compression-br`, `compression-zstd`, or aggregate
+//! `compression`.
 //!
 //! ```no_run
 //! use std::time::Duration;

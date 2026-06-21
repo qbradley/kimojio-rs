@@ -97,6 +97,12 @@ stealing counters. Use `RuntimeContext::pool_diagnostics()` during `block_on`
 when code needs a read-only snapshot of embedded stack scheduler pools and the
 current context's bounded shared-sync payload cache; context-local cache values
 are not aggregated into `Runtime::metrics()`.
+`Runtime::metrics().backpressure()` returns a compact summary of queue depths,
+enqueue-to-start ready wait, rejected submissions, and worker completion
+imbalance. Use it in connection-accept harnesses when accepted sockets appear to
+remain unread under full-suite load: queued work and high ready-wait indicate
+worker-pool backpressure, while zero queueing points investigation back toward
+the connection/protocol path.
 
 Benchmarks for local scheduling, raw scheduler queue movement, full stealable
 handoff, rings, metrics, and channels are available with:

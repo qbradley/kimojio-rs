@@ -2,17 +2,23 @@
 // Licensed under the MIT License.
 
 use std::cell::Cell;
+#[cfg(feature = "compression-gzip")]
 use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
+#[cfg(feature = "compression-gzip")]
 use flate2::Compression as FlateCompression;
+#[cfg(feature = "compression-gzip")]
 use flate2::read::GzDecoder;
+#[cfg(feature = "compression-gzip")]
 use flate2::write::{GzEncoder, ZlibEncoder};
 use http::{HeaderName, Method, Request, Response, StatusCode, header};
-use kimojio_stack_http::{Body, BodyLimits};
+use kimojio_stack_http::Body;
+#[cfg(feature = "compression-gzip")]
+use kimojio_stack_http::BodyLimits;
 use kimojio_stack_tower::http::{
     CacheLayer, CacheStore, CompressionLayer, DecompressionLayer, Encoding, FollowRedirectLayer,
     GovernorLayer, MemoryCacheStore, MemorySessionStore, Session, SessionLayer, SessionStore,
@@ -31,24 +37,32 @@ fn text(response: &Response<Body>) -> String {
     String::from_utf8_lossy(response.body().as_bytes()).into_owned()
 }
 
+#[cfg(feature = "compression-gzip")]
 fn gzip(bytes: &[u8]) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::new(), FlateCompression::default());
     encoder.write_all(bytes).unwrap();
     encoder.finish().unwrap()
 }
 
+#[cfg(feature = "compression-gzip")]
 fn zlib(bytes: &[u8]) -> Vec<u8> {
     let mut encoder = ZlibEncoder::new(Vec::new(), FlateCompression::default());
     encoder.write_all(bytes).unwrap();
     encoder.finish().unwrap()
 }
 
+#[cfg(feature = "compression-gzip")]
 fn gunzip(bytes: &[u8]) -> Vec<u8> {
     let mut output = Vec::new();
     GzDecoder::new(bytes).read_to_end(&mut output).unwrap();
     output
 }
 
+#[cfg(all(
+    feature = "compression-br",
+    feature = "compression-gzip",
+    feature = "compression-zstd"
+))]
 #[test]
 fn stateful_body_middleware_compresses_and_decompresses_gzip() {
     let mut compress = service_fn(|_: &(), _request: Request<Body>| {
@@ -136,6 +150,7 @@ fn stateful_body_middleware_compresses_and_decompresses_gzip() {
     ));
 }
 
+#[cfg(feature = "compression-gzip")]
 #[test]
 fn stateful_body_middleware_decompression_rejects_oversized_decoded_bodies() {
     let mut decompress = service_fn(|_: &(), request: Request<Body>| {
@@ -154,6 +169,7 @@ fn stateful_body_middleware_decompression_rejects_oversized_decoded_bodies() {
     ));
 }
 
+#[cfg(feature = "compression-gzip")]
 #[test]
 fn stateful_body_middleware_compression_updates_entity_headers_and_vary() {
     let mut compress = service_fn(|_: &(), _request: Request<Body>| {
@@ -188,6 +204,40 @@ fn stateful_body_middleware_compression_updates_entity_headers_and_vary() {
             .headers()
             .contains_key(header::CONTENT_ENCODING)
     );
+}
+
+#[cfg(not(feature = "compression-gzip"))]
+#[test]
+fn stateful_body_middleware_compression_codecs_are_feature_gated() {
+    let mut compress = service_fn(|_: &(), _request: Request<Body>| {
+        Ok::<_, ServiceError>(Response::new(
+            Body::copy_from_slice(b"compress me", Default::default()).unwrap(),
+        ))
+    })
+    .layer(CompressionLayer::new(vec![Encoding::Gzip]));
+    let mut compress_request = request(Method::GET, "/", []);
+    compress_request
+        .headers_mut()
+        .insert(header::ACCEPT_ENCODING, "gzip".parse().unwrap());
+    assert!(matches!(
+        compress.call(&(), compress_request),
+        Err(ServiceError::InvalidRequest(
+            "gzip compression feature disabled"
+        ))
+    ));
+
+    let mut decompress = service_fn(|_: &(), request: Request<Body>| {
+        Ok::<_, ServiceError>(Response::new(request.into_body()))
+    })
+    .layer(DecompressionLayer::new());
+    let mut request = request(Method::POST, "/", b"not really gzip");
+    request
+        .headers_mut()
+        .insert(header::CONTENT_ENCODING, "gzip".parse().unwrap());
+    assert!(matches!(
+        decompress.call(&(), request),
+        Err(ServiceError::InvalidRequest("unsupported content encoding"))
+    ));
 }
 
 #[test]

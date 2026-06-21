@@ -6,6 +6,7 @@
 use bytes::Bytes;
 use http::{Response, StatusCode};
 use kimojio_stack_http::Body;
+use kimojio_stack_tower::ServiceError;
 
 use crate::{Rejection, StreamingBody};
 
@@ -90,6 +91,20 @@ where
 impl IntoResponse for Rejection {
     fn into_response(self) -> Response<Body> {
         self.into_response()
+    }
+}
+
+impl IntoResponse for ServiceError {
+    fn into_response(self) -> Response<Body> {
+        let status = match self {
+            ServiceError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
+            ServiceError::Timeout => StatusCode::REQUEST_TIMEOUT,
+            ServiceError::NotReady | ServiceError::Overloaded => StatusCode::SERVICE_UNAVAILABLE,
+            ServiceError::Canceled | ServiceError::Inner(_) | ServiceError::Layer { .. } => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        };
+        status.into_response()
     }
 }
 

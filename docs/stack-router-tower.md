@@ -60,6 +60,8 @@ Routers support:
 - router merging with `Router::merge`
 - fallback handlers
 - path parameters using `:name`
+- catch-all path parameters using a terminal `*name` segment, such as
+  `/account/container/*blob`
 - shared state with `State<T>`
 - extensions with `Extension<T>`
 - query extraction with `QueryParams`
@@ -69,6 +71,10 @@ Ambiguous same-shape routes are rejected at registration time. During dispatch,
 literal segments outrank parameter segments at the earliest differing segment.
 Nested routers and merged routers currently import route tables only; child
 router state and fallback scopes are not preserved.
+Generic `handler_fn` works for ordinary context types. When closures are built
+inside `Runtime::block_on` and need the concrete stack runtime context, use
+`stack_handler_fn` or `steal_handler_fn`; those helpers are higher-ranked over
+the context lifetime and avoid common "not general enough" closure errors.
 
 ## Services and middleware
 
@@ -119,6 +125,16 @@ steer, timeout, discovery, balance, reconnect, buffer, spawn-ready, and hedge,
 plus HTTP middleware for auth, CORS, CSRF, request IDs, trace hooks, header
 updates, compression/decompression, redirects, sessions, cache, and
 governor-style rate limiting.
+
+The HTTP/1.1 and buffered HTTP/2 serving adapters accept any
+`Service<Cx, Request<Body>, Response = Response<Body>>` whose error implements
+`IntoResponse`. That means a middleware-wrapped router can be served directly
+instead of unwrapping back to `Router`.
+
+Compression codecs are feature-gated. Enable `compression-gzip`,
+`compression-br`, `compression-zstd`, or aggregate `compression` on
+`kimojio-stack-tower` when response compression or request decompression for
+those encodings is needed. The default build does not pull codec crates.
 
 ## Stackful differences from axum/tower
 
@@ -194,6 +210,7 @@ cargo test -p examples stack_router_porting --all-targets
 cargo test -p examples stack_router_workload --all-targets
 cargo test --doc
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps -p kimojio-stack-router -p kimojio-stack-tower
+cargo test -p kimojio-stack-tower --all-features
 ```
 
 Benchmark smoke commands:

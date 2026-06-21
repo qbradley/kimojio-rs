@@ -1,10 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#[cfg(any(feature = "compression-br", feature = "compression-gzip"))]
 use std::io::Write;
 
 use bytes::Bytes;
+#[cfg(feature = "compression-gzip")]
 use flate2::Compression as FlateCompression;
+#[cfg(feature = "compression-gzip")]
 use flate2::write::{GzEncoder, ZlibEncoder};
 use http::{HeaderValue, Request, Response, header};
 use kimojio_stack_http::Body;
@@ -49,12 +52,23 @@ impl CompressionLayer {
 
     /// Creates a layer supporting all implemented encodings.
     pub fn all() -> Self {
-        Self::new(vec![
-            Encoding::Gzip,
-            Encoding::Deflate,
-            Encoding::Brotli,
-            Encoding::Zstd,
-        ])
+        let encodings = Vec::new();
+        #[cfg(any(
+            feature = "compression-br",
+            feature = "compression-gzip",
+            feature = "compression-zstd"
+        ))]
+        let mut encodings = encodings;
+        #[cfg(feature = "compression-gzip")]
+        {
+            encodings.push(Encoding::Gzip);
+            encodings.push(Encoding::Deflate);
+        }
+        #[cfg(feature = "compression-br")]
+        encodings.push(Encoding::Brotli);
+        #[cfg(feature = "compression-zstd")]
+        encodings.push(Encoding::Zstd);
+        Self::new(encodings)
     }
 }
 
@@ -169,36 +183,78 @@ fn append_vary_accept_encoding(headers: &mut http::HeaderMap) {
 
 pub(crate) fn encode(encoding: Encoding, bytes: &[u8]) -> Result<Bytes, ServiceError> {
     match encoding {
-        Encoding::Gzip => {
-            let mut encoder = GzEncoder::new(Vec::new(), FlateCompression::default());
-            encoder
-                .write_all(bytes)
-                .map_err(|_| ServiceError::InvalidRequest("gzip compression failed"))?;
-            Ok(Bytes::from(encoder.finish().map_err(|_| {
-                ServiceError::InvalidRequest("gzip compression failed")
-            })?))
-        }
-        Encoding::Deflate => {
-            let mut encoder = ZlibEncoder::new(Vec::new(), FlateCompression::default());
-            encoder
-                .write_all(bytes)
-                .map_err(|_| ServiceError::InvalidRequest("deflate compression failed"))?;
-            Ok(Bytes::from(encoder.finish().map_err(|_| {
-                ServiceError::InvalidRequest("deflate compression failed")
-            })?))
-        }
-        Encoding::Brotli => {
-            let mut output = Vec::new();
-            {
-                let mut writer = brotli::CompressorWriter::new(&mut output, 4096, 5, 22);
-                writer
-                    .write_all(bytes)
-                    .map_err(|_| ServiceError::InvalidRequest("brotli compression failed"))?;
-            }
-            Ok(Bytes::from(output))
-        }
-        Encoding::Zstd => zstd::stream::encode_all(bytes, 0)
-            .map(Bytes::from)
-            .map_err(|_| ServiceError::InvalidRequest("zstd compression failed")),
+        Encoding::Gzip => encode_gzip(bytes),
+        Encoding::Deflate => encode_deflate(bytes),
+        Encoding::Brotli => encode_brotli(bytes),
+        Encoding::Zstd => encode_zstd(bytes),
     }
+}
+
+#[cfg(feature = "compression-gzip")]
+fn encode_gzip(bytes: &[u8]) -> Result<Bytes, ServiceError> {
+    let mut encoder = GzEncoder::new(Vec::new(), FlateCompression::default());
+    encoder
+        .write_all(bytes)
+        .map_err(|_| ServiceError::InvalidRequest("gzip compression failed"))?;
+    Ok(Bytes::from(encoder.finish().map_err(|_| {
+        ServiceError::InvalidRequest("gzip compression failed")
+    })?))
+}
+
+#[cfg(not(feature = "compression-gzip"))]
+fn encode_gzip(_bytes: &[u8]) -> Result<Bytes, ServiceError> {
+    Err(ServiceError::InvalidRequest(
+        "gzip compression feature disabled",
+    ))
+}
+
+#[cfg(feature = "compression-gzip")]
+fn encode_deflate(bytes: &[u8]) -> Result<Bytes, ServiceError> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), FlateCompression::default());
+    encoder
+        .write_all(bytes)
+        .map_err(|_| ServiceError::InvalidRequest("deflate compression failed"))?;
+    Ok(Bytes::from(encoder.finish().map_err(|_| {
+        ServiceError::InvalidRequest("deflate compression failed")
+    })?))
+}
+
+#[cfg(not(feature = "compression-gzip"))]
+fn encode_deflate(_bytes: &[u8]) -> Result<Bytes, ServiceError> {
+    Err(ServiceError::InvalidRequest(
+        "deflate compression feature disabled",
+    ))
+}
+
+#[cfg(feature = "compression-br")]
+fn encode_brotli(bytes: &[u8]) -> Result<Bytes, ServiceError> {
+    let mut output = Vec::new();
+    {
+        let mut writer = brotli::CompressorWriter::new(&mut output, 4096, 5, 22);
+        writer
+            .write_all(bytes)
+            .map_err(|_| ServiceError::InvalidRequest("brotli compression failed"))?;
+    }
+    Ok(Bytes::from(output))
+}
+
+#[cfg(not(feature = "compression-br"))]
+fn encode_brotli(_bytes: &[u8]) -> Result<Bytes, ServiceError> {
+    Err(ServiceError::InvalidRequest(
+        "brotli compression feature disabled",
+    ))
+}
+
+#[cfg(feature = "compression-zstd")]
+fn encode_zstd(bytes: &[u8]) -> Result<Bytes, ServiceError> {
+    zstd::stream::encode_all(bytes, 0)
+        .map(Bytes::from)
+        .map_err(|_| ServiceError::InvalidRequest("zstd compression failed"))
+}
+
+#[cfg(not(feature = "compression-zstd"))]
+fn encode_zstd(_bytes: &[u8]) -> Result<Bytes, ServiceError> {
+    Err(ServiceError::InvalidRequest(
+        "zstd compression feature disabled",
+    ))
 }
