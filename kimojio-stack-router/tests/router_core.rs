@@ -6,8 +6,8 @@ use std::sync::Arc;
 use http::{HeaderMap, Method, Request, Response, StatusCode};
 use kimojio_stack_http::Body;
 use kimojio_stack_router::{
-    BodyBytes, Extension, MethodRouter, PathParams, QueryParams, Rejection, Router, State,
-    extractor_fn, handler_fn,
+    BodyBytes, Extension, IntoResponse, MethodRouter, PathParams, QueryParams, Rejection, Router,
+    State, extractor_fn, handler_fn,
 };
 use kimojio_stack_tower::Service;
 
@@ -413,4 +413,22 @@ fn router_core_streaming_body_can_buffer_for_protocol_neutral_response_paths() {
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert_eq!(body_text(response), "ab");
+}
+
+#[test]
+fn router_core_oversized_response_conversion_returns_payload_too_large() {
+    let response = "x".repeat(4 * 1024 * 1024 + 1).into_response();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let response = kimojio_stack_router::StreamingBody::from_chunks(
+        StatusCode::OK,
+        vec![kimojio_stack_router::StreamingChunk::data(vec![
+            b'x';
+            4 * 1024
+                * 1024
+                + 1
+        ])],
+    )
+    .into_buffered_response();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }

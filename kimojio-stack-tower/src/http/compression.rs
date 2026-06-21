@@ -6,7 +6,7 @@ use std::io::Write;
 use bytes::Bytes;
 use flate2::Compression as FlateCompression;
 use flate2::write::{GzEncoder, ZlibEncoder};
-use http::{Request, Response, header};
+use http::{HeaderValue, Request, Response, header};
 use kimojio_stack_http::Body;
 
 use crate::{BoxError, Layer, Readiness, Service, ServiceError};
@@ -114,10 +114,13 @@ where
         let compressed = encode(encoding, response.body().as_bytes())?;
         *response.body_mut() = Body::from_bytes(compressed, Default::default())
             .map_err(|_| ServiceError::InvalidRequest("compressed body exceeded body limit"))?;
+        response.headers_mut().remove(header::CONTENT_LENGTH);
+        response.headers_mut().remove(header::ETAG);
         response.headers_mut().insert(
             header::CONTENT_ENCODING,
             encoding.as_str().parse().expect("valid encoding header"),
         );
+        append_vary_accept_encoding(response.headers_mut());
         Ok(response)
     }
 }
@@ -125,8 +128,43 @@ where
 fn accepts(header: &str, encoding: Encoding) -> bool {
     header
         .split(',')
-        .map(str::trim)
-        .any(|value| value == encoding.as_str() || value == "*")
+        .filter_map(parse_accept_encoding)
+        .any(|(value, allowed)| allowed && (value == encoding.as_str() || value == "*"))
+}
+
+fn parse_accept_encoding(value: &str) -> Option<(&str, bool)> {
+    let mut parts = value.split(';').map(str::trim);
+    let encoding = parts.next()?.trim();
+    if encoding.is_empty() {
+        return None;
+    }
+    let allowed = parts.all(|part| {
+        let Some((name, q)) = part.split_once('=') else {
+            return true;
+        };
+        !(name.trim().eq_ignore_ascii_case("q") && q.trim() == "0")
+    });
+    Some((encoding, allowed))
+}
+
+fn append_vary_accept_encoding(headers: &mut http::HeaderMap) {
+    let Some(existing) = headers
+        .get(header::VARY)
+        .and_then(|value| value.to_str().ok())
+    else {
+        headers.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+        return;
+    };
+    if existing
+        .split(',')
+        .any(|value| value.trim().eq_ignore_ascii_case("accept-encoding"))
+    {
+        return;
+    }
+    let value = format!("{existing}, Accept-Encoding");
+    if let Ok(value) = HeaderValue::from_str(&value) {
+        headers.insert(header::VARY, value);
+    }
 }
 
 pub(crate) fn encode(encoding: Encoding, bytes: &[u8]) -> Result<Bytes, ServiceError> {

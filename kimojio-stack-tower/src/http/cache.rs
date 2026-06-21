@@ -202,11 +202,9 @@ where
                 .call(cx, request)
                 .map_err(|error| ServiceError::Inner(error.into()));
         }
-        if request
-            .headers()
-            .get(header::CACHE_CONTROL)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.contains("no-store"))
+        if request.headers().contains_key(header::AUTHORIZATION)
+            || request.headers().contains_key(header::COOKIE)
+            || request_cache_bypasses(request.headers())
         {
             return self
                 .inner
@@ -221,12 +219,7 @@ where
             .inner
             .call(cx, request)
             .map_err(|error| ServiceError::Inner(error.into()))?;
-        let response_no_store = response
-            .headers()
-            .get(header::CACHE_CONTROL)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.contains("no-store"));
-        if response.status() == StatusCode::OK && !response_no_store {
+        if response.status() == StatusCode::OK && response_is_cacheable(response.headers()) {
             self.store.insert(cx, key, response.clone())?;
         }
         Ok(response)
@@ -240,4 +233,32 @@ impl<S, Store> Cache<S, Store> {
             None => request.uri().to_string(),
         }
     }
+}
+
+fn request_cache_bypasses(headers: &http::HeaderMap) -> bool {
+    cache_control_has_any(headers, &["no-store", "no-cache"])
+}
+
+fn response_is_cacheable(headers: &http::HeaderMap) -> bool {
+    !headers.contains_key(header::SET_COOKIE)
+        && !headers.contains_key(header::VARY)
+        && !cache_control_has_any(headers, &["no-store", "no-cache", "private"])
+}
+
+fn cache_control_has_any(headers: &http::HeaderMap, directives: &[&str]) -> bool {
+    headers
+        .get_all(header::CACHE_CONTROL)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(|directive| {
+            directive
+                .trim()
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase()
+        })
+        .any(|directive| directives.iter().any(|expected| directive == *expected))
 }

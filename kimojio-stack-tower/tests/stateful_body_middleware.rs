@@ -12,7 +12,7 @@ use flate2::Compression as FlateCompression;
 use flate2::read::GzDecoder;
 use flate2::write::{GzEncoder, ZlibEncoder};
 use http::{HeaderName, Method, Request, Response, StatusCode, header};
-use kimojio_stack_http::Body;
+use kimojio_stack_http::{Body, BodyLimits};
 use kimojio_stack_tower::http::{
     CacheLayer, CacheStore, CompressionLayer, DecompressionLayer, Encoding, FollowRedirectLayer,
     GovernorLayer, MemoryCacheStore, MemorySessionStore, Session, SessionLayer, SessionStore,
@@ -72,7 +72,7 @@ fn stateful_body_middleware_compresses_and_decompresses_gzip() {
     let mut decompress = service_fn(|_: &(), request: Request<Body>| {
         Ok::<_, ServiceError>(Response::new(request.into_body()))
     })
-    .layer(DecompressionLayer);
+    .layer(DecompressionLayer::new());
 
     for (encoding, header_value, encoded) in [
         (Encoding::Deflate, "deflate", zlib(b"hello")),
@@ -124,6 +124,7 @@ fn stateful_body_middleware_compresses_and_decompresses_gzip() {
         .insert(header::CONTENT_ENCODING, "gzip".parse().unwrap());
     let decompressed = decompress.call(&(), compressed_request).unwrap();
     assert_eq!(text(&decompressed), "hello");
+    assert!(!decompressed.headers().contains_key(header::CONTENT_LENGTH));
 
     let mut unsupported = request(Method::POST, "/", b"hello");
     unsupported
@@ -133,6 +134,60 @@ fn stateful_body_middleware_compresses_and_decompresses_gzip() {
         decompress.call(&(), unsupported),
         Err(ServiceError::InvalidRequest(_))
     ));
+}
+
+#[test]
+fn stateful_body_middleware_decompression_rejects_oversized_decoded_bodies() {
+    let mut decompress = service_fn(|_: &(), request: Request<Body>| {
+        Ok::<_, ServiceError>(Response::new(request.into_body()))
+    })
+    .layer(DecompressionLayer::with_limits(BodyLimits::new(5)));
+    let mut too_large = request(Method::POST, "/", gzip(b"too large"));
+    too_large
+        .headers_mut()
+        .insert(header::CONTENT_ENCODING, "gzip".parse().unwrap());
+    assert!(matches!(
+        decompress.call(&(), too_large),
+        Err(ServiceError::InvalidRequest(
+            "decompressed body exceeded limit"
+        ))
+    ));
+}
+
+#[test]
+fn stateful_body_middleware_compression_updates_entity_headers_and_vary() {
+    let mut compress = service_fn(|_: &(), _request: Request<Body>| {
+        Ok::<_, ServiceError>(
+            Response::builder()
+                .header(header::CONTENT_LENGTH, "11")
+                .header(header::ETAG, "\"plain\"")
+                .body(Body::copy_from_slice(b"compress me", Default::default()).unwrap())
+                .unwrap(),
+        )
+    })
+    .layer(CompressionLayer::new(vec![Encoding::Gzip]));
+    let mut compress_request = request(Method::GET, "/", []);
+    compress_request
+        .headers_mut()
+        .insert(header::ACCEPT_ENCODING, "gzip".parse().unwrap());
+    let compressed = compress.call(&(), compress_request).unwrap();
+    assert!(!compressed.headers().contains_key(header::CONTENT_LENGTH));
+    assert!(!compressed.headers().contains_key(header::ETAG));
+    assert_eq!(
+        compressed.headers().get(header::VARY).unwrap(),
+        "Accept-Encoding"
+    );
+
+    let mut no_q_zero = request(Method::GET, "/", []);
+    no_q_zero
+        .headers_mut()
+        .insert(header::ACCEPT_ENCODING, "gzip;q=0".parse().unwrap());
+    let uncompressed = compress.call(&(), no_q_zero).unwrap();
+    assert!(
+        !uncompressed
+            .headers()
+            .contains_key(header::CONTENT_ENCODING)
+    );
 }
 
 #[test]
@@ -225,10 +280,24 @@ fn stateful_body_middleware_sessions_create_reuse_corrupt_and_fail() {
 
     let first = service.call(&(), request(Method::GET, "/", [])).unwrap();
     let cookie = first.headers().get(header::SET_COOKIE).unwrap().clone();
+    let cookie_text = cookie.to_str().unwrap();
+    assert!(cookie_text.contains("HttpOnly"));
+    assert!(cookie_text.contains("SameSite=Lax"));
+    assert!(cookie_text.contains("Path=/"));
     let mut second_request = request(Method::GET, "/", []);
     second_request.headers_mut().insert(header::COOKIE, cookie);
     let second = service.call(&(), second_request).unwrap();
     assert_eq!(text(&first), text(&second));
+
+    let mut multi_cookie = request(Method::GET, "/", []);
+    multi_cookie.headers_mut().insert(
+        header::COOKIE,
+        format!("theme=dark; sid={}; other=yes", text(&first))
+            .parse()
+            .unwrap(),
+    );
+    let multi = service.call(&(), multi_cookie).unwrap();
+    assert_eq!(text(&first), text(&multi));
 
     store.insert_corrupt("bad");
     let mut corrupt = request(Method::GET, "/", []);
@@ -264,6 +333,15 @@ fn stateful_body_middleware_sessions_create_reuse_corrupt_and_fail() {
     expired.headers_mut().insert(header_name, id);
     let second = header_service.call(&(), expired).unwrap();
     assert_ne!(text(&first), text(&second));
+}
+
+#[test]
+fn stateful_body_middleware_memory_session_store_is_bounded() {
+    let store = MemorySessionStore::with_capacity(2);
+    for _ in 0..5 {
+        store.create(&()).unwrap();
+    }
+    assert_eq!(store.len(), 2);
 }
 
 #[derive(Clone)]
@@ -398,6 +476,79 @@ fn stateful_body_middleware_cache_hits_evicts_and_reports_store_errors() {
         service.call(&(), request(Method::GET, "/c", [])),
         Err(ServiceError::InvalidRequest("cache failed"))
     ));
+}
+
+#[test]
+fn stateful_body_middleware_cache_bypasses_private_or_varying_responses() {
+    let calls = Cell::new(0);
+    let mut auth_service = service_fn(|_: &(), _request: Request<Body>| {
+        calls.set(calls.get() + 1);
+        Ok::<_, ServiceError>(Response::new(
+            Body::copy_from_slice(calls.get().to_string().as_bytes(), Default::default()).unwrap(),
+        ))
+    })
+    .layer(CacheLayer::new(MemoryCacheStore::new(8)));
+    let mut authorized = request(Method::GET, "/auth", []);
+    authorized
+        .headers_mut()
+        .insert(header::AUTHORIZATION, "token".parse().unwrap());
+    let first = auth_service.call(&(), authorized).unwrap();
+    let mut authorized = request(Method::GET, "/auth", []);
+    authorized
+        .headers_mut()
+        .insert(header::AUTHORIZATION, "token".parse().unwrap());
+    let second = auth_service.call(&(), authorized).unwrap();
+    assert_ne!(text(&first), text(&second));
+
+    let response_calls = Cell::new(0);
+    let mut response_service = service_fn(|_: &(), _request: Request<Body>| {
+        response_calls.set(response_calls.get() + 1);
+        Ok::<_, ServiceError>(
+            Response::builder()
+                .header(header::SET_COOKIE, "sid=private")
+                .body(
+                    Body::copy_from_slice(
+                        response_calls.get().to_string().as_bytes(),
+                        Default::default(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+        )
+    })
+    .layer(CacheLayer::new(MemoryCacheStore::new(8)));
+    let first = response_service
+        .call(&(), request(Method::GET, "/cookie", []))
+        .unwrap();
+    let second = response_service
+        .call(&(), request(Method::GET, "/cookie", []))
+        .unwrap();
+    assert_ne!(text(&first), text(&second));
+
+    let private_calls = Cell::new(0);
+    let mut private_service = service_fn(|_: &(), _request: Request<Body>| {
+        private_calls.set(private_calls.get() + 1);
+        Ok::<_, ServiceError>(
+            Response::builder()
+                .header(header::CACHE_CONTROL, "Private")
+                .body(
+                    Body::copy_from_slice(
+                        private_calls.get().to_string().as_bytes(),
+                        Default::default(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+        )
+    })
+    .layer(CacheLayer::new(MemoryCacheStore::new(8)));
+    let first = private_service
+        .call(&(), request(Method::GET, "/private", []))
+        .unwrap();
+    let second = private_service
+        .call(&(), request(Method::GET, "/private", []))
+        .unwrap();
+    assert_ne!(text(&first), text(&second));
 }
 
 #[derive(Clone)]

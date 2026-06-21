@@ -1644,6 +1644,7 @@ dependencies = [
  "kimojio-stack",
  "kimojio-stack-http",
  "kimojio-stack-steal",
+ "uuid",
  "zstd",
 ]
 

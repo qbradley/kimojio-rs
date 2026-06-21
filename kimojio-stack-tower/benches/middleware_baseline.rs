@@ -55,6 +55,30 @@ fn base_service() -> impl Service<(), Request<Body>, Response = Response<Body>, 
     })
 }
 
+fn heavy_service<Cx>()
+-> impl Service<Cx, Request<Body>, Response = Response<Body>, Error = ServiceError> {
+    let trace = TraceLayer::new();
+    BenchReady { offset: 1 }
+        .layer(SetHeaderLayer::response(
+            HeaderName::from_static("x-stack"),
+            HeaderValue::from_static("router"),
+        ))
+        .layer(RequestIdLayer::new(HeaderName::from_static("x-request-id")))
+        .layer(SessionLayer::new(MemorySessionStore::new()))
+        .layer(CacheLayer::new(MemoryCacheStore::new(64)))
+        .layer(GovernorLayer::new(4096, |request: &Request<Body>| {
+            request.uri().path().to_owned()
+        }))
+        .layer(AuthLayer::new(|request: &Request<Body>| {
+            request.headers().contains_key("authorization")
+        }))
+        .layer(trace)
+        .layer(RetryLayer::new(1))
+        .layer(ConcurrencyLimitLayer::new(1024))
+        .layer(TimeoutLayer::new(Duration::from_secs(1)))
+        .layer(LoadShedLayer)
+}
+
 fn middleware_baseline(c: &mut Criterion) {
     c.bench_function("tower/direct_service", |b| {
         let mut service = base_service();
@@ -72,27 +96,24 @@ fn middleware_baseline(c: &mut Criterion) {
     });
 
     c.bench_function("tower/middleware_heavy_stack", |b| {
-        let trace = TraceLayer::new();
-        let mut service = base_service()
-            .layer(SetHeaderLayer::response(
-                HeaderName::from_static("x-stack"),
-                HeaderValue::from_static("router"),
-            ))
-            .layer(RequestIdLayer::new(HeaderName::from_static("x-request-id")))
-            .layer(SessionLayer::new(MemorySessionStore::new()))
-            .layer(CacheLayer::new(MemoryCacheStore::new(64)))
-            .layer(GovernorLayer::new(4096, |request: &Request<Body>| {
-                request.uri().path().to_owned()
-            }))
-            .layer(AuthLayer::new(|request: &Request<Body>| {
-                request.headers().contains_key("authorization")
-            }))
-            .layer(trace)
-            .layer(RetryLayer::new(1))
-            .layer(ConcurrencyLimitLayer::new(1024))
-            .layer(TimeoutLayer::new(Duration::from_secs(1)))
-            .layer(LoadShedLayer);
+        let mut service = heavy_service::<()>();
         b.iter(|| black_box(service.call(&(), request()).unwrap()));
+    });
+
+    c.bench_function("tower/stack/middleware_heavy_context", |b| {
+        let mut runtime = kimojio_stack::Runtime::new();
+        runtime.block_on(|cx| {
+            let mut service = heavy_service();
+            b.iter(|| black_box(service.call(cx, request()).unwrap()));
+        });
+    });
+
+    c.bench_function("tower/stack-steal/middleware_heavy_context", |b| {
+        let mut runtime = kimojio_stack_steal::Runtime::new();
+        runtime.block_on(|cx| {
+            let mut service = heavy_service();
+            b.iter(|| black_box(service.call(cx, request()).unwrap()));
+        });
     });
 
     c.bench_function("tower/timeout_retry_limit", |b| {

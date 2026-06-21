@@ -33,8 +33,9 @@ fn stack_router_porting_middleware_example_covers_security_stack() {
 #[test]
 fn stack_router_porting_stateful_example_covers_session_cache_rate_limit() {
     let report = examples::stack_router_ported_stateful::run_report();
-    assert_eq!(report.first_body, report.cached_body);
+    assert_eq!(report.first_body, report.reused_body);
     assert!(report.first_body.starts_with("session-"));
+    assert_eq!(report.cached_body, "cache=1");
     assert_eq!(report.rate_limited_status, StatusCode::TOO_MANY_REQUESTS);
 }
 

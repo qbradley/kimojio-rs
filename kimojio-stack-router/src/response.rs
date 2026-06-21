@@ -32,25 +32,28 @@ impl IntoResponse for Body {
 
 impl IntoResponse for Bytes {
     fn into_response(self) -> Response<Body> {
-        Body::from_bytes(self, Default::default())
-            .expect("response bytes should fit default body limits")
-            .into_response()
+        Body::from_bytes(self, Default::default()).map_or_else(
+            |_| StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+            IntoResponse::into_response,
+        )
     }
 }
 
 impl IntoResponse for &'static str {
     fn into_response(self) -> Response<Body> {
-        Body::copy_from_slice(self.as_bytes(), Default::default())
-            .expect("static str should fit default body limits")
-            .into_response()
+        Body::copy_from_slice(self.as_bytes(), Default::default()).map_or_else(
+            |_| StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+            IntoResponse::into_response,
+        )
     }
 }
 
 impl IntoResponse for String {
     fn into_response(self) -> Response<Body> {
-        Body::copy_from_slice(self.as_bytes(), Default::default())
-            .expect("string should fit default body limits")
-            .into_response()
+        Body::copy_from_slice(self.as_bytes(), Default::default()).map_or_else(
+            |_| StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+            IntoResponse::into_response,
+        )
     }
 }
 

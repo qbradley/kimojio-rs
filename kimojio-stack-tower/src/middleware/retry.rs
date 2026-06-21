@@ -13,6 +13,10 @@ pub trait RetryPolicy: Clone {
 }
 
 /// Retry policy that retries every error until the attempt budget is exhausted.
+///
+/// Use this policy only for replay-safe requests. A cloned request can still
+/// represent a non-idempotent operation, so HTTP callers should prefer an
+/// explicit policy when side effects are possible.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RetryAll;
 
@@ -33,6 +37,10 @@ impl RetryPolicy for RetryNone {
 }
 
 /// Layer that retries failed requests with a fixed attempt budget.
+///
+/// Retries clone and replay the request. Configure a policy that matches the
+/// operation's idempotency and failure semantics before wrapping mutating
+/// handlers.
 #[derive(Clone, Debug)]
 pub struct RetryLayer<P = RetryAll> {
     max_attempts: usize,

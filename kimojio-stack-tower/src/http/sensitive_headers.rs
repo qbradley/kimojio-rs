@@ -70,8 +70,14 @@ where
 
 fn mark_sensitive(headers: &mut http::HeaderMap, names: &[HeaderName]) {
     for name in names {
-        if let Some(value) = headers.get_mut(name) {
+        let mut values = headers.get_all(name).iter().cloned().collect::<Vec<_>>();
+        if values.is_empty() {
+            continue;
+        }
+        headers.remove(name);
+        for mut value in values.drain(..) {
             value.set_sensitive(true);
+            headers.append(name, value);
         }
     }
 }

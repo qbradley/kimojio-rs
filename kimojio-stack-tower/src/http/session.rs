@@ -2,12 +2,12 @@
 // Licensed under the MIT License.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use http::{HeaderName, Request, Response, header};
 use kimojio_stack_http::Body;
+use uuid::Uuid;
 
 use crate::{BoxError, Layer, Readiness, Service, ServiceError};
 
@@ -21,12 +21,23 @@ pub struct Session {
 }
 
 /// In-memory session store.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct MemorySessionStore {
+    max_entries: usize,
     entries: Arc<Mutex<BTreeMap<String, StoredSession>>>,
-    next: Arc<AtomicU64>,
     fail: Arc<Mutex<Option<ServiceError>>>,
     ttl: Option<Duration>,
+}
+
+impl Default for MemorySessionStore {
+    fn default() -> Self {
+        Self {
+            max_entries: 1024,
+            entries: Arc::new(Mutex::new(BTreeMap::new())),
+            fail: Arc::new(Mutex::new(None)),
+            ttl: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -60,9 +71,39 @@ impl MemorySessionStore {
         }
     }
 
+    /// Creates an in-memory store with a maximum number of sessions.
+    pub fn with_capacity(max_entries: usize) -> Self {
+        Self {
+            max_entries: max_entries.max(1),
+            ..Self::default()
+        }
+    }
+
+    /// Creates an in-memory store with expiration and a maximum number of sessions.
+    pub fn with_ttl_and_capacity(ttl: Duration, max_entries: usize) -> Self {
+        Self {
+            max_entries: max_entries.max(1),
+            ttl: Some(ttl),
+            ..Self::default()
+        }
+    }
+
+    /// Returns the current number of retained sessions.
+    pub fn len(&self) -> usize {
+        self.entries.lock().unwrap().len()
+    }
+
+    /// Returns whether no sessions are currently retained.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Inserts a corrupt marker for `id`.
     pub fn insert_corrupt(&self, id: impl Into<String>) {
-        self.entries.lock().unwrap().insert(
+        let mut entries = self.entries.lock().unwrap();
+        evict_expired(&mut entries);
+        evict_to_capacity(&mut entries, self.max_entries.saturating_sub(1));
+        entries.insert(
             id.into(),
             StoredSession {
                 session: Session {
@@ -114,7 +155,7 @@ impl SessionStore for MemorySessionStore {
 
     fn create<Cx>(&self, cx: &Cx) -> Result<Session, ServiceError> {
         self.take_failure()?;
-        let id = format!("session-{}", self.next.fetch_add(1, Ordering::AcqRel));
+        let id = format!("session-{}", Uuid::new_v4());
         let session = Session {
             id: id.clone(),
             data: BTreeMap::new(),
@@ -125,7 +166,12 @@ impl SessionStore for MemorySessionStore {
 
     fn save<Cx>(&self, _cx: &Cx, session: Session) -> Result<(), ServiceError> {
         self.take_failure()?;
-        self.entries.lock().unwrap().insert(
+        let mut entries = self.entries.lock().unwrap();
+        evict_expired(&mut entries);
+        if !entries.contains_key(&session.id) {
+            evict_to_capacity(&mut entries, self.max_entries.saturating_sub(1));
+        }
+        entries.insert(
             session.id.clone(),
             StoredSession {
                 session,
@@ -134,6 +180,20 @@ impl SessionStore for MemorySessionStore {
             },
         );
         Ok(())
+    }
+}
+
+fn evict_expired(entries: &mut BTreeMap<String, StoredSession>) {
+    let now = Instant::now();
+    entries.retain(|_, stored| stored.expires_at.is_none_or(|expires_at| expires_at > now));
+}
+
+fn evict_to_capacity(entries: &mut BTreeMap<String, StoredSession>, retained: usize) {
+    while entries.len() > retained {
+        let Some(first) = entries.keys().next().cloned() else {
+            break;
+        };
+        entries.remove(&first);
     }
 }
 
@@ -150,7 +210,7 @@ impl SessionTransport {
                 .headers()
                 .get(header::COOKIE)
                 .and_then(|value| value.to_str().ok())
-                .and_then(|cookie| cookie.strip_prefix("sid="))
+                .and_then(read_cookie_sid)
                 .map(str::to_owned),
             Self::Header(name) => request
                 .headers()
@@ -165,7 +225,9 @@ impl SessionTransport {
             Self::Cookie => {
                 response.headers_mut().insert(
                     header::SET_COOKIE,
-                    format!("sid={id}").parse().expect("valid session cookie"),
+                    format!("sid={id}; HttpOnly; SameSite=Lax; Path=/")
+                        .parse()
+                        .expect("valid session cookie"),
                 );
             }
             Self::Header(name) => {
@@ -175,6 +237,13 @@ impl SessionTransport {
             }
         }
     }
+}
+
+fn read_cookie_sid(cookie: &str) -> Option<&str> {
+    cookie.split(';').find_map(|pair| {
+        let (name, value) = pair.trim().split_once('=')?;
+        (name == "sid").then_some(value)
+    })
 }
 
 /// Session middleware layer.

@@ -64,6 +64,60 @@
 //!
 //! This crate is currently the framework substrate. HTTP-specific routing and
 //! axum-like extractors live in `kimojio-stack-router`.
+//!
+//! # Middleware families
+//!
+//! Core service middleware includes filter, concurrency/rate limits, load
+//! observation, load shedding, retry, steer, cooperative timeout, bounded
+//! buffering, cooperative spawn-ready, cooperative hedge, discovery, balance, and
+//! reconnect layers.
+//!
+//! HTTP middleware covers add-extension, auth, catch-panic, compression, CORS,
+//! CSRF, decompression, follow-redirect, normalize-path, propagate-header,
+//! request-id, sensitive-headers, set-header, set-status, timeout, trace,
+//! validate-request, sessions, cache, and governor-style keyed rate limiting.
+//!
+//! ```no_run
+//! use std::time::Duration;
+//! use http::{Request, Response, StatusCode};
+//! use kimojio_stack_http::Body;
+//! use kimojio_stack_tower::{
+//!     ConcurrencyLimitLayer, RetryLayer, Service, ServiceError, ServiceExt,
+//!     TimeoutLayer, service_fn,
+//! };
+//!
+//! # fn example(cx: &()) -> Result<(), ServiceError> {
+//! let mut service = service_fn(|_: &(), _request: Request<Body>| {
+//!     Ok::<_, ServiceError>(Response::new(Body::empty()))
+//! })
+//! .layer(RetryLayer::new(2))
+//! .layer(ConcurrencyLimitLayer::new(128))
+//! .layer(TimeoutLayer::new(Duration::from_secs(1)));
+//!
+//! let response = service.call(
+//!     cx,
+//!     Request::builder().uri("/").body(Body::empty()).unwrap(),
+//! )?;
+//! assert_eq!(response.status(), StatusCode::OK);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Compatibility notes
+//!
+//! The API mirrors tower concepts but is not source-compatible with tower.
+//! `Service::ready` is direct and stackful instead of `poll_ready`, and timeout,
+//! buffer, spawn-ready, and hedge behavior is cooperative unless the caller's
+//! runtime context explicitly waits or schedules more work. True detached
+//! background service workers are deferred until the service core has a safe
+//! owned stackful task handle.
+//!
+//! Sessions and cache are intentionally conservative first-version surfaces:
+//! `MemorySessionStore` is bounded and uses opaque random IDs, but production
+//! deployments should supply their own persistent store and any required
+//! signing/encryption policy. `CacheLayer` bypasses request/response shapes that
+//! are user-specific or validator-dependent by default; full revalidation and
+//! `Vary`-aware policy hooks are deferred compatibility work.
 
 pub mod error;
 pub mod http;

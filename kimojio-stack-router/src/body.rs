@@ -5,7 +5,7 @@
 
 use bytes::Bytes;
 use http::{HeaderMap, Response};
-use kimojio_stack_http::Body;
+use kimojio_stack_http::{Body, BodyBuilder, BodyLimits};
 
 /// One chunk in a streaming response body.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -77,19 +77,21 @@ impl StreamingBody {
 
     /// Converts this streaming body to a buffered response.
     pub fn into_buffered_response(self) -> Response<Body> {
-        let mut bytes = Vec::new();
+        let mut bytes = BodyBuilder::new(BodyLimits::default());
         for chunk in &self.chunks {
-            bytes.extend_from_slice(&chunk.data);
+            if bytes.append(&chunk.data).is_err() {
+                return Response::builder()
+                    .status(http::StatusCode::PAYLOAD_TOO_LARGE)
+                    .body(Body::empty())
+                    .expect("valid too-large streaming response");
+            }
         }
         let mut builder = Response::builder().status(self.response.status());
         *builder
             .headers_mut()
             .expect("new response builder has headers") = self.response.headers().clone();
         builder
-            .body(
-                Body::copy_from_slice(&bytes, Default::default())
-                    .expect("streaming body should fit default buffered limits"),
-            )
+            .body(bytes.finish())
             .expect("valid buffered streaming response")
     }
 }

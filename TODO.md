@@ -39,6 +39,18 @@
 - Document and validate TLS/ALPN setup for HTTP/2 and gRPC services.
 - Provide end-to-end examples from echo server to HTTP, gRPC, object gateway,
   storage, telemetry, and SQLite.
+- Promote stackful router/tower follow-ups after the first compatibility surface
+  settles: proc macros and derived extractors, production session/cache/discovery
+  stores, additional compression codecs or feature gates, broader benchmark
+  environments, and true background buffer/spawn-ready/hedge implementations
+  backed by safe owned stackful task handles.
+- Extend stackful router/tower stateful middleware beyond the first partial
+  compatibility surface with session mutation commit semantics, signed/encrypted
+  cookie options, cache validator/revalidation hooks, and full `Vary`-aware cache
+  key policy.
+- Extend router/tower framework integration with nested state/fallback scopes,
+  generic serving adapters for middleware-wrapped routers, retry/hedge
+  idempotency helpers, and runtime-capability-bound middleware variants.
 
 ## SQLite hardening
 

@@ -129,6 +129,10 @@ fn http_middleware_auth_cors_and_csrf_cover_default_and_relaxed_paths() {
     let allowed = cors.call(&(), allowed).unwrap();
     assert_eq!(allowed.status(), StatusCode::NO_CONTENT);
     assert_eq!(
+        allowed.headers().get(header::VARY).unwrap(),
+        "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+    );
+    assert_eq!(
         allowed
             .headers()
             .get(header::ACCESS_CONTROL_ALLOW_METHODS)
@@ -246,6 +250,9 @@ fn http_middleware_sensitive_headers_and_catch_panic() {
         response
             .headers_mut()
             .insert(header::SET_COOKIE, HeaderValue::from_static("secret"));
+        response
+            .headers_mut()
+            .append(header::SET_COOKIE, HeaderValue::from_static("secret2"));
         Ok::<_, ServiceError>(response)
     })
     .layer(SensitiveHeadersLayer::conservative_defaults());
@@ -254,13 +261,9 @@ fn http_middleware_sensitive_headers_and_catch_panic() {
         .headers_mut()
         .insert(header::AUTHORIZATION, HeaderValue::from_static("secret"));
     let response = sensitive.call(&(), sensitive_request).unwrap();
-    assert!(
-        response
-            .headers()
-            .get(header::SET_COOKIE)
-            .unwrap()
-            .is_sensitive()
-    );
+    for value in response.headers().get_all(header::SET_COOKIE) {
+        assert!(value.is_sensitive());
+    }
 
     let mut relaxed_sensitive = service_fn(|_: &(), request: Request<Body>| {
         assert!(

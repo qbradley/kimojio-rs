@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use http::{HeaderName, Method, Request, Response, StatusCode, header};
+use http::{HeaderName, HeaderValue, Method, Request, Response, StatusCode, header};
 use kimojio_stack_http::Body;
 
 use crate::{BoxError, Layer, Readiness, Service, ServiceError};
@@ -132,6 +132,7 @@ impl<S> Cors<S> {
                 header::ACCESS_CONTROL_ALLOW_ORIGIN,
                 value.parse().expect("valid CORS origin header"),
             );
+            append_vary(response.headers_mut(), "Origin");
         }
     }
 
@@ -147,6 +148,7 @@ impl<S> Cors<S> {
                 header::ACCESS_CONTROL_ALLOW_METHODS,
                 methods.parse().expect("valid CORS methods header"),
             );
+            append_vary(response.headers_mut(), "Access-Control-Request-Method");
         }
         let headers = self
             .allow_headers
@@ -159,6 +161,29 @@ impl<S> Cors<S> {
                 header::ACCESS_CONTROL_ALLOW_HEADERS,
                 headers.parse().expect("valid CORS headers header"),
             );
+            append_vary(response.headers_mut(), "Access-Control-Request-Headers");
         }
+    }
+}
+
+fn append_vary(headers: &mut http::HeaderMap, name: &str) {
+    let Some(existing) = headers
+        .get(header::VARY)
+        .and_then(|value| value.to_str().ok())
+    else {
+        if let Ok(value) = HeaderValue::from_str(name) {
+            headers.insert(header::VARY, value);
+        }
+        return;
+    };
+    if existing
+        .split(',')
+        .any(|value| value.trim().eq_ignore_ascii_case(name))
+    {
+        return;
+    }
+    let value = format!("{existing}, {name}");
+    if let Ok(value) = HeaderValue::from_str(&value) {
+        headers.insert(header::VARY, value);
     }
 }

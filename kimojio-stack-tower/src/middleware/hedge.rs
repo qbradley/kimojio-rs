@@ -6,6 +6,10 @@ use std::time::{Duration, Instant};
 use crate::{BoxError, Layer, Readiness, Service, ServiceError};
 
 /// Layer that issues a bounded follow-up attempt when the first attempt is slow.
+///
+/// The cooperative first version replays a cloned request after the initial
+/// attempt completes slowly or fails. Use it only for replay-safe operations, or
+/// place an idempotency guard in front of mutating handlers.
 #[derive(Clone, Copy, Debug)]
 pub struct HedgeLayer {
     threshold: Duration,

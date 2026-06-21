@@ -32,6 +32,10 @@ that need explicit scheduling and predictable latency:
   foundations over the stackful HTTP transport.
 - `kimojio-stack-sqlite` provides a SQLite VFS for rusqlite-backed local
   databases inside stackful runtimes.
+- `kimojio-stack-tower` provides stackful service/layer traits and
+  tower/tower-http-style middleware.
+- `kimojio-stack-router` provides axum-style routing, extraction, response
+  conversion, and server adapters over the stackful service model.
 
 See the [Stackful HTTP and gRPC Guide][stack-http-grpc-guide] for supported
 protocol features, transport setup, interoperability guarantees, and current
@@ -44,6 +48,8 @@ See the [Stackful Object Gateway Guide][stack-object-gateway-guide] for the
 canonical multi-runtime example, conformance matrix, and workload commands.
 See the [Stackful SQLite VFS Guide][stack-sqlite-guide] for rusqlite setup,
 runtime requirements, validation commands, and current limitations.
+See the [Stack Router/Tower Guide][stack-router-tower-guide] for stackful
+router, extractor, service, layer, middleware, and porting examples.
 See the [Stack Router/Tower Compatibility Matrix][stack-router-tower-compatibility]
 for current axum/tower-style stackful framework coverage.
 
@@ -52,6 +58,7 @@ for current axum/tower-style stackful framework coverage.
 [stack-storage-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-storage.md
 [stack-object-gateway-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-object-gateway.md
 [stack-sqlite-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-sqlite.md
+[stack-router-tower-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-router-tower.md
 [stack-router-tower-compatibility]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-router-tower-compatibility.md
 
 ## Stackful Work-Stealing Runtime
