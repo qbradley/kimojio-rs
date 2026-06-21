@@ -1,0 +1,29 @@
+[package]
+name = "kimojio-stack-tower"
+version = "0.0.1-alpha.0"
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "Stackful service and middleware foundations for kimojio-stack"
+
+[features]
+default = []
+
+[dependencies]
+brotli.workspace = true
+bytes.workspace = true
+flate2.workspace = true
+http.workspace = true
+kimojio-stack.workspace = true
+kimojio-stack-http = { path = "../kimojio-stack-http", version = "0.0.1-alpha.0", default-features = false }
+zstd.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+kimojio-stack-steal.workspace = true
+
+[[bench]]
+name = "middleware_baseline"
+harness = false

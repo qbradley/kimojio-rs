@@ -11,9 +11,11 @@
 use std::time::{Duration, Instant};
 
 use kimojio_stack::{
-    Errno, IoFd, ReadOutput, RuntimeIoError, RuntimeReadResult, RuntimeSocket, RuntimeWaitError,
-    RuntimeWaitable, RuntimeWriteResult, SocketIoRuntime, StackfulWaitContext, WriteOutput,
+    Errno, IoFd, ReadOutput, RuntimeIoError, RuntimeReadResult, RuntimeSocket, RuntimeWriteResult,
+    SocketIoRuntime, StackfulWaitContext, WriteOutput,
 };
+#[cfg(feature = "tls")]
+use kimojio_stack::{RuntimeWaitError, RuntimeWaitable};
 #[cfg(feature = "tls")]
 use kimojio_stack_tls::{RuntimeTlsStream, TlsStream};
 use rustix::{fd::OwnedFd, net::Shutdown};
@@ -503,6 +505,7 @@ fn runtime_io_error(error: RuntimeIoError) -> Error {
     }
 }
 
+#[cfg(feature = "tls")]
 fn runtime_wait_error(error: RuntimeWaitError) -> Error {
     match error {
         RuntimeWaitError::Unsupported(_) => {

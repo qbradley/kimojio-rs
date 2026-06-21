@@ -44,12 +44,15 @@ See the [Stackful Object Gateway Guide][stack-object-gateway-guide] for the
 canonical multi-runtime example, conformance matrix, and workload commands.
 See the [Stackful SQLite VFS Guide][stack-sqlite-guide] for rusqlite setup,
 runtime requirements, validation commands, and current limitations.
+See the [Stack Router/Tower Compatibility Matrix][stack-router-tower-compatibility]
+for current axum/tower-style stackful framework coverage.
 
 [stack-http-grpc-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-http-grpc.md
 [stack-opentelemetry-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-opentelemetry.md
 [stack-storage-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-storage.md
 [stack-object-gateway-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-object-gateway.md
 [stack-sqlite-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-sqlite.md
+[stack-router-tower-compatibility]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-router-tower-compatibility.md
 
 ## Stackful Work-Stealing Runtime
 
