@@ -1,14 +1,16 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use anyhow::{Result, bail};
+use std::net::SocketAddr;
+
+use anyhow::{Result, bail, ensure};
 use clap::{Parser, ValueEnum};
 use examples::object_gateway::{
     conformance::go_conformance_skip_reason,
-    launch::launch_go_host,
+    launch::{TcpGateway, launch_go_host},
     workload::{
-        DEFAULT_WORKLOADS, WorkloadImplementation, WorkloadSummary, find_workload,
-        format_summaries, go_workload_host_config, go_workload_target_info,
+        DEFAULT_WORKLOADS, WorkloadImplementation, WorkloadSummary, WorkloadTargetInfo,
+        find_workload, format_summaries, go_workload_host_config, go_workload_target_info,
         run_implementation_profile, run_tcp_profile,
     },
 };
@@ -32,6 +34,20 @@ struct Args {
     workload: String,
     #[arg(long)]
     include_go: bool,
+    #[arg(long)]
+    target_grpc_addr: Option<SocketAddr>,
+    #[arg(long)]
+    target_admin_addr: Option<SocketAddr>,
+    #[arg(long, default_value = "target")]
+    target_label: String,
+    #[arg(long, default_value = "tcp")]
+    target_runtime_mode: String,
+    #[arg(long, default_value = "kimojio-stack-storage")]
+    target_storage_client: String,
+    #[arg(long, default_value = "hermetic")]
+    target_backend_mode: String,
+    #[arg(long, default_value = "kimojio-stack-opentelemetry-hermetic")]
+    target_telemetry_sink_mode: String,
 }
 
 fn main() -> Result<()> {
@@ -39,6 +55,18 @@ fn main() -> Result<()> {
     let profiles = selected_profiles(&args.workload)?;
     let mut summaries = Vec::new();
     let mut skip_lines = Vec::new();
+    ensure!(
+        args.target_grpc_addr.is_some() == args.target_admin_addr.is_some(),
+        "--target-grpc-addr and --target-admin-addr must be provided together"
+    );
+    if let (Some(grpc_addr), Some(admin_addr)) = (args.target_grpc_addr, args.target_admin_addr) {
+        run_target(&args, grpc_addr, admin_addr, &profiles, &mut summaries)?;
+        let output = format_summaries(&summaries);
+        if !output.is_empty() {
+            println!("{output}");
+        }
+        return Ok(());
+    }
     match args.implementation {
         Implementation::All => {
             for implementation in WorkloadImplementation::ALL {
@@ -76,6 +104,30 @@ fn main() -> Result<()> {
     }
     for line in skip_lines {
         println!("{line}");
+    }
+    Ok(())
+}
+
+fn run_target(
+    args: &Args,
+    grpc_addr: SocketAddr,
+    admin_addr: SocketAddr,
+    profiles: &[examples::object_gateway::workload::WorkloadProfile],
+    summaries: &mut Vec<WorkloadSummary>,
+) -> Result<()> {
+    let info = WorkloadTargetInfo {
+        implementation: &args.target_label,
+        runtime_mode: &args.target_runtime_mode,
+        storage_client: &args.target_storage_client,
+        backend_mode: &args.target_backend_mode,
+        telemetry_sink_mode: &args.target_telemetry_sink_mode,
+    };
+    for profile in profiles {
+        summaries.push(run_tcp_profile(
+            info,
+            TcpGateway::new(grpc_addr, admin_addr),
+            *profile,
+        )?);
     }
     Ok(())
 }

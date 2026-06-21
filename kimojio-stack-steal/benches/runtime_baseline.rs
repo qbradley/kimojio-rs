@@ -34,8 +34,8 @@ fn ready_queue_worker_counts() -> Vec<usize> {
     let available = thread::available_parallelism()
         .map(NonZeroUsize::get)
         .unwrap_or(1)
-        .min(32);
-    let mut counts = [1_usize, 2, 4, 8, 16, available]
+        .min(128);
+    let mut counts = [1_usize, 2, 4, 8, 16, 32, 64, available]
         .into_iter()
         .filter(|count| *count <= available)
         .collect::<Vec<_>>();
