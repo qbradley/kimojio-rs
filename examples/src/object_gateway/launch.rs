@@ -301,6 +301,7 @@ pub fn launch_go_host(config: GoHostConfig) -> Result<GoHostProcess> {
 pub struct TcpGateway {
     grpc_addr: SocketAddr,
     admin_addr: SocketAddr,
+    request_timeout: Option<Duration>,
 }
 
 impl TcpGateway {
@@ -308,7 +309,13 @@ impl TcpGateway {
         Self {
             grpc_addr,
             admin_addr,
+            request_timeout: None,
         }
+    }
+
+    pub const fn with_request_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.request_timeout = timeout;
+        self
     }
 
     pub const fn grpc_addr(&self) -> SocketAddr {
@@ -386,6 +393,37 @@ impl TcpGateway {
         })
     }
 
+    pub fn steady_small_object(
+        &self,
+        namespace: &str,
+        iterations: usize,
+        max_chunk_bytes: u32,
+    ) -> Result<Vec<(proto::ObjectStatusCode, Duration)>> {
+        self.grpc_rpc(|cx, client| {
+            let mut samples = Vec::with_capacity(iterations.saturating_mul(2));
+            for index in 0..iterations {
+                let object = format!("steady-small-{index}");
+                let body = Bytes::from(format!("steady-object-{index}"));
+                let started = Instant::now();
+                let put = client.put(cx, namespace, &object, vec![body.clone()])?;
+                samples.push((status_code(put.message.status.as_ref()), started.elapsed()));
+
+                let started = Instant::now();
+                let get = client.get(cx, namespace, &object, max_chunk_bytes)?;
+                let elapsed = started.elapsed();
+                ensure!(
+                    get.iter()
+                        .flat_map(|chunk| chunk.data.iter().copied())
+                        .collect::<Vec<_>>()
+                        == body,
+                    "steady small-object workload body mismatch for {object}"
+                );
+                samples.push((get_status(&get), elapsed));
+            }
+            Ok(samples)
+        })
+    }
+
     pub fn admin_health(&self) -> Result<String> {
         self.admin_request("/health")
     }
@@ -397,7 +435,8 @@ impl TcpGateway {
     pub fn cancel_get_after_first_chunk(&self, namespace: &str, object: &str) -> Result<()> {
         let mut runtime = Runtime::new();
         runtime.block_on(|cx| {
-            let transport = stack_tcp_connect(cx, self.grpc_addr)?;
+            let mut transport = stack_tcp_connect(cx, self.grpc_addr)?;
+            transport.set_io_timeout(self.request_timeout);
             let http = h2::ClientConnection::new(transport, HttpConfig::default());
             let mut client =
                 RuntimeUnaryClient::new(http, kimojio_stack_grpc::ClientConfig::default());
@@ -424,7 +463,8 @@ impl TcpGateway {
     pub fn idle_grpc_request_times_out(&self) -> Result<()> {
         let mut runtime = Runtime::new();
         runtime.block_on(|cx| {
-            let transport = stack_tcp_connect(cx, self.grpc_addr)?;
+            let mut transport = stack_tcp_connect(cx, self.grpc_addr)?;
+            transport.set_io_timeout(self.request_timeout);
             let http = h2::ClientConnection::new(transport, HttpConfig::default());
             let mut client =
                 RuntimeUnaryClient::new(http, kimojio_stack_grpc::ClientConfig::default());
@@ -503,7 +543,8 @@ impl TcpGateway {
     {
         let mut runtime = Runtime::new();
         runtime.block_on(|cx| {
-            let transport = stack_tcp_connect(cx, self.grpc_addr)?;
+            let mut transport = stack_tcp_connect(cx, self.grpc_addr)?;
+            transport.set_io_timeout(self.request_timeout);
             let http = h2::ClientConnection::new(transport, HttpConfig::default());
             let mut client = StackfulGatewayClient::new(RuntimeUnaryClient::new(
                 http,
@@ -521,7 +562,11 @@ impl TcpGateway {
 
     fn admin_request(&self, path: &'static str) -> Result<String> {
         let mut runtime = Runtime::new();
-        runtime.block_on(|cx| http1_request(cx, stack_tcp_connect(cx, self.admin_addr)?, path))
+        runtime.block_on(|cx| {
+            let mut transport = stack_tcp_connect(cx, self.admin_addr)?;
+            transport.set_io_timeout(self.request_timeout);
+            http1_request(cx, transport, path)
+        })
     }
 }
 
@@ -1264,6 +1309,21 @@ fn address_family(addr: SocketAddr) -> AddressFamily {
     } else {
         AddressFamily::INET6
     }
+}
+
+fn status_code(status: Option<&proto::OperationStatus>) -> proto::ObjectStatusCode {
+    status
+        .and_then(|status| proto::ObjectStatusCode::try_from(status.code).ok())
+        .unwrap_or(proto::ObjectStatusCode::Internal)
+}
+
+fn get_status(chunks: &[proto::GetChunk]) -> proto::ObjectStatusCode {
+    chunks
+        .first()
+        .and_then(|chunk| chunk.status.as_ref())
+        .map_or(proto::ObjectStatusCode::Internal, |status| {
+            status_code(Some(status))
+        })
 }
 
 fn identity(namespace: &str, object: &str) -> proto::ObjectIdentity {

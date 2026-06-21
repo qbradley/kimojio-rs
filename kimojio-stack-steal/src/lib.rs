@@ -105,6 +105,7 @@ use std::thread::{self, JoinHandle as ThreadJoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker as CrossbeamWorker};
+use crossbeam_queue::SegQueue;
 pub use kimojio_stack::{
     AddressFamily, AtFlags, BusyPoll, EpollCtlOp, EpollEvent, EpollEventData, EpollEventFlags,
     FallocateFlags, FileAdvice, FutexWaitFlags, FutexWaitvFlags, IoCounters, IoFd, IoVec,
@@ -507,6 +508,16 @@ pub struct RuntimeMetrics {
     pub sfq_queue_polls: usize,
     /// Final SFQ reassignment epoch observed by the runtime.
     pub sfq_epoch: u64,
+    /// Number of worker-pool jobs that recorded enqueue-to-start wait time.
+    pub ready_wait_samples: usize,
+    /// Total enqueue-to-start wait time across sampled worker-pool jobs.
+    ///
+    /// This counter saturates at `usize::MAX` internally.
+    pub total_ready_wait_ns: u128,
+    /// Maximum enqueue-to-start wait time observed for one worker-pool job.
+    pub max_ready_wait_ns: u128,
+    /// Tenant associated with the maximum observed ready wait.
+    pub max_ready_wait_tenant: Option<TenantId>,
     /// Most recent owner worker observed for a completed worker-pool job.
     pub last_owner_worker: Option<WorkerId>,
     /// Most recent executing worker observed for a completed worker-pool job.
@@ -563,6 +574,10 @@ impl Default for RuntimeMetrics {
             max_sfq_partition_depth: 0,
             sfq_queue_polls: 0,
             sfq_epoch: 0,
+            ready_wait_samples: 0,
+            total_ready_wait_ns: 0,
+            max_ready_wait_ns: 0,
+            max_ready_wait_tenant: None,
             last_owner_worker: None,
             last_executing_worker: None,
             last_steal_victim: None,
@@ -4463,6 +4478,7 @@ struct QueuedJob {
     tenant: TenantId,
     job: Job,
     active_steal_scope: Option<Arc<StealScopeState>>,
+    queued_at: Instant,
     #[cfg(test)]
     sequence: usize,
 }
@@ -4479,6 +4495,7 @@ impl QueuedJob {
             tenant,
             job,
             active_steal_scope,
+            queued_at: Instant::now(),
             #[cfg(test)]
             sequence: 0,
         }
@@ -4491,6 +4508,7 @@ impl QueuedJob {
             tenant,
             job: Box::new(|_| {}),
             active_steal_scope: None,
+            queued_at: Instant::now(),
             sequence,
         }
     }
@@ -4662,7 +4680,7 @@ struct MultiRuntime {
     tenant_allocator: Arc<AtomicU64>,
     stealers: Vec<Stealer<QueuedJob>>,
     global: Injector<QueuedJob>,
-    sfq_queues: Vec<Mutex<VecDeque<QueuedJob>>>,
+    sfq_queues: Vec<SegQueue<QueuedJob>>,
     sfq_depths: Vec<AtomicUsize>,
     total_sfq_depth: AtomicUsize,
     sfq_decisions: AtomicU64,
@@ -4728,7 +4746,7 @@ impl MultiRuntime {
             stealers,
             global: Injector::new(),
             sfq_queues: (0..config.scheduler.ready_partitions.get())
-                .map(|_| Mutex::new(VecDeque::new()))
+                .map(|_| SegQueue::new())
                 .collect(),
             sfq_depths: (0..config.scheduler.ready_partitions.get())
                 .map(|_| AtomicUsize::new(0))
@@ -4870,10 +4888,7 @@ impl MultiRuntime {
             return Err(job);
         };
         self.metrics.record_sfq_partition_depth(depth);
-        self.sfq_queues[partition]
-            .lock()
-            .expect("SFQ ready queue mutex poisoned")
-            .push_back(job);
+        self.sfq_queues[partition].push(job);
         Ok(())
     }
 
@@ -4973,6 +4988,18 @@ impl MultiRuntime {
             let next = current
                 .checked_sub(count)
                 .expect("queue depth accounting underflow");
+            match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => return,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    fn saturating_fetch_add(counter: &AtomicUsize, value: usize) {
+        let mut current = counter.load(Ordering::Relaxed);
+        loop {
+            let next = current.saturating_add(value);
             match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
             {
                 Ok(_) => return,
@@ -5159,10 +5186,16 @@ impl MultiRuntime {
                             tenant,
                             job,
                             active_steal_scope,
+                            queued_at,
                             ..
                         } = ready.queued;
-                        self.metrics
-                            .record_execution(owner, worker, ready.stolen_from, tenant);
+                        self.metrics.record_execution(
+                            owner,
+                            worker,
+                            ready.stolen_from,
+                            tenant,
+                            queued_at.elapsed(),
+                        );
                         let runtime = Arc::clone(self);
                         scope.spawn(move |inner| {
                             let runtime_id = runtime.runtime_id;
@@ -5266,11 +5299,10 @@ impl MultiRuntime {
         for offset in 0..partitions {
             self.metrics.sfq_queue_polls.fetch_add(1, Ordering::Relaxed);
             let partition = (start + offset) % partitions;
-            let mut queue = self.sfq_queues[partition]
-                .lock()
-                .expect("SFQ ready queue mutex poisoned");
-            if let Some(job) = queue.pop_front() {
-                drop(queue);
+            if self.sfq_depths[partition].load(Ordering::Acquire) == 0 {
+                continue;
+            }
+            if let Some(job) = self.sfq_queues[partition].pop() {
                 self.release_sfq_partition(partition);
                 return Some(ReadyJob {
                     queued: job,
@@ -5599,6 +5631,11 @@ impl MultiRuntime {
     }
 
     fn metrics(&self) -> RuntimeMetrics {
+        let max_ready_wait = *self
+            .metrics
+            .max_ready_wait
+            .lock()
+            .expect("max ready-wait metric mutex poisoned");
         RuntimeMetrics {
             worker_count: self.config.workers.get(),
             steal_policy: self.config.steal_policy,
@@ -5619,6 +5656,11 @@ impl MultiRuntime {
                     self.sfq_decisions.load(Ordering::Relaxed) / interval.get() as u64
                 }
             },
+            ready_wait_samples: self.metrics.ready_wait_samples.load(Ordering::Relaxed),
+            total_ready_wait_ns: self.metrics.total_ready_wait_ns.load(Ordering::Relaxed) as u128,
+            max_ready_wait_ns: max_ready_wait.ns as u128,
+            max_ready_wait_tenant: (max_ready_wait.tenant != 0)
+                .then_some(TenantId(max_ready_wait.tenant)),
             last_owner_worker: self.metrics.load_worker(&self.metrics.last_owner_worker),
             last_executing_worker: self
                 .metrics
@@ -5650,11 +5692,20 @@ struct MultiMetrics {
     max_global_queue_depth: AtomicUsize,
     max_sfq_partition_depth: AtomicUsize,
     sfq_queue_polls: AtomicUsize,
+    ready_wait_samples: AtomicUsize,
+    total_ready_wait_ns: AtomicUsize,
+    max_ready_wait: Mutex<MaxReadyWait>,
     last_owner_worker: AtomicUsize,
     last_executing_worker: AtomicUsize,
     last_steal_victim: AtomicUsize,
     last_tenant: AtomicU64,
     worker_completed_tasks: Vec<AtomicUsize>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct MaxReadyWait {
+    ns: usize,
+    tenant: u64,
 }
 
 impl MultiMetrics {
@@ -5670,6 +5721,9 @@ impl MultiMetrics {
             max_global_queue_depth: AtomicUsize::new(0),
             max_sfq_partition_depth: AtomicUsize::new(0),
             sfq_queue_polls: AtomicUsize::new(0),
+            ready_wait_samples: AtomicUsize::new(0),
+            total_ready_wait_ns: AtomicUsize::new(0),
+            max_ready_wait: Mutex::new(MaxReadyWait::default()),
             last_owner_worker: AtomicUsize::new(NO_WORKER),
             last_executing_worker: AtomicUsize::new(NO_WORKER),
             last_steal_victim: AtomicUsize::new(NO_WORKER),
@@ -5706,6 +5760,7 @@ impl MultiMetrics {
         executing: WorkerId,
         stolen_from: Option<WorkerId>,
         tenant: TenantId,
+        ready_wait: Duration,
     ) {
         self.last_owner_worker
             .store(owner.index(), Ordering::Relaxed);
@@ -5716,6 +5771,19 @@ impl MultiMetrics {
                 .store(victim.index(), Ordering::Relaxed);
         }
         self.last_tenant.store(tenant.get(), Ordering::Relaxed);
+        let wait_ns = ready_wait.as_nanos().min(usize::MAX as u128) as usize;
+        self.ready_wait_samples.fetch_add(1, Ordering::Relaxed);
+        MultiRuntime::saturating_fetch_add(&self.total_ready_wait_ns, wait_ns);
+        let mut max_ready_wait = self
+            .max_ready_wait
+            .lock()
+            .expect("max ready-wait metric mutex poisoned");
+        if wait_ns > max_ready_wait.ns {
+            *max_ready_wait = MaxReadyWait {
+                ns: wait_ns,
+                tenant: tenant.get(),
+            };
+        }
     }
 
     fn record_completion(&self, worker: WorkerId) {

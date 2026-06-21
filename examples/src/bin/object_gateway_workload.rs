@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
 use anyhow::{Result, bail, ensure};
 use clap::{Parser, ValueEnum};
@@ -48,6 +48,8 @@ struct Args {
     target_backend_mode: String,
     #[arg(long, default_value = "kimojio-stack-opentelemetry-hermetic")]
     target_telemetry_sink_mode: String,
+    #[arg(long, default_value_t = 30_000)]
+    target_request_timeout_ms: u64,
 }
 
 fn main() -> Result<()> {
@@ -122,12 +124,12 @@ fn run_target(
         backend_mode: &args.target_backend_mode,
         telemetry_sink_mode: &args.target_telemetry_sink_mode,
     };
+    let target = TcpGateway::new(grpc_addr, admin_addr).with_request_timeout(
+        (args.target_request_timeout_ms != 0)
+            .then_some(Duration::from_millis(args.target_request_timeout_ms)),
+    );
     for profile in profiles {
-        summaries.push(run_tcp_profile(
-            info,
-            TcpGateway::new(grpc_addr, admin_addr),
-            *profile,
-        )?);
+        summaries.push(run_tcp_profile(info, target.clone(), *profile)?);
     }
     Ok(())
 }

@@ -27,11 +27,13 @@ use super::{
 };
 
 const MEASUREMENT_MODE: &str = "cold-start-per-operation";
+const STEADY_CONNECTION_MEASUREMENT_MODE: &str = "steady-connection";
 const TAIL_LATENCY_RELIABLE_SAMPLES: usize = 100;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkloadKind {
     SmallObject,
+    SteadySmallObject,
     StreamingLargeObject,
     Concurrent,
     TenantSkew,
@@ -54,6 +56,14 @@ pub const DEFAULT_WORKLOADS: &[WorkloadProfile] = &[
         label: "small-object",
         kind: WorkloadKind::SmallObject,
         iterations: 8,
+        max_object_bytes: 1024,
+        max_chunk_bytes: 256,
+        memory_budget_bytes: 1024,
+    },
+    WorkloadProfile {
+        label: "steady-small-object",
+        kind: WorkloadKind::SteadySmallObject,
+        iterations: 128,
         max_object_bytes: 1024,
         max_chunk_bytes: 256,
         memory_budget_bytes: 1024,
@@ -312,9 +322,19 @@ fn run_profile_for_target(
     let started = Instant::now();
     let mut recorder = WorkloadRecorder::default();
     let namespace = format!("wl-{}-{}", info.implementation, profile.label);
+    let measurement_mode = match (&target, profile.kind) {
+        (GatewayTarget::Tcp(_), WorkloadKind::SteadySmallObject) => {
+            STEADY_CONNECTION_MEASUREMENT_MODE
+        }
+        _ => MEASUREMENT_MODE,
+    };
     let fairness_ratio = match profile.kind {
         WorkloadKind::SmallObject => {
             run_small_object(&target, &namespace, profile, &mut recorder)?;
+            None
+        }
+        WorkloadKind::SteadySmallObject => {
+            run_steady_small_object(&target, &namespace, profile, &mut recorder)?;
             None
         }
         WorkloadKind::StreamingLargeObject => {
@@ -340,7 +360,13 @@ fn run_profile_for_target(
             None
         }
     };
-    Ok(recorder.finish(info.owned(), profile, started.elapsed(), fairness_ratio))
+    Ok(recorder.finish(
+        info.owned(),
+        profile,
+        started.elapsed(),
+        fairness_ratio,
+        measurement_mode,
+    ))
 }
 
 fn run_small_object(
@@ -362,6 +388,25 @@ fn run_small_object(
         );
     }
     Ok(())
+}
+
+fn run_steady_small_object(
+    target: &GatewayTarget,
+    namespace: &str,
+    profile: WorkloadProfile,
+    recorder: &mut WorkloadRecorder,
+) -> Result<()> {
+    if let GatewayTarget::Tcp(gateway) = target {
+        for (status, elapsed) in gateway.steady_small_object(
+            namespace,
+            profile.iterations,
+            profile.max_chunk_bytes as u32,
+        )? {
+            recorder.record_status(status, elapsed);
+        }
+        return Ok(());
+    }
+    run_small_object(target, namespace, profile, recorder)
 }
 
 fn run_streaming_large_object(
@@ -678,6 +723,7 @@ impl WorkloadRecorder {
         profile: WorkloadProfile,
         elapsed: Duration,
         fairness_ratio: Option<f64>,
+        measurement_mode: &str,
     ) -> WorkloadSummary {
         self.latencies.sort_unstable();
         let throughput_per_sec = if elapsed.is_zero() {
@@ -691,7 +737,7 @@ impl WorkloadRecorder {
             storage_client: info.storage_client,
             backend_mode: info.backend_mode,
             telemetry_sink_mode: info.telemetry_sink_mode,
-            measurement_mode: MEASUREMENT_MODE.to_owned(),
+            measurement_mode: measurement_mode.to_owned(),
             workload: profile.label.to_owned(),
             request_count: self.request_count,
             success_count: self.success_count,

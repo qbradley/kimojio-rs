@@ -47,6 +47,8 @@ fn sfq_scheduler_completes_stealable_work_and_records_metrics() {
     let metrics = runtime.metrics();
     assert_eq!(metrics.scheduler.mode, SchedulerMode::StochasticFair);
     assert_eq!(metrics.completed_tasks, 32);
+    assert_eq!(metrics.ready_wait_samples, 32);
+    assert!(metrics.total_ready_wait_ns >= metrics.max_ready_wait_ns);
     assert!(metrics.max_sfq_partition_depth != 0);
     assert!(metrics.sfq_queue_polls != 0);
     assert!(metrics.last_tenant.is_some());
