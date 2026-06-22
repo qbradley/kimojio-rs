@@ -15,7 +15,6 @@ description = "A thread-per-core Linux io_uring async runtime optimized for late
 async_fn_in_trait = "allow"
 
 [dependencies]
-foreign-types-shared.workspace = true
 futures.workspace = true
 impls.workspace = true
 intrusive-collections.workspace = true
@@ -57,7 +56,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dev-dependencies]
 criterion.workspace = true
-rcgen.workspace = true
 tempfile.workspace = true
 
 [[bench]]

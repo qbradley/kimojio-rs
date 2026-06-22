@@ -13,9 +13,8 @@ use crate::{
     AsyncLock, AsyncStreamRead, AsyncStreamWrite, CanceledError, Errno, OwnedFd, SplittableStream,
     operations, try_clone_owned_fd,
 };
-use foreign_types_shared::ForeignTypeRef;
 use futures::TryFutureExt;
-use kimojio_tls::TlsServer;
+use kimojio_tls::{ApplicationBioReadLease, ApplicationBioWriteLease, TlsServer, TlsServerShared};
 use std::borrow::Borrow;
 use std::io::IoSlice;
 use std::rc::Rc;
@@ -66,13 +65,65 @@ impl SocketPair for Rc<SharedSocketPair> {
 }
 
 pub struct TlsReadStream {
-    ssl: TlsServer,
+    ssl: TlsServerShared,
     socket: Rc<SharedSocketPair>,
 }
 
 pub struct TlsWriteStream {
-    ssl: TlsServer,
+    ssl: TlsServerShared,
     socket: Rc<SharedSocketPair>,
+}
+
+trait TlsIo {
+    fn read(&mut self, buffer: &mut [u8]) -> kimojio_tls::Response;
+    fn write(&mut self, buffer: &[u8]) -> kimojio_tls::Response;
+    fn shutdown(&mut self) -> kimojio_tls::Response;
+    fn write_lease(&self) -> Option<ApplicationBioWriteLease<'_>>;
+    fn read_lease(&self) -> Option<ApplicationBioReadLease<'_>>;
+}
+
+impl TlsIo for TlsServer {
+    fn read(&mut self, buffer: &mut [u8]) -> kimojio_tls::Response {
+        self.read(buffer)
+    }
+
+    fn write(&mut self, buffer: &[u8]) -> kimojio_tls::Response {
+        self.write(buffer)
+    }
+
+    fn shutdown(&mut self) -> kimojio_tls::Response {
+        self.shutdown()
+    }
+
+    fn write_lease(&self) -> Option<ApplicationBioWriteLease<'_>> {
+        self.write_lease()
+    }
+
+    fn read_lease(&self) -> Option<ApplicationBioReadLease<'_>> {
+        self.read_lease()
+    }
+}
+
+impl TlsIo for TlsServerShared {
+    fn read(&mut self, buffer: &mut [u8]) -> kimojio_tls::Response {
+        self.read(buffer)
+    }
+
+    fn write(&mut self, buffer: &[u8]) -> kimojio_tls::Response {
+        self.write(buffer)
+    }
+
+    fn shutdown(&mut self) -> kimojio_tls::Response {
+        self.shutdown()
+    }
+
+    fn write_lease(&self) -> Option<ApplicationBioWriteLease<'_>> {
+        self.write_lease()
+    }
+
+    fn read_lease(&self) -> Option<ApplicationBioReadLease<'_>> {
+        self.read_lease()
+    }
 }
 
 impl TlsStream {
@@ -126,10 +177,7 @@ impl TlsStream {
 
     /// Gets the SSL object reference.
     pub fn get_ssl(&self) -> &openssl::ssl::SslRef {
-        let raw_ssl = self.ssl.get_ssl_raw();
-        // Safety: The raw ptr in SslRef is valid for lifetime as self,
-        // and SslRef does not own the underlying SSL object.
-        unsafe { openssl::ssl::SslRef::from_ptr(raw_ssl as *mut _) }
+        self.ssl.get_ssl()
     }
 }
 
@@ -151,8 +199,7 @@ impl SplittableStream for TlsStream {
             })
         };
         let write_socket = read_socket.clone();
-        let read_ssl = self.ssl;
-        let write_ssl = read_ssl.clone();
+        let (read_ssl, write_ssl) = self.ssl.split();
         Ok((
             TlsReadStream {
                 ssl: read_ssl,
@@ -167,18 +214,18 @@ impl SplittableStream for TlsStream {
 }
 
 async fn try_read(
-    ssl: &mut TlsServer,
+    ssl: &mut impl TlsIo,
     socket: &impl SocketPair,
     deadline: Option<Instant>,
 ) -> Result<(), Errno> {
     let socket = socket.read_socket().await?;
     if let Some(socket) = socket.borrow() {
-        if let Some(buffer) = ssl.get_push_buffer() {
-            let amount = operations::read_with_deadline(socket, buffer, deadline).await?;
+        if let Some(mut lease) = ssl.write_lease() {
+            let amount = operations::read_with_deadline(socket, lease.as_mut(), deadline).await?;
             if amount == 0 {
                 return Err(Errno::from_raw_os_error(libc::EPIPE));
             }
-            ssl.use_push_buffer(amount);
+            lease.commit(amount);
         }
         Ok(())
     } else {
@@ -187,7 +234,7 @@ async fn try_read(
 }
 
 async fn try_write(
-    ssl: &mut TlsServer,
+    ssl: &mut impl TlsIo,
     socket: &impl SocketPair,
     deadline: Option<Instant>,
 ) -> Result<(), Errno> {
@@ -197,12 +244,12 @@ async fn try_write(
         // buffer by the length of the full buffer copied into the BIO rather than
         // the amount of data written to the socket here. Need to fully exhaust
         // the BIO here to keep the bookkeeping in sync
-        while let Some(buffer) = ssl.get_pull_buffer() {
-            let amount = operations::write_with_deadline(socket, buffer, deadline).await?;
+        while let Some(lease) = ssl.read_lease() {
+            let amount = operations::write_with_deadline(socket, lease.as_ref(), deadline).await?;
             if amount == 0 {
                 return Err(Errno::from_raw_os_error(libc::EPIPE));
             }
-            ssl.use_pull_buffer(amount);
+            lease.consume(amount);
         }
         Ok(())
     } else {
@@ -214,7 +261,7 @@ async fn try_write(
 // multiple write_internal calls to accumulate data for a single write
 // to the wire.
 async fn write_internal(
-    ssl: &mut TlsServer,
+    ssl: &mut impl TlsIo,
     socket: &impl SocketPair,
     mut buffer: &[u8],
     deadline: Option<Instant>,
@@ -259,7 +306,7 @@ async fn handle_tls_error(
 }
 
 async fn try_read_impl(
-    ssl: &mut TlsServer,
+    ssl: &mut impl TlsIo,
     socket: &impl SocketPair,
     buffer: &mut [u8],
     deadline: Option<Instant>,
@@ -276,7 +323,7 @@ async fn try_read_impl(
 }
 
 async fn read_impl(
-    ssl: &mut TlsServer,
+    ssl: &mut impl TlsIo,
     socket: &impl SocketPair,
     mut buffer: &mut [u8],
     deadline: Option<Instant>,
@@ -296,7 +343,7 @@ async fn read_impl(
 }
 
 async fn writev_impl(
-    ssl: &mut TlsServer,
+    ssl: &mut impl TlsIo,
     socket: &impl SocketPair,
     buffers: &mut [IoSlice<'_>],
     deadline: Option<Instant>,
@@ -309,7 +356,7 @@ async fn writev_impl(
 }
 
 async fn write_impl(
-    ssl: &mut TlsServer,
+    ssl: &mut impl TlsIo,
     socket: &impl SocketPair,
     buffer: &[u8],
     deadline: Option<Instant>,
@@ -319,7 +366,7 @@ async fn write_impl(
     try_write(ssl, socket, deadline).await
 }
 
-async fn shutdown_impl(ssl: &mut TlsServer, socket: &impl SocketPair) -> Result<(), Errno> {
+async fn shutdown_impl(ssl: &mut impl TlsIo, socket: &impl SocketPair) -> Result<(), Errno> {
     loop {
         match ssl.shutdown() {
             kimojio_tls::Response::Success(_) => return Ok(()),
