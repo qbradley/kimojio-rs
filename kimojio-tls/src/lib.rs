@@ -192,6 +192,14 @@ pub struct TlsServerContext {
 // ok, but not Sync)
 unsafe impl Send for TlsServerContext {}
 
+// SAFETY: `TlsServerContext` owns an initialized OpenSSL `SSL_CTX`. OpenSSL 1.1+
+// makes `SSL_CTX` reference-counting and object construction internally
+// synchronized after process initialization. The wrapper exposes only immutable
+// methods on shared references; per-connection mutable state is created as a
+// separate `SSL`/`TlsServer` handle by `TlsServerContext::create`. Callers must
+// finish mutating OpenSSL configuration before converting into this wrapper.
+unsafe impl Sync for TlsServerContext {}
+
 pub struct TlsServer {
     server: *mut RawTlsServer,
 }

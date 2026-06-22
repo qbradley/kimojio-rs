@@ -63,7 +63,10 @@
 //! private socket I/O through that adapter and poisons the stream, so callers
 //! should close rather than reuse a stream after an active timeout.
 //! `TlsContext::from_openssl` takes ownership of the OpenSSL context; do not keep
-//! using the original `SslContext` value after conversion.
+//! using the original `SslContext` value after conversion. Complete all OpenSSL
+//! context configuration before conversion; after conversion, `TlsContext` is
+//! immutable and shareable across stack-steal worker tasks for creating
+//! independent per-connection TLS streams.
 
 use std::{
     cell::{Cell, RefCell},
@@ -89,6 +92,12 @@ use rustix::{fd::OwnedFd, net::Shutdown};
 pub struct TlsContext {
     ssl_ctx: TlsServerContext,
 }
+
+// SAFETY: `TlsContext` is a transparent policy wrapper around
+// `kimojio_tls::TlsServerContext`. Shared access only creates independent
+// per-connection TLS handles from the immutable OpenSSL `SSL_CTX`; it does not
+// mutate connection state in the context itself.
+unsafe impl Sync for TlsContext {}
 
 impl TlsContext {
     /// Creates a stack TLS context from an OpenSSL crate context.
@@ -1402,7 +1411,7 @@ fn runtime_wait_error_as_errno(error: RuntimeWaitError) -> Errno {
 
 #[cfg(test)]
 mod tests {
-    use std::{mem::size_of, num::NonZeroUsize, time::Duration};
+    use std::{mem::size_of, num::NonZeroUsize, sync::Arc, time::Duration};
 
     use kimojio_stack::{Runtime, RuntimeWaitable, StackfulWaitContext, Waitable};
     use openssl::{
@@ -1589,6 +1598,71 @@ mod tests {
                 server.join(cx);
                 let echoed = client.join(cx);
                 assert_eq!(echoed, message);
+            });
+        });
+    }
+
+    #[test]
+    fn tls_context_can_be_shared_across_stealable_connection_tasks() {
+        let (server_ctx, client_ctx) = make_contexts();
+        let server_ctx = Arc::new(server_ctx);
+        let client_ctx = Arc::new(client_ctx);
+        let pairs = (0..4)
+            .map(|_| {
+                socketpair(
+                    AddressFamily::UNIX,
+                    SocketType::STREAM,
+                    SocketFlags::empty(),
+                    None,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let mut runtime =
+            kimojio_stack_steal::Runtime::with_config(kimojio_stack_steal::RuntimeConfig {
+                workers: NonZeroUsize::new(2).unwrap(),
+                ..kimojio_stack_steal::RuntimeConfig::default()
+            });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let mut handles = Vec::new();
+                for (index, (client_fd, server_fd)) in pairs.into_iter().enumerate() {
+                    let server_ctx = Arc::clone(&server_ctx);
+                    let message = format!("shared tls context message {index}").into_bytes();
+                    handles.push(scope.spawn_stealable(move |cx| {
+                        let mut tls = server_ctx
+                            .server_with_runtime(cx, TLS_BUFFER_SIZE, server_fd)
+                            .expect("server TLS handshake failed");
+                        let mut buf = vec![0_u8; message.len()];
+                        tls.read_exact_or_eof(cx, &mut buf)
+                            .expect("server TLS read failed");
+                        assert_eq!(buf, message);
+                        tls.write(cx, &buf).expect("server TLS write failed");
+                        tls.shutdown(cx).expect("server TLS shutdown failed");
+                        tls.close(cx).expect("server TLS close failed");
+                    }));
+
+                    let client_ctx = Arc::clone(&client_ctx);
+                    handles.push(scope.spawn_stealable(move |cx| {
+                        let message = format!("shared tls context message {index}").into_bytes();
+                        let mut tls = client_ctx
+                            .client_with_runtime(cx, TLS_BUFFER_SIZE, client_fd, "localhost")
+                            .expect("client TLS handshake failed");
+                        tls.write(cx, &message).expect("client TLS write failed");
+                        let mut echoed = vec![0_u8; message.len()];
+                        tls.read_exact_or_eof(cx, &mut echoed)
+                            .expect("client TLS read failed");
+                        assert_eq!(echoed, message);
+                        tls.shutdown(cx).expect("client TLS shutdown failed");
+                        tls.close(cx).expect("client TLS close failed");
+                    }));
+                }
+
+                for handle in handles {
+                    handle.join(cx);
+                }
             });
         });
     }

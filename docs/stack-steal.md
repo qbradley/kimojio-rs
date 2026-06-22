@@ -46,6 +46,9 @@ synchronously so the accept loop can stop accepting, close the just-accepted
 socket, or shed work instead of leaving a connected socket unread. The returned
 `JoinHandle` exposes `has_started()` and `wait_started(cx)` so a server can tell
 whether a connection job is only queued or has actually begun reading.
+`kimojio-stack-tls::TlsContext` is immutable/shareable after OpenSSL
+configuration is complete, so wrap it in `Arc<TlsContext>` and move clones into
+stealable connection tasks when TLS policy is shared across accepted sockets.
 
 The runtime context exposes the same direct io_uring operation surface as
 `kimojio-stack`, including filesystem, socket setup, send/recv, vectored I/O,
