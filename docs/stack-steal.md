@@ -40,6 +40,13 @@ let value = runtime.block_on(|cx| {
 assert_eq!(value, 42);
 ```
 
+For accept loops that move already-accepted sockets into worker-pool connection
+handlers, prefer `Scope::try_spawn_stealable`. It reports queue saturation
+synchronously so the accept loop can stop accepting, close the just-accepted
+socket, or shed work instead of leaving a connected socket unread. The returned
+`JoinHandle` exposes `has_started()` and `wait_started(cx)` so a server can tell
+whether a connection job is only queued or has actually begun reading.
+
 The runtime context exposes the same direct io_uring operation surface as
 `kimojio-stack`, including filesystem, socket setup, send/recv, vectored I/O,
 poll/epoll, splice/tee, futex, cancellation, async read/write, and registered

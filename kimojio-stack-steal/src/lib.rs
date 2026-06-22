@@ -66,6 +66,12 @@
 //! non-`Send` state and must remain on the owner worker. Use
 //! [`Scope::spawn_stealable`] for work that may execute on another worker; the
 //! closure and return value must be `Send + 'static`.
+//! Accept loops that move already-accepted sockets into stealable jobs should
+//! prefer [`Scope::try_spawn_stealable`] so queue saturation is reported
+//! synchronously. The returned [`JoinHandle`] can be queried with
+//! [`JoinHandle::has_started`] or waited with [`JoinHandle::wait_started`] to
+//! distinguish an admitted-but-not-yet-started connection task from protocol or
+//! socket read bugs.
 //!
 //! # Cost model
 //!
@@ -3132,8 +3138,47 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
         F: FnOnce(&RuntimeContext<'_>) -> T + Send + 'static,
         T: Send + 'static,
     {
+        match self.try_spawn_stealable_with_tenant(tenant, f) {
+            Ok(handle) => handle,
+            Err(error) => {
+                let join = Arc::new(StealJoinState::new());
+                let message = match error {
+                    SpawnError::ShuttingDown => {
+                        "stealable task rejected because runtime is shutting down"
+                    }
+                    SpawnError::QueueFull => {
+                        "stealable task rejected because runtime queue is full"
+                    }
+                };
+                join.complete(StealOutcome::Panicked(Box::new(message)));
+                JoinHandle {
+                    inner: JoinInner::Stealable(join, std::marker::PhantomData),
+                }
+            }
+        }
+    }
+
+    /// Attempts to spawn stealable work and reports queue saturation synchronously.
+    pub fn try_spawn_stealable<F, T>(&self, f: F) -> Result<JoinHandle<'scope, T>, SpawnError>
+    where
+        F: FnOnce(&RuntimeContext<'_>) -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        self.try_spawn_stealable_with_tenant(self.new_tenant_id(), f)
+    }
+
+    /// Attempts to spawn stealable work associated with `tenant`.
+    pub fn try_spawn_stealable_with_tenant<F, T>(
+        &self,
+        tenant: TenantId,
+        f: F,
+    ) -> Result<JoinHandle<'scope, T>, SpawnError>
+    where
+        F: FnOnce(&RuntimeContext<'_>) -> T + Send + 'static,
+        T: Send + 'static,
+    {
         let Some(runtime) = self.steal_runtime.clone() else {
-            return self.spawn_local_with_tenant(tenant, f);
+            return Ok(self.spawn_local_with_tenant(tenant, f));
         };
         let steal_scope = {
             let steal_scope = self.steal_scope.expect("stealable scope state missing");
@@ -3154,6 +3199,7 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
             owner,
             tenant,
             Box::new(move |cx| {
+                join_for_job.mark_started();
                 let result = panic::catch_unwind(AssertUnwindSafe(|| f(cx)));
                 match result {
                     Ok(value) => join_for_job.complete(StealOutcome::Value(value)),
@@ -3170,19 +3216,13 @@ impl<'scope, 'env: 'scope> Scope<'scope, 'env> {
         );
 
         if let Err(error) = submitted {
-            let message = match error {
-                SubmitError::ShuttingDown => {
-                    "stealable task rejected because runtime is shutting down"
-                }
-                SubmitError::QueueFull => "stealable task rejected because runtime queue is full",
-            };
-            join.complete(StealOutcome::Panicked(Box::new(message)));
             steal_scope.complete_one();
+            return Err(error.into());
         }
 
-        JoinHandle {
+        Ok(JoinHandle {
             inner: JoinInner::Stealable(join, std::marker::PhantomData),
-        }
+        })
     }
 
     /// Spawns local stackful work with a custom usable stack size.
@@ -3262,6 +3302,47 @@ enum JoinInner<'scope, T> {
 }
 
 impl<T> JoinHandle<'_, T> {
+    /// Returns whether this handle's work has started executing.
+    ///
+    /// Local work is admitted to the current stack scheduler synchronously and is
+    /// reported as started. Stealable work reports true only after a worker begins
+    /// running the submitted job. Accept loops can use this to distinguish
+    /// accepted-but-not-yet-serviced connections from protocol/socket bugs.
+    pub fn has_started(&self) -> bool {
+        match self {
+            Self {
+                inner: JoinInner::Local(_),
+            } => true,
+            Self {
+                inner: JoinInner::Stealable(inner, _),
+            } => inner.has_started(),
+        }
+    }
+
+    /// Waits until this handle's work starts executing.
+    pub fn wait_started(&self, cx: &RuntimeContext<'_>) {
+        match self {
+            Self {
+                inner: JoinInner::Local(_),
+            } => {}
+            Self {
+                inner: JoinInner::Stealable(inner, _),
+            } => loop {
+                if inner.has_started() {
+                    return;
+                }
+                if let Some(registration) = cx.stackful_wait_registration() {
+                    if inner.add_start_waiter(registration.waiter()) {
+                        cx.park_stackful();
+                    }
+                } else {
+                    inner.wait_started_blocking_for(Duration::from_millis(1));
+                    cx.yield_now();
+                }
+            },
+        }
+    }
+
     /// Returns the completed stackful coroutine result if it is ready.
     pub fn try_join(&self) -> Option<T> {
         match self {
@@ -4540,6 +4621,35 @@ impl PanicSources {
 enum SubmitError {
     ShuttingDown,
     QueueFull,
+}
+
+/// Recoverable error returned by fallible stealable spawn APIs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpawnError {
+    /// The worker pool is shutting down.
+    ShuttingDown,
+    /// The configured worker/global queue capacity is exhausted.
+    QueueFull,
+}
+
+impl fmt::Display for SpawnError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ShuttingDown => f.write_str("stealable task rejected: runtime is shutting down"),
+            Self::QueueFull => f.write_str("stealable task rejected: runtime queue is full"),
+        }
+    }
+}
+
+impl Error for SpawnError {}
+
+impl From<SubmitError> for SpawnError {
+    fn from(value: SubmitError) -> Self {
+        match value {
+            SubmitError::ShuttingDown => Self::ShuttingDown,
+            SubmitError::QueueFull => Self::QueueFull,
+        }
+    }
 }
 
 struct QueuedJob {
@@ -5987,6 +6097,7 @@ struct StealScopeInner {
 struct StealJoinState<T> {
     inner: Mutex<StealJoinInner<T>>,
     ready: Condvar,
+    started_ready: Condvar,
     taken: AtomicBool,
 }
 
@@ -5994,24 +6105,75 @@ impl<T> StealJoinState<T> {
     fn new() -> Self {
         Self {
             inner: Mutex::new(StealJoinInner {
+                started: false,
                 outcome: None,
+                start_waiters: StackfulWaiters::default(),
                 waiters: StackfulWaiters::default(),
             }),
             ready: Condvar::new(),
+            started_ready: Condvar::new(),
             taken: AtomicBool::new(false),
         }
     }
 
-    fn complete(&self, outcome: StealOutcome<T>) {
+    fn mark_started(&self) {
         let waiters = {
+            let mut inner = self.inner.lock().expect("steal join mutex poisoned");
+            if inner.started {
+                return;
+            }
+            inner.started = true;
+            std::mem::take(&mut inner.start_waiters)
+        };
+        waiters.wake_all();
+        self.started_ready.notify_all();
+    }
+
+    fn has_started(&self) -> bool {
+        self.inner
+            .lock()
+            .expect("steal join mutex poisoned")
+            .started
+    }
+
+    fn add_start_waiter(&self, waiter: StackfulWaiterHandle) -> bool {
+        let mut inner = self.inner.lock().expect("steal join mutex poisoned");
+        if inner.started {
+            false
+        } else {
+            inner.start_waiters.push(waiter);
+            true
+        }
+    }
+
+    fn wait_started_blocking_for(&self, duration: Duration) {
+        let inner = self.inner.lock().expect("steal join mutex poisoned");
+        if !inner.started {
+            let _guard = self
+                .started_ready
+                .wait_timeout(inner, duration)
+                .expect("steal join mutex poisoned");
+        }
+    }
+
+    fn complete(&self, outcome: StealOutcome<T>) {
+        let (start_waiters, completion_waiters) = {
             let mut inner = self.inner.lock().expect("steal join mutex poisoned");
             if inner.outcome.is_some() {
                 return;
             }
+            let start_waiters = if inner.started {
+                StackfulWaiters::default()
+            } else {
+                inner.started = true;
+                std::mem::take(&mut inner.start_waiters)
+            };
             inner.outcome = Some(outcome);
-            std::mem::take(&mut inner.waiters)
+            (start_waiters, std::mem::take(&mut inner.waiters))
         };
-        waiters.wake_all();
+        start_waiters.wake_all();
+        completion_waiters.wake_all();
+        self.started_ready.notify_all();
         self.ready.notify_all();
     }
 
@@ -6077,7 +6239,9 @@ impl<T: Send + 'static> StealPanicSource for StealJoinState<T> {
 }
 
 struct StealJoinInner<T> {
+    started: bool,
     outcome: Option<StealOutcome<T>>,
+    start_waiters: StackfulWaiters,
     waiters: StackfulWaiters,
 }
 
@@ -6985,7 +7149,7 @@ mod tests {
         OFlags, QueuedJob, RenameFlags, Ring, RingError, RingFd, RingInner, RingMode, Runtime,
         RuntimeConfig, RuntimeId, SchedulerConfig, SchedulerMode, SharedOpLifecycle, SharedOpRoute,
         SharedOpState, SharedOpTestResource, SharedOperation, SharedOperationKind, SharedRingCore,
-        SharedRingWake, StatxFlags, StealPolicy, SubmitError, TenantId, WorkerId,
+        SharedRingWake, SpawnError, StatxFlags, StealPolicy, SubmitError, TenantId, WorkerId,
     };
 
     struct WaitProbe<'cx, 'a> {
@@ -7632,6 +7796,55 @@ mod tests {
                 .max(diagnostics.max_local_queue_depth)
                 .max(diagnostics.max_sfq_partition_depth)
         );
+    }
+
+    #[test]
+    fn try_spawn_stealable_reports_queue_saturation_synchronously() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(2).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            max_worker_queue_len: 0,
+            max_global_queue_len: 1,
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let first = scope
+                    .try_spawn_stealable(|_| {
+                        std::thread::sleep(Duration::from_millis(50));
+                        1
+                    })
+                    .unwrap();
+                let rejected = scope.try_spawn_stealable(|_| ());
+                assert!(matches!(rejected, Err(SpawnError::QueueFull)));
+                assert_eq!(first.join(cx), 1);
+            });
+        });
+
+        assert_eq!(runtime.metrics().rejected_tasks, 1);
+    }
+
+    #[test]
+    fn stealable_handle_reports_start_observation() {
+        let mut runtime = Runtime::with_config(RuntimeConfig {
+            workers: NonZeroUsize::new(1).unwrap(),
+            steal_policy: StealPolicy::steal_one(),
+            max_global_queue_len: 8,
+            ..RuntimeConfig::default()
+        });
+
+        runtime.block_on(|cx| {
+            cx.scope(|scope| {
+                let handle = scope.spawn_stealable(|cx| {
+                    cx.yield_now();
+                    7
+                });
+                handle.wait_started(cx);
+                assert!(handle.has_started());
+                assert_eq!(handle.join(cx), 7);
+            });
+        });
     }
 
     #[test]
