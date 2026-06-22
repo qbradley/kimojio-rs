@@ -8807,8 +8807,17 @@ mod tests {
                 ring.shared_test_counters().unwrap().driver_submitted == 1
             });
             drop(read);
-            assert_eq!(drops.load(Ordering::Acquire), 0);
-            wait_until(cx, || drops.load(Ordering::Acquire) == 1);
+            if drops.load(Ordering::Acquire) == 0 {
+                assert_eq!(
+                    ring.shared_test_counters().unwrap().driver_retired,
+                    0,
+                    "buffer should be retained until the driver retires the canceled read"
+                );
+            }
+            wait_until(cx, || {
+                let counters = ring.shared_test_counters().unwrap();
+                drops.load(Ordering::Acquire) == 1 && counters.driver_retired == 1
+            });
         });
     }
 
@@ -8839,8 +8848,17 @@ mod tests {
                 ring.shared_test_counters().unwrap().driver_submitted == 1
             });
             write.cancel();
-            assert_eq!(drops.load(Ordering::Acquire), 0);
-            wait_until(cx, || drops.load(Ordering::Acquire) == 1);
+            if drops.load(Ordering::Acquire) == 0 {
+                assert_eq!(
+                    ring.shared_test_counters().unwrap().driver_retired,
+                    0,
+                    "buffer should be retained until the driver retires the canceled write"
+                );
+            }
+            wait_until(cx, || {
+                let counters = ring.shared_test_counters().unwrap();
+                drops.load(Ordering::Acquire) == 1 && counters.driver_retired == 1
+            });
         });
     }
 
