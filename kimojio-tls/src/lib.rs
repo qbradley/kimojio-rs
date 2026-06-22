@@ -194,7 +194,6 @@ fn c_int_len(len: usize) -> Result<c_int, TlsServerError> {
 
 struct ApplicationBio {
     bio: NonNull<ffi::BIO>,
-    #[cfg(debug_assertions)]
     in_write_callback: Cell<bool>,
     in_read_callback: Cell<bool>,
 }
@@ -203,7 +202,6 @@ impl ApplicationBio {
     fn new(bio: NonNull<ffi::BIO>) -> Self {
         Self {
             bio,
-            #[cfg(debug_assertions)]
             in_write_callback: Cell::new(false),
             in_read_callback: Cell::new(false),
         }
@@ -276,7 +274,6 @@ impl ApplicationBio {
                 "reentrant OpenSSL BIO read-buffer access"
             ),
             ApplicationBioDirection::Write => {
-                #[cfg(debug_assertions)]
                 assert!(
                     !self.in_write_callback.replace(true),
                     "reentrant OpenSSL BIO write-buffer access"
@@ -312,7 +309,6 @@ impl Drop for ApplicationBioCallbackGuard<'_> {
         match self.direction {
             ApplicationBioDirection::Read => self.bio.in_read_callback.set(false),
             ApplicationBioDirection::Write => {
-                #[cfg(debug_assertions)]
                 self.bio.in_write_callback.set(false);
             }
         }
@@ -663,7 +659,6 @@ mod tests {
         }
     }
 
-    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "reentrant OpenSSL BIO write-buffer access")]
     fn debug_rejects_reentrant_bio_access() {
