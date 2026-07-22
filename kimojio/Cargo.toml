@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
-readme.workspace = true
+readme = "README.md"
 description = "A thread-per-core Linux io_uring async runtime optimized for latency."
 
 [lints.rust]
@@ -16,8 +16,10 @@ async_fn_in_trait = "allow"
 
 [dependencies]
 futures.workspace = true
+http = { workspace = true, optional = true }
 impls.workspace = true
 intrusive-collections.workspace = true
+kimojio-fsm-http = { workspace = true, optional = true }
 kimojio-json.workspace = true
 kimojio-macros.workspace = true
 kimojio-tls = { workspace = true, optional = true }
@@ -35,6 +37,8 @@ zerocopy.workspace = true
 default = ["tls"]
 # Enable TLS/OpenSSL support
 tls = ["dep:openssl", "dep:kimojio-tls"]
+# Enable HTTP/1.1 and HTTP/2 client and server support
+http = ["dep:http", "dep:kimojio-fsm-http"]
 # Enable IoUring feature which optimizes the uring hot path at the tradeoff of
 # requiring the same thread to call io_uring_enter() exclusively, the ring
 # cannot be shared across threads. Requires Linux 6.0 or later.
@@ -43,11 +47,11 @@ setup_single_issuer = []
 # This requires using 128 byte SQEs and 32 byte CQEs that encapsulate the
 # underlying NVMe SQE and CQEs
 io_uring_cmd = []
-# Expose the parser-only entry point used by the separate fuzz workspace.
-fuzzing = []
 noencrypt = []
 enter_stats = []
 fault_injection = []
+# Expose the parser-only entry point used by the separate fuzz workspace.
+fuzzing = []
 # Enable virtual clock for deterministic test timing
 virtual-clock = []
 # Temporary feature for ssl2
@@ -59,7 +63,15 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dev-dependencies]
 criterion.workspace = true
+foreign-types-shared.workspace = true
+http-body-util = "=0.1.4"
+hyper = { version = "=1.11.0", features = ["http1", "http2", "server"] }
+hyper-util = { version = "=0.1.20", features = ["tokio"] }
+openssl-sys.workspace = true
+reqwest = { version = "=0.12.28", default-features = false, features = ["http2"] }
+rustix = { workspace = true, features = ["net"] }
 tempfile.workspace = true
+tokio = { version = "=1.53.1", features = ["macros", "net", "rt", "sync", "time"] }
 
 [[bench]]
 name = "iouring"

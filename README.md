@@ -52,6 +52,62 @@ async fn main() -> Result<(), Errno> {
 }
 ```
 
+## Optional HTTP client and server
+
+Enable the `http` feature to use the HTTP/1.1 and HTTP/2 APIs:
+
+```toml
+[dependencies]
+kimojio = { version = "0.17", features = ["http"] }
+```
+
+The client uses a request-builder API and standard `http` types:
+
+```rust,no_run
+use kimojio::http::{Client, Version};
+
+# async fn example() -> kimojio::http::Result<()> {
+let response = Client::new()
+    .get("http://127.0.0.1:8080/health")
+    .version(Version::HTTP_2)
+    .send()
+    .await?;
+assert!(response.status().is_success());
+# Ok(())
+# }
+```
+
+`Server` accepts both protocols and calls a runtime-local async handler. With
+the default `tls` feature, `TlsClientConfig` and `TlsServerConfig` add HTTPS and
+select HTTP/1.1 or HTTP/2 through ALPN. Received bodies are buffered by default;
+`Server::serve_streaming`, `Client::execute_streaming`, and
+`RequestBuilder::send_streaming` opt into pull-based inbound chunks.
+The server multiplexes concurrent HTTP/2 streams on a connection and serves
+sequential HTTP/1 requests over persistent connections. Each client instance
+pools idle HTTP/1 and HTTP/2 connections for sequential reuse; cloned clients
+share that pool. Client request bodies and server response bodies may instead
+use `Body::from_chunks` or `Body::from_stream` for incremental transmission;
+inbound streaming uses `Body::next_chunk`. Buffered bodies retain a configured
+total-size bound; streaming bodies are bounded in memory per chunk rather than
+by their total transfer size. Protocol upgrades are not supported.
+Host-name resolution is asynchronous and does not block the current runtime
+thread. See [`kimojio/README.md`](kimojio/README.md) for server use, limits,
+and configuration.
+
+HTTP/1.1 clients honor `Expect: 100-continue` and use a bounded wait before
+sending the body when an intermediary suppresses the interim response.
+Servers continue expected requests by default and can install a request-head
+hook to reject one before reading its body.
+
+Protocol implementation references include the
+[Stackful HTTP and gRPC Guide][stack-http-grpc-guide], the
+[HPACK and Header Representation Reference][hpack-header-representation], and
+the [FSM HTTP Server Guide][fsm-http-server-guide].
+
+[stack-http-grpc-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/stack-http-grpc.md
+[hpack-header-representation]: https://github.com/Azure/kimojio-rs/blob/main/docs/hpack-header-representation.md
+[fsm-http-server-guide]: https://github.com/Azure/kimojio-rs/blob/main/docs/fsm-http-server.md
+
 ## Contributing
 
 Please see [CONTRIBUTING.md](CONTRIBUTING.md) for more information on how to contribute to this project.

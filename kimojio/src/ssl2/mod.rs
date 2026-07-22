@@ -441,6 +441,54 @@ mod tests {
         rs_client(&cert_and_key_file_names_clone, client_fd).await;
     }
 
+    /// A client that cannot speak TLS 1.3 must still complete a handshake.
+    /// TLS 1.2 splits the server flight differently, so a pump that only
+    /// serviced the TLS 1.3 message pattern would stall here.
+    #[crate::test]
+    async fn test_rs_server_rs_client_over_tls12() {
+        let certs = crate::tlscontext::test::test_utils::setup_default_certs().unwrap();
+        let (client_fd, server_fd) = bipipe();
+        let server_certs = certs.clone();
+        spawn_task(async move {
+            let acceptor = create_openssl_acceptor(&server_certs);
+            let ssl = openssl::ssl::Ssl::new(acceptor.context()).unwrap();
+            let mut ssl_s = SslStream::new(ssl, OwnedFdStream::new(server_fd)).unwrap();
+            ssl_s.accept(None).await.unwrap();
+            let mut message = [0; 5];
+            ssl_s.try_read(&mut message, None).await.unwrap();
+            assert_eq!(&message, b"hello");
+            ssl_s.write(b"goodbye", None).await.unwrap();
+        });
+
+        let mut connector =
+            openssl::ssl::SslConnector::builder(openssl::ssl::SslMethod::tls()).unwrap();
+        connector
+            .set_ca_file(certs.ca_cert_name.to_string_lossy().as_ref())
+            .unwrap();
+        connector.set_verify(openssl::ssl::SslVerifyMode::NONE);
+        connector
+            .set_max_proto_version(Some(SslVersion::TLS1_2))
+            .unwrap();
+        let ssl = connector
+            .build()
+            .configure()
+            .unwrap()
+            .into_ssl(DEFAULT_SERVER_NAME)
+            .unwrap();
+        let mut ssl_s = SslStream::new(ssl, OwnedFdStream::new(client_fd)).unwrap();
+
+        let deadline = crate::clock_now() + std::time::Duration::from_secs(10);
+        ssl_s
+            .connect(Some(deadline))
+            .await
+            .expect("a TLS 1.2 handshake must complete");
+
+        ssl_s.write(b"hello", Some(deadline)).await.unwrap();
+        let mut buf = [0; 7];
+        assert_eq!(ssl_s.try_read(&mut buf, Some(deadline)).await.unwrap(), 7);
+        assert_eq!(&buf, b"goodbye");
+    }
+
     #[crate::test]
     async fn test_c_client_rs_server() {
         let cert_and_key_file_names =

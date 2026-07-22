@@ -627,6 +627,68 @@ pub(crate) mod test {
         .unwrap();
     }
 
+    /// A client that cannot negotiate TLS 1.3 must still complete a handshake.
+    /// TLS 1.2 ends with the server writing ChangeCipherSpec and Finished, so
+    /// reporting success without draining the BIO strands that flight and the
+    /// client waits for it forever. Every other test pins the server to TLS
+    /// 1.3, which never reaches that state.
+    #[crate::test]
+    async fn client_server_handshake_completes_over_tls12() {
+        let certs = setup_default_certs().unwrap();
+        let (client_fd, server_fd) = bipipe();
+
+        let mut acceptor = openssl::ssl::SslAcceptor::mozilla_intermediate_v5(
+            openssl::ssl::SslMethod::tls_server(),
+        )
+        .unwrap();
+        acceptor
+            .set_certificate_file(
+                certs.server_cert_name.to_string_lossy().as_ref(),
+                openssl::ssl::SslFiletype::PEM,
+            )
+            .unwrap();
+        acceptor
+            .set_private_key_file(
+                certs.server_key_name.to_string_lossy().as_ref(),
+                openssl::ssl::SslFiletype::PEM,
+            )
+            .unwrap();
+        acceptor
+            .set_max_proto_version(Some(openssl::ssl::SslVersion::TLS1_2))
+            .unwrap();
+        let server_context = super::TlsContext::from_openssl(acceptor.build().into_context());
+
+        spawn_task(async move {
+            let mut stream = server_context
+                .server(16384, server_fd, None)
+                .await
+                .expect("the server must complete a TLS 1.2 handshake");
+            let mut request = [0; 5];
+            stream.read(&mut request, None).await.unwrap();
+            assert_eq!(&request, b"hello");
+            stream.write(b"goodbye", None).await.unwrap();
+        });
+
+        let mut builder =
+            openssl::ssl::SslContextBuilder::new(openssl::ssl::SslMethod::tls_client()).unwrap();
+        builder
+            .set_max_proto_version(Some(openssl::ssl::SslVersion::TLS1_2))
+            .unwrap();
+        builder.set_verify(openssl::ssl::SslVerifyMode::NONE);
+        let client_context = super::TlsContext::from_openssl(builder.build());
+
+        let deadline = crate::clock_now() + Duration::from_secs(10);
+        let mut stream = client_context
+            .client(16384, client_fd, Some(deadline))
+            .await
+            .expect("a TLS 1.2 handshake must complete");
+
+        stream.write(b"hello", Some(deadline)).await.unwrap();
+        let mut response = [0; 7];
+        stream.read(&mut response, Some(deadline)).await.unwrap();
+        assert_eq!(&response, b"goodbye");
+    }
+
     #[crate::test]
     async fn use_incorrect_ca_cert_for_server_authentication() {
         let cert_and_key_file_names = setup_default_certs().unwrap();

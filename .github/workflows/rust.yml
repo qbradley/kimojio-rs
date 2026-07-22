@@ -40,6 +40,9 @@ jobs:
     - name: Run virtual-clock tests
       run: cargo +${{ matrix.rust }} test --all-targets --features virtual-clock
 
+    - name: Run HTTP tests
+      run: cargo +${{ matrix.rust }} test -p kimojio --all-targets --features http
+
     - name: Check docs
       run: cargo +${{ matrix.rust }} test --doc
 
@@ -48,7 +51,12 @@ jobs:
 
     - name: Check features
       run: cargo +${{ matrix.rust }} clippy --all-targets --all-features -- -D warnings
-    
+
+    - name: Check release packages
+      run: |
+        cargo +${{ matrix.rust }} package -p kimojio-fsm-http
+        cargo +${{ matrix.rust }} package -p kimojio --no-verify
+
   coverage:
     if: github.repository == 'Azure/kimojio-rs'
 

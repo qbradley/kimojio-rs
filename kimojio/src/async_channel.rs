@@ -244,6 +244,11 @@ impl<T> Sender<T> {
     pub fn try_send(&self, message: T) -> Result<(), SendError<T>> {
         self.inner.try_send(message)
     }
+
+    #[cfg(feature = "http")]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
 }
 
 impl<T> Clone for Sender<T> {
@@ -362,6 +367,11 @@ impl<T> AsyncChannel<T> {
                 Err(ChannelError::Closed)
             }
         })
+    }
+
+    #[cfg(feature = "http")]
+    fn is_empty(&self) -> bool {
+        self.item.use_mut(|item| item.value.is_none())
     }
 
     async fn recv(&self) -> Result<T, ChannelError> {

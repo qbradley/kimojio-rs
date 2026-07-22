@@ -8,6 +8,25 @@ use std::{future::Future, io::IoSlice, time::Instant};
 
 use crate::{Errno, OwnedFd, operations, try_clone_owned_fd};
 
+#[cfg(feature = "http")]
+pub(crate) fn recv_nonblocking(fd: &OwnedFd, buffer: &mut [u8]) -> Result<Option<usize>, Errno> {
+    loop {
+        match rustix::net::recv(fd, &mut *buffer, rustix::net::RecvFlags::DONTWAIT) {
+            Ok((amount, _)) => return Ok(Some(amount)),
+            Err(error) if error.raw_os_error() == libc::EINTR => continue,
+            Err(error)
+                if error.raw_os_error() == libc::EAGAIN
+                    || error.raw_os_error() == libc::EWOULDBLOCK =>
+            {
+                // POSIX permits EAGAIN and EWOULDBLOCK to differ, although Linux
+                // aliases them. Either means the nonblocking probe found no data.
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 /// A trait for asynchronous reading from a stream.
 ///
 /// Implementors provide methods to read data asynchronously with optional deadlines.
@@ -126,6 +145,51 @@ impl OwnedFdStream {
     pub fn into_inner(self) -> Option<OwnedFd> {
         self.fd
     }
+
+    #[cfg(feature = "http")]
+    pub(crate) fn try_clone_fd(&self) -> Result<OwnedFd, Errno> {
+        self.fd
+            .as_ref()
+            .ok_or(Errno::BADF)
+            .and_then(try_clone_owned_fd)
+    }
+
+    #[cfg(feature = "http")]
+    pub(crate) async fn write_with_progress(
+        &mut self,
+        buffer: &[u8],
+        deadline: Option<Instant>,
+        bytes_written: &mut bool,
+    ) -> Result<(), Errno> {
+        write_with_progress_impl(&mut self.fd, buffer, deadline, bytes_written).await
+    }
+
+    #[cfg(feature = "http")]
+    pub(crate) async fn writev_with_progress(
+        &mut self,
+        buffers: &mut [IoSlice<'_>],
+        deadline: Option<Instant>,
+        bytes_written: &mut bool,
+    ) -> Result<(), Errno> {
+        writev_with_progress_impl(&mut self.fd, buffers, deadline, bytes_written).await
+    }
+
+    #[cfg(feature = "http")]
+    pub(crate) fn try_read_for_reuse(&mut self, buffer: &mut [u8]) -> Result<Option<usize>, Errno> {
+        if self.read_state.read_available != 0 {
+            let read_used = self.read_state.read_used;
+            let amount = buffer.len().min(self.read_state.read_available);
+            buffer[..amount]
+                .copy_from_slice(&self.read_state.read_buffer[read_used..read_used + amount]);
+            self.read_state.read_used += amount;
+            self.read_state.read_available -= amount;
+            return Ok(Some(amount));
+        }
+        let Some(fd) = &self.fd else {
+            return Err(Errno::from_raw_os_error(crate::EPIPE));
+        };
+        recv_nonblocking(fd, buffer)
+    }
 }
 
 impl SplittableStream for OwnedFdStream {
@@ -232,8 +296,18 @@ impl AsyncStreamRead for OwnedFdStream {
 
 async fn write_impl(
     fd: &mut Option<OwnedFd>,
+    buffer: &[u8],
+    deadline: Option<Instant>,
+) -> Result<(), Errno> {
+    let mut bytes_written = false;
+    write_with_progress_impl(fd, buffer, deadline, &mut bytes_written).await
+}
+
+async fn write_with_progress_impl(
+    fd: &mut Option<OwnedFd>,
     mut buffer: &[u8],
     deadline: Option<Instant>,
+    bytes_written: &mut bool,
 ) -> Result<(), Errno> {
     if let Some(fd) = fd {
         while !buffer.is_empty() {
@@ -241,6 +315,7 @@ async fn write_impl(
             if amount == 0 {
                 return Err(Errno::from_raw_os_error(crate::EPIPE));
             }
+            *bytes_written = true;
             buffer = &buffer[amount..];
         }
         Ok(())
@@ -251,8 +326,18 @@ async fn write_impl(
 
 async fn writev_impl(
     fd: &mut Option<OwnedFd>,
+    buffers: &mut [IoSlice<'_>],
+    deadline: Option<Instant>,
+) -> Result<(), Errno> {
+    let mut bytes_written = false;
+    writev_with_progress_impl(fd, buffers, deadline, &mut bytes_written).await
+}
+
+async fn writev_with_progress_impl(
+    fd: &mut Option<OwnedFd>,
     mut buffers: &mut [IoSlice<'_>],
     deadline: Option<Instant>,
+    bytes_written: &mut bool,
 ) -> Result<(), Errno> {
     if let Some(fd) = fd {
         while !buffers.is_empty() {
@@ -260,6 +345,7 @@ async fn writev_impl(
             if result == 0 {
                 return Err(Errno::from_raw_os_error(crate::EPIPE));
             }
+            *bytes_written = true;
             IoSlice::advance_slices(&mut buffers, result);
         }
 

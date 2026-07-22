@@ -27,6 +27,8 @@ mod cancellation_token;
 pub mod configuration;
 mod errors;
 mod handle_table;
+#[cfg(feature = "http")]
+pub mod http;
 pub mod io_type;
 mod message_pipe;
 mod mut_in_place_cell;

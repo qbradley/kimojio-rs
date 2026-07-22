@@ -8,6 +8,8 @@
 //!
 //! TODO: implement client authentication
 //!
+#[cfg(feature = "http")]
+use crate::async_stream::recv_nonblocking;
 use crate::tlscontext::as_io_error;
 use crate::{
     AsyncLock, AsyncStreamRead, AsyncStreamWrite, CanceledError, Errno, OwnedFd, SplittableStream,
@@ -127,6 +129,14 @@ impl TlsIo for TlsServerShared {
 }
 
 impl TlsStream {
+    #[cfg(feature = "http")]
+    pub(crate) fn try_clone_fd(&self) -> Result<OwnedFd, Errno> {
+        self.socket
+            .as_ref()
+            .ok_or(Errno::BADF)
+            .and_then(try_clone_owned_fd)
+    }
+
     /// Creates an instance of TlsStream.
     pub fn new_tlsstream(ssl: TlsServer, socket: OwnedFd) -> TlsStream {
         let socket = Some(socket);
@@ -138,7 +148,13 @@ impl TlsStream {
         loop {
             let response = self.ssl.client_side_handshake();
             match response {
-                kimojio_tls::Response::Success(_) => return Ok(()),
+                kimojio_tls::Response::Success(_) => {
+                    // The last handshake flight can still be sitting in the
+                    // BIO when OpenSSL reports success, and the peer waits for
+                    // it before treating the handshake as complete.
+                    try_write(&mut self.ssl, &self.socket, deadline).await?;
+                    return Ok(());
+                }
                 kimojio_tls::Response::Fail(e) => {
                     handle_tls_error(&self.socket, "client_side_handshake", e).await?
                 }
@@ -158,7 +174,13 @@ impl TlsStream {
         loop {
             let response = self.ssl.server_side_handshake();
             match response {
-                kimojio_tls::Response::Success(_) => return Ok(()),
+                kimojio_tls::Response::Success(_) => {
+                    // TLS 1.2 ends with the server writing ChangeCipherSpec and
+                    // Finished, so returning without draining the BIO leaves the
+                    // client waiting for a flight that never arrives.
+                    try_write(&mut self.ssl, &self.socket, deadline).await?;
+                    return Ok(());
+                }
                 kimojio_tls::Response::Fail(e) => {
                     handle_tls_error(&self.socket, "server_side_handshake", e).await?
                 }
@@ -178,6 +200,81 @@ impl TlsStream {
     /// Gets the SSL object reference.
     pub fn get_ssl(&self) -> &openssl::ssl::SslRef {
         self.ssl.get_ssl()
+    }
+
+    #[cfg(feature = "http")]
+    pub(crate) async fn write_with_progress(
+        &mut self,
+        buffer: &[u8],
+        deadline: Option<Instant>,
+        bytes_written: &mut bool,
+    ) -> Result<(), Errno> {
+        if let Err(error) =
+            write_with_progress_impl(&mut self.ssl, &self.socket, buffer, deadline, bytes_written)
+                .await
+        {
+            close_impl(&mut self.socket, Err(error)).await?;
+            Err(error)
+        } else {
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "http")]
+    pub(crate) async fn writev_with_progress(
+        &mut self,
+        buffers: &mut [IoSlice<'_>],
+        deadline: Option<Instant>,
+        bytes_written: &mut bool,
+    ) -> Result<(), Errno> {
+        if let Err(error) = writev_with_progress_impl(
+            &mut self.ssl,
+            &self.socket,
+            buffers,
+            deadline,
+            bytes_written,
+        )
+        .await
+        {
+            close_impl(&mut self.socket, Err(error)).await?;
+            Err(error)
+        } else {
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "http")]
+    pub(crate) async fn try_read_for_reuse(
+        &mut self,
+        buffer: &mut [u8],
+    ) -> Result<Option<usize>, Errno> {
+        loop {
+            let response = self.ssl.read(buffer);
+            // Post-handshake processing can produce TLS protocol output, such as
+            // a KeyUpdate response. It must reach the peer before reuse.
+            try_write(&mut self.ssl, &self.socket, None).await?;
+            match response {
+                kimojio_tls::Response::Success(amount) => return Ok(Some(amount)),
+                kimojio_tls::Response::WantRead => {
+                    let Some(socket) = &self.socket else {
+                        return Err(Errno::from_raw_os_error(libc::EPIPE));
+                    };
+                    let Some(mut lease) = self.ssl.write_lease() else {
+                        return Err(Errno::from_raw_os_error(libc::ENOBUFS));
+                    };
+                    match recv_nonblocking(socket, lease.as_mut())? {
+                        Some(0) => return Ok(Some(0)),
+                        Some(amount) => {
+                            lease.commit(amount);
+                        }
+                        None => return Ok(None),
+                    }
+                }
+                kimojio_tls::Response::WantWrite => {}
+                kimojio_tls::Response::Fail(error) => return Err(as_io_error(error)),
+                kimojio_tls::Response::Eof => return Ok(Some(0)),
+            }
+        }
     }
 }
 
@@ -238,17 +335,27 @@ async fn try_write(
     socket: &impl SocketPair,
     deadline: Option<Instant>,
 ) -> Result<(), Errno> {
+    let mut bytes_written = false;
+    try_write_with_progress(ssl, socket, deadline, &mut bytes_written).await
+}
+
+async fn try_write_with_progress(
+    ssl: &mut impl TlsIo,
+    socket: &impl SocketPair,
+    deadline: Option<Instant>,
+    bytes_written: &mut bool,
+) -> Result<(), Errno> {
     let socket = socket.write_socket().await?;
     if let Some(socket) = socket.borrow() {
-        // Keep writing until the pull buffer is exhausted. write_internal() advances
-        // buffer by the length of the full buffer copied into the BIO rather than
-        // the amount of data written to the socket here. Need to fully exhaust
-        // the BIO here to keep the bookkeeping in sync
+        // Keep writing until the pull buffer is exhausted. The input advances by
+        // the plaintext copied into the BIO, not by the amount written here, so
+        // the BIO must be fully drained to keep the bookkeeping in sync.
         while let Some(lease) = ssl.read_lease() {
             let amount = operations::write_with_deadline(socket, lease.as_ref(), deadline).await?;
             if amount == 0 {
                 return Err(Errno::from_raw_os_error(libc::EPIPE));
             }
+            *bytes_written = true;
             lease.consume(amount);
         }
         Ok(())
@@ -257,14 +364,14 @@ async fn try_write(
     }
 }
 
-// write_internal does not flush the encrypted buffer.  This allows
-// multiple write_internal calls to accumulate data for a single write
-// to the wire.
-async fn write_internal(
+// This does not flush the encrypted buffer, allowing multiple calls to
+// accumulate data for a single write to the wire.
+async fn write_internal_with_progress(
     ssl: &mut impl TlsIo,
     socket: &impl SocketPair,
     mut buffer: &[u8],
     deadline: Option<Instant>,
+    bytes_written: &mut bool,
 ) -> Result<(), Errno> {
     while !buffer.is_empty() {
         match ssl.write(buffer) {
@@ -273,7 +380,9 @@ async fn write_internal(
             }
             kimojio_tls::Response::Fail(e) => handle_tls_error(socket, "write_internal", e).await?,
             kimojio_tls::Response::WantRead => try_read(ssl, socket, deadline).await?,
-            kimojio_tls::Response::WantWrite => try_write(ssl, socket, deadline).await?,
+            kimojio_tls::Response::WantWrite => {
+                try_write_with_progress(ssl, socket, deadline, bytes_written).await?
+            }
             kimojio_tls::Response::Eof => return Err(Errno::from_raw_os_error(libc::EPIPE)),
         }
     }
@@ -348,11 +457,22 @@ async fn writev_impl(
     buffers: &mut [IoSlice<'_>],
     deadline: Option<Instant>,
 ) -> Result<(), Errno> {
+    let mut bytes_written = false;
+    writev_with_progress_impl(ssl, socket, buffers, deadline, &mut bytes_written).await
+}
+
+async fn writev_with_progress_impl(
+    ssl: &mut impl TlsIo,
+    socket: &impl SocketPair,
+    buffers: &mut [IoSlice<'_>],
+    deadline: Option<Instant>,
+    bytes_written: &mut bool,
+) -> Result<(), Errno> {
     for buffer in buffers {
-        write_internal(ssl, socket, buffer, deadline).await?;
+        write_internal_with_progress(ssl, socket, buffer, deadline, bytes_written).await?;
     }
     // flush
-    try_write(ssl, socket, deadline).await
+    try_write_with_progress(ssl, socket, deadline, bytes_written).await
 }
 
 async fn write_impl(
@@ -361,9 +481,20 @@ async fn write_impl(
     buffer: &[u8],
     deadline: Option<Instant>,
 ) -> Result<(), Errno> {
-    write_internal(ssl, socket, buffer, deadline).await?;
+    let mut bytes_written = false;
+    write_with_progress_impl(ssl, socket, buffer, deadline, &mut bytes_written).await
+}
+
+async fn write_with_progress_impl(
+    ssl: &mut impl TlsIo,
+    socket: &impl SocketPair,
+    buffer: &[u8],
+    deadline: Option<Instant>,
+    bytes_written: &mut bool,
+) -> Result<(), Errno> {
+    write_internal_with_progress(ssl, socket, buffer, deadline, bytes_written).await?;
     // flush
-    try_write(ssl, socket, deadline).await
+    try_write_with_progress(ssl, socket, deadline, bytes_written).await
 }
 
 async fn shutdown_impl(ssl: &mut impl TlsIo, socket: &impl SocketPair) -> Result<(), Errno> {

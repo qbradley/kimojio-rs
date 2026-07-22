@@ -346,6 +346,27 @@ impl<'a, T: Unpin, C: MakeResult<T>> Drop for RingFuture<'a, T, C> {
                     task_state = submit_and_complete_io(task_state, false, iopoll);
                 }
             }
+
+            // A cancelation races the kernel, so the operation may still have
+            // succeeded. Materialize that result and drop it, otherwise
+            // descriptor-producing operations such as accept and open leak the
+            // descriptor the kernel already created. Replacing the stored
+            // result keeps a later reap from releasing it a second time.
+            completion.state.use_mut(|state| {
+                if let CompletionState::Completed {
+                    result,
+                    #[cfg(feature = "io_uring_cmd")]
+                    big_cqe,
+                } = state
+                    && let Ok(value) = *result
+                {
+                    #[cfg(not(feature = "io_uring_cmd"))]
+                    let big_cqe = &[0u64; 2];
+
+                    drop(C::make_success(value, big_cqe));
+                    *result = Err(Errno::CANCELED);
+                }
+            });
         }
     }
 }
@@ -401,6 +422,48 @@ impl MakeResult<[u64; 2]> for ResultToCqe {
 mod test {
     use crate::{AsyncEvent, Errno, OwnedFd, operations};
     use std::rc::Rc;
+
+    /// Dropping an accept whose completion already arrived must not strand the
+    /// descriptor the kernel created for it. The peer is the observer here: a
+    /// stranded descriptor leaves the connection open forever, while a released
+    /// one closes it.
+    #[crate::test]
+    async fn dropping_a_completed_accept_releases_the_socket() {
+        use crate::socket_helpers::{create_client_socket, create_server_socket};
+        use futures::{FutureExt, pin_mut, poll};
+        use rustix::net::RecvFlags;
+        use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
+        use std::time::Duration;
+
+        let listener = create_server_socket(9107).await.unwrap();
+        let address = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 9107, 0, 0));
+        let client = create_client_socket(&address).await.unwrap();
+
+        {
+            let accept = operations::accept(&listener).fuse();
+            pin_mut!(accept);
+
+            // Submit the accept, then let the kernel satisfy it before the
+            // future is dropped without ever being awaited to completion.
+            let _ = poll!(accept.as_mut());
+            operations::sleep(Duration::from_millis(50)).await.unwrap();
+        }
+
+        let mut buffer = [0u8; 1];
+        let observed = operations::recv(
+            &client,
+            &mut buffer,
+            RecvFlags::empty(),
+            Some(Duration::from_secs(5)),
+        )
+        .await;
+
+        assert_eq!(
+            observed,
+            Ok(0),
+            "a dropped accept must close the accepted socket instead of stranding it"
+        );
+    }
 
     #[crate::test]
     async fn select_test() {

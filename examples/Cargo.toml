@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [features]
+http = ["kimojio/http"]
 tls = ["kimojio/tls", "dep:openssl"]
 virtual-clock = ["kimojio/virtual-clock"]
 
@@ -13,6 +14,7 @@ anyhow.workspace = true
 clap.workspace = true
 futures.workspace = true
 kimojio.workspace = true
+libc.workspace = true
 openssl = { workspace = true, optional = true }
 rustix.workspace = true
 
@@ -21,9 +23,19 @@ name = "copyfile"
 path = "src/bin/copyfile.rs"
 
 [[bin]]
+name = "h2spec-server"
+path = "src/bin/h2spec_server.rs"
+required-features = ["http", "tls"]
+
+[[bin]]
 name = "retry-backoff"
 path = "src/bin/retry_backoff.rs"
 required-features = ["virtual-clock"]
+
+[[bin]]
+name = "static-file-server"
+path = "src/bin/static_file_server.rs"
+required-features = ["http", "tls"]
 
 [[bin]]
 name = "tls-echo-server"
