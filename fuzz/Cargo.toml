@@ -20,6 +20,9 @@ path = "../kimojio"
 default-features = false
 features = ["fuzzing"]
 
+[dependencies.kimojio-fsm-http]
+path = "../kimojio-fsm-http"
+
 [dependencies.kimojio-json]
 path = "../kimojio-json"
 
@@ -36,6 +39,41 @@ bench = false
 [[bin]]
 name = "varlink_reply"
 path = "fuzz_targets/varlink_reply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hpack_decode"
+path = "fuzz_targets/hpack_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hpack_round_trip"
+path = "fuzz_targets/hpack_round_trip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "h2_server_accept"
+path = "fuzz_targets/h2_server_accept.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http1_connection"
+path = "fuzz_targets/http1_connection.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http1_chunked"
+path = "fuzz_targets/http1_chunked.rs"
 test = false
 doc = false
 bench = false

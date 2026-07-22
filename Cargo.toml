@@ -2,6 +2,7 @@
 
 members = [
     "kimojio",
+    "kimojio-fsm-http",
     "kimojio-json",
     "kimojio-macros",
     "kimojio-tls",
@@ -14,7 +15,6 @@ resolver = "3"
 [workspace.package]
 version = "0.17.0"
 edition = "2024"
-rust-version = "1.90"
 license = "MIT"
 homepage = "https://github.com/Azure/kimojio-rs"
 repository = "https://github.com/Azure/kimojio-rs"
@@ -24,9 +24,13 @@ readme = "README.md"
 criterion = { version = "0.8", default-features = false }
 foreign-types-shared = "0.1"
 futures = "0.3"
+hpack = "0.3"
+http = "1"
+httparse = "1"
 impls = "1"
 intrusive-collections = "0.10"
 kimojio = { path = "kimojio", version = "0.17.0" }
+kimojio-fsm-http = { path = "kimojio-fsm-http", version = "0.17.0-alpha.1", default-features = false }
 kimojio-json = { path = "kimojio-json", version = "0.17.0" }
 kimojio-macros = { path = "kimojio-macros", version = "0.17.0" }
 kimojio-tls = { path = "kimojio-tls", version = "0.17.0" }
@@ -49,6 +53,7 @@ rustix = { version = "1", features = [
 ] }
 rustix-uring = { version = "0.6" }
 scopeguard = "1"
+sha2 = "0.10"
 static_assertions = "1"
 tempfile = "3"
 uuid = { version = "1", features = ["v4"] }
