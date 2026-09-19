@@ -1,0 +1,12 @@
+[package]
+name = "http1-static"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+kimojio-fsm-http1 = { path = "../../kimojio-fsm-http1" }
+rustix = { workspace = true, features = ["net"] }
+rustix-uring.workspace = true
