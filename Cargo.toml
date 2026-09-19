@@ -4,6 +4,7 @@ members = [
     "kimojio",
     "kimojio-json",
     "kimojio-fsm-http1",
+    "kimojio-http1",
     "kimojio-macros",
     "kimojio-tls",
     "perf",
@@ -27,6 +28,7 @@ foreign-types-shared = "0.1"
 futures = "0.3"
 httparse = "1.10"
 kimojio-fsm-http1 = { path = "kimojio-fsm-http1", version = "0.17.0" }
+kimojio-http1 = { path = "kimojio-http1", version = "0.17.0" }
 impls = "1"
 intrusive-collections = "0.10"
 kimojio = { path = "kimojio", version = "0.17.0" }
