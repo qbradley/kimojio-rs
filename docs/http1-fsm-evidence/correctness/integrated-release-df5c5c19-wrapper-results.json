@@ -1,0 +1,548 @@
+{
+  "command": [
+    "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-server-df5c5c19-release",
+    "--bind",
+    "127.0.0.1:0",
+    "--connections",
+    "32"
+  ],
+  "results": [
+    {
+      "case": "get",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "R0VUIC8gSFRUUC8xLjENCkhvc3Q6IGxvY2FsaG9zdA0KQ29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMjAwIE9LDQpjb250ZW50LWxlbmd0aDogMjUNCmNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "aGVsbG8gZnJvbSBraW1vamlvLWh0dHAxCg==",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.00177
+    },
+    {
+      "case": "head",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "SEVBRCAvIEhUVFAvMS4xDQpIb3N0OiBsb2NhbGhvc3QNCkNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMjAwIE9LDQpjb250ZW50LWxlbmd0aDogMjUNCmNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.000224
+    },
+    {
+      "case": "keepalive",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "R0VUIC9ieXRlcy8xNyBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQoNCg==",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMjAwIE9LDQpjb250ZW50LWxlbmd0aDogMTcNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "eHh4eHh4eHh4eHh4eHh4eHg=",
+          "eof": false
+        },
+        {
+          "event": "send-intent",
+          "base64": "R0VUIC9ieXRlcy8wIEhUVFAvMS4xDQpIb3N0OiBsb2NhbGhvc3QNCkNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMjAwIE9LDQpjb250ZW50LWxlbmd0aDogMA0KY29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.000272
+    },
+    {
+      "case": "pipeline",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "R0VUIC9ieXRlcy8xNyBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQoNCkdFVCAvYnl0ZXMvMCBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQpDb25uZWN0aW9uOiBjbG9zZQ0KDQo=",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMjAwIE9LDQpjb250ZW50LWxlbmd0aDogMTcNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "eHh4eHh4eHh4eHh4eHh4eHg=",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMjAwIE9LDQpjb250ZW50LWxlbmd0aDogMA0KY29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.000199
+    },
+    {
+      "case": "trailers",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "R0VUIC90cmFpbGVycyBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQpDb25uZWN0aW9uOiBjbG9zZQ0KDQo=",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMjAwIE9LDQp0cmFpbGVyOiB4LWZpbmlzaGVkDQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KY29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "Ng0KZmlyc3QKDQo3DQpzZWNvbmQKDQo=",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "MA0KeC1maW5pc2hlZDogeWVzDQoNCg==",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.000289
+    },
+    {
+      "case": "echo-length",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "UE9TVCAvZWNobyBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQpDb25uZWN0aW9uOiBjbG9zZQ0KQ29udGVudC1MZW5ndGg6IDYNCg0Kb25ldHdv",
+          "chunk_size": 1,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMjAwIE9LDQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KY29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "NA0Kb25ldA0KMg0Kd28NCg==",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "MA0KDQo=",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.000715
+    },
+    {
+      "case": "echo-chunked",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "UE9TVCAvZWNobyBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQpDb25uZWN0aW9uOiBjbG9zZQ0KVHJhbnNmZXItRW5jb2Rpbmc6IGNodW5rZWQNCg0KMztwYXJ0PW9uZQ0Kb25lDQozDQp0d28NCjANCg0K",
+          "chunk_size": 1,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMjAwIE9LDQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KY29ubmVjdGlvbjogY2xvc2UNCg0KMQ0Kbw0KMg0KbmUNCjINCnR3DQoxDQpvDQo=",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "MA0KDQo=",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.000813
+    },
+    {
+      "case": "echo-chunked-trailers",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "UE9TVCAvZWNobyBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQpDb25uZWN0aW9uOiBjbG9zZQ0KVHJhbnNmZXItRW5jb2Rpbmc6IGNodW5rZWQNClRyYWlsZXI6IFgtUHJvYmUNCg0KMztwYXJ0PW9uZQ0Kb25lDQozDQp0d28NCjANClgtUHJvYmU6IGRvbmUNCg0K",
+          "chunk_size": 1,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMjAwIE9LDQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KY29ubmVjdGlvbjogY2xvc2UNCg0KMg0Kb24NCjENCmUNCjENCnQNCjINCndvDQo=",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "MA0KeC1wcm9iZTogZG9uZQ0KDQo=",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.001021
+    },
+    {
+      "case": "echo-continue",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "UE9TVCAvZWNobyBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQpDb25uZWN0aW9uOiBjbG9zZQ0KQ29udGVudC1MZW5ndGg6IDYNCkV4cGVjdDogMTAwLWNvbnRpbnVlDQoNCg==",
+          "chunk_size": 1,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMTAwIENvbnRpbnVlDQoNCkhUVFAvMS4xIDIwMCBPSw0KdHJhbnNmZXItZW5jb2Rpbmc6IGNodW5rZWQNCmNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+          "eof": false
+        },
+        {
+          "event": "send-intent",
+          "base64": "b25ldHdv",
+          "chunk_size": 1,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "Mg0Kb24NCjMNCmV0dw0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "MQ0Kbw0KMA0KDQo=",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.000855
+    },
+    {
+      "case": "early-expect",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "UE9TVCAvZWFybHkgSFRUUC8xLjENCkhvc3Q6IGxvY2FsaG9zdA0KQ29ubmVjdGlvbjogY2xvc2UNCkNvbnRlbnQtTGVuZ3RoOiAxMDQ4NTc2DQpFeHBlY3Q6IDEwMC1jb250aW51ZQ0KDQo=",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgNDEzIFBheWxvYWQgVG9vIExhcmdlDQpjb250ZW50LWxlbmd0aDogMA0KY29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.000173
+    },
+    {
+      "case": "early-no-expect",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "UE9TVCAvZWFybHkgSFRUUC8xLjENCkhvc3Q6IGxvY2FsaG9zdA0KQ29ubmVjdGlvbjogY2xvc2UNCkNvbnRlbnQtTGVuZ3RoOiAxMDQ4NTc2DQoNCg==",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgNDEzIFBheWxvYWQgVG9vIExhcmdlDQpjb250ZW50LWxlbmd0aDogMA0KY29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.000163
+    },
+    {
+      "case": "missing-host",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "R0VUIC8gSFRUUC8xLjENCg0KR0VUIC9ieXRlcy8wIEhUVFAvMS4xDQpIb3N0OiBsb2NhbGhvc3QNCkNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgNDAwIEJhZCBSZXF1ZXN0DQpjb250ZW50LWxlbmd0aDogMA0KY29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.000192
+    },
+    {
+      "case": "negative-length",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "UE9TVCAvZWNobyBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQpDb250ZW50LUxlbmd0aDogLTENCg0KR0VUIC9ieXRlcy8wIEhUVFAvMS4xDQpIb3N0OiBsb2NhbGhvc3QNCkNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgNDAwIEJhZCBSZXF1ZXN0DQpjb250ZW50LWxlbmd0aDogMA0KY29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.000176
+    },
+    {
+      "case": "te-cl",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "UE9TVCAvZWNobyBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KQ29udGVudC1MZW5ndGg6IDUNCg0KMA0KDQpHRVQgL2J5dGVzLzAgSFRUUC8xLjENCkhvc3Q6IGxvY2FsaG9zdA0KQ29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgNDAwIEJhZCBSZXF1ZXN0DQpjb250ZW50LWxlbmd0aDogMA0KY29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.00017
+    },
+    {
+      "case": "bare-lf-prefix",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "R0VUIC9maXh0dXJlLmJpbiBIVFRQLzEuMQo=",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgNDAwIEJhZCBSZXF1ZXN0DQpjb250ZW50LWxlbmd0aDogMA0KY29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.00021
+    },
+    {
+      "case": "bare-cr-prefix",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "R0VUIC9maXh0dXJlLmJpbiBIVFRQLzEuMQ1Y",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgNDAwIEJhZCBSZXF1ZXN0DQpjb250ZW50LWxlbmd0aDogMA0KY29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.000173
+    },
+    {
+      "case": "http10-close",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "R0VUIC8gSFRUUC8xLjANCkhvc3Q6IGxvY2FsaG9zdA0KDQo=",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjAgMjAwIE9LDQpjb250ZW50LWxlbmd0aDogMjUNCmNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "aGVsbG8gZnJvbSBraW1vamlvLWh0dHAxCg==",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.000174
+    },
+    {
+      "case": "unsupported-expect",
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "UE9TVCAvZWNobyBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQpFeHBlY3Q6IHVuc3VwcG9ydGVkLXRva2VuDQpDb250ZW50LUxlbmd0aDogNg0KQ29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgNDE3IEV4cGVjdGF0aW9uIEZhaWxlZA0KY29udGVudC1sZW5ndGg6IDANCmNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ],
+      "seconds": 0.000168
+    },
+    {
+      "case": "go-upload-length",
+      "stdout": "{\"index\":0,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n{\"index\":1,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n",
+      "stderr": "",
+      "passed": true
+    },
+    {
+      "case": "go-upload-chunked",
+      "stdout": "{\"index\":0,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n{\"index\":1,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n",
+      "stderr": "",
+      "passed": true
+    }
+  ],
+  "matrix": "fixture-application-boundary-v3",
+  "peer_log": "stdout: LISTEN 127.0.0.1:45467\n\nstderr: connection 12: Protocol(Protocol)\nconnection 13: Protocol(Protocol)\nconnection 14: Protocol(Protocol)\nconnection 15: Protocol(Protocol)\nconnection 16: Protocol(Protocol)\nconnection 18: Protocol(ExpectationFailed)\n",
+  "publication": {
+    "integration_commit": "df5c5c193639f4305650c8cb2870ba67eda60e71",
+    "jj_change": "qozoolpmtnqkvpnnvtlomznmkxnnrkmn",
+    "profile": "release",
+    "component_mapping_provenance": "Parent-published integration mapping; full commit IDs resolved from shared git objects when available.",
+    "components": {
+      "core": "953a9ed40bb6eee0166e0390c1f6be7c05523a4f",
+      "static": "31ce475dd39172bc75f08df9cd4ce04fb505019d",
+      "wrapper": "39ec9351f542a7d31f1b30600fc0d1e858484631",
+      "websocket_protocol": "a4ecfafc6772daca59d5a011c584aeb46a7a8556"
+    },
+    "binaries": {
+      "static": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-static-df5c5c19-release",
+        "sha256": "ad7e56cd2c49d9aa0e2680013dbf7e1c212b2dfb253f79254a5817f2758de83b"
+      },
+      "server": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-server-df5c5c19-release",
+        "sha256": "aa67ef961b1e2a5c277ac97f90e8eca631d09179f22b87124c7564c82d36b465"
+      },
+      "client": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-client-df5c5c19-release",
+        "sha256": "5c15027df271b16e3e6b80ff800bca57afe7ff8103cf211bd0e9dd01215efe7e"
+      }
+    },
+    "parent_checks": "Full workspace/all-feature tests,fmt,bothclippys passed;4preexistingdoctests ignored; chat not included."
+  }
+}

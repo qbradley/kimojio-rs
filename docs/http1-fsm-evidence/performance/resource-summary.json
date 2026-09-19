@@ -1,0 +1,173 @@
+{
+  "purpose": "Intentional-abort recovery; no throughput claim",
+  "rows": [
+    {
+      "target": "go-static",
+      "valid": true,
+      "intentional_resets": 9,
+      "retained_fds": [
+        6,
+        6
+      ],
+      "retained_rss_kib": [
+        23404,
+        23404
+      ],
+      "slow_recipient": null,
+      "baseline_fds": 6,
+      "recovery_fds": [
+        6,
+        7,
+        7,
+        7,
+        8,
+        8,
+        8,
+        8,
+        7
+      ],
+      "max_descriptor_settle_seconds": 0.3957498430099804,
+      "max_healthy_recovery_seconds": 0.0005672910192515701
+    },
+    {
+      "target": "go-fixture",
+      "valid": true,
+      "intentional_resets": 9,
+      "retained_fds": [
+        6,
+        6
+      ],
+      "retained_rss_kib": [
+        23448,
+        23448
+      ],
+      "slow_recipient": null,
+      "baseline_fds": 6,
+      "recovery_fds": [
+        6,
+        7,
+        7,
+        7,
+        8,
+        8,
+        8,
+        8,
+        7
+      ],
+      "max_descriptor_settle_seconds": 0.4133778919931501,
+      "max_healthy_recovery_seconds": 0.00043640300282277167
+    },
+    {
+      "target": "go-ws",
+      "valid": true,
+      "intentional_resets": 6,
+      "retained_fds": [
+        6,
+        6
+      ],
+      "retained_rss_kib": [
+        21808,
+        21808
+      ],
+      "slow_recipient": {
+        "published_messages": 12,
+        "healthy_recipients": 2,
+        "slow_messages_before_close": 1,
+        "close": 1008
+      },
+      "baseline_fds": 6,
+      "recovery_fds": [
+        6,
+        6,
+        6,
+        6,
+        6,
+        6
+      ]
+    },
+    {
+      "target": "rust-static",
+      "valid": true,
+      "intentional_resets": 9,
+      "retained_fds": [
+        6,
+        6
+      ],
+      "retained_rss_kib": [
+        2544,
+        2544
+      ],
+      "slow_recipient": null,
+      "baseline_fds": 6,
+      "recovery_fds": [
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6
+      ],
+      "max_descriptor_settle_seconds": 2.7999922167509794e-06,
+      "max_healthy_recovery_seconds": 0.0003499019949231297
+    },
+    {
+      "target": "rust-wrapper",
+      "valid": true,
+      "intentional_resets": 9,
+      "retained_fds": [
+        10,
+        10
+      ],
+      "retained_rss_kib": [
+        2988,
+        2988
+      ],
+      "slow_recipient": null,
+      "baseline_fds": 10,
+      "recovery_fds": [
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10
+      ],
+      "max_descriptor_settle_seconds": 2.5999906938523054e-06,
+      "max_healthy_recovery_seconds": 0.0006637049955315888
+    },
+    {
+      "target": "rust-ws",
+      "valid": true,
+      "intentional_resets": 6,
+      "retained_fds": [
+        10,
+        10
+      ],
+      "retained_rss_kib": [
+        3020,
+        3020
+      ],
+      "slow_recipient": {
+        "published_messages": 12,
+        "healthy_recipients": 2,
+        "slow_messages_before_close": 1,
+        "close": 1008
+      },
+      "baseline_fds": 10,
+      "recovery_fds": [
+        10,
+        10,
+        10,
+        10,
+        10,
+        10
+      ]
+    }
+  ]
+}

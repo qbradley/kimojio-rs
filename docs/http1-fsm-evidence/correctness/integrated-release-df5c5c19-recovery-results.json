@@ -1,0 +1,153 @@
+{
+  "command": [
+    "/workspace/kimojio-rs/target/interop-publication/http1-static-df5c5c19-release",
+    "--bind",
+    "127.0.0.1:0",
+    "--root",
+    "/workspace/home/qbradley/fsm-http1-interop/target/interop/run-035ebcb3732248b7ba811e7e44ca72dc/root",
+    "--max-connections",
+    "1",
+    "--timeout-ms",
+    "1000"
+  ],
+  "results": [
+    {
+      "case": "partial-header-reset",
+      "iteration": 0,
+      "recovery_seconds": 0.000251,
+      "fds_after_recovery": 6,
+      "passed": true
+    },
+    {
+      "case": "partial-body-reset",
+      "iteration": 0,
+      "recovery_seconds": 0.000221,
+      "fds_after_recovery": 6,
+      "passed": true
+    },
+    {
+      "case": "stalled-response-reset",
+      "iteration": 0,
+      "response_head_base64": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL29jdGV0LXN0cmVhbQ0KQWxsb3c6IEdFVCwgSEVBRA0KY29udGVudC1sZW5ndGg6IDgzODg2MDgNCmNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+      "already_read_body_bytes": 0,
+      "receive_buffer_bytes": 8192,
+      "recovery_seconds": 0.0004,
+      "fds_after_recovery": 6,
+      "passed": true
+    },
+    {
+      "case": "partial-header-reset",
+      "iteration": 1,
+      "recovery_seconds": 0.000244,
+      "fds_after_recovery": 6,
+      "passed": true
+    },
+    {
+      "case": "partial-body-reset",
+      "iteration": 1,
+      "recovery_seconds": 0.000301,
+      "fds_after_recovery": 6,
+      "passed": true
+    },
+    {
+      "case": "stalled-response-reset",
+      "iteration": 1,
+      "response_head_base64": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL29jdGV0LXN0cmVhbQ0KQWxsb3c6IEdFVCwgSEVBRA0KY29udGVudC1sZW5ndGg6IDgzODg2MDgNCmNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+      "already_read_body_bytes": 0,
+      "receive_buffer_bytes": 8192,
+      "recovery_seconds": 0.00044,
+      "fds_after_recovery": 6,
+      "passed": true
+    },
+    {
+      "case": "partial-header-reset",
+      "iteration": 2,
+      "recovery_seconds": 0.000268,
+      "fds_after_recovery": 6,
+      "passed": true
+    },
+    {
+      "case": "partial-body-reset",
+      "iteration": 2,
+      "recovery_seconds": 0.000248,
+      "fds_after_recovery": 6,
+      "passed": true
+    },
+    {
+      "case": "stalled-response-reset",
+      "iteration": 2,
+      "response_head_base64": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL29jdGV0LXN0cmVhbQ0KQWxsb3c6IEdFVCwgSEVBRA0KY29udGVudC1sZW5ndGg6IDgzODg2MDgNCmNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+      "already_read_body_bytes": 0,
+      "receive_buffer_bytes": 8192,
+      "recovery_seconds": 0.000595,
+      "fds_after_recovery": 6,
+      "passed": true
+    },
+    {
+      "case": "partial-header-reset",
+      "iteration": 3,
+      "recovery_seconds": 0.000284,
+      "fds_after_recovery": 6,
+      "passed": true
+    },
+    {
+      "case": "partial-body-reset",
+      "iteration": 3,
+      "recovery_seconds": 0.000272,
+      "fds_after_recovery": 6,
+      "passed": true
+    },
+    {
+      "case": "stalled-response-reset",
+      "iteration": 3,
+      "response_head_base64": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL29jdGV0LXN0cmVhbQ0KQWxsb3c6IEdFVCwgSEVBRA0KY29udGVudC1sZW5ndGg6IDgzODg2MDgNCmNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+      "already_read_body_bytes": 0,
+      "receive_buffer_bytes": 8192,
+      "recovery_seconds": 0.000433,
+      "fds_after_recovery": 6,
+      "passed": true
+    },
+    {
+      "case": "partial-head-deadline-response",
+      "wire_deadline_seconds": 3,
+      "status": 408,
+      "wire_base64": "SFRUUC8xLjEgNDA4IFJlcXVlc3QgVGltZW91dA0KY29udGVudC1sZW5ndGg6IDANCmNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+      "recovery_seconds": 0.000392,
+      "passed": true
+    }
+  ],
+  "matrix": "static-transport-v1",
+  "baseline_fds": 6,
+  "descriptor_allowance": 2,
+  "timeout_case_selected": true,
+  "final_fds": 6,
+  "scope": "Bounded reset/recovery checks with sampled child descriptor counts; not exhaustive leak proof or deterministic kernel-receipt injection.",
+  "peer_log": "stdout: LISTEN 127.0.0.1:59113\n\nstderr: connection 2: Transport(IoError { kind: Reset, code: Some(104) })\nconnection 4: Transport(IoError { kind: Reset, code: Some(104) })\nconnection 6: Transport(IoError { kind: Reset, code: Some(104) })\nconnection 8: Transport(IoError { kind: Reset, code: Some(104) })\nconnection 10: Transport(IoError { kind: Reset, code: Some(104) })\nconnection 12: Transport(IoError { kind: Reset, code: Some(104) })\nconnection 14: Transport(IoError { kind: Reset, code: Some(104) })\nconnection 16: Transport(IoError { kind: Reset, code: Some(104) })\nconnection 18: Transport(IoError { kind: Reset, code: Some(104) })\nconnection 20: Transport(IoError { kind: Reset, code: Some(104) })\nconnection 22: Transport(IoError { kind: Reset, code: Some(104) })\nconnection 24: Transport(IoError { kind: Reset, code: Some(104) })\nconnection 26: Timeout\n",
+  "publication": {
+    "integration_commit": "df5c5c193639f4305650c8cb2870ba67eda60e71",
+    "jj_change": "qozoolpmtnqkvpnnvtlomznmkxnnrkmn",
+    "profile": "release",
+    "component_mapping_provenance": "Parent-published integration mapping; full commit IDs resolved from shared git objects when available.",
+    "components": {
+      "core": "953a9ed40bb6eee0166e0390c1f6be7c05523a4f",
+      "static": "31ce475dd39172bc75f08df9cd4ce04fb505019d",
+      "wrapper": "39ec9351f542a7d31f1b30600fc0d1e858484631",
+      "websocket_protocol": "a4ecfafc6772daca59d5a011c584aeb46a7a8556"
+    },
+    "binaries": {
+      "static": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-static-df5c5c19-release",
+        "sha256": "ad7e56cd2c49d9aa0e2680013dbf7e1c212b2dfb253f79254a5817f2758de83b"
+      },
+      "server": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-server-df5c5c19-release",
+        "sha256": "aa67ef961b1e2a5c277ac97f90e8eca631d09179f22b87124c7564c82d36b465"
+      },
+      "client": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-client-df5c5c19-release",
+        "sha256": "5c15027df271b16e3e6b80ff800bca57afe7ff8103cf211bd0e9dd01215efe7e"
+      }
+    },
+    "parent_checks": "Full workspace/all-feature tests,fmt,bothclippys passed;4preexistingdoctests ignored; chat not included."
+  }
+}

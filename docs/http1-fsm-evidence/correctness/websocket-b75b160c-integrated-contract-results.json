@@ -1,0 +1,238 @@
+{
+  "matrix": "native-chat-contract-v1",
+  "binary_sha256": "2eeb47596a050ba4b50a70fc9e829c4af991912acdc1afbc4b6335bfdd987dce",
+  "publication": {
+    "integration_commit": "b75b160c61fb44bc52e6115a9998226babe714eb",
+    "profile": "release",
+    "owner_commit": "6105bdf000cd1623d76ba2fe1e3b6c2f4286f043",
+    "http_commit": "953a9ed40bb6eee0166e0390c1f6be7c05523a4f",
+    "websocket_commit": "a4ecfafc6772daca59d5a011c584aeb46a7a8556",
+    "binary": "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+    "binary_sha256": "2eeb47596a050ba4b50a70fc9e829c4af991912acdc1afbc4b6335bfdd987dce",
+    "source_mapping_provenance": "Parent-published final integrated release mapping. Binary hash independently calculated.",
+    "parent_checks": {
+      "chat_tests": 32,
+      "both_clippys": "pass",
+      "chat_review": "Public Config mismatch fixed and parent-reviewed."
+    },
+    "public_config_scope": "CLI already normalizes the constructor invariant; invalid public Config rejection remains owner-native-unit evidence, not CLI wire evidence."
+  },
+  "results": [
+    {
+      "case": "strict-handshakes",
+      "command": [
+        "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "observations": {
+        "handshake-wrong-version": 426,
+        "handshake-short-key": 400,
+        "handshake-missing-upgrade": 400,
+        "handshake-wrong-method": 400
+      },
+      "peer_log": "stdout: LISTEN 127.0.0.1:42791\n",
+      "passed": true
+    },
+    {
+      "case": "binary-boundaries",
+      "command": [
+        "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "observations": {
+        "binary_lengths": [
+          0,
+          1,
+          125,
+          126,
+          65535,
+          65536
+        ],
+        "empty_text": true
+      },
+      "peer_log": "stdout: LISTEN 127.0.0.1:45831\n",
+      "passed": true
+    },
+    {
+      "case": "validated-message-only",
+      "command": [
+        "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "observations": {
+        "invalid_fragment_close": 1007,
+        "recipient_sentinel_exact": true
+      },
+      "peer_log": "stdout: LISTEN 127.0.0.1:46371\n",
+      "passed": true
+    },
+    {
+      "case": "concurrent-publishers",
+      "command": [
+        "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "observations": {
+        "publishers": 2,
+        "messages_each": 4,
+        "recipients": 3,
+        "common_order": [
+          "first:0",
+          "first:1",
+          "second:0",
+          "first:2",
+          "second:1",
+          "first:3",
+          "second:2",
+          "second:3"
+        ]
+      },
+      "peer_log": "stdout: LISTEN 127.0.0.1:41939\n",
+      "passed": true
+    },
+    {
+      "case": "bytewise-upgrade-and-frames",
+      "command": [
+        "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "observations": {
+        "write_chunk_bytes": 1,
+        "scope": "TCP may coalesce writes; not forced kernel read boundaries."
+      },
+      "peer_log": "stdout: LISTEN 127.0.0.1:37305\n",
+      "passed": true
+    },
+    {
+      "case": "node-built-in",
+      "command": [
+        "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "observations": {
+        "received": true,
+        "code": 1000,
+        "reason": "done",
+        "clean": true
+      },
+      "peer_log": "stdout: LISTEN 127.0.0.1:43367\n",
+      "passed": true
+    },
+    {
+      "case": "go-standard-library",
+      "command": [
+        "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "observations": {
+        "binary_bytes": 65792,
+        "binary_sha256": "120c518a83325c66464701a6ee080302f332bc768ea3f60473b209f1bfb091df",
+        "clean_eof": true,
+        "close": 1000,
+        "pong": true,
+        "text": "independent-Go-\u20ac"
+      },
+      "peer_log": "stdout: LISTEN 127.0.0.1:40489\n",
+      "passed": true
+    },
+    {
+      "case": "message-limits",
+      "command": [
+        "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+        "--bind",
+        "127.0.0.1:0",
+        "--max-message-bytes",
+        "1024"
+      ],
+      "observations": {
+        "limit_bytes": 1024,
+        "exact_limit_accepted": true,
+        "single_and_fragmented_overflow": 1009
+      },
+      "peer_log": "stdout: LISTEN 127.0.0.1:36187\n",
+      "passed": true
+    },
+    {
+      "case": "reset-recovery",
+      "command": [
+        "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "observations": {
+        "baseline_fds": 10,
+        "recovery_fds": [
+          10,
+          10,
+          10,
+          10,
+          10,
+          10
+        ],
+        "descriptor_allowance": 2
+      },
+      "peer_log": "stdout: LISTEN 127.0.0.1:44805\n",
+      "passed": true
+    },
+    {
+      "case": "slow-recipient",
+      "command": [
+        "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+        "--bind",
+        "127.0.0.1:0",
+        "--max-message-bytes",
+        "65536",
+        "--max-queued-messages",
+        "2",
+        "--max-client-bytes",
+        "262144",
+        "--send-buffer-bytes",
+        "4096",
+        "--close-timeout-ms",
+        "5000"
+      ],
+      "observations": {
+        "published_messages": 12,
+        "healthy_recipients": 2,
+        "slow_messages_before_close": 1,
+        "close": 1008
+      },
+      "peer_log": "stdout: LISTEN 127.0.0.1:33415\n",
+      "passed": true
+    },
+    {
+      "case": "bounded-shutdown",
+      "command": [
+        "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+        "--bind",
+        "127.0.0.1:0",
+        "--run-for-ms",
+        "1000",
+        "--shutdown-grace-ms",
+        "1000"
+      ],
+      "observations": {
+        "exit": 0,
+        "close": 1001,
+        "process_wait_bound_seconds": 3
+      },
+      "peer_log": "stdout: LISTEN 127.0.0.1:44955\n\nstderr: STOP clients=0 used=76116 peak=229152\n",
+      "passed": true
+    }
+  ],
+  "harness_commit": "f06e99bb222f3309158660a501f0b73ef6e8a474",
+  "harness_source_sha256": {
+    "interop/websocket/ws_suite.py": "d1515815405ac97dc466d179e9f55cbab31861a8697e9538e4b0dbfcfa494680",
+    "interop/websocket/chat_suite.py": "ebeb6a4983e0bb146429fc9d60cb595f5e1534cf5aacf2bdf5724c4904bf9d02",
+    "interop/websocket/ws_wire.py": "39eb5853cc44042506db7e2f408f17dcfdff0499eae2beac51a50407640800f5",
+    "interop/websocket/peer.go": "aea5da60e716365766a6c77a09cdc00c90961870ff62b11c2266bd64618aa541",
+    "interop/websocket/node_peer.js": "4e2d064e718f01cb33d974769acd6cd782e67549f07c88f68e0a63dd834a65a5"
+  }
+}

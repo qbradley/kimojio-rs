@@ -1,0 +1,1003 @@
+{
+  "purpose": "SYMBOLIZED_NATIVE_CORRECTNESS_SMOKE_NOT_PERFORMANCE",
+  "integration_commit": "284812f1f9b59256907524a8b3ef5529e56379d2",
+  "full_generated_report": "target/perf/smoke-ef062564631e4046a4da8556b5478c60/results.json",
+  "full_generated_report_sha256": "2b841cb58bb9116b267be118d046ce6b2d5ece87a497242195a7089b511889a9",
+  "tool": {
+    "binary": "/workspace/home/qbradley/fsm-performance/target/perf/perf-tool-2ed9da2a56462f8cf9e030650f2967b759c9f75a4f3fc4a52de1974119580738",
+    "sha256": "2ed9da2a56462f8cf9e030650f2967b759c9f75a4f3fc4a52de1974119580738",
+    "checkout_commit": "5db798f13e7367fa44f9b878c926e86d9adb02b5",
+    "source_status_at_build": "?? interop/perf/",
+    "source_sha256": {
+      "interop/perf/load.go": "66e408f4da9dbd7277d12fc8c2dff46cff3df09d7c4156c9a0ffd60abaa6f650",
+      "interop/perf/load_test.go": "51949b0e94182d0c8c6fe0bcf8bc4f4980bb156febaa458e4ae56d9da7863d29",
+      "interop/perf/main.go": "96c9bf37228e60dd49209b64dec3d43887c1993154fb6226605dc55691220b52",
+      "interop/perf/reference.go": "33e6dcd18f9b1467bd3a2b6de27206803e3258ce3322254901e9157be850cb4d"
+    },
+    "go_mod_sha256": "cc9e5cd7f4fca75c30257c0d982bd2a6f40c4b66da7710585347fa0b7f68c159",
+    "go_sum_sha256": "1737d5523b7264df09b253e86e29f96af295a7bd18e0aaa4373c6099317e065f",
+    "compiler": "go version go1.27.1 linux/amd64",
+    "build_flags": [
+      "-trimpath",
+      "-buildvcs=false",
+      "-pgo=off"
+    ],
+    "dependency": "github.com/gorilla/websocket v1.5.3",
+    "owned_commit": "893a4fd423a9093ec783ba3da064dd60ec236e78",
+    "compiled_source_matches_committed_files": true
+  },
+  "native_manifest": {
+    "schema": 1,
+    "targets": [
+      {
+        "name": "rust-static",
+        "kind": "static",
+        "binary": "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/http1-static",
+        "sha256": "1ff4f196d5d9c4aeed5d3dc1904c69b26699f9cf23fba34ee6ce6ab9c389115d",
+        "command": [
+          "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/http1-static",
+          "--bind",
+          "{bind}",
+          "--root",
+          "{root}",
+          "--max-connections",
+          "64",
+          "--timeout-ms",
+          "10000"
+        ],
+        "source": {
+          "integration_commit": "284812f1f9b59256907524a8b3ef5529e56379d2",
+          "http_core": "953a9ed40bb6eee0166e0390c1f6be7c05523a4f",
+          "static": "31ce475dd39172bc75f08df9cd4ce04fb505019d",
+          "wrapper": "39ec9351f542a7d31f1b30600fc0d1e858484631",
+          "websocket_protocol": "a4ecfafc6772daca59d5a011c584aeb46a7a8556",
+          "chat": "1b7fd43f (test/docs-only after production6105bdf0)",
+          "mapping_provenance": "Parent-published source/profile manifest; executable hash independently checked"
+        },
+        "profile": "release with CARGO_PROFILE_RELEASE_DEBUG=2; unchanged optimization flags for profiles and comparative measurements",
+        "socket_options": {
+          "server_tcp_nodelay": false,
+          "requested_send_buffer_bytes": "OS default",
+          "keepalive": false
+        },
+        "limits": {
+          "max_clients": 64,
+          "max_message_bytes": null,
+          "queued_messages": null
+        },
+        "compiler": {
+          "rustc": "1.92.0",
+          "LLVM": "21.1.3",
+          "target": "x86_64"
+        },
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_DEBUG": "2",
+          "CARGO_TARGET_DIR": "target/profile",
+          "RUSTFLAGS": "",
+          "CARGO_ENCODED_RUSTFLAGS": ""
+        },
+        "build_command": [
+          "cargo",
+          "build",
+          "--release",
+          "-p",
+          "http1-static",
+          "-p",
+          "kimojio-http1",
+          "-p",
+          "websocket-chat",
+          "--bins",
+          "--examples",
+          "--offline"
+        ]
+      },
+      {
+        "name": "rust-wrapper",
+        "kind": "fixture",
+        "binary": "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/http1-wrapper-server",
+        "sha256": "afae8760d40b321366dcc600a072c90e0a74a395403e7da9cfdb4cfee4f336f7",
+        "command": [
+          "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/http1-wrapper-server",
+          "--bind",
+          "{bind}"
+        ],
+        "source": {
+          "integration_commit": "284812f1f9b59256907524a8b3ef5529e56379d2",
+          "http_core": "953a9ed40bb6eee0166e0390c1f6be7c05523a4f",
+          "static": "31ce475dd39172bc75f08df9cd4ce04fb505019d",
+          "wrapper": "39ec9351f542a7d31f1b30600fc0d1e858484631",
+          "websocket_protocol": "a4ecfafc6772daca59d5a011c584aeb46a7a8556",
+          "chat": "1b7fd43f (test/docs-only after production6105bdf0)",
+          "mapping_provenance": "Parent-published source/profile manifest; executable hash independently checked"
+        },
+        "profile": "release with CARGO_PROFILE_RELEASE_DEBUG=2; unchanged optimization flags for profiles and comparative measurements",
+        "socket_options": {
+          "server_tcp_nodelay": true,
+          "keepalive": "30s idle/1s interval/30probes",
+          "requested_send_buffer_bytes": "OS default",
+          "source": "kimojio::socket_helpers::update_accept_socket"
+        },
+        "limits": {
+          "max_clients": 32,
+          "max_message_bytes": null,
+          "queued_messages": null
+        },
+        "compiler": {
+          "rustc": "1.92.0",
+          "LLVM": "21.1.3",
+          "target": "x86_64"
+        },
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_DEBUG": "2",
+          "CARGO_TARGET_DIR": "target/profile",
+          "RUSTFLAGS": "",
+          "CARGO_ENCODED_RUSTFLAGS": ""
+        },
+        "build_command": [
+          "cargo",
+          "build",
+          "--release",
+          "-p",
+          "http1-static",
+          "-p",
+          "kimojio-http1",
+          "-p",
+          "websocket-chat",
+          "--bins",
+          "--examples",
+          "--offline"
+        ]
+      },
+      {
+        "name": "rust-ws",
+        "kind": "ws",
+        "binary": "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/websocket-chat",
+        "sha256": "9c0214e1ca366b47d923543023abfd00697f388d800bdbdc5555af7243c5aea2",
+        "command": [
+          "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/websocket-chat",
+          "--bind",
+          "{bind}",
+          "--max-clients",
+          "64",
+          "--run-for-ms",
+          "60000"
+        ],
+        "source": {
+          "integration_commit": "284812f1f9b59256907524a8b3ef5529e56379d2",
+          "http_core": "953a9ed40bb6eee0166e0390c1f6be7c05523a4f",
+          "static": "31ce475dd39172bc75f08df9cd4ce04fb505019d",
+          "wrapper": "39ec9351f542a7d31f1b30600fc0d1e858484631",
+          "websocket_protocol": "a4ecfafc6772daca59d5a011c584aeb46a7a8556",
+          "chat": "1b7fd43f (test/docs-only after production6105bdf0)",
+          "mapping_provenance": "Parent-published source/profile manifest; executable hash independently checked"
+        },
+        "profile": "release with CARGO_PROFILE_RELEASE_DEBUG=2; unchanged optimization flags for profiles and comparative measurements",
+        "socket_options": {
+          "server_tcp_nodelay": false,
+          "requested_send_buffer_bytes": 65536,
+          "keepalive": false
+        },
+        "limits": {
+          "max_clients": 64,
+          "max_message_bytes": 1048576,
+          "queued_messages": 32
+        },
+        "challenge_command": [
+          "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/websocket-chat",
+          "--bind",
+          "{bind}",
+          "--max-clients",
+          "64",
+          "--run-for-ms",
+          "60000",
+          "--max-message-bytes",
+          "65536",
+          "--max-queued-messages",
+          "2",
+          "--max-client-bytes",
+          "262144",
+          "--send-buffer-bytes",
+          "4096",
+          "--close-timeout-ms",
+          "5000"
+        ],
+        "compiler": {
+          "rustc": "1.92.0",
+          "LLVM": "21.1.3",
+          "target": "x86_64"
+        },
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_DEBUG": "2",
+          "CARGO_TARGET_DIR": "target/profile",
+          "RUSTFLAGS": "",
+          "CARGO_ENCODED_RUSTFLAGS": ""
+        },
+        "build_command": [
+          "cargo",
+          "build",
+          "--release",
+          "-p",
+          "http1-static",
+          "-p",
+          "kimojio-http1",
+          "-p",
+          "websocket-chat",
+          "--bins",
+          "--examples",
+          "--offline"
+        ]
+      }
+    ],
+    "schedule_note": "No comparative timings authorized yet. Smoke only; parent prepares profiles separately."
+  },
+  "configuration": {
+    "action": "smoke",
+    "manifest": "target/perf/native-symbolized-284812f1-manifest.json",
+    "server_cpu": 0,
+    "client_cpus": [
+      2,
+      4,
+      6
+    ],
+    "monitor_cpu": 8,
+    "duration": 0.05,
+    "warmup": 0,
+    "repetitions": 1,
+    "seed": 953,
+    "archive": false
+  },
+  "platform": {
+    "uname": [
+      "Linux",
+      "azl3000002",
+      "6.6.137.mshv2-2.azl3",
+      "#1 SMP Mon Aug 10 11:35:34 UTC 2026",
+      "x86_64",
+      "x86_64"
+    ],
+    "python": "3.12.14 (main, Aug 18 2026, 15:00:50) [GCC 13.2.0]",
+    "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+    "go": "go version go1.27.1 linux/amd64",
+    "cpu_model": "model name\t: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz",
+    "topology": {
+      "0": {
+        "socket": 0,
+        "core": 0,
+        "siblings": "0-1"
+      },
+      "1": {
+        "socket": 0,
+        "core": 0,
+        "siblings": "0-1"
+      },
+      "2": {
+        "socket": 0,
+        "core": 1,
+        "siblings": "2-3"
+      },
+      "3": {
+        "socket": 0,
+        "core": 1,
+        "siblings": "2-3"
+      },
+      "4": {
+        "socket": 0,
+        "core": 2,
+        "siblings": "4-5"
+      },
+      "5": {
+        "socket": 0,
+        "core": 2,
+        "siblings": "4-5"
+      },
+      "6": {
+        "socket": 0,
+        "core": 3,
+        "siblings": "6-7"
+      },
+      "7": {
+        "socket": 0,
+        "core": 3,
+        "siblings": "6-7"
+      },
+      "8": {
+        "socket": 0,
+        "core": 4,
+        "siblings": "8-9"
+      },
+      "9": {
+        "socket": 0,
+        "core": 4,
+        "siblings": "8-9"
+      },
+      "10": {
+        "socket": 0,
+        "core": 5,
+        "siblings": "10-11"
+      },
+      "11": {
+        "socket": 0,
+        "core": 5,
+        "siblings": "10-11"
+      },
+      "12": {
+        "socket": 0,
+        "core": 6,
+        "siblings": "12-13"
+      },
+      "13": {
+        "socket": 0,
+        "core": 6,
+        "siblings": "12-13"
+      },
+      "14": {
+        "socket": 0,
+        "core": 7,
+        "siblings": "14-15"
+      },
+      "15": {
+        "socket": 0,
+        "core": 7,
+        "siblings": "14-15"
+      },
+      "16": {
+        "socket": 0,
+        "core": 8,
+        "siblings": "16-17"
+      },
+      "17": {
+        "socket": 0,
+        "core": 8,
+        "siblings": "16-17"
+      },
+      "18": {
+        "socket": 0,
+        "core": 9,
+        "siblings": "18-19"
+      },
+      "19": {
+        "socket": 0,
+        "core": 9,
+        "siblings": "18-19"
+      },
+      "20": {
+        "socket": 0,
+        "core": 10,
+        "siblings": "20-21"
+      },
+      "21": {
+        "socket": 0,
+        "core": 10,
+        "siblings": "20-21"
+      },
+      "22": {
+        "socket": 0,
+        "core": 11,
+        "siblings": "22-23"
+      },
+      "23": {
+        "socket": 0,
+        "core": 11,
+        "siblings": "22-23"
+      },
+      "24": {
+        "socket": 0,
+        "core": 12,
+        "siblings": "24-25"
+      },
+      "25": {
+        "socket": 0,
+        "core": 12,
+        "siblings": "24-25"
+      },
+      "26": {
+        "socket": 0,
+        "core": 13,
+        "siblings": "26-27"
+      },
+      "27": {
+        "socket": 0,
+        "core": 13,
+        "siblings": "26-27"
+      },
+      "28": {
+        "socket": 0,
+        "core": 14,
+        "siblings": "28-29"
+      },
+      "29": {
+        "socket": 0,
+        "core": 14,
+        "siblings": "28-29"
+      },
+      "30": {
+        "socket": 0,
+        "core": 15,
+        "siblings": "30-31"
+      },
+      "31": {
+        "socket": 0,
+        "core": 15,
+        "siblings": "30-31"
+      }
+    },
+    "initial_loadavg": [
+      6.46923828125,
+      7.11962890625,
+      7.1708984375
+    ]
+  },
+  "results": [
+    {
+      "target": "rust-static",
+      "case": {
+        "kind": "static",
+        "size": 1048576,
+        "concurrency": 1,
+        "path": "/1048576.bin",
+        "framing": "fixed",
+        "fresh": false
+      },
+      "server_command": [
+        "taskset",
+        "-c",
+        "0",
+        "env",
+        "GOMAXPROCS=1",
+        "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/http1-static",
+        "--bind",
+        "127.0.0.1:0",
+        "--root",
+        "/workspace/home/qbradley/fsm-performance/target/perf/smoke-ef062564631e4046a4da8556b5478c60/root",
+        "--max-connections",
+        "64",
+        "--timeout-ms",
+        "10000"
+      ],
+      "client_command": [
+        "taskset",
+        "-c",
+        "2,4,6",
+        "env",
+        "GOMAXPROCS=3",
+        "/workspace/home/qbradley/fsm-performance/target/perf/perf-tool-2ed9da2a56462f8cf9e030650f2967b759c9f75a4f3fc4a52de1974119580738",
+        "http-load",
+        "--url",
+        "http://127.0.0.1:32971/1048576.bin",
+        "--size",
+        "1048576",
+        "--nodelay=true",
+        "--concurrency",
+        "1",
+        "--framing",
+        "fixed",
+        "--fresh=false",
+        "--duration",
+        "0.05s"
+      ],
+      "valid": true,
+      "client_exit": 0,
+      "attempts": 6,
+      "validated_successes": 6,
+      "validated_deliveries": 0,
+      "new_connections": 1,
+      "reused_connections": 5,
+      "errors": null
+    },
+    {
+      "target": "rust-wrapper",
+      "case": {
+        "kind": "fixture",
+        "size": 13,
+        "concurrency": 1,
+        "path": "/trailers",
+        "framing": "trailers",
+        "fresh": false
+      },
+      "server_command": [
+        "taskset",
+        "-c",
+        "0",
+        "env",
+        "GOMAXPROCS=1",
+        "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/http1-wrapper-server",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "client_command": [
+        "taskset",
+        "-c",
+        "2,4,6",
+        "env",
+        "GOMAXPROCS=3",
+        "/workspace/home/qbradley/fsm-performance/target/perf/perf-tool-2ed9da2a56462f8cf9e030650f2967b759c9f75a4f3fc4a52de1974119580738",
+        "http-load",
+        "--url",
+        "http://127.0.0.1:41647/trailers",
+        "--size",
+        "13",
+        "--nodelay=true",
+        "--concurrency",
+        "1",
+        "--framing",
+        "trailers",
+        "--fresh=false",
+        "--duration",
+        "0.05s"
+      ],
+      "valid": true,
+      "client_exit": 0,
+      "attempts": 467,
+      "validated_successes": 467,
+      "validated_deliveries": 0,
+      "new_connections": 1,
+      "reused_connections": 466,
+      "errors": null
+    },
+    {
+      "target": "rust-ws",
+      "case": {
+        "kind": "ws",
+        "size": 64,
+        "fanout": 1,
+        "path": "/chat"
+      },
+      "server_command": [
+        "taskset",
+        "-c",
+        "0",
+        "env",
+        "GOMAXPROCS=1",
+        "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/websocket-chat",
+        "--bind",
+        "127.0.0.1:0",
+        "--max-clients",
+        "64",
+        "--run-for-ms",
+        "60000"
+      ],
+      "client_command": [
+        "taskset",
+        "-c",
+        "2,4,6",
+        "env",
+        "GOMAXPROCS=3",
+        "/workspace/home/qbradley/fsm-performance/target/perf/perf-tool-2ed9da2a56462f8cf9e030650f2967b759c9f75a4f3fc4a52de1974119580738",
+        "ws-load",
+        "--url",
+        "ws://127.0.0.1:40277/chat",
+        "--size",
+        "64",
+        "--nodelay=true",
+        "--fanout",
+        "1",
+        "--duration",
+        "0.05s"
+      ],
+      "valid": true,
+      "client_exit": 0,
+      "attempts": 802,
+      "validated_successes": 802,
+      "validated_deliveries": 802,
+      "new_connections": 1,
+      "reused_connections": 0,
+      "errors": null
+    },
+    {
+      "target": "rust-ws",
+      "case": {
+        "kind": "ws",
+        "size": 65536,
+        "fanout": 16,
+        "path": "/chat"
+      },
+      "server_command": [
+        "taskset",
+        "-c",
+        "0",
+        "env",
+        "GOMAXPROCS=1",
+        "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/websocket-chat",
+        "--bind",
+        "127.0.0.1:0",
+        "--max-clients",
+        "64",
+        "--run-for-ms",
+        "60000"
+      ],
+      "client_command": [
+        "taskset",
+        "-c",
+        "2,4,6",
+        "env",
+        "GOMAXPROCS=3",
+        "/workspace/home/qbradley/fsm-performance/target/perf/perf-tool-2ed9da2a56462f8cf9e030650f2967b759c9f75a4f3fc4a52de1974119580738",
+        "ws-load",
+        "--url",
+        "ws://127.0.0.1:44163/chat",
+        "--size",
+        "65536",
+        "--nodelay=true",
+        "--fanout",
+        "16",
+        "--duration",
+        "0.05s"
+      ],
+      "valid": true,
+      "client_exit": 0,
+      "attempts": 2,
+      "validated_successes": 2,
+      "validated_deliveries": 32,
+      "new_connections": 16,
+      "reused_connections": 0,
+      "errors": null
+    },
+    {
+      "target": "rust-static",
+      "case": {
+        "kind": "static",
+        "size": 65536,
+        "concurrency": 1,
+        "path": "/65536.bin",
+        "framing": "fixed",
+        "fresh": false
+      },
+      "server_command": [
+        "taskset",
+        "-c",
+        "0",
+        "env",
+        "GOMAXPROCS=1",
+        "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/http1-static",
+        "--bind",
+        "127.0.0.1:0",
+        "--root",
+        "/workspace/home/qbradley/fsm-performance/target/perf/smoke-ef062564631e4046a4da8556b5478c60/root",
+        "--max-connections",
+        "64",
+        "--timeout-ms",
+        "10000"
+      ],
+      "client_command": [
+        "taskset",
+        "-c",
+        "2,4,6",
+        "env",
+        "GOMAXPROCS=3",
+        "/workspace/home/qbradley/fsm-performance/target/perf/perf-tool-2ed9da2a56462f8cf9e030650f2967b759c9f75a4f3fc4a52de1974119580738",
+        "http-load",
+        "--url",
+        "http://127.0.0.1:40949/65536.bin",
+        "--size",
+        "65536",
+        "--nodelay=true",
+        "--concurrency",
+        "1",
+        "--framing",
+        "fixed",
+        "--fresh=false",
+        "--duration",
+        "0.05s"
+      ],
+      "valid": true,
+      "client_exit": 0,
+      "attempts": 281,
+      "validated_successes": 281,
+      "validated_deliveries": 0,
+      "new_connections": 1,
+      "reused_connections": 280,
+      "errors": null
+    },
+    {
+      "target": "rust-ws",
+      "case": {
+        "kind": "ws",
+        "size": 4096,
+        "fanout": 4,
+        "path": "/chat"
+      },
+      "server_command": [
+        "taskset",
+        "-c",
+        "0",
+        "env",
+        "GOMAXPROCS=1",
+        "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/websocket-chat",
+        "--bind",
+        "127.0.0.1:0",
+        "--max-clients",
+        "64",
+        "--run-for-ms",
+        "60000"
+      ],
+      "client_command": [
+        "taskset",
+        "-c",
+        "2,4,6",
+        "env",
+        "GOMAXPROCS=3",
+        "/workspace/home/qbradley/fsm-performance/target/perf/perf-tool-2ed9da2a56462f8cf9e030650f2967b759c9f75a4f3fc4a52de1974119580738",
+        "ws-load",
+        "--url",
+        "ws://127.0.0.1:46831/chat",
+        "--size",
+        "4096",
+        "--nodelay=true",
+        "--fanout",
+        "4",
+        "--duration",
+        "0.05s"
+      ],
+      "valid": true,
+      "client_exit": 0,
+      "attempts": 86,
+      "validated_successes": 86,
+      "validated_deliveries": 344,
+      "new_connections": 4,
+      "reused_connections": 0,
+      "errors": null
+    },
+    {
+      "target": "rust-wrapper",
+      "case": {
+        "kind": "fixture",
+        "size": 65536,
+        "concurrency": 1,
+        "path": "/bytes/65536",
+        "framing": "fixed",
+        "fresh": false
+      },
+      "server_command": [
+        "taskset",
+        "-c",
+        "0",
+        "env",
+        "GOMAXPROCS=1",
+        "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/http1-wrapper-server",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "client_command": [
+        "taskset",
+        "-c",
+        "2,4,6",
+        "env",
+        "GOMAXPROCS=3",
+        "/workspace/home/qbradley/fsm-performance/target/perf/perf-tool-2ed9da2a56462f8cf9e030650f2967b759c9f75a4f3fc4a52de1974119580738",
+        "http-load",
+        "--url",
+        "http://127.0.0.1:38483/bytes/65536",
+        "--size",
+        "65536",
+        "--nodelay=true",
+        "--concurrency",
+        "1",
+        "--framing",
+        "fixed",
+        "--fresh=false",
+        "--duration",
+        "0.05s"
+      ],
+      "valid": true,
+      "client_exit": 0,
+      "attempts": 301,
+      "validated_successes": 301,
+      "validated_deliveries": 0,
+      "new_connections": 1,
+      "reused_connections": 300,
+      "errors": null
+    },
+    {
+      "target": "rust-wrapper",
+      "case": {
+        "kind": "fixture",
+        "size": 128,
+        "concurrency": 1,
+        "path": "/bytes/128",
+        "framing": "fixed",
+        "fresh": false
+      },
+      "server_command": [
+        "taskset",
+        "-c",
+        "0",
+        "env",
+        "GOMAXPROCS=1",
+        "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/http1-wrapper-server",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "client_command": [
+        "taskset",
+        "-c",
+        "2,4,6",
+        "env",
+        "GOMAXPROCS=3",
+        "/workspace/home/qbradley/fsm-performance/target/perf/perf-tool-2ed9da2a56462f8cf9e030650f2967b759c9f75a4f3fc4a52de1974119580738",
+        "http-load",
+        "--url",
+        "http://127.0.0.1:44985/bytes/128",
+        "--size",
+        "128",
+        "--nodelay=true",
+        "--concurrency",
+        "1",
+        "--framing",
+        "fixed",
+        "--fresh=false",
+        "--duration",
+        "0.05s"
+      ],
+      "valid": true,
+      "client_exit": 0,
+      "attempts": 439,
+      "validated_successes": 439,
+      "validated_deliveries": 0,
+      "new_connections": 1,
+      "reused_connections": 438,
+      "errors": null
+    },
+    {
+      "target": "rust-wrapper",
+      "case": {
+        "kind": "fixture",
+        "size": 128,
+        "concurrency": 1,
+        "path": "/bytes/128",
+        "framing": "fixed",
+        "fresh": true
+      },
+      "server_command": [
+        "taskset",
+        "-c",
+        "0",
+        "env",
+        "GOMAXPROCS=1",
+        "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/http1-wrapper-server",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "client_command": [
+        "taskset",
+        "-c",
+        "2,4,6",
+        "env",
+        "GOMAXPROCS=3",
+        "/workspace/home/qbradley/fsm-performance/target/perf/perf-tool-2ed9da2a56462f8cf9e030650f2967b759c9f75a4f3fc4a52de1974119580738",
+        "http-load",
+        "--url",
+        "http://127.0.0.1:33025/bytes/128",
+        "--size",
+        "128",
+        "--nodelay=true",
+        "--concurrency",
+        "1",
+        "--framing",
+        "fixed",
+        "--fresh=true",
+        "--duration",
+        "0.05s"
+      ],
+      "valid": true,
+      "client_exit": 0,
+      "attempts": 211,
+      "validated_successes": 211,
+      "validated_deliveries": 0,
+      "new_connections": 211,
+      "reused_connections": 0,
+      "errors": null
+    },
+    {
+      "target": "rust-static",
+      "case": {
+        "kind": "static",
+        "size": 128,
+        "concurrency": 1,
+        "path": "/128.bin",
+        "framing": "fixed",
+        "fresh": true
+      },
+      "server_command": [
+        "taskset",
+        "-c",
+        "0",
+        "env",
+        "GOMAXPROCS=1",
+        "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/http1-static",
+        "--bind",
+        "127.0.0.1:0",
+        "--root",
+        "/workspace/home/qbradley/fsm-performance/target/perf/smoke-ef062564631e4046a4da8556b5478c60/root",
+        "--max-connections",
+        "64",
+        "--timeout-ms",
+        "10000"
+      ],
+      "client_command": [
+        "taskset",
+        "-c",
+        "2,4,6",
+        "env",
+        "GOMAXPROCS=3",
+        "/workspace/home/qbradley/fsm-performance/target/perf/perf-tool-2ed9da2a56462f8cf9e030650f2967b759c9f75a4f3fc4a52de1974119580738",
+        "http-load",
+        "--url",
+        "http://127.0.0.1:60575/128.bin",
+        "--size",
+        "128",
+        "--nodelay=true",
+        "--concurrency",
+        "1",
+        "--framing",
+        "fixed",
+        "--fresh=true",
+        "--duration",
+        "0.05s"
+      ],
+      "valid": true,
+      "client_exit": 0,
+      "attempts": 241,
+      "validated_successes": 241,
+      "validated_deliveries": 0,
+      "new_connections": 241,
+      "reused_connections": 0,
+      "errors": null
+    },
+    {
+      "target": "rust-static",
+      "case": {
+        "kind": "static",
+        "size": 128,
+        "concurrency": 1,
+        "path": "/128.bin",
+        "framing": "fixed",
+        "fresh": false
+      },
+      "server_command": [
+        "taskset",
+        "-c",
+        "0",
+        "env",
+        "GOMAXPROCS=1",
+        "/workspace/kimojio-rs/target/perf/frozen/284812f1-debug2/http1-static",
+        "--bind",
+        "127.0.0.1:0",
+        "--root",
+        "/workspace/home/qbradley/fsm-performance/target/perf/smoke-ef062564631e4046a4da8556b5478c60/root",
+        "--max-connections",
+        "64",
+        "--timeout-ms",
+        "10000"
+      ],
+      "client_command": [
+        "taskset",
+        "-c",
+        "2,4,6",
+        "env",
+        "GOMAXPROCS=3",
+        "/workspace/home/qbradley/fsm-performance/target/perf/perf-tool-2ed9da2a56462f8cf9e030650f2967b759c9f75a4f3fc4a52de1974119580738",
+        "http-load",
+        "--url",
+        "http://127.0.0.1:55067/128.bin",
+        "--size",
+        "128",
+        "--nodelay=true",
+        "--concurrency",
+        "1",
+        "--framing",
+        "fixed",
+        "--fresh=false",
+        "--duration",
+        "0.05s"
+      ],
+      "valid": true,
+      "client_exit": 0,
+      "attempts": 3,
+      "validated_successes": 3,
+      "validated_deliveries": 0,
+      "new_connections": 1,
+      "reused_connections": 2,
+      "errors": null
+    }
+  ]
+}

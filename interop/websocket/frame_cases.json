@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "name": "rfc6455-unmasked-hello",
+      "hex": "810548656c6c6f",
+      "expect_mask": false,
+      "opcode": 1,
+      "payload_hex": "48656c6c6f",
+      "fin": true
+    },
+    {
+      "name": "rfc6455-masked-hello",
+      "hex": "818537fa213d7f9f4d5158",
+      "expect_mask": true,
+      "opcode": 1,
+      "payload_hex": "48656c6c6f",
+      "fin": true
+    },
+    {
+      "name": "rfc6455-first-fragment",
+      "hex": "010348656c",
+      "expect_mask": false,
+      "opcode": 1,
+      "payload_hex": "48656c",
+      "fin": false
+    },
+    {
+      "name": "rfc6455-final-fragment",
+      "hex": "80026c6f",
+      "expect_mask": false,
+      "opcode": 0,
+      "payload_hex": "6c6f",
+      "fin": true
+    },
+    {
+      "name": "unmasked-client",
+      "hex": "810178",
+      "expect_mask": true,
+      "error_code": 1002
+    },
+    {
+      "name": "masked-server",
+      "hex": "818537fa213d7f9f4d5158",
+      "expect_mask": false,
+      "error_code": 1002
+    },
+    {
+      "name": "reserved-rsv-bit",
+      "hex": "c100",
+      "expect_mask": false,
+      "error_code": 1002
+    },
+    {
+      "name": "nonminimal-16-bit-length",
+      "hex": "827e0001",
+      "expect_mask": false,
+      "error_code": 1002
+    },
+    {
+      "name": "nonminimal-64-bit-length",
+      "hex": "827f000000000000007e",
+      "expect_mask": false,
+      "error_code": 1002
+    },
+    {
+      "name": "64-bit-sign-bit",
+      "hex": "827f8000000000010000",
+      "expect_mask": false,
+      "error_code": 1002
+    },
+    {
+      "name": "fragmented-ping",
+      "hex": "0900",
+      "expect_mask": false,
+      "error_code": 1002
+    }
+  ]
+}

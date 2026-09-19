@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "command": [
+    "python3",
+    "-B",
+    "interop/http1/go_adapter.py",
+    "--peer",
+    "target/interop/http1-peer",
+    "--request",
+    "{request_file}",
+    "--result",
+    "{result_file}"
+  ],
+  "capabilities": ["basic", "reuse", "upload", "chunked-upload", "interim", "trailers", "expect-continue"]
+}

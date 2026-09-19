@@ -15,6 +15,7 @@ Their implementation can overlap final wrapper debugging and review.
 The plan is an implementation commitment, not a claim of completed functionality.
 The final report records actual results, changes to the plan, and incomplete work.
 Existing HTTP/2 changes and alternative adapter experiments remain intact.
+The [implementation assessment](http1-fsm-report.md) records the resulting changes and evidence.
 
 ## Change topology
 

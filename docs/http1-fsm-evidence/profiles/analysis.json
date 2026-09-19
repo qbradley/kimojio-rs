@@ -1,0 +1,225 @@
+{
+  "schema": 1,
+  "publication": {
+    "analysis_agent": "5c0204e1-1d09-4bf1-a3b2-58c480973c62",
+    "analysis_cpu": 8,
+    "production_changes": false,
+    "new_builds": false,
+    "new_profiles": false,
+    "new_workload_runs": false,
+    "binary_mapping": "publication.json"
+  },
+  "method": {
+    "event": "cpu-clock:u",
+    "frequency_hz": 499,
+    "nominal_record_seconds": 3,
+    "dwarf_stack_bytes": 16384,
+    "site_radius_bytes": 24,
+    "dynamic_register_values_recorded": false,
+    "throughput_under_perf_is_comparative": false,
+    "ownership": "Explicit recovered client/server ancestors, including inline ancestors; otherwise shared",
+    "site_counts": "Unique samples per site; overlapping windows are not additive"
+  },
+  "profiles": {
+    "static": {
+      "build_id": "b18152a8af612db9227c280dc41cbdedd2a8b0ed",
+      "samples": 204,
+      "lost_samples": 0,
+      "owner_samples": {
+        "client": 0,
+        "server": 99,
+        "shared": 105
+      },
+      "raw_single_frame_stacks": 66,
+      "raw_stacks_containing_unknown": 99,
+      "sample_span_seconds": 2.941578,
+      "raw_profile_path": "/workspace/kimojio-rs/target/perf/profiles-final/static/perf.data",
+      "raw_profile_sha256": "df929c35c8d338bbdb6c88a3527155b9818d43054ac1f9db588c6cf476264aa5",
+      "raw_profile_bytes": 3415832
+    },
+    "wrapper": {
+      "build_id": "0af32be83c9969f7ba44503f96abe6edb88694ab",
+      "samples": 554,
+      "lost_samples": 0,
+      "owner_samples": {
+        "client": 0,
+        "server": 21,
+        "shared": 533
+      },
+      "raw_single_frame_stacks": 250,
+      "raw_stacks_containing_unknown": 177,
+      "sample_span_seconds": 2.982471,
+      "raw_profile_path": "/workspace/kimojio-rs/target/perf/profiles-final/wrapper/perf.data",
+      "raw_profile_sha256": "addbca748d94f1e8b7b5df07657865a9258161361c72b61efcf024abb8183e98",
+      "raw_profile_bytes": 9235776
+    },
+    "websocket": {
+      "build_id": "934c4bddf792f11ffbaf4237eb33bac638290b78",
+      "samples": 184,
+      "lost_samples": 0,
+      "owner_samples": {
+        "client": 0,
+        "server": 131,
+        "shared": 53
+      },
+      "raw_single_frame_stacks": 54,
+      "raw_stacks_containing_unknown": 122,
+      "sample_span_seconds": 2.987431,
+      "raw_profile_path": "/workspace/kimojio-rs/target/perf/profiles-final/websocket/perf.data",
+      "raw_profile_sha256": "4ddb6665c99577a02eabe9bf5ebfda34f81db7119d026c57da5257c58f5d6c3a",
+      "raw_profile_bytes": 3081800
+    },
+    "client": {
+      "build_id": "6ed57a0e04006e721fef976c44faada3bc60b00f",
+      "samples": 953,
+      "lost_samples": 0,
+      "owner_samples": {
+        "client": 505,
+        "server": 0,
+        "shared": 448
+      },
+      "raw_single_frame_stacks": 228,
+      "raw_stacks_containing_unknown": 195,
+      "sample_span_seconds": 3.001774,
+      "raw_profile_path": "/workspace/kimojio-rs/target/perf/profiles-final/client/perf.data",
+      "raw_profile_sha256": "b3aee08b9b5a791949d746dea4d177d7afdce45fd3401bc08f1b3819f8ffe73f",
+      "raw_profile_bytes": 15872264
+    }
+  },
+  "copy_candidates": [
+    {
+      "rank": 1,
+      "profile": "client",
+      "symbol": "PollFn::poll",
+      "symbol_start": "0x7ed80",
+      "site_offset": "0xb9",
+      "site_address": "0x7ee39",
+      "instruction": "memcpy",
+      "kind": "explicit",
+      "bytes": null,
+      "maximum_bytes": 16384,
+      "length_expression": "min(offered_buffer_length, buffered_available)",
+      "near_samples": 19,
+      "copy_supported_samples": 19,
+      "parent_self_samples": 2,
+      "parent_inclusive_samples": 21,
+      "necessary": "Current staging design only; investigate direct read when staging is empty"
+    },
+    {
+      "rank": 2,
+      "profile": "wrapper",
+      "symbol": "MaybeDone::poll",
+      "symbol_start": "0x6eed0",
+      "site_offset": "0x9f2",
+      "site_address": "0x6f8c2",
+      "instruction": "memcpy",
+      "kind": "move",
+      "bytes": 264,
+      "near_samples": 7,
+      "copy_supported_samples": 7,
+      "parent_self_samples": 48,
+      "parent_inclusive_samples": 104,
+      "necessary": "Ownership transfer required; intermediate stack location potentially avoidable"
+    },
+    {
+      "rank": 3,
+      "profile": "websocket",
+      "symbol": "Server::next",
+      "symbol_start": "0x43630",
+      "site_offset": "0x890",
+      "site_address": "0x43ec0",
+      "instruction": "movups/movaps sequence",
+      "kind": "move",
+      "bytes": 80,
+      "near_samples": 6,
+      "copy_supported_samples": 6,
+      "parent_self_samples": 70,
+      "parent_inclusive_samples": 71,
+      "necessary": "No external lifetime requires the local iterator staging value"
+    }
+  ],
+  "nonpriorities": [
+    {
+      "profile": "wrapper",
+      "site": "Unfold::poll_next@0x6bf70+0x82",
+      "instruction": "memset",
+      "fill_byte": 120,
+      "bytes": 16384,
+      "near_samples": 19,
+      "initialization_samples": 9,
+      "excluded_allocation_samples": 10
+    },
+    {
+      "profile": "websocket",
+      "site": "TaskState::schedule_new@0x3b1a0+0x2d",
+      "bytes": 928,
+      "near_samples": 2
+    },
+    {
+      "profile": "websocket",
+      "site": "run@0x33100+0x25d1",
+      "bytes": 280,
+      "near_samples": 2
+    },
+    {
+      "profile": "static",
+      "site": "Ring::submit@0x40730+0x8f",
+      "bytes": 392,
+      "near_samples": 4,
+      "excluded_allocation_samples": 3,
+      "remaining_self_neighborhood_samples": 1
+    },
+    {
+      "profile": "wrapper",
+      "site": "Pin::poll@0x4efd0+0xdc5",
+      "bytes": 16400,
+      "near_samples": 0,
+      "classification": "cold"
+    },
+    {
+      "profile": "websocket",
+      "site": "Chat::next@0x51eb0+0xf84",
+      "bytes": 1616,
+      "near_samples": 0,
+      "classification": "cold"
+    }
+  ],
+  "noncopy_hotspots": [
+    {
+      "profile": "client",
+      "symbol_start": "0x4c4c0",
+      "offset_range": [
+        "0x3230",
+        "0x3241"
+      ],
+      "samples": 483,
+      "purpose": "Required ASCII x comparison loop"
+    },
+    {
+      "profile": "websocket",
+      "symbol_start": "0x43630",
+      "offset_range": [
+        "0xed0",
+        "0xeec"
+      ],
+      "samples": 40,
+      "purpose": "WebSocket payload masking"
+    },
+    {
+      "profile": "static",
+      "symbol_start": "0x2e160",
+      "offset": "0x18c0",
+      "samples": 12,
+      "purpose": "HTTP header-terminator comparison/branch"
+    }
+  ],
+  "limitations": [
+    "Short userspace-only software-clock recordings",
+    "Incomplete and occasionally implausible recovered ancestor stacks",
+    "Dynamic rdx values unavailable",
+    "No predicted speedups or comparative throughput conclusions",
+    "No new allocation measurements",
+    "No generated MIR or new compilation",
+    "Cold labels apply only to these recordings"
+  ]
+}

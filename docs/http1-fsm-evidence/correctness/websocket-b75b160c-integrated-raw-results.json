@@ -1,0 +1,117 @@
+{
+  "publication": {
+    "integration_commit": "b75b160c61fb44bc52e6115a9998226babe714eb",
+    "profile": "release",
+    "owner_commit": "6105bdf000cd1623d76ba2fe1e3b6c2f4286f043",
+    "http_commit": "953a9ed40bb6eee0166e0390c1f6be7c05523a4f",
+    "websocket_commit": "a4ecfafc6772daca59d5a011c584aeb46a7a8556",
+    "binary": "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+    "binary_sha256": "2eeb47596a050ba4b50a70fc9e829c4af991912acdc1afbc4b6335bfdd987dce",
+    "source_mapping_provenance": "Parent-published final integrated release mapping. Binary hash independently calculated.",
+    "parent_checks": {
+      "chat_tests": 32,
+      "both_clippys": "pass",
+      "chat_review": "Public Config mismatch fixed and parent-reviewed."
+    },
+    "public_config_scope": "CLI already normalizes the constructor invariant; invalid public Config rejection remains owner-native-unit evidence, not CLI wire evidence."
+  },
+  "command": [
+    "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+    "--bind",
+    "127.0.0.1:0",
+    "--run-for-ms",
+    "60000"
+  ],
+  "results": [
+    {
+      "case": "broadcast",
+      "passed": true
+    },
+    {
+      "case": "fragment-control",
+      "passed": true
+    },
+    {
+      "case": "coalesced-upgrade",
+      "passed": true
+    },
+    {
+      "case": "unmasked-client",
+      "passed": true
+    },
+    {
+      "case": "reserved-opcode",
+      "passed": true
+    },
+    {
+      "case": "fragmented-ping",
+      "passed": true
+    },
+    {
+      "case": "oversized-ping",
+      "passed": true
+    },
+    {
+      "case": "orphan-continuation",
+      "passed": true
+    },
+    {
+      "case": "invalid-text-utf8",
+      "passed": true
+    },
+    {
+      "case": "partial-close-code",
+      "passed": true
+    },
+    {
+      "case": "forbidden-close-code",
+      "passed": true
+    },
+    {
+      "case": "invalid-close-utf8",
+      "passed": true
+    },
+    {
+      "case": "reserved-rsv",
+      "passed": true
+    },
+    {
+      "case": "nonminimal-length",
+      "passed": true
+    },
+    {
+      "case": "new-data-mid-fragment",
+      "passed": true
+    },
+    {
+      "case": "handshake-wrong-version",
+      "passed": true
+    },
+    {
+      "case": "handshake-short-key",
+      "passed": true
+    },
+    {
+      "case": "handshake-missing-upgrade",
+      "passed": true
+    },
+    {
+      "case": "handshake-wrong-method",
+      "passed": true
+    }
+  ],
+  "node": {
+    "exit": 0,
+    "stdout": "{\"received\":true,\"code\":1000,\"reason\":\"done\",\"clean\":true}\n",
+    "stderr": ""
+  },
+  "peer_log": "stdout: LISTEN 127.0.0.1:43949\n",
+  "harness_commit": "f06e99bb222f3309158660a501f0b73ef6e8a474",
+  "harness_source_sha256": {
+    "interop/websocket/ws_suite.py": "d1515815405ac97dc466d179e9f55cbab31861a8697e9538e4b0dbfcfa494680",
+    "interop/websocket/chat_suite.py": "ebeb6a4983e0bb146429fc9d60cb595f5e1534cf5aacf2bdf5724c4904bf9d02",
+    "interop/websocket/ws_wire.py": "39eb5853cc44042506db7e2f408f17dcfdff0499eae2beac51a50407640800f5",
+    "interop/websocket/peer.go": "aea5da60e716365766a6c77a09cdc00c90961870ff62b11c2266bd64618aa541",
+    "interop/websocket/node_peer.js": "4e2d064e718f01cb33d974769acd6cd782e67549f07c88f68e0a63dd834a65a5"
+  }
+}

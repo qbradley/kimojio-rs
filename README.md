@@ -65,6 +65,18 @@ through independent native-FSM and Kimojio consumers.
 The [standalone HTTP/1 crate](kimojio-fsm-http1/README.md) contains synchronous
 client and server machines with caller-owned I/O execution.
 
+| Component | Purpose |
+| --- | --- |
+| [Kimojio HTTP/1 wrapper](kimojio-http1/README.md) | Conventional async client, handlers, and body streams |
+| [Static-file server](examples/http1-static/README.md) | HTTP and file FSMs with a direct `rustix-uring` driver |
+| [WebSocket FSM](kimojio-fsm-websocket/README.md) | Runtime-neutral RFC 6455 server and HTTP upgrade |
+| [Broadcast chat](examples/websocket-chat/README.md) | Bounded application FSM with a Kimojio raw-I/O executor |
+
+The [HTTP harness](interop/http1/README.md) and [WebSocket harness](interop/websocket/README.md)
+use independent protocol peers.
+The [composition assessment](docs/http1-fsm-report.md) records the change topology,
+correctness evidence, performance results, and remaining limitations.
+
 ## Virtual Clock for Testing
 
 Kimojio supports deterministic timing via a virtual clock, enabling tests

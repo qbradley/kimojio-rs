@@ -1,0 +1,115 @@
+{
+  "ledger_source_revision": "5f25b94f9a13d1c5b001fd4f01050bbb9ba96fb9",
+  "jj_change": "qozoolpmtnqkvpnnvtlomznmkxnnrkmn",
+  "format": {
+    "command": "cargo fmt",
+    "result": "pass"
+  },
+  "clippy": {
+    "commands": [
+      "cargo clippy --offline",
+      "cargo clippy --offline --all-targets --all-features"
+    ],
+    "result": "pass",
+    "warnings": 0
+  },
+  "rust_tests": {
+    "command": "cargo test --workspace --all-features --offline",
+    "passed": 681,
+    "failed": 0,
+    "ignored": 4,
+    "ignored_scope": "Pre-existing ignored doctests listed in ignored_tests",
+    "ignored_tests": [
+      "test kimojio-macros/src/lib.rs - main (line 20) ... ignored",
+      "test kimojio-macros/src/lib.rs - main (line 29) ... ignored",
+      "test kimojio-macros/src/lib.rs - test (line 106) ... ignored",
+      "test kimojio-macros/src/lib.rs - test (line 116) ... ignored"
+    ]
+  },
+  "benchmark_tests": {
+    "command": "cargo test -p kimojio-http1 --example bench_client --all-features --offline",
+    "passed": 6,
+    "failed": 0
+  },
+  "python_tests": {
+    "http1": 44,
+    "websocket": 24,
+    "performance": 12,
+    "profile_outcomes": 4,
+    "result": "pass"
+  },
+  "go_performance": {
+    "command": "python3 -B interop/perf/run.py build",
+    "unit_tests": 10,
+    "vet": "pass",
+    "build": "pass"
+  },
+  "peer_checks": {
+    "commands": [
+      "go vet interop/http1/peer.go",
+      "go vet interop/websocket/peer.go",
+      "node --check interop/websocket/node_peer.js"
+    ],
+    "result": "pass"
+  },
+  "preparatory_failure": "The first performance self-test invocation lacked target/perf/tool-publication.json. The documented build prerequisite supplied it; the subsequent complete 12-test run passed.",
+  "source_equivalence": [
+    {
+      "release_revision": "df5c5c193639f4305650c8cb2870ba67eda60e71",
+      "paths": [
+        "kimojio-fsm-http1/src",
+        "kimojio-http1/src",
+        "examples/http1-static/src"
+      ],
+      "git_diff_exit_code": 0
+    },
+    {
+      "release_revision": "b75b160c61fb44bc52e6115a9998226babe714eb",
+      "paths": [
+        "kimojio-fsm-websocket/src",
+        "examples/websocket-chat/src"
+      ],
+      "git_diff_exit_code": 0
+    }
+  ],
+  "archive_checks": "All four compressed and uncompressed SHA256 values match performance/archive-index.json",
+  "topology": "Three parents: nlsrqplwpylu, stzrupowmmtz, nyrxrxlpnvpm; no conflicts",
+  "logs": [
+    {
+      "path": "target/final-clippy.log",
+      "sha256": "8e0562c4444b27d0c74afad2b7ee065adada576be8a96d0ddc41389278e2cb2e"
+    },
+    {
+      "path": "target/final-clippy-all.log",
+      "sha256": "cc84d0d0ab980081901c8bdf938ef1ae0f35313e0d6b495df0cf128807af6541"
+    },
+    {
+      "path": "target/final-workspace-tests.log",
+      "sha256": "d882287c08429cce520220ae2d954ceb0e082aea8e03dcfe85ad880dd3b746d1"
+    },
+    {
+      "path": "target/final-bench-client-tests.log",
+      "sha256": "fb66eb9a3b9cc96845acec564879f6a64a17b34d8cd116ad4025bd61cfa8474a"
+    },
+    {
+      "path": "target/final-http-harness-tests.log",
+      "sha256": "b0fe92c1587455edc1ab353c9b9d5bc8422c7cc604aacf050a2a76924850afb3"
+    },
+    {
+      "path": "target/final-ws-harness-tests.log",
+      "sha256": "8b8153aa66222727d8cdcd89de3320bf7cc6207b65e034e4c01da9f397d60b5c"
+    },
+    {
+      "path": "target/final-perf-harness-tests.log",
+      "sha256": "95ee8324b3b2fb83c45fdceb3dcd5e3728556347e7d12ffdfef7131cd1c104b2"
+    },
+    {
+      "path": "target/final-profile-tests.log",
+      "sha256": "feabb4add9e2ca3374e538560634d1ec97dc4f4ce89aab12f3d726e36ea9b2f6"
+    },
+    {
+      "path": "target/final-perf-build.log",
+      "sha256": "f96f7adc7908afbd225e1f1df48263d540057c55707c912de4415ba8ed7e49d6"
+    }
+  ]
+}

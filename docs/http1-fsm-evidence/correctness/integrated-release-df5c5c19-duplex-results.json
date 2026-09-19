@@ -1,0 +1,314 @@
+{
+  "results": [
+    {
+      "case": "server-duplex-length",
+      "response_head_before_request_body": true,
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "UE9TVCAvZWNobyBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQpDb25uZWN0aW9uOiBjbG9zZQ0KQ29udGVudC1MZW5ndGg6IDYNCg0K",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMjAwIE9LDQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KY29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "eof": false
+        },
+        {
+          "event": "send-intent",
+          "base64": "b25l",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "Mw0Kb25lDQo=",
+          "eof": false
+        },
+        {
+          "event": "send-intent",
+          "base64": "dHdv",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "Mw0KdHdvDQowDQoNCg==",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ]
+    },
+    {
+      "case": "server-duplex-chunked",
+      "response_head_before_request_body": true,
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "UE9TVCAvZWNobyBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQpDb25uZWN0aW9uOiBjbG9zZQ0KVHJhbnNmZXItRW5jb2Rpbmc6IGNodW5rZWQNClRyYWlsZXI6IFgtRHVwbGV4DQoNCg==",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMjAwIE9LDQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KY29ubmVjdGlvbjogY2xvc2UNCg0K",
+          "eof": false
+        },
+        {
+          "event": "send-intent",
+          "base64": "Mw0Kb25lDQo=",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "Mw0Kb25lDQo=",
+          "eof": false
+        },
+        {
+          "event": "send-intent",
+          "base64": "Mw0KdHdvDQo=",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "Mw0KdHdvDQo=",
+          "eof": false
+        },
+        {
+          "event": "send-intent",
+          "base64": "MA0KWC1EdXBsZXg6IGRvbmUNCg0K",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "MA0KeC1kdXBsZXg6IGRvbmUNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ]
+    },
+    {
+      "case": "server-duplex-length-expect",
+      "response_head_before_request_body": true,
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "UE9TVCAvZWNobyBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQpDb25uZWN0aW9uOiBjbG9zZQ0KQ29udGVudC1MZW5ndGg6IDYNCkV4cGVjdDogMTAwLWNvbnRpbnVlDQoNCg==",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMTAwIENvbnRpbnVlDQoNCkhUVFAvMS4xIDIwMCBPSw0KdHJhbnNmZXItZW5jb2Rpbmc6IGNodW5rZWQNCmNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+          "eof": false
+        },
+        {
+          "event": "send-intent",
+          "base64": "b25l",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "Mw0Kb25lDQo=",
+          "eof": false
+        },
+        {
+          "event": "send-intent",
+          "base64": "dHdv",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "Mw0KdHdvDQo=",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "MA0KDQo=",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ]
+    },
+    {
+      "case": "server-duplex-chunked-expect",
+      "response_head_before_request_body": true,
+      "passed": true,
+      "trace": [
+        {
+          "event": "send-intent",
+          "base64": "UE9TVCAvZWNobyBIVFRQLzEuMQ0KSG9zdDogbG9jYWxob3N0DQpDb25uZWN0aW9uOiBjbG9zZQ0KVHJhbnNmZXItRW5jb2Rpbmc6IGNodW5rZWQNClRyYWlsZXI6IFgtRHVwbGV4DQpFeHBlY3Q6IDEwMC1jb250aW51ZQ0KDQo=",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "SFRUUC8xLjEgMTAwIENvbnRpbnVlDQoNCkhUVFAvMS4xIDIwMCBPSw0KdHJhbnNmZXItZW5jb2Rpbmc6IGNodW5rZWQNCmNvbm5lY3Rpb246IGNsb3NlDQoNCg==",
+          "eof": false
+        },
+        {
+          "event": "send-intent",
+          "base64": "Mw0Kb25lDQo=",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "Mw0Kb25lDQo=",
+          "eof": false
+        },
+        {
+          "event": "send-intent",
+          "base64": "Mw0KdHdvDQo=",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "Mw0KdHdvDQo=",
+          "eof": false
+        },
+        {
+          "event": "send-intent",
+          "base64": "MA0KWC1EdXBsZXg6IGRvbmUNCg0K",
+          "chunk_size": null,
+          "completed": true
+        },
+        {
+          "event": "receive",
+          "base64": "MA0KeC1kdXBsZXg6IGRvbmUNCg0K",
+          "eof": false
+        },
+        {
+          "event": "receive",
+          "base64": "",
+          "eof": true
+        }
+      ]
+    },
+    {
+      "case": "client-duplex-length",
+      "request_body_bytes": 8388608,
+      "peer_verified_body_bytes": 8388608,
+      "phase": "final-response-sent",
+      "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjU1MzI5DQpjb250ZW50LWxlbmd0aDogODM4ODYwOA0KDQo=",
+      "request_wire_bytes_buffered_before_response_head": 0,
+      "receive_buffer_bytes": 8192,
+      "early_response_base64": "SFRUUC8xLjEgMjAwIE9LDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KVHJhaWxlcjogWC1EdXBsZXgNCkNvbm5lY3Rpb246IGNsb3NlDQoNCjE2DQpkdXBsZXgtcmVzcG9uc2Utc3RhcnQ6DQo=",
+      "passed": true
+    },
+    {
+      "case": "client-duplex-chunked",
+      "request_body_bytes": 8388608,
+      "peer_verified_body_bytes": 8388608,
+      "phase": "final-response-sent",
+      "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjM2MDI1DQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KDQo=",
+      "request_wire_bytes_buffered_before_response_head": 0,
+      "receive_buffer_bytes": 8192,
+      "early_response_base64": "SFRUUC8xLjEgMjAwIE9LDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KVHJhaWxlcjogWC1EdXBsZXgNCkNvbm5lY3Rpb246IGNsb3NlDQoNCjE2DQpkdXBsZXgtcmVzcG9uc2Utc3RhcnQ6DQo=",
+      "passed": true
+    },
+    {
+      "case": "client-duplex-length-expect",
+      "request_body_bytes": 8388608,
+      "peer_verified_body_bytes": 8388608,
+      "phase": "final-response-sent",
+      "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjU4NzgxDQpjb250ZW50LWxlbmd0aDogODM4ODYwOA0KZXhwZWN0OiAxMDAtY29udGludWUNCg0K",
+      "request_wire_bytes_buffered_before_response_head": 0,
+      "receive_buffer_bytes": 8192,
+      "early_response_base64": "SFRUUC8xLjEgMTAwIENvbnRpbnVlDQoNCkhUVFAvMS4xIDIwMCBPSw0KVHJhbnNmZXItRW5jb2Rpbmc6IGNodW5rZWQNClRyYWlsZXI6IFgtRHVwbGV4DQpDb25uZWN0aW9uOiBjbG9zZQ0KDQoxNg0KZHVwbGV4LXJlc3BvbnNlLXN0YXJ0Og0K",
+      "passed": true
+    },
+    {
+      "case": "client-duplex-chunked-expect",
+      "request_body_bytes": 8388608,
+      "peer_verified_body_bytes": 8388608,
+      "phase": "final-response-sent",
+      "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjQxNTI1DQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KZXhwZWN0OiAxMDAtY29udGludWUNCg0K",
+      "request_wire_bytes_buffered_before_response_head": 0,
+      "receive_buffer_bytes": 8192,
+      "early_response_base64": "SFRUUC8xLjEgMTAwIENvbnRpbnVlDQoNCkhUVFAvMS4xIDIwMCBPSw0KVHJhbnNmZXItRW5jb2Rpbmc6IGNodW5rZWQNClRyYWlsZXI6IFgtRHVwbGV4DQpDb25uZWN0aW9uOiBjbG9zZQ0KDQoxNg0KZHVwbGV4LXJlc3BvbnNlLXN0YXJ0Og0K",
+      "passed": true
+    }
+  ],
+  "scope": "Independent duplex progress, not deterministic kernel completion scheduling.",
+  "server_command": [
+    "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-server-df5c5c19-release",
+    "--bind",
+    "127.0.0.1:0",
+    "--connections",
+    "4"
+  ],
+  "server_log": "stdout: LISTEN 127.0.0.1:34753\n",
+  "adapter": {
+    "schema": 1,
+    "command": [
+      "python3",
+      "-B",
+      "interop/http1/kimojio_adapter.py",
+      "--client",
+      "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-client-df5c5c19-release",
+      "--request",
+      "{request_file}",
+      "--result",
+      "{result_file}"
+    ],
+    "capabilities": [
+      "basic",
+      "reuse",
+      "upload",
+      "chunked-upload",
+      "trailers",
+      "strict-framing",
+      "expect-continue"
+    ]
+  },
+  "publication": {
+    "integration_commit": "df5c5c193639f4305650c8cb2870ba67eda60e71",
+    "jj_change": "qozoolpmtnqkvpnnvtlomznmkxnnrkmn",
+    "profile": "release",
+    "component_mapping_provenance": "Parent-published integration mapping; full commit IDs resolved from shared git objects when available.",
+    "components": {
+      "core": "953a9ed40bb6eee0166e0390c1f6be7c05523a4f",
+      "static": "31ce475dd39172bc75f08df9cd4ce04fb505019d",
+      "wrapper": "39ec9351f542a7d31f1b30600fc0d1e858484631",
+      "websocket_protocol": "a4ecfafc6772daca59d5a011c584aeb46a7a8556"
+    },
+    "binaries": {
+      "static": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-static-df5c5c19-release",
+        "sha256": "ad7e56cd2c49d9aa0e2680013dbf7e1c212b2dfb253f79254a5817f2758de83b"
+      },
+      "server": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-server-df5c5c19-release",
+        "sha256": "aa67ef961b1e2a5c277ac97f90e8eca631d09179f22b87124c7564c82d36b465"
+      },
+      "client": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-client-df5c5c19-release",
+        "sha256": "5c15027df271b16e3e6b80ff800bca57afe7ff8103cf211bd0e9dd01215efe7e"
+      }
+    },
+    "parent_checks": "Full workspace/all-feature tests,fmt,bothclippys passed;4preexistingdoctests ignored; chat not included."
+  }
+}

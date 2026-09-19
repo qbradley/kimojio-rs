@@ -1,0 +1,36 @@
+[package]
+name = "fsm-allocation-probes"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+futures.workspace = true
+http1-static = { path = "../../examples/http1-static" }
+kimojio.workspace = true
+kimojio-http1.workspace = true
+rustix.workspace = true
+serde_json = "1"
+websocket-chat = { path = "../../examples/websocket-chat" }
+
+[[bin]]
+name = "alloc-http1-static"
+path = "src/static_server.rs"
+test = false
+
+[[bin]]
+name = "alloc-http1-wrapper"
+path = "src/http_server.rs"
+test = false
+
+[[bin]]
+name = "alloc-websocket-chat"
+path = "src/chat_server.rs"
+test = false
+
+[[bin]]
+name = "alloc-http1-client"
+path = "src/http_client.rs"
+test = false

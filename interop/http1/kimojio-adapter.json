@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "command": [
+    "python3",
+    "-B",
+    "interop/http1/kimojio_adapter.py",
+    "--client",
+    "target/debug/examples/client",
+    "--request",
+    "{request_file}",
+    "--result",
+    "{result_file}"
+  ],
+  "capabilities": [
+    "basic", "reuse", "upload", "chunked-upload", "trailers", "strict-framing", "expect-continue"
+  ]
+}

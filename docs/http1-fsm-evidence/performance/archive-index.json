@@ -1,0 +1,32 @@
+{
+  "artifacts": [
+    {
+      "path": "docs/http1-fsm-evidence/performance/measure-238a3833220146e88206ed7ef6abc716.json.gz",
+      "sha256": "90d510d42bde07472018097ec1c5831086b82eaac0fcf40211a39adb3a1552a4",
+      "uncompressed_sha256": "c3181a37ddef42e55eb726318d0db292ee52652b497da5a8f6325ecb8742be6f",
+      "uncompressed_bytes": 14508555,
+      "compressed_bytes": 859070
+    },
+    {
+      "path": "docs/http1-fsm-evidence/performance/measure-6eaba4398f324834bc2bc0d424655539.json.gz",
+      "sha256": "44d2796a29e3173cdb04b35cb8e3edb690055e603cc245b2dd946c3519834ea5",
+      "uncompressed_sha256": "79d5d3d1f4ce4e252d84643c9a433fb518b2da9c87e7c369fd7c8f171b372459",
+      "uncompressed_bytes": 3866371,
+      "compressed_bytes": 278753
+    },
+    {
+      "path": "docs/http1-fsm-evidence/performance/resource-challenges-final.json.gz",
+      "sha256": "82a27841f6dead3b51f5fc0572f4706d6387242ab4414e33a90dc286def55838",
+      "uncompressed_sha256": "14fadbd313d12b620f5d06c972b029300518ea2e424a8925807c65b7a22a0ac9",
+      "uncompressed_bytes": 266622,
+      "compressed_bytes": 14194
+    },
+    {
+      "path": "docs/http1-fsm-evidence/performance/measure-15e7a12f87274236821d9ee353b0c827.json.gz",
+      "sha256": "caeda3224bfdbcc9e2d30ad9a211063be2857c2f7cc178415f7a9fc580e9a961",
+      "uncompressed_sha256": "4b2200585f80b5f02a87ec65b153f8899716b5479abb97d4c6976fcef6cb6866",
+      "uncompressed_bytes": 2640988,
+      "compressed_bytes": 143410
+    }
+  ]
+}

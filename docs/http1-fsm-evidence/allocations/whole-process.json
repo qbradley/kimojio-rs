@@ -1,0 +1,327 @@
+{
+  "scope": "Whole-process Rust allocator calls; setup and shutdown included; not timing results",
+  "complete": true,
+  "requested": {
+    "counts": [
+      32,
+      128
+    ],
+    "sizes": [
+      128,
+      65536
+    ],
+    "fanout": 4,
+    "chat_run_for_ms": 15000
+  },
+  "revision": "994ea7ecabeee5b52e7adeafed33f2ae9eb5c719",
+  "rows": [
+    {
+      "target": "static",
+      "size": 128,
+      "successful_operations": 32,
+      "deliveries": 32,
+      "connections": 1,
+      "command": [
+        "/workspace/kimojio-rs/target/perf/frozen/994ea7ecabeee5b52e7adeafed33f2ae9eb5c719-alloc/alloc-http1-static",
+        "--bind",
+        "127.0.0.1:0",
+        "--root",
+        "/workspace/kimojio-rs/target/allocation-fixture-mv8dh9l8",
+        "--stop-after",
+        "32"
+      ],
+      "sha256": "1c3e61575f10f9b5473fd61268a06a2b66f92305ddf39055fb58deca8a8dfa77",
+      "counters": {
+        "alloc_calls": 550,
+        "zeroed_calls": 2,
+        "realloc_calls": 99,
+        "dealloc_calls": 549,
+        "failed_calls": 0,
+        "requested_bytes": 190599,
+        "live_bytes": 1484,
+        "peak_live_bytes": 75264
+      }
+    },
+    {
+      "target": "wrapper",
+      "size": 128,
+      "successful_operations": 32,
+      "deliveries": 32,
+      "connections": 1,
+      "command": [
+        "/workspace/kimojio-rs/target/perf/frozen/994ea7ecabeee5b52e7adeafed33f2ae9eb5c719-alloc/alloc-http1-wrapper",
+        "--bind",
+        "127.0.0.1:0",
+        "--connections",
+        "1"
+      ],
+      "sha256": "ac148424995c9bbc3ecc7334654f4a7e6f962e98799bfcca189c784ab3808825",
+      "counters": {
+        "alloc_calls": 4448,
+        "zeroed_calls": 1,
+        "realloc_calls": 67,
+        "dealloc_calls": 4445,
+        "failed_calls": 0,
+        "requested_bytes": 442986,
+        "live_bytes": 1532,
+        "peak_live_bytes": 113718
+      }
+    },
+    {
+      "target": "chat",
+      "size": 128,
+      "successful_operations": 32,
+      "deliveries": 128,
+      "connections": 4,
+      "command": [
+        "/workspace/kimojio-rs/target/perf/frozen/994ea7ecabeee5b52e7adeafed33f2ae9eb5c719-alloc/alloc-websocket-chat",
+        "--bind",
+        "127.0.0.1:0",
+        "--run-for-ms",
+        "15000"
+      ],
+      "sha256": "1eb33aa66157a197c81addc5e6b08ef49f3468064128d80d38ba11763735e37f",
+      "counters": {
+        "alloc_calls": 1200,
+        "zeroed_calls": 4,
+        "realloc_calls": 31,
+        "dealloc_calls": 1200,
+        "failed_calls": 0,
+        "requested_bytes": 416962,
+        "live_bytes": 1532,
+        "peak_live_bytes": 169796
+      }
+    },
+    {
+      "target": "static",
+      "size": 128,
+      "successful_operations": 128,
+      "deliveries": 128,
+      "connections": 1,
+      "command": [
+        "/workspace/kimojio-rs/target/perf/frozen/994ea7ecabeee5b52e7adeafed33f2ae9eb5c719-alloc/alloc-http1-static",
+        "--bind",
+        "127.0.0.1:0",
+        "--root",
+        "/workspace/kimojio-rs/target/allocation-fixture-mv8dh9l8",
+        "--stop-after",
+        "128"
+      ],
+      "sha256": "1c3e61575f10f9b5473fd61268a06a2b66f92305ddf39055fb58deca8a8dfa77",
+      "counters": {
+        "alloc_calls": 2086,
+        "zeroed_calls": 2,
+        "realloc_calls": 387,
+        "dealloc_calls": 2085,
+        "failed_calls": 0,
+        "requested_bytes": 527176,
+        "live_bytes": 1484,
+        "peak_live_bytes": 75264
+      }
+    },
+    {
+      "target": "wrapper",
+      "size": 128,
+      "successful_operations": 128,
+      "deliveries": 128,
+      "connections": 1,
+      "command": [
+        "/workspace/kimojio-rs/target/perf/frozen/994ea7ecabeee5b52e7adeafed33f2ae9eb5c719-alloc/alloc-http1-wrapper",
+        "--bind",
+        "127.0.0.1:0",
+        "--connections",
+        "1"
+      ],
+      "sha256": "ac148424995c9bbc3ecc7334654f4a7e6f962e98799bfcca189c784ab3808825",
+      "counters": {
+        "alloc_calls": 17600,
+        "zeroed_calls": 1,
+        "realloc_calls": 259,
+        "dealloc_calls": 17597,
+        "failed_calls": 0,
+        "requested_bytes": 1383306,
+        "live_bytes": 1532,
+        "peak_live_bytes": 113718
+      }
+    },
+    {
+      "target": "chat",
+      "size": 128,
+      "successful_operations": 128,
+      "deliveries": 512,
+      "connections": 4,
+      "command": [
+        "/workspace/kimojio-rs/target/perf/frozen/994ea7ecabeee5b52e7adeafed33f2ae9eb5c719-alloc/alloc-websocket-chat",
+        "--bind",
+        "127.0.0.1:0",
+        "--run-for-ms",
+        "15000"
+      ],
+      "sha256": "1eb33aa66157a197c81addc5e6b08ef49f3468064128d80d38ba11763735e37f",
+      "counters": {
+        "alloc_calls": 3966,
+        "zeroed_calls": 4,
+        "realloc_calls": 31,
+        "dealloc_calls": 3966,
+        "failed_calls": 0,
+        "requested_bytes": 1064386,
+        "live_bytes": 1532,
+        "peak_live_bytes": 169796
+      }
+    },
+    {
+      "target": "static",
+      "size": 65536,
+      "successful_operations": 32,
+      "deliveries": 32,
+      "connections": 1,
+      "command": [
+        "/workspace/kimojio-rs/target/perf/frozen/994ea7ecabeee5b52e7adeafed33f2ae9eb5c719-alloc/alloc-http1-static",
+        "--bind",
+        "127.0.0.1:0",
+        "--root",
+        "/workspace/kimojio-rs/target/allocation-fixture-mv8dh9l8",
+        "--stop-after",
+        "32"
+      ],
+      "sha256": "1c3e61575f10f9b5473fd61268a06a2b66f92305ddf39055fb58deca8a8dfa77",
+      "counters": {
+        "alloc_calls": 934,
+        "zeroed_calls": 2,
+        "realloc_calls": 99,
+        "dealloc_calls": 933,
+        "failed_calls": 0,
+        "requested_bytes": 284299,
+        "live_bytes": 1484,
+        "peak_live_bytes": 75264
+      }
+    },
+    {
+      "target": "wrapper",
+      "size": 65536,
+      "successful_operations": 32,
+      "deliveries": 32,
+      "connections": 1,
+      "command": [
+        "/workspace/kimojio-rs/target/perf/frozen/994ea7ecabeee5b52e7adeafed33f2ae9eb5c719-alloc/alloc-http1-wrapper",
+        "--bind",
+        "127.0.0.1:0",
+        "--connections",
+        "1"
+      ],
+      "sha256": "ac148424995c9bbc3ecc7334654f4a7e6f962e98799bfcca189c784ab3808825",
+      "counters": {
+        "alloc_calls": 8192,
+        "zeroed_calls": 1,
+        "realloc_calls": 67,
+        "dealloc_calls": 8189,
+        "failed_calls": 0,
+        "requested_bytes": 2776618,
+        "live_bytes": 1532,
+        "peak_live_bytes": 128896
+      }
+    },
+    {
+      "target": "chat",
+      "size": 65536,
+      "successful_operations": 32,
+      "deliveries": 128,
+      "connections": 4,
+      "command": [
+        "/workspace/kimojio-rs/target/perf/frozen/994ea7ecabeee5b52e7adeafed33f2ae9eb5c719-alloc/alloc-websocket-chat",
+        "--bind",
+        "127.0.0.1:0",
+        "--run-for-ms",
+        "15000"
+      ],
+      "sha256": "1eb33aa66157a197c81addc5e6b08ef49f3468064128d80d38ba11763735e37f",
+      "counters": {
+        "alloc_calls": 3870,
+        "zeroed_calls": 4,
+        "realloc_calls": 31,
+        "dealloc_calls": 3870,
+        "failed_calls": 0,
+        "requested_bytes": 4738242,
+        "live_bytes": 1532,
+        "peak_live_bytes": 261868
+      }
+    },
+    {
+      "target": "static",
+      "size": 65536,
+      "successful_operations": 128,
+      "deliveries": 128,
+      "connections": 1,
+      "command": [
+        "/workspace/kimojio-rs/target/perf/frozen/994ea7ecabeee5b52e7adeafed33f2ae9eb5c719-alloc/alloc-http1-static",
+        "--bind",
+        "127.0.0.1:0",
+        "--root",
+        "/workspace/kimojio-rs/target/allocation-fixture-mv8dh9l8",
+        "--stop-after",
+        "128"
+      ],
+      "sha256": "1c3e61575f10f9b5473fd61268a06a2b66f92305ddf39055fb58deca8a8dfa77",
+      "counters": {
+        "alloc_calls": 3622,
+        "zeroed_calls": 2,
+        "realloc_calls": 387,
+        "dealloc_calls": 3621,
+        "failed_calls": 0,
+        "requested_bytes": 901964,
+        "live_bytes": 1484,
+        "peak_live_bytes": 75264
+      }
+    },
+    {
+      "target": "wrapper",
+      "size": 65536,
+      "successful_operations": 128,
+      "deliveries": 128,
+      "connections": 1,
+      "command": [
+        "/workspace/kimojio-rs/target/perf/frozen/994ea7ecabeee5b52e7adeafed33f2ae9eb5c719-alloc/alloc-http1-wrapper",
+        "--bind",
+        "127.0.0.1:0",
+        "--connections",
+        "1"
+      ],
+      "sha256": "ac148424995c9bbc3ecc7334654f4a7e6f962e98799bfcca189c784ab3808825",
+      "counters": {
+        "alloc_calls": 32576,
+        "zeroed_calls": 1,
+        "realloc_calls": 259,
+        "dealloc_calls": 32573,
+        "failed_calls": 0,
+        "requested_bytes": 10717834,
+        "live_bytes": 1532,
+        "peak_live_bytes": 128896
+      }
+    },
+    {
+      "target": "chat",
+      "size": 65536,
+      "successful_operations": 128,
+      "deliveries": 512,
+      "connections": 4,
+      "command": [
+        "/workspace/kimojio-rs/target/perf/frozen/994ea7ecabeee5b52e7adeafed33f2ae9eb5c719-alloc/alloc-websocket-chat",
+        "--bind",
+        "127.0.0.1:0",
+        "--run-for-ms",
+        "15000"
+      ],
+      "sha256": "1eb33aa66157a197c81addc5e6b08ef49f3468064128d80d38ba11763735e37f",
+      "counters": {
+        "alloc_calls": 14718,
+        "zeroed_calls": 4,
+        "realloc_calls": 31,
+        "dealloc_calls": 14718,
+        "failed_calls": 0,
+        "requested_bytes": 18355650,
+        "live_bytes": 1532,
+        "peak_live_bytes": 261868
+      }
+    }
+  ]
+}

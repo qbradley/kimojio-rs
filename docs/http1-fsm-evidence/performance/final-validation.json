@@ -1,0 +1,30 @@
+{
+  "clock_ticks_per_second": 100,
+  "go_build_info": "go-build-info.txt",
+  "go_build_info_sha256": "2ba0d2a453782a4c680b87dc8325ab467b4dc0891b454603c2fece5848fd382c",
+  "measurements_complete": true,
+  "production_optimizations": false,
+  "primary_rows": 126,
+  "single_core_control_rows": 30,
+  "valid_rows": 180,
+  "request_errors": 0,
+  "warmup_errors": 0,
+  "stderr_rows": 0,
+  "native_client_limit_retirements": 0,
+  "native_histogram_overflows": 0,
+  "resource_groups_passed": 6,
+  "checks": {
+    "go_unit_tests": 10,
+    "python_selftests": 12,
+    "go_vet": "pass",
+    "cargo_fmt": "pass",
+    "cargo_clippy": "pass",
+    "cargo_clippy_all_targets_all_features": "pass",
+    "compressed_archive_checksums": "pass"
+  },
+  "go_build_info_format": "go version -m output with trailing whitespace removed",
+  "large_chunked_supplement_rows": 24,
+  "large_chunked_progress_probes": 4,
+  "large_chunked_go_tool_sha256": "0ccd7b424609fa22cace0fe97c88d2f9315a168dfd1278ddd7853ef7a511382c",
+  "earlier_primary_control_resource_artifacts_unchanged": true
+}

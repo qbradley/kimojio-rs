@@ -1,0 +1,257 @@
+{
+  "profile": "strict",
+  "matrix": "application-boundary-v3",
+  "command": [
+    "/workspace/kimojio-rs/target/interop-publication/http1-static-df5c5c19-release",
+    "--bind",
+    "127.0.0.1:0",
+    "--root",
+    "/workspace/home/qbradley/fsm-http1-interop/target/interop/run-ca4ff94e942e4841b6d18b9629b04ab0/root",
+    "--max-connections",
+    "32",
+    "--timeout-ms",
+    "2000"
+  ],
+  "fixture_sha256": "c09e97ef46845f58b0ac9b3bc5413ac6646a5ab114262bd14cd00246b99d7d2f",
+  "results": [
+    {
+      "case": "get",
+      "passed": true,
+      "seconds": 0.002966,
+      "policy": "portable"
+    },
+    {
+      "case": "head",
+      "passed": true,
+      "seconds": 0.000404,
+      "policy": "portable"
+    },
+    {
+      "case": "empty",
+      "passed": true,
+      "seconds": 0.000367,
+      "policy": "portable"
+    },
+    {
+      "case": "encoded-space",
+      "passed": true,
+      "seconds": 0.000378,
+      "policy": "portable"
+    },
+    {
+      "case": "nested",
+      "passed": true,
+      "seconds": 0.000361,
+      "policy": "portable"
+    },
+    {
+      "case": "missing",
+      "passed": true,
+      "seconds": 0.000358,
+      "policy": "portable"
+    },
+    {
+      "case": "keepalive",
+      "passed": true,
+      "seconds": 0.000534,
+      "policy": "portable"
+    },
+    {
+      "case": "pipeline",
+      "passed": true,
+      "seconds": 0.000373,
+      "policy": "portable"
+    },
+    {
+      "case": "fragmented-request",
+      "passed": true,
+      "seconds": 0.001193,
+      "policy": "portable"
+    },
+    {
+      "case": "http10-close",
+      "passed": true,
+      "seconds": 0.000395,
+      "policy": "portable"
+    },
+    {
+      "case": "head-then-get",
+      "passed": true,
+      "seconds": 0.000559,
+      "policy": "portable"
+    },
+    {
+      "case": "unsupported-expect",
+      "passed": true,
+      "seconds": 0.000312,
+      "policy": "portable"
+    },
+    {
+      "case": "content-length-request",
+      "passed": true,
+      "seconds": 0.001966,
+      "policy": "portable"
+    },
+    {
+      "case": "chunked-request",
+      "passed": true,
+      "seconds": 0.002277,
+      "policy": "portable"
+    },
+    {
+      "case": "request-trailers",
+      "passed": true,
+      "seconds": 0.00256,
+      "policy": "portable"
+    },
+    {
+      "case": "python-client",
+      "passed": true,
+      "seconds": 0.046125,
+      "policy": "portable"
+    },
+    {
+      "case": "traversal",
+      "passed": true,
+      "seconds": 0.001264,
+      "policy": "portable"
+    },
+    {
+      "case": "conflicting-length",
+      "passed": true,
+      "seconds": 0.000264,
+      "policy": "portable"
+    },
+    {
+      "case": "negative-length",
+      "passed": true,
+      "seconds": 0.000255,
+      "policy": "portable"
+    },
+    {
+      "case": "nondigit-length",
+      "passed": true,
+      "seconds": 0.000218,
+      "policy": "portable"
+    },
+    {
+      "case": "missing-host",
+      "passed": true,
+      "seconds": 0.000233,
+      "policy": "portable"
+    },
+    {
+      "case": "duplicate-host",
+      "passed": true,
+      "seconds": 0.000284,
+      "policy": "portable"
+    },
+    {
+      "case": "space-in-name",
+      "passed": true,
+      "seconds": 0.000306,
+      "policy": "portable"
+    },
+    {
+      "case": "space-before-colon",
+      "passed": true,
+      "seconds": 0.000249,
+      "policy": "portable"
+    },
+    {
+      "case": "nul-in-field",
+      "passed": true,
+      "seconds": 0.00024,
+      "policy": "portable"
+    },
+    {
+      "case": "bad-method",
+      "passed": true,
+      "seconds": 0.000231,
+      "policy": "portable"
+    },
+    {
+      "case": "overflow-length",
+      "passed": true,
+      "seconds": 0.000224,
+      "policy": "portable"
+    },
+    {
+      "case": "transfer-encoding-with-length",
+      "passed": true,
+      "seconds": 0.000298,
+      "policy": "strict"
+    },
+    {
+      "case": "folded-field",
+      "passed": true,
+      "seconds": 0.000226,
+      "policy": "strict"
+    },
+    {
+      "case": "bare-lf",
+      "passed": true,
+      "seconds": 0.000245,
+      "policy": "strict"
+    },
+    {
+      "case": "bare-lf-prefix",
+      "passed": true,
+      "seconds": 0.000219,
+      "policy": "strict"
+    },
+    {
+      "case": "bare-cr-prefix",
+      "passed": true,
+      "seconds": 0.000224,
+      "policy": "strict"
+    },
+    {
+      "case": "symlink-escape",
+      "passed": true,
+      "seconds": 0.000242,
+      "policy": "strict"
+    },
+    {
+      "case": "go-client-get",
+      "passed": true
+    },
+    {
+      "case": "go-client-head",
+      "passed": true
+    }
+  ],
+  "peers": [
+    "python-raw",
+    "python-http.client",
+    "go-net/http"
+  ],
+  "peer_log": "stdout: LISTEN 127.0.0.1:54295\n\nstderr: connection 12: ExpectationFailed\nconnection 22: Protocol\nconnection 23: Protocol\nconnection 24: Protocol\nconnection 25: Protocol\nconnection 26: Protocol\nconnection 27: Protocol\nconnection 28: Protocol\nconnection 29: Protocol\nconnection 30: Protocol\nconnection 31: Protocol\nconnection 32: Protocol\nconnection 33: Protocol\nconnection 34: Protocol\nconnection 35: Protocol\nconnection 36: Protocol\n",
+  "publication": {
+    "integration_commit": "df5c5c193639f4305650c8cb2870ba67eda60e71",
+    "jj_change": "qozoolpmtnqkvpnnvtlomznmkxnnrkmn",
+    "profile": "release",
+    "component_mapping_provenance": "Parent-published integration mapping; full commit IDs resolved from shared git objects when available.",
+    "components": {
+      "core": "953a9ed40bb6eee0166e0390c1f6be7c05523a4f",
+      "static": "31ce475dd39172bc75f08df9cd4ce04fb505019d",
+      "wrapper": "39ec9351f542a7d31f1b30600fc0d1e858484631",
+      "websocket_protocol": "a4ecfafc6772daca59d5a011c584aeb46a7a8556"
+    },
+    "binaries": {
+      "static": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-static-df5c5c19-release",
+        "sha256": "ad7e56cd2c49d9aa0e2680013dbf7e1c212b2dfb253f79254a5817f2758de83b"
+      },
+      "server": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-server-df5c5c19-release",
+        "sha256": "aa67ef961b1e2a5c277ac97f90e8eca631d09179f22b87124c7564c82d36b465"
+      },
+      "client": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-client-df5c5c19-release",
+        "sha256": "5c15027df271b16e3e6b80ff800bca57afe7ff8103cf211bd0e9dd01215efe7e"
+      }
+    },
+    "parent_checks": "Full workspace/all-feature tests,fmt,bothclippys passed;4preexistingdoctests ignored; chat not included."
+  }
+}

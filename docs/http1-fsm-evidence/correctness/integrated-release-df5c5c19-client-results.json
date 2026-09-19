@@ -1,0 +1,262 @@
+{
+  "schema": 1,
+  "adapter": {
+    "schema": 1,
+    "command": [
+      "python3",
+      "-B",
+      "interop/http1/kimojio_adapter.py",
+      "--client",
+      "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-client-df5c5c19-release",
+      "--request",
+      "{request_file}",
+      "--result",
+      "{result_file}"
+    ],
+    "capabilities": [
+      "basic",
+      "reuse",
+      "upload",
+      "chunked-upload",
+      "trailers",
+      "strict-framing",
+      "expect-continue"
+    ]
+  },
+  "capabilities": [
+    "basic",
+    "reuse",
+    "upload",
+    "chunked-upload",
+    "trailers",
+    "strict-framing",
+    "expect-continue"
+  ],
+  "results": [
+    {
+      "case": "length",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 67
+        }
+      ],
+      "seconds": 0.103528
+    },
+    {
+      "case": "chunked",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 67
+        }
+      ],
+      "seconds": 0.102884
+    },
+    {
+      "case": "interim",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 67
+        }
+      ],
+      "seconds": 0.102332
+    },
+    {
+      "case": "head",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 68
+        }
+      ],
+      "seconds": 0.10237
+    },
+    {
+      "case": "no-content",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 67
+        }
+      ],
+      "seconds": 0.102329
+    },
+    {
+      "case": "not-modified",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 67
+        }
+      ],
+      "seconds": 0.102271
+    },
+    {
+      "case": "close-delimited",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 67
+        }
+      ],
+      "seconds": 0.102163
+    },
+    {
+      "case": "truncated-length",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 67
+        }
+      ],
+      "seconds": 0.102632
+    },
+    {
+      "case": "truncated-chunk",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 67
+        }
+      ],
+      "seconds": 0.102497
+    },
+    {
+      "case": "conflicting-length",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 67
+        }
+      ],
+      "seconds": 0.112529
+    },
+    {
+      "case": "invalid-status",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 67
+        }
+      ],
+      "seconds": 0.102348
+    },
+    {
+      "case": "reuse",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 67
+        },
+        {
+          "index": 1,
+          "request_bytes": 67
+        }
+      ],
+      "seconds": 0.102367
+    },
+    {
+      "case": "upload",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 87
+        }
+      ],
+      "seconds": 0.112332
+    },
+    {
+      "case": "chunked-upload",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 106
+        }
+      ],
+      "seconds": 0.102585
+    },
+    {
+      "case": "transfer-encoding-with-length",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 67
+        }
+      ],
+      "seconds": 0.122577
+    },
+    {
+      "case": "expect-continue",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 109
+        }
+      ],
+      "seconds": 0.102641
+    },
+    {
+      "case": "expect-reject",
+      "passed": true,
+      "observations": [
+        {
+          "index": 0,
+          "request_bytes": 91
+        }
+      ],
+      "seconds": 0.102561
+    }
+  ],
+  "not_covered": [
+    "cancel",
+    "stalled-upload",
+    "upgrade",
+    "deterministic-short-write",
+    "interim"
+  ],
+  "publication": {
+    "integration_commit": "df5c5c193639f4305650c8cb2870ba67eda60e71",
+    "jj_change": "qozoolpmtnqkvpnnvtlomznmkxnnrkmn",
+    "profile": "release",
+    "component_mapping_provenance": "Parent-published integration mapping; full commit IDs resolved from shared git objects when available.",
+    "components": {
+      "core": "953a9ed40bb6eee0166e0390c1f6be7c05523a4f",
+      "static": "31ce475dd39172bc75f08df9cd4ce04fb505019d",
+      "wrapper": "39ec9351f542a7d31f1b30600fc0d1e858484631",
+      "websocket_protocol": "a4ecfafc6772daca59d5a011c584aeb46a7a8556"
+    },
+    "binaries": {
+      "static": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-static-df5c5c19-release",
+        "sha256": "ad7e56cd2c49d9aa0e2680013dbf7e1c212b2dfb253f79254a5817f2758de83b"
+      },
+      "server": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-server-df5c5c19-release",
+        "sha256": "aa67ef961b1e2a5c277ac97f90e8eca631d09179f22b87124c7564c82d36b465"
+      },
+      "client": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-client-df5c5c19-release",
+        "sha256": "5c15027df271b16e3e6b80ff800bca57afe7ff8103cf211bd0e9dd01215efe7e"
+      }
+    },
+    "parent_checks": "Full workspace/all-feature tests,fmt,bothclippys passed;4preexistingdoctests ignored; chat not included."
+  }
+}

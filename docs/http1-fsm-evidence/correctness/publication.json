@@ -1,0 +1,302 @@
+{
+  "status_updated_at": "2026-09-19T10:58:29.129013+00:00",
+  "status": "Final independent correctness gates green: HTTP integrated df5c5c19 PASS93/93; WS integrated b75b160c PASS30/30. Parent reports chat review fixed/approved. No performance measurements started.",
+  "publication": {
+    "integration_commit": "df5c5c193639f4305650c8cb2870ba67eda60e71",
+    "jj_change": "qozoolpmtnqkvpnnvtlomznmkxnnrkmn",
+    "profile": "release",
+    "component_mapping_provenance": "Parent-published integration mapping; full commit IDs resolved from shared git objects when available.",
+    "components": {
+      "core": "953a9ed40bb6eee0166e0390c1f6be7c05523a4f",
+      "static": "31ce475dd39172bc75f08df9cd4ce04fb505019d",
+      "wrapper": "39ec9351f542a7d31f1b30600fc0d1e858484631",
+      "websocket_protocol": "a4ecfafc6772daca59d5a011c584aeb46a7a8556"
+    },
+    "binaries": {
+      "static": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-static-df5c5c19-release",
+        "sha256": "ad7e56cd2c49d9aa0e2680013dbf7e1c212b2dfb253f79254a5817f2758de83b"
+      },
+      "server": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-server-df5c5c19-release",
+        "sha256": "aa67ef961b1e2a5c277ac97f90e8eca631d09179f22b87124c7564c82d36b465"
+      },
+      "client": {
+        "path": "/workspace/kimojio-rs/target/interop-publication/http1-wrapper-client-df5c5c19-release",
+        "sha256": "5c15027df271b16e3e6b80ff800bca57afe7ff8103cf211bd0e9dd01215efe7e"
+      }
+    },
+    "parent_checks": "Full workspace/all-feature tests,fmt,bothclippys passed;4preexistingdoctests ignored; chat not included."
+  },
+  "provenance": "Exact published binaries independently SHA256-verified before and after execution. Integration/source/profile mapping parent-attested; shared git objects resolve component IDs. No source identity inferred from old owner binaries.",
+  "suites": {
+    "static": {
+      "passed": 35,
+      "total": 35,
+      "report": "/workspace/home/qbradley/fsm-http1-interop/target/interop/integrated-release-df5c5c19-static-results.json",
+      "report_sha256": "a23314e5216041cc24ebc0b219b4bc3ad1c7399769fd441b5359e717622b2ddd"
+    },
+    "recovery": {
+      "passed": 13,
+      "total": 13,
+      "report": "/workspace/home/qbradley/fsm-http1-interop/target/interop/integrated-release-df5c5c19-recovery-results.json",
+      "report_sha256": "be8633f6bc6a78ca2aa41e87106f06807bc5e4c32818b688592f601f5a8f99bf",
+      "baseline_fds": 6,
+      "final_fds": 6,
+      "recovery_fd_samples": [
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6
+      ]
+    },
+    "wrapper": {
+      "passed": 20,
+      "total": 20,
+      "report": "/workspace/home/qbradley/fsm-http1-interop/target/interop/integrated-release-df5c5c19-wrapper-results.json",
+      "report_sha256": "d00850b0cfc2e44253af3d7979bf82f57df6ee18d3e16b7780f62ba4635b268a"
+    },
+    "client": {
+      "passed": 17,
+      "total": 17,
+      "report": "/workspace/home/qbradley/fsm-http1-interop/target/interop/integrated-release-df5c5c19-client-results.json",
+      "report_sha256": "73f0d97532d91446952686726cd9f0d8920d98981a8b23a5b507a7892765ff41"
+    },
+    "duplex": {
+      "passed": 8,
+      "total": 8,
+      "report": "/workspace/home/qbradley/fsm-http1-interop/target/interop/integrated-release-df5c5c19-duplex-results.json",
+      "report_sha256": "c36f05c35707e6f0d5679e756ac6ec3e061744063876200c837015295a9b6169"
+    }
+  },
+  "harness": {
+    "commit": "f06e99bb222f3309158660a501f0b73ef6e8a474",
+    "worktree": "/workspace/home/qbradley/fsm-http1-interop",
+    "clean": true,
+    "trailers_verified": true,
+    "checks": {
+      "http_selftests": 44,
+      "websocket_selftests": 24,
+      "go_vet": "HTTP and WS peers pass",
+      "node_syntax": "pass",
+      "cargo_fmt_all_check": "pass",
+      "cargo_clippy_locked": "pass",
+      "cargo_clippy_locked_all_targets_all_features": "pass",
+      "cargo_fmt_all": "pass"
+    },
+    "check_scope": "Current committed main-based harness worktree; parent separately reported integrated workspace tests/lints.",
+    "base_http_export_commit": "2c326dd58b9b0414fad4cf272e82144957ce3fa0"
+  },
+  "limits": [
+    "No benchmark or performance claim; recorded suite timings are correctness deadlines.",
+    "Normal GET reuse and live streaming echo are separate; no echo keepalive claim.",
+    "TCP probes do not deterministically inject kernel receipt ordering; exact native cancellation/admission ordering remains owner unit-test evidence.",
+    "Earlier 128KiB early413 targeted probes and owner native test counts apply only to their explicitly named historical binaries, not automatically to this release."
+  ],
+  "historical_ledger": "/workspace/home/qbradley/fsm-http1-interop/target/interop/previous-status-before-integrated-release-df5c5c19.json",
+  "historical_scope": "Prior core3a7/d0 and owner artifacts are retired checkpoint evidence; not current integrated release results.",
+  "websocket": {
+    "status": "PASS30/30 unchanged independent WS checks on authoritative final integrated release",
+    "publication": {
+      "integration_commit": "b75b160c61fb44bc52e6115a9998226babe714eb",
+      "profile": "release",
+      "owner_commit": "6105bdf000cd1623d76ba2fe1e3b6c2f4286f043",
+      "http_commit": "953a9ed40bb6eee0166e0390c1f6be7c05523a4f",
+      "websocket_commit": "a4ecfafc6772daca59d5a011c584aeb46a7a8556",
+      "binary": "/workspace/kimojio-rs/target/interop-publication/websocket-chat-b75b160c61fb44bc52e6115a9998226babe714eb-release",
+      "binary_sha256": "2eeb47596a050ba4b50a70fc9e829c4af991912acdc1afbc4b6335bfdd987dce",
+      "source_mapping_provenance": "Parent-published final integrated release mapping. Binary hash independently calculated.",
+      "parent_checks": {
+        "chat_tests": 32,
+        "both_clippys": "pass",
+        "chat_review": "Public Config mismatch fixed and parent-reviewed."
+      },
+      "public_config_scope": "CLI already normalizes the constructor invariant; invalid public Config rejection remains owner-native-unit evidence, not CLI wire evidence."
+    },
+    "reports": {
+      "raw": {
+        "passed": 19,
+        "total": 19,
+        "report": "/workspace/home/qbradley/fsm-http1-interop/target/interop/websocket-b75b160c-integrated-raw-results.json",
+        "sha256": "b530221b770a2a4374c5ebe517e14de1e6737c1d1337712e59d60526c7a8b7e7"
+      },
+      "contract": {
+        "passed": 11,
+        "total": 11,
+        "report": "/workspace/home/qbradley/fsm-http1-interop/target/interop/websocket-b75b160c-integrated-contract-results.json",
+        "sha256": "eaee67c32d6497830089e5f4874829f8f10c14ef47bfd276a965e6c39f291d55"
+      }
+    },
+    "harness_commit": "f06e99bb222f3309158660a501f0b73ef6e8a474",
+    "extra_raw_node_exit": 0,
+    "languages": [
+      "Python raw-wire oracle",
+      "Node built-in WebSocket",
+      "Go standard-library wire peer"
+    ],
+    "descriptor_observations": {
+      "baseline": 10,
+      "six_recovery_samples": [
+        10,
+        10,
+        10,
+        10,
+        10,
+        10
+      ]
+    },
+    "bounds": {
+      "ordinary_socket_deadline_seconds": 5,
+      "node_and_go_peer_deadline_seconds": 5,
+      "node_and_go_outer_process_deadline_seconds": 7,
+      "max_message_probe_bytes": 1024,
+      "slow_recipient": {
+        "max_message_bytes": 65536,
+        "max_queued_messages": 2,
+        "max_client_bytes": 262144,
+        "send_buffer_bytes": 4096,
+        "requested_receive_buffer_bytes": 4096,
+        "close_timeout_ms": 5000,
+        "published_messages": 12,
+        "healthy_recipients": 2,
+        "strict_close_code": 1008
+      },
+      "shutdown": {
+        "run_for_ms": 1000,
+        "shutdown_grace_ms": 1000,
+        "successful_exit_wait_bound_seconds": 3,
+        "observed_close": 1001
+      }
+    },
+    "provenance": "Exact final integration/release/hash mapping, independently checked before/after execution. No older owner or integrated results reused. Parent native unit/review checks remain parent-reported, separate from independent wire evidence.",
+    "remaining_scope": [
+      "No deterministic native completion/cancellation injection or exhaustive leak/RSS proof.",
+      "Strict slow-peer1008 requires explicitly preserved5000ms close timeout; no default1s complete-close claim.",
+      "Constructor invalid-Config and20KB incremental-receive unit proofs are not independently exercised by the command-level suite."
+    ],
+    "prior_integrated_checkpoint": "/workspace/home/qbradley/fsm-http1-interop/target/interop/websocket-e08cb341-integrated-summary.json",
+    "prior_standalone_fix_checkpoint": "/workspace/home/qbradley/fsm-http1-interop/target/interop/websocket-6105bdf0-summary.json"
+  },
+  "performance_gate": {
+    "status": "correctness_green_awaiting_parent_stage_transition",
+    "reason": "Requested final WS gate passed; parent reports review fix approved. Await parent performance instructions.",
+    "measurements_executed": false
+  },
+  "websocket_latest_review_fix": {
+    "status": "PASS30/30 unchanged independent cases on latest standalone review-fix checkpoint",
+    "publication": {
+      "owner_commit": "6105bdf000cd1623d76ba2fe1e3b6c2f4286f043",
+      "http_commit": "d0e062bf99092fa02e9b1ba49e2ef57aee3b1c66",
+      "websocket_commit": "5d9f02c3dbc312ee3a3cb92510255daf3dc5950c",
+      "foundation_commit": "a072ade2448a24c1af22411b66b56b8660f7ed00",
+      "example_tree": "5cb5fa62244276735f04257c959162d200afcfba",
+      "binary": "/workspace/home/qbradley/fsm-websocket-chat/target/interop-frozen/websocket-chat-6105bdf0-ws5d9f02c3",
+      "binary_sha256": "201a68ba2b611e1338c75f3112c033a3eadf294e9aaec946c978060a1d50da93",
+      "workspace_manifest_sha256": "3e22a8e01cd09ac0ba5fbf18fc87d64da160678a063eec51465d1390e2102205",
+      "workspace_lock_sha256": "0988ca62b0bdc44eec42bd2f7febfefc701d97447db0e63471563ac7e7e57a47",
+      "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+      "owned_tests": {
+        "unit": 31,
+        "actual_native_wire": 1,
+        "debug": "pass",
+        "release": "pass",
+        "native_fd_baseline": 10,
+        "native_fd_after_recovery": 10
+      },
+      "checks": [
+        "cargo fmt",
+        "cargo clippy",
+        "cargo clippy --all-targets --all-features"
+      ],
+      "independent_interoperability": "pending",
+      "build": "cargo build --release -p websocket-chat",
+      "run": "/workspace/home/qbradley/fsm-websocket-chat/target/interop-frozen/websocket-chat-6105bdf0-ws5d9f02c3 --bind 127.0.0.1:0 --run-for-ms 60000",
+      "scope": "owned chat component only; copied protocol source/workspace entries/transitive lock entries excluded from owned commits",
+      "fix": "Public Chat constructor rejects max_buffer_bytes < maximum assembled hub message; regression failed before fix, passes after; valid20KB broadcast admitted by both real WS FSM recipients. CLI normalization already met invariant."
+    },
+    "harness_commit": "f06e99bb222f3309158660a501f0b73ef6e8a474",
+    "reports": {
+      "raw": {
+        "passed": 19,
+        "total": 19,
+        "path": "/workspace/home/qbradley/fsm-http1-interop/target/interop/websocket-6105bdf0-raw-results.json",
+        "sha256": "76d91d9b14f7e9569f85889157cd0c8eeaf857c149b9da2e965a2d8dfc19d7fa"
+      },
+      "contract": {
+        "passed": 11,
+        "total": 11,
+        "path": "/workspace/home/qbradley/fsm-http1-interop/target/interop/websocket-6105bdf0-contract-results.json",
+        "sha256": "e5b91bacec59662f1a1794c5002ad8bf4d1eebc30d7af205f5fa67ad69722666"
+      }
+    },
+    "descriptor_observations": {
+      "baseline": 10,
+      "six_recovery_samples": [
+        10,
+        10,
+        10,
+        10,
+        10,
+        10
+      ]
+    },
+    "bounds": "Unchanged committed chat suite; slow-recipient strict1008 case selects5000ms close timeout; Node/Go5s with7s outer bound; shutdown1s plus1s grace and3s exit wait. Actual command arrays are in reports.",
+    "scope": "Public-Config constructor rejection is owner-native-unit-test evidence, not exercised by the already-normalizing CLI. Independent wire cases prove CLI regressions remain absent. This standalone target embeds HTTPd0 and WS5d9; it does not replace the e08 integrated source mapping.",
+    "performance": "Still blocked pending parent review/integration approval.",
+    "superseded_by_integrated_release": "b75b160c61fb44bc52e6115a9998226babe714eb"
+  },
+  "websocket_public_lifecycle_supplement": {
+    "provenance": "Owner manifest and reported native tests; not rerun by independent wire harness. Published owner executable hash independently compared and unchanged.",
+    "manifest": "/workspace/home/qbradley/fsm-http1-interop/target/interop/websocket-32e82608-test-only-identity.json",
+    "publication": {
+      "owner_commit": "32e8260875af3d45c9217afbd753e86a5d6f0241",
+      "http_commit": "d0e062bf99092fa02e9b1ba49e2ef57aee3b1c66",
+      "websocket_commit": "5d9f02c3dbc312ee3a3cb92510255daf3dc5950c",
+      "foundation_commit": "a072ade2448a24c1af22411b66b56b8660f7ed00",
+      "example_tree": "2382d7aff7bb52a7c30faf68abdf19283798497b",
+      "binary": "/workspace/home/qbradley/fsm-websocket-chat/target/interop-frozen/websocket-chat-6105bdf0-ws5d9f02c3",
+      "binary_sha256": "201a68ba2b611e1338c75f3112c033a3eadf294e9aaec946c978060a1d50da93",
+      "workspace_manifest_sha256": "3e22a8e01cd09ac0ba5fbf18fc87d64da160678a063eec51465d1390e2102205",
+      "workspace_lock_sha256": "0988ca62b0bdc44eec42bd2f7febfefc701d97447db0e63471563ac7e7e57a47",
+      "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+      "owned_tests": {
+        "unit": 31,
+        "actual_native_wire": 1,
+        "debug": "pass",
+        "release": "pass",
+        "native_fd_baseline": 10,
+        "native_fd_after_recovery": 10,
+        "public_composition": 2,
+        "total": 34
+      },
+      "checks": [
+        "cargo fmt",
+        "cargo clippy",
+        "cargo clippy --all-targets --all-features"
+      ],
+      "independent_interoperability": "pending",
+      "build": "cargo build --release -p websocket-chat",
+      "run": "/workspace/home/qbradley/fsm-websocket-chat/target/interop-frozen/websocket-chat-6105bdf0-ws5d9f02c3 --bind 127.0.0.1:0 --run-for-ms 60000",
+      "scope": "owned chat component only; copied protocol source/workspace entries/transitive lock entries excluded from owned commits",
+      "fix": "Public Chat constructor rejects max_buffer_bytes < maximum assembled hub message; regression failed before fix, passes after; valid20KB broadcast admitted by both real WS FSM recipients. CLI normalization already met invariant.",
+      "test_only_extension": "Public API20,000-byte broadcast through16KiB receive ops and37-byte write completions; exact sender/peer payloads, healthy peer follow-up, old+new growth peak and final accounting/operation settlement; adjacent invalid configurations rejected. No production changes since6105bdf0; rebuilt executable byte-identical."
+    },
+    "owner_reported_tests": {
+      "unit": 31,
+      "public_composition": 2,
+      "actual_native_wire": 1,
+      "total": 34,
+      "debug_and_release": "pass"
+    },
+    "owner_reported_proof": "Public Chat/Ports operations: reject mismatched16KiB/1MiB config; valid20,000-byte masked binary arrives via2reads into16KiB receive storage with no premature broadcast;37-byte output progress, exact sender+peer delivery, healthy follow-up, capacity peak and final refunds/cancellation.",
+    "effect_on_independent_evidence": "Test/doc-only extension; prior exact6105owner binary CLI30/30 evidence remains valid, no duplicate execution. Parent-integrated b75release30/30 and HTTPdf5release93/93 remain separately scoped and unchanged."
+  }
+}
