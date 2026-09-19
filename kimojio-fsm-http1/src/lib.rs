@@ -7,6 +7,7 @@
 mod codec;
 mod connection;
 mod operations;
+mod state;
 mod types;
 
 pub use connection::{Client, Server};

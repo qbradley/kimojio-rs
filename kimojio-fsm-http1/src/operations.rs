@@ -34,7 +34,10 @@ impl<B> ReadCompletion<B> {
 
 #[derive(Debug)]
 pub(crate) enum WriteStorage<B> {
-    Head(Vec<u8>),
+    Head {
+        bytes: Vec<u8>,
+        kind: MetadataKind,
+    },
     Body {
         command: SendBody<B>,
         body_id: BodyId,
@@ -42,6 +45,13 @@ pub(crate) enum WriteStorage<B> {
         prefix_len: usize,
         chunked: bool,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MetadataKind {
+    Informational,
+    FinalHead,
+    BodyEnd,
 }
 
 #[derive(Debug)]
@@ -61,7 +71,7 @@ impl<B: AsRef<[u8]>> WriteOp<B> {
     /// It must end those borrows before it moves the op into a completion.
     pub fn slices(&self) -> [&[u8]; 3] {
         let slices: [&[u8]; 3] = match &self.storage {
-            WriteStorage::Head(bytes) => [bytes, &[], &[]],
+            WriteStorage::Head { bytes, .. } => [bytes, &[], &[]],
             WriteStorage::Body {
                 command,
                 prefix,

@@ -1,5 +1,9 @@
 use crate::codec::{self, Framing};
-use crate::operations::WriteStorage;
+use crate::operations::{MetadataKind, WriteStorage};
+use crate::state::{
+    Admission, ArmedDeadline, Closing, ContinueGate, IoState, Lifecycle, MethodSemantics,
+    Notification, ReceiveStorage, TimerPhase, Timers, Transmit, Upgrade,
+};
 use crate::*;
 use std::io::Write;
 
@@ -16,25 +20,17 @@ enum Rx {
     Paused,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TimerPhase {
-    Head,
-    Body,
-    Idle,
-    Continue,
-    Upload,
-}
-
 #[derive(Debug)]
 struct Exchange {
     id: ExchangeId,
     version: Version,
-    head_method: bool,
-    connect_method: bool,
+    method: MethodSemantics,
     persistent: bool,
     upgrade: Option<Vec<u8>>,
     expect: bool,
-    incoming_notified: bool,
+    continue_gate: ContinueGate,
+    incoming_notification: Notification,
+    source_notification: Notification,
 }
 
 #[derive(Debug)]
@@ -45,13 +41,8 @@ struct Core<B, W> {
     sequence: u64,
     exchanges: u64,
     now: Tick,
-    deadline: Option<Deadline>,
-    deadline_dirty: bool,
-    deadline_kind: Option<TimerPhase>,
-    phase_timer: Option<(TimerPhase, Tick)>,
-    continue_at: Option<Tick>,
-    upload_at: Option<Tick>,
-    input: Option<B>,
+    timers: Timers,
+    receive: ReceiveStorage<B>,
     start: usize,
     end: usize,
     head: Vec<u8>,
@@ -72,34 +63,15 @@ struct Core<B, W> {
     credit: usize,
     eof: bool,
     exchange: Option<Exchange>,
-    tx: Framing,
-    tx_started: bool,
-    tx_done: bool,
-    tx_end: bool,
-    demand_issued: bool,
-    source_notified: bool,
-    wait_continue: bool,
-    stop_upload: bool,
+    tx: Transmit,
     output: Option<WriteOp<W>>,
     pending_body: Option<(BodyId, SendBody<W>)>,
     body_result: Option<BodySent<W>>,
-    read_live: Option<OperationId>,
-    write_live: Option<OperationId>,
-    body_live: Option<OperationId>,
-    close_live: Option<OperationId>,
-    read_blocked: bool,
-    write_blocked: bool,
-    cancel_read_sent: bool,
-    cancel_write_sent: bool,
+    read: IoState,
+    write: IoState,
     close_after: bool,
-    graceful: bool,
     failure: Option<Failure>,
-    closing: bool,
-    closed: bool,
-    closed_notified: bool,
-    upgrade_pending: bool,
-    upgrade_notified: bool,
-    handed_off: bool,
+    lifecycle: Lifecycle,
 }
 
 /// A single-exchange HTTP/1 server with independently owned I/O operations.
@@ -146,13 +118,8 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             sequence: 0,
             exchanges: 0,
             now,
-            deadline: None,
-            deadline_dirty: false,
-            deadline_kind: None,
-            phase_timer: None,
-            continue_at: None,
-            upload_at: None,
-            input: Some(input),
+            timers: Timers::new(),
+            receive: ReceiveStorage::Available(input),
             start: 0,
             end: 0,
             head: Vec::new(),
@@ -173,34 +140,15 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             credit: 0,
             eof: false,
             exchange: None,
-            tx: Framing::Empty,
-            tx_started: false,
-            tx_done: false,
-            tx_end: false,
-            demand_issued: false,
-            source_notified: false,
-            wait_continue: false,
-            stop_upload: false,
+            tx: Transmit::Idle,
             output: None,
             pending_body: None,
             body_result: None,
-            read_live: None,
-            write_live: None,
-            body_live: None,
-            close_live: None,
-            read_blocked: false,
-            write_blocked: false,
-            cancel_read_sent: false,
-            cancel_write_sent: false,
+            read: IoState::Idle,
+            write: IoState::Idle,
             close_after: false,
-            graceful: false,
             failure: None,
-            closing: false,
-            closed: false,
-            closed_notified: false,
-            upgrade_pending: false,
-            upgrade_notified: false,
-            handed_off: false,
+            lifecycle: Lifecycle::Http(Admission::Accepting),
         };
         core.set_deadline(
             if server {
@@ -255,7 +203,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                     .ok_or(CommandError::InvalidConfig)
             })
             .transpose()?;
-        self.update_deadline(phase_timer, self.continue_at)
+        self.update_deadline(phase_timer, self.timers.continue_at)
     }
 
     fn update_deadline(
@@ -269,36 +217,44 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             (None, Some(at)) => Some((TimerPhase::Continue, at)),
             _ => None,
         };
-        if let Some(at) = self.upload_at
+        if let Some(at) = self.timers.upload_at
             && earliest.is_none_or(|(_, prior)| at < prior)
         {
             earliest = Some((TimerPhase::Upload, at));
         }
-        if earliest != self.deadline_kind.zip(self.deadline.map(|d| d.at)) {
-            let deadline = match earliest {
-                Some((_, at)) => Some(Deadline {
-                    connection: self.id,
-                    sequence: self.sequence()?,
-                    at,
+        if earliest
+            != self
+                .timers
+                .armed
+                .map(|armed| (armed.kind, armed.deadline.at))
+        {
+            let armed = match earliest {
+                Some((kind, at)) => Some(ArmedDeadline {
+                    deadline: Deadline {
+                        connection: self.id,
+                        sequence: self.sequence()?,
+                        at,
+                    },
+                    kind,
                 }),
                 None => None,
             };
-            self.deadline = deadline;
-            self.deadline_kind = earliest.map(|(kind, _)| kind);
-            self.deadline_dirty = true;
+            self.timers.armed = armed;
+            self.timers.notification = Notification::Pending;
         }
-        self.phase_timer = phase_timer;
-        self.continue_at = continue_at;
+        self.timers.phase = phase_timer;
+        self.timers.continue_at = continue_at;
         Ok(())
     }
 
     fn progress(&mut self) {
-        if !self.closing && !self.stop_upload && self.upload_at.is_some() {
+        if !self.lifecycle.is_closing() && !self.tx.stopped() && self.timers.upload_at.is_some() {
             self.arm_upload();
         }
-        if !self.closing
+        if !self.lifecycle.is_closing()
             && self
-                .phase_timer
+                .timers
+                .phase
                 .is_some_and(|(kind, _)| kind == TimerPhase::Body)
             && self
                 .set_deadline(TimerPhase::Body, self.config.body_timeout_ns)
@@ -309,23 +265,18 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
     }
 
     fn clear_deadlines(&mut self) {
-        self.deadline_dirty |= self.deadline.is_some();
-        self.deadline = None;
-        self.deadline_kind = None;
-        self.phase_timer = None;
-        self.continue_at = None;
-        self.upload_at = None;
+        self.timers.clear();
     }
 
     fn arm_upload(&mut self) {
-        self.upload_at = self
+        self.timers.upload_at = self
             .config
             .body_timeout_ns
             .and_then(|duration| self.now.0.checked_add(duration))
             .map(Tick);
-        if self.config.body_timeout_ns.is_some() && self.upload_at.is_none()
+        if self.config.body_timeout_ns.is_some() && self.timers.upload_at.is_none()
             || self
-                .update_deadline(self.phase_timer, self.continue_at)
+                .update_deadline(self.timers.phase, self.timers.continue_at)
                 .is_err()
         {
             self.fail(Failure::SequenceExhausted);
@@ -335,10 +286,22 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
     fn check_exchange(&self, exchange: ExchangeId) -> Result<(), CommandError> {
         if self.exchange.as_ref().map(|e| e.id) != Some(exchange) {
             Err(CommandError::StaleExchange)
-        } else if self.closing || self.closed || self.handed_off || self.failure.is_some() {
+        } else if !self.lifecycle.accepts_exchange_commands() {
             Err(CommandError::InvalidState)
         } else {
             Ok(())
+        }
+    }
+
+    fn waiting_continue(&self) -> bool {
+        self.exchange
+            .as_ref()
+            .is_some_and(|exchange| exchange.continue_gate == ContinueGate::Waiting)
+    }
+
+    fn release_continue(&mut self) {
+        if let Some(exchange) = &mut self.exchange {
+            exchange.continue_gate = ContinueGate::Open;
         }
     }
 
@@ -357,15 +320,13 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             _ => None,
         };
         self.failure.get_or_insert(failure);
-        self.upgrade_notified = false;
-        self.upgrade_pending = false;
         self.credit = 0;
         self.rx = Rx::Paused;
-        self.wait_continue = false;
+        self.release_continue();
         self.clear_deadlines();
         if first_failure
             && self.server
-            && !self.tx_started
+            && !self.tx.started()
             && let Some((status, reason)) = status
         {
             let response = Response {
@@ -388,19 +349,22 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             {
                 self.outgoing_metadata_bytes += bytes.len();
                 self.outgoing_metadata_fields += header_count(&bytes);
-                self.tx_started = true;
-                self.tx = Framing::Empty;
-                self.tx_end = true;
-                self.tx_done = false;
+                self.tx = Transmit::begin(Framing::Empty);
+                self.lifecycle = Lifecycle::ErrorResponse;
                 self.close_after = true;
                 if let Some(op) = self.output.as_mut() {
-                    let WriteStorage::Head(queued) = &mut op.storage else {
+                    let WriteStorage::Head {
+                        bytes: queued,
+                        kind,
+                    } = &mut op.storage
+                    else {
                         unreachable!()
                     };
                     queued.reserve_exact(bytes.len());
                     queued.extend_from_slice(&bytes);
+                    *kind = MetadataKind::FinalHead;
                 } else {
-                    self.queue_head(bytes);
+                    self.queue_head(bytes, MetadataKind::FinalHead);
                 }
                 if self
                     .set_deadline(TimerPhase::Body, self.config.body_timeout_ns)
@@ -410,11 +374,11 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 }
             }
         }
-        self.closing = true;
+        self.lifecycle.begin_closing();
         self.clear_deadlines();
     }
 
-    fn queue_head(&mut self, bytes: Vec<u8>) {
+    fn queue_head(&mut self, bytes: Vec<u8>, kind: MetadataKind) {
         // A queued operation receives its external identity only at issuance.
         self.output = Some(WriteOp {
             id: OperationId {
@@ -422,7 +386,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 sequence: 0,
                 kind: OperationKind::Write,
             },
-            storage: WriteStorage::Head(bytes),
+            storage: WriteStorage::Head { bytes, kind },
             cursor: 0,
         });
     }
@@ -430,10 +394,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
     fn request(&mut self, request: Request<'_>) -> Result<ExchangeId, CommandError> {
         if self.exchange.is_some()
             || self.start < self.end
-            || self.closing
-            || self.closed
-            || self.graceful
-            || self.handed_off
+            || self.lifecycle != Lifecycle::Http(Admission::Accepting)
         {
             return Err(CommandError::InvalidState);
         }
@@ -462,25 +423,27 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         self.exchange = Some(Exchange {
             id,
             version: request.head.version,
-            head_method: request.head.method == "HEAD",
-            connect_method: request.head.method == "CONNECT",
+            method: MethodSemantics::from_method(request.head.method),
             persistent: codec::persistent(request.head.version, request.head.headers),
             upgrade,
             expect: request.expect_continue,
-            incoming_notified: false,
+            continue_gate: if request.expect_continue
+                && request.head.version == Version::Http11
+                && framing != Framing::Empty
+            {
+                ContinueGate::Waiting
+            } else {
+                ContinueGate::Open
+            },
+            incoming_notification: Notification::Pending,
+            source_notification: Notification::Pending,
         });
         self.exchanges += 1;
-        self.tx = framing;
-        self.tx_started = true;
-        self.tx_done = false;
-        self.tx_end = framing == Framing::Empty;
-        self.wait_continue = request.expect_continue
-            && request.head.version == Version::Http11
-            && framing != Framing::Empty;
+        self.tx = Transmit::begin(framing);
         self.outgoing_connection_fields = connection_fields;
         self.outgoing_metadata_bytes = head.len();
         self.outgoing_metadata_fields = header_count(&head);
-        self.queue_head(head);
+        self.queue_head(head, MetadataKind::FinalHead);
         Ok(id)
     }
 
@@ -492,15 +455,16 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
     ) -> Result<(), CommandError> {
         self.check_exchange(exchange)?;
         let current = self.exchange.as_ref().unwrap();
-        if self.tx_started
+        if self.tx.started()
             || (!upgrade && response.head.status < 200)
             || (upgrade && self.rx != Rx::Done)
-            || (upgrade && self.graceful)
+            || (upgrade && self.lifecycle.is_draining())
         {
             return Err(CommandError::InvalidState);
         }
         response.head.version = current.version;
-        let tunnel = current.connect_method && (200..300).contains(&response.head.status);
+        let tunnel = current.method == MethodSemantics::Connect
+            && (200..300).contains(&response.head.status);
         if upgrade {
             if !tunnel
                 && (current.version != Version::Http11
@@ -519,11 +483,11 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         let early = self.rx != Rx::Done;
         let close = !current.persistent
             || early
-            || self.graceful
+            || self.lifecycle.is_draining()
             || self.exchanges >= self.config.max_requests;
         let (final_bytes, framing) = codec::encode_response(
             response,
-            current.head_method,
+            current.method == MethodSemantics::Head,
             close && !upgrade,
             tunnel,
             &self.config,
@@ -575,10 +539,10 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             && (close
                 || framing == Framing::Eof
                 || codec::has_token(response.head.headers, "connection", b"close"));
-        self.upgrade_pending = upgrade;
-        self.tx_started = true;
-        self.tx = framing;
-        self.tx_end = framing == Framing::Empty;
+        if upgrade {
+            self.lifecycle.begin_upgrade();
+        }
+        self.tx = Transmit::begin(framing);
         self.outgoing_connection_fields = connection_fields;
         if continue_first {
             self.exchange.as_mut().unwrap().expect = false;
@@ -587,13 +551,18 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         self.outgoing_metadata_bytes += bytes.len();
         self.outgoing_metadata_fields += fields;
         if let Some(op) = self.output.as_mut() {
-            let WriteStorage::Head(queued) = &mut op.storage else {
+            let WriteStorage::Head {
+                bytes: queued,
+                kind,
+            } = &mut op.storage
+            else {
                 unreachable!()
             };
             queued.reserve_exact(bytes.len());
             queued.extend_from_slice(&bytes);
+            *kind = MetadataKind::FinalHead;
         } else {
-            self.queue_head(bytes);
+            self.queue_head(bytes, MetadataKind::FinalHead);
         }
         Ok(())
     }
@@ -605,9 +574,9 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
     ) -> Result<(), CommandError> {
         self.check_exchange(exchange)?;
         head.version = self.exchange.as_ref().unwrap().version;
-        if self.tx_started
+        if self.tx.started()
             || self.output.is_some()
-            || self.write_live.is_some()
+            || self.write.operation().is_some()
             || !(100..=199).contains(&head.status)
             || head.status == 101
             || head.version != Version::Http11
@@ -637,23 +606,18 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         self.outgoing_metadata_bytes += bytes.len();
         self.outgoing_metadata_fields += fields;
         self.outgoing_informational += 1;
-        self.queue_head(bytes);
+        self.queue_head(bytes, MetadataKind::Informational);
         Ok(())
     }
 
     fn send_body(&mut self, command: SendBody<W>) -> Result<BodyId, Rejected<SendBody<W>>> {
-        let reason = if self.check_exchange(command.exchange).is_err()
-            || !self.tx_started
-            || self.tx_done
-            || self.tx_end
-            || self.stop_upload
-        {
+        let reason = if self.check_exchange(command.exchange).is_err() || !self.tx.accepts_data() {
             Some(RejectReason::InvalidState)
         } else if self.pending_body.is_some()
             || self.body_result.is_some()
             || self.output.is_some()
-            || self.write_live.is_some()
-            || self.wait_continue
+            || self.write.operation().is_some()
+            || self.waiting_continue()
         {
             Some(RejectReason::NoCapacity)
         } else if command.range.start > command.range.end
@@ -664,7 +628,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         {
             Some(RejectReason::InvalidRange)
         } else {
-            match self.tx {
+            match self.tx.framing() {
                 Framing::Empty => Some(RejectReason::InvalidState),
                 Framing::Fixed(left)
                     if command.range.len() as u64 > left
@@ -681,13 +645,13 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 .is_none_or(|n| n > self.config.max_body_bytes)
                 .then_some(RejectReason::Limit)
         });
-        let chunk_metadata = if self.tx == Framing::Chunked {
+        let chunk_metadata = if self.tx.framing() == Framing::Chunked {
             command.range.len().max(1).ilog(16) as usize + 5
         } else {
             0
         };
         let reason = reason.or_else(|| {
-            (self.tx == Framing::Chunked
+            (self.tx.framing() == Framing::Chunked
                 && (chunk_metadata - 2 > self.config.max_chunk_line_bytes
                     || self
                         .outgoing_chunk_metadata_bytes
@@ -697,7 +661,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 .then_some(RejectReason::Limit)
         });
         let reason = reason.or_else(|| {
-            (self.tx == Framing::Chunked
+            (self.tx.framing() == Framing::Chunked
                 && command.end
                 && self.check_outgoing_metadata(5, 0).is_err())
             .then_some(RejectReason::Limit)
@@ -721,19 +685,13 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             connection: self.id,
             sequence,
         };
-        if let Framing::Fixed(left) = self.tx {
-            let remaining = left - command.range.len() as u64;
-            self.tx = Framing::Fixed(remaining);
-            self.tx_end = remaining == 0;
-        }
-        self.tx_end |= command.end;
+        self.tx.accept_data(command.range.len(), command.end);
         self.outgoing_bytes += command.range.len() as u64;
         self.outgoing_chunk_metadata_bytes += chunk_metadata;
-        if self.tx == Framing::Chunked && command.end {
+        if self.tx.framing() == Framing::Chunked && command.end {
             self.outgoing_chunk_metadata_bytes += 3;
         }
         self.pending_body = Some((id, command));
-        self.demand_issued = false;
         Ok(id)
     }
 
@@ -743,23 +701,21 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         trailers: Headers<'_>,
     ) -> Result<(), CommandError> {
         self.check_exchange(exchange)?;
-        if !self.tx_started
-            || self.tx_done
-            || self.tx_end
+        if !self.tx.accepts_data()
             || self.pending_body.is_some()
             || self.output.is_some()
-            || self.write_live.is_some()
+            || self.write.operation().is_some()
             || self.body_result.is_some()
         {
             return Err(CommandError::InvalidState);
         }
-        if matches!(self.tx, Framing::Fixed(n) if n != 0) {
+        if matches!(self.tx.framing(), Framing::Fixed(n) if n != 0) {
             return Err(CommandError::InvalidFraming);
         }
-        if !trailers.is_empty() && self.tx != Framing::Chunked {
+        if !trailers.is_empty() && self.tx.framing() != Framing::Chunked {
             return Err(CommandError::InvalidFraming);
         }
-        let bytes = if self.tx == Framing::Chunked {
+        let bytes = if self.tx.framing() == Framing::Chunked {
             if self.outgoing_chunk_metadata_bytes.saturating_add(3)
                 > self.config.max_chunk_metadata_bytes
             {
@@ -772,15 +728,14 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         self.check_outgoing_metadata(bytes.len(), trailers.len())?;
         self.outgoing_metadata_bytes += bytes.len();
         self.outgoing_metadata_fields += trailers.len();
-        if self.tx == Framing::Chunked {
+        if self.tx.framing() == Framing::Chunked {
             self.outgoing_chunk_metadata_bytes += 3;
         }
-        self.tx_end = true;
-        self.demand_issued = false;
+        self.tx.finish_source();
         if bytes.is_empty() {
-            self.tx_done = true;
+            self.tx.settle();
         } else {
-            self.queue_head(bytes);
+            self.queue_head(bytes, MetadataKind::BodyEnd);
         }
         Ok(())
     }
@@ -800,7 +755,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         completion: ReadCompletion<B>,
     ) -> Result<(), Rejected<ReadCompletion<B>>> {
         let reason = self
-            .validate(completion.op.id, self.read_live)
+            .validate(completion.op.id, self.read.operation())
             .err()
             .or_else(|| {
                 completion
@@ -815,10 +770,9 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 value: completion,
             });
         }
-        self.read_live = None;
-        self.cancel_read_sent = false;
+        self.read.complete();
         let ReadCompletion { op, result } = completion;
-        self.input = Some(op.buffer);
+        self.receive.complete_read(op.buffer);
         match result {
             Ok(n) => {
                 self.start = op.range.start;
@@ -829,7 +783,8 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                         && self.rx == Rx::Head
                         && self.exchange.is_none()
                         && self
-                            .phase_timer
+                            .timers
+                            .phase
                             .is_some_and(|(kind, _)| kind == TimerPhase::Idle)
                         && self
                             .set_deadline(TimerPhase::Head, self.config.head_timeout_ns)
@@ -841,13 +796,13 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                     }
                 }
             }
-            Err(error) if self.closing || self.rx == Rx::Paused => {
+            Err(error) if self.lifecycle.is_closing() || self.rx == Rx::Paused => {
                 let _ = error;
             }
             Err(IoError {
                 kind: IoErrorKind::WouldBlock,
                 ..
-            }) => self.read_blocked = true,
+            }) => self.read.wait_for_readiness(),
             Err(IoError {
                 kind: IoErrorKind::Interrupted,
                 ..
@@ -864,7 +819,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         completion: WriteCompletion<W>,
     ) -> Result<(), Rejected<WriteCompletion<W>>> {
         let reason = self
-            .validate(completion.op.id, self.write_live)
+            .validate(completion.op.id, self.write.operation())
             .err()
             .or_else(|| {
                 completion
@@ -879,8 +834,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 value: completion,
             });
         }
-        self.write_live = None;
-        self.cancel_write_sent = false;
+        self.write.complete();
         let WriteCompletion { mut op, result } = completion;
         let acceptance = if matches!(
             result,
@@ -902,18 +856,18 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             Err(IoError {
                 kind: IoErrorKind::WouldBlock,
                 ..
-            }) if !self.closing => self.write_blocked = true,
+            }) if !self.lifecycle.is_closing() => self.write.wait_for_readiness(),
             Err(IoError {
                 kind: IoErrorKind::Interrupted,
                 ..
-            }) if !self.closing => {}
+            }) if !self.lifecycle.is_closing() => {}
             Err(IoError {
                 kind: IoErrorKind::Cancelled | IoErrorKind::CancelledUnknownProgress,
                 ..
-            }) if self.stop_upload => {}
+            }) if self.tx.stopped() => {}
             Err(error) => self.fail(Failure::Transport(error)),
         }
-        if self.closing || self.stop_upload || op.remaining() == 0 {
+        if self.lifecycle.is_closing() || self.tx.stopped() || op.remaining() == 0 {
             self.settle_write(op, acceptance);
         } else {
             self.output = Some(op);
@@ -923,21 +877,32 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
 
     fn settle_write(&mut self, op: WriteOp<W>, acceptance: Acceptance) {
         match op.storage {
-            WriteStorage::Head(_) => {
-                if self.tx_started && self.tx_end {
-                    self.tx_done = true;
+            WriteStorage::Head { kind, .. } => {
+                if kind != MetadataKind::Informational
+                    && self.tx.started()
+                    && self.tx.source_finished()
+                {
+                    self.tx.settle();
                 }
-                if !self.server && !self.tx_end && !self.stop_upload && !self.closing {
+                if !self.server
+                    && !self.tx.source_finished()
+                    && !self.tx.stopped()
+                    && !self.lifecycle.is_closing()
+                {
                     self.arm_upload();
                 }
-                if !self.server && self.wait_continue && !self.closing && !self.stop_upload {
+                if !self.server
+                    && self.waiting_continue()
+                    && !self.lifecycle.is_closing()
+                    && !self.tx.stopped()
+                {
                     let at = self
                         .config
                         .continue_timeout_ns
                         .and_then(|duration| self.now.0.checked_add(duration))
                         .map(Tick);
                     if self.config.continue_timeout_ns.is_some() && at.is_none()
-                        || self.update_deadline(self.phase_timer, at).is_err()
+                        || self.update_deadline(self.timers.phase, at).is_err()
                     {
                         self.fail(Failure::SequenceExhausted);
                     }
@@ -962,23 +927,23 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                     acceptance,
                     result: self
                         .failure
-                        .or(self.stop_upload.then_some(Failure::EarlyResponse))
+                        .or(self.tx.stopped().then_some(Failure::EarlyResponse))
                         .map_or(Ok(()), Err),
                 });
-                if self.tx_end && !self.closing && !self.stop_upload {
+                if self.tx.source_finished() && !self.lifecycle.is_closing() && !self.tx.stopped() {
                     if chunked {
                         self.outgoing_metadata_bytes += 5;
-                        self.queue_head(b"0\r\n\r\n".to_vec());
+                        self.queue_head(b"0\r\n\r\n".to_vec(), MetadataKind::BodyEnd);
                     } else {
-                        self.tx_done = true;
+                        self.tx.settle();
                     }
                 }
             }
         }
-        if self.tx_done
-            && self.upload_at.take().is_some()
+        if self.tx.settled()
+            && self.timers.upload_at.take().is_some()
             && self
-                .update_deadline(self.phase_timer, self.continue_at)
+                .update_deadline(self.timers.phase, self.timers.continue_at)
                 .is_err()
         {
             self.fail(Failure::SequenceExhausted);
@@ -990,8 +955,8 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         completion: ReadinessCompletion,
     ) -> Result<(), Rejected<ReadinessCompletion>> {
         let live = match completion.op.direction {
-            Direction::Read => self.read_live,
-            Direction::Write => self.write_live,
+            Direction::Read => self.read.operation(),
+            Direction::Write => self.write.operation(),
         };
         if let Err(reason) = self.validate(completion.op.id, live) {
             return Err(Rejected {
@@ -1000,26 +965,18 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             });
         }
         match completion.op.direction {
-            Direction::Read => {
-                self.read_live = None;
-                self.read_blocked = false;
-                self.cancel_read_sent = false;
-            }
-            Direction::Write => {
-                self.write_live = None;
-                self.write_blocked = false;
-                self.cancel_write_sent = false;
-            }
+            Direction::Read => self.read.complete(),
+            Direction::Write => self.write.complete(),
         }
         if let Err(error) = completion.result {
-            if error.kind == IoErrorKind::Interrupted && !self.closing {
+            if error.kind == IoErrorKind::Interrupted && !self.lifecycle.is_closing() {
                 match completion.op.direction {
-                    Direction::Read => self.read_blocked = true,
-                    Direction::Write => self.write_blocked = true,
+                    Direction::Read => self.read.wait_for_readiness(),
+                    Direction::Write => self.write.wait_for_readiness(),
                 }
-            } else if !self.closing
+            } else if !self.lifecycle.is_closing()
                 && self.rx != Rx::Paused
-                && !(self.stop_upload
+                && !(self.tx.stopped()
                     && completion.op.direction == Direction::Write
                     && error.kind == IoErrorKind::Cancelled)
             {
@@ -1034,7 +991,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         completion: BodyCompletion<B>,
     ) -> Result<(), Rejected<BodyCompletion<B>>> {
         let reason = self
-            .validate(completion.op.id, self.body_live)
+            .validate(completion.op.id, self.receive.lease())
             .err()
             .or_else(|| {
                 (completion.consumed > completion.op.range.len())
@@ -1046,8 +1003,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 value: completion,
             });
         }
-        self.body_live = None;
-        self.input = Some(completion.op.buffer);
+        self.receive.release(completion.op.buffer);
         self.start = completion.op.range.start + completion.consumed;
         self.end = completion.op.buffered_end;
         if completion.consumed == 0 {
@@ -1095,18 +1051,160 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         &mut self,
         completion: CloseCompletion,
     ) -> Result<(), Rejected<CloseCompletion>> {
-        if let Err(reason) = self.validate(completion.op.id, self.close_live) {
+        if let Err(reason) = self.validate(completion.op.id, self.lifecycle.close_operation()) {
             return Err(Rejected {
                 reason,
                 value: completion,
             });
         }
-        self.close_live = None;
         if let Err(error) = completion.result {
             self.failure.get_or_insert(Failure::Transport(error));
         }
-        self.closed = true;
+        self.lifecycle.complete_close();
         Ok(())
+    }
+
+    fn shutdown(&mut self, mode: ShutdownMode) {
+        if self.lifecycle.is_terminal() {
+            return;
+        }
+        if mode == ShutdownMode::Abort || self.lifecycle.is_upgrade() {
+            self.fail(Failure::Cancelled);
+        } else {
+            if matches!(self.lifecycle, Lifecycle::Http(_)) {
+                self.lifecycle = Lifecycle::Http(Admission::Draining);
+            }
+            if self.exchange.is_none() {
+                self.lifecycle.begin_closing();
+                self.clear_deadlines();
+            }
+        }
+    }
+
+    fn observe_time(&mut self, now: Tick) -> Result<(), CommandError> {
+        if now < self.now {
+            return Err(CommandError::TimeRegression);
+        }
+        self.now = now;
+        Ok(())
+    }
+
+    fn expire(&mut self, deadline: Deadline, now: Tick) -> Result<(), CommandError> {
+        if self.timers.deadline() != Some(deadline) {
+            return Err(CommandError::StaleDeadline);
+        }
+        if now < deadline.at {
+            return Err(CommandError::EarlyDeadline);
+        }
+        if self.timers.kind() == Some(TimerPhase::Continue) && self.timers.phase.is_some() {
+            self.sequence
+                .checked_add(1)
+                .filter(|n| *n < u64::MAX)
+                .ok_or(CommandError::SequenceExhausted)?;
+        }
+        self.observe_time(now)?;
+        if self.timers.kind() == Some(TimerPhase::Continue) {
+            self.release_continue();
+            self.update_deadline(self.timers.phase, None)?;
+        } else {
+            self.fail(Failure::Timeout);
+        }
+        Ok(())
+    }
+
+    fn take_upgrade(&mut self) -> Result<Handoff<B>, CommandError> {
+        if self.lifecycle != Lifecycle::Upgrade(Upgrade::Ready)
+            || self.receive.buffer().is_none()
+            || !self.tx.settled()
+            || self.rx != Rx::Done
+            || !self.io_settled()
+            || self.output.is_some()
+            || self.pending_body.is_some()
+            || self.body_result.is_some()
+        {
+            return Err(CommandError::NotReady);
+        }
+        self.lifecycle = Lifecycle::HandedOff;
+        Ok(Handoff {
+            connection: self.id,
+            buffered: BufferedInput {
+                buffer: self.receive.handoff(),
+                range: self.start..self.end,
+            },
+        })
+    }
+
+    fn io_settled(&self) -> bool {
+        self.read.operation().is_none()
+            && self.write.operation().is_none()
+            && self.receive.lease().is_none()
+    }
+
+    fn assert_invariants(&self) {
+        let read_owns_input = self
+            .read
+            .operation()
+            .is_some_and(|id| id.kind() == OperationKind::Read);
+        debug_assert_eq!(
+            matches!(self.receive, ReceiveStorage::Reading),
+            read_owns_input
+        );
+        debug_assert_eq!(
+            matches!(self.receive, ReceiveStorage::Transferred),
+            self.lifecycle == Lifecycle::HandedOff
+        );
+        debug_assert!(self.receive.lease().is_none() || self.read.operation().is_none());
+        if let Some(buffer) = self.receive.buffer() {
+            debug_assert!(self.start <= self.end && self.end <= buffer.as_ref().len());
+        }
+        if self.tx.settled() && self.lifecycle.accepts_exchange_commands() {
+            debug_assert!(self.output.is_none());
+            debug_assert!(self.pending_body.is_none());
+        }
+        if self
+            .write
+            .operation()
+            .is_some_and(|id| id.kind() == OperationKind::Write)
+            && let Some(queued) = &self.output
+        {
+            // A final head can queue behind an outstanding informational write.
+            debug_assert!(matches!(queued.storage, WriteStorage::Head { .. }));
+        }
+        match self.lifecycle {
+            Lifecycle::Http(_) | Lifecycle::Upgrade(_) => {
+                debug_assert!(self.failure.is_none());
+            }
+            Lifecycle::ErrorResponse => {
+                debug_assert!(self.failure.is_some());
+                debug_assert_eq!(self.rx, Rx::Paused);
+                debug_assert!(self.tx.source_finished());
+                debug_assert!(self.close_after);
+            }
+            _ => {}
+        }
+        if matches!(
+            self.lifecycle,
+            Lifecycle::Closing(Closing::AwaitingClose(_)) | Lifecycle::Closed(_)
+        ) {
+            debug_assert!(self.io_settled());
+            debug_assert!(self.exchange.is_none());
+            debug_assert!(self.output.is_none());
+            debug_assert!(self.pending_body.is_none());
+            debug_assert!(self.body_result.is_none());
+            debug_assert!(self.timers.armed.is_none());
+        }
+        if matches!(
+            self.lifecycle,
+            Lifecycle::Upgrade(Upgrade::Ready) | Lifecycle::HandedOff
+        ) {
+            debug_assert!(self.io_settled());
+            debug_assert!(self.tx.settled());
+            debug_assert_eq!(self.rx, Rx::Done);
+            debug_assert!(self.output.is_none());
+            debug_assert!(self.pending_body.is_none());
+            debug_assert!(self.body_result.is_none());
+            debug_assert!(self.timers.armed.is_none());
+        }
     }
 
     fn next<P: Ports<B, W>>(
@@ -1115,13 +1213,13 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         head_callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
     ) -> Option<P::Output> {
         loop {
-            if self.handed_off {
+            self.assert_invariants();
+            if self.lifecycle == Lifecycle::HandedOff {
                 return None;
             }
             let response_head_ready = !self.server && self.rx == Rx::Head && self.start < self.end;
-            if self.deadline_dirty {
-                self.deadline_dirty = false;
-                if let Some(output) = ports.deadline_changed(self.deadline) {
+            if self.timers.notification.take() {
+                if let Some(output) = ports.deadline_changed(self.timers.deadline()) {
                     return Some(output);
                 }
                 continue;
@@ -1132,22 +1230,21 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 }
                 continue;
             }
-            if self.closed {
-                if !self.closed_notified {
-                    self.closed_notified = true;
+            if let Lifecycle::Closed(notification) = &mut self.lifecycle {
+                if notification.take() {
                     return ports.closed(self.failure.map_or(Ok(()), Err));
                 }
                 return None;
             }
-            if self.graceful && self.upgrade_pending {
+            if self.lifecycle == Lifecycle::Upgrade(Upgrade::Revoked) {
                 self.fail(Failure::Cancelled);
                 continue;
             }
             if self.server
-                && self.tx_done
+                && self.tx.settled()
                 && !matches!(self.rx, Rx::Done | Rx::Paused)
-                && !self.upgrade_pending
-                && !self.closing
+                && !self.lifecycle.is_upgrade()
+                && !self.lifecycle.is_closing()
             {
                 self.rx = Rx::Paused;
                 self.credit = 0;
@@ -1155,37 +1252,32 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             }
             if !self.server
                 && self.rx == Rx::Done
-                && !self.tx_done
-                && self.tx != Framing::Empty
-                && !self.upgrade_pending
-                && !self.closing
+                && !self.tx.settled()
+                && self.tx.framing() != Framing::Empty
+                && !self.lifecycle.is_upgrade()
+                && !self.lifecycle.is_closing()
             {
-                self.stop_upload = true;
-                self.tx_end = true;
-                self.wait_continue = false;
+                self.tx.stop_upload();
+                self.release_continue();
                 self.close_after = true;
-                self.upload_at = None;
-                if self.update_deadline(self.phase_timer, None).is_err() {
+                self.timers.upload_at = None;
+                if self.update_deadline(self.timers.phase, None).is_err() {
                     self.fail(Failure::SequenceExhausted);
                 }
             }
-            if !self.source_notified
-                && (self.tx_end || self.stop_upload || self.failure.is_some())
-                && let Some(exchange) = self.exchange.as_ref()
+            if (self.tx.source_finished() || self.failure.is_some())
+                && let Some(exchange) = self.exchange.as_mut()
+                && exchange.source_notification.take()
             {
                 let id = exchange.id;
-                self.source_notified = true;
                 if let Some(output) = ports.source_finished(id) {
                     return Some(output);
                 }
                 continue;
             }
-            if self.stop_upload && !self.closing {
-                if self.write_live.is_some() && !self.cancel_write_sent {
-                    self.cancel_write_sent = true;
-                    if let Some(output) = ports.cancel(CancelOp {
-                        target: self.write_live.unwrap(),
-                    }) {
+            if self.tx.stopped() && !self.lifecycle.is_closing() {
+                if let Some(target) = self.write.cancel() {
+                    if let Some(output) = ports.cancel(CancelOp { target }) {
                         return Some(output);
                     }
                     continue;
@@ -1205,29 +1297,22 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                     });
                     continue;
                 }
-                if self.write_live.is_none() {
-                    self.tx_done = true;
+                if self.write.operation().is_none() {
+                    self.tx.settle();
                 }
             }
-            if (self.closing || self.rx == Rx::Paused)
-                && self.read_live.is_some()
-                && !self.cancel_read_sent
+            if (self.lifecycle.is_closing() || self.rx == Rx::Paused)
+                && let Some(target) = self.read.cancel()
             {
-                self.cancel_read_sent = true;
-                if let Some(output) = ports.cancel(CancelOp {
-                    target: self.read_live.unwrap(),
-                }) {
+                if let Some(output) = ports.cancel(CancelOp { target }) {
                     return Some(output);
                 }
                 continue;
             }
-            if self.closing {
+            if self.lifecycle.is_closing() {
                 self.clear_deadlines();
-                if self.write_live.is_some() && !self.cancel_write_sent {
-                    self.cancel_write_sent = true;
-                    if let Some(output) = ports.cancel(CancelOp {
-                        target: self.write_live.unwrap(),
-                    }) {
+                if let Some(target) = self.write.cancel() {
+                    if let Some(output) = ports.cancel(CancelOp { target }) {
                         return Some(output);
                     }
                     continue;
@@ -1257,10 +1342,10 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                     }
                     continue;
                 }
-                if self.read_live.is_none()
-                    && self.write_live.is_none()
-                    && self.body_live.is_none()
-                    && self.close_live.is_none()
+                if self.read.operation().is_none()
+                    && self.write.operation().is_none()
+                    && self.receive.lease().is_none()
+                    && self.lifecycle.close_operation().is_none()
                 {
                     // This identity is reserved for exhaustion cleanup.
                     let id = OperationId {
@@ -1268,7 +1353,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                         sequence: u64::MAX,
                         kind: OperationKind::Close,
                     };
-                    self.close_live = Some(id);
+                    self.lifecycle.issue_close(id);
                     if let Some(output) = ports.close(CloseOp { id }) {
                         return Some(output);
                     }
@@ -1276,12 +1361,12 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 return None;
             }
             if self.server
-                && !self.tx_started
+                && !self.tx.started()
                 && self.credit != 0
                 && self.start == self.end
                 && !self.eof
                 && !matches!(self.rx, Rx::Done | Rx::Paused)
-                && self.write_live.is_none()
+                && self.write.operation().is_none()
                 && self.output.is_none()
                 && let Some(exchange) = self.exchange.as_ref().filter(|exchange| exchange.expect)
             {
@@ -1294,12 +1379,12 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 }
                 continue;
             }
-            if self.write_live.is_none() && self.output.is_some() && !response_head_ready {
-                if self.write_blocked {
+            if self.write.operation().is_none() && self.output.is_some() && !response_head_ready {
+                if self.write == IoState::NeedsReadiness {
                     let Some(id) = self.operation(OperationKind::Writable) else {
                         continue;
                     };
-                    self.write_live = Some(id);
+                    self.write.issue(id);
                     if let Some(output) = ports.readiness(ReadinessOp {
                         id,
                         direction: Direction::Write,
@@ -1312,20 +1397,20 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                     };
                     let mut op = self.output.take().unwrap();
                     op.id = id;
-                    self.write_live = Some(id);
+                    self.write.issue(id);
                     if let Some(output) = ports.write(op) {
                         return Some(output);
                     }
                 }
                 continue;
             }
-            if self.write_live.is_none()
+            if self.write.operation().is_none()
                 && self.output.is_none()
                 && !response_head_ready
                 && let Some((body_id, command)) = self.pending_body.take()
             {
                 let mut prefix = [0; 24];
-                let chunked = self.tx == Framing::Chunked;
+                let chunked = self.tx.framing() == Framing::Chunked;
                 let prefix_len = if chunked {
                     let mut target = &mut prefix[..];
                     write!(target, "{:x}\r\n", command.range.len()).unwrap();
@@ -1350,56 +1435,50 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 });
                 continue;
             }
-            if self.failure.is_some()
-                && self.tx_done
-                && self.write_live.is_none()
+            if self.lifecycle == Lifecycle::ErrorResponse
+                && self.tx.settled()
+                && self.write.operation().is_none()
                 && self.output.is_none()
             {
-                self.closing = true;
+                self.lifecycle.begin_closing();
                 self.clear_deadlines();
                 continue;
             }
             if self.rx == Rx::Done
                 && let Some(exchange) = self.exchange.as_mut()
-                && !exchange.incoming_notified
+                && exchange.incoming_notification.take()
             {
-                exchange.incoming_notified = true;
                 if let Some(output) = ports.incoming_finished(exchange.id) {
                     return Some(output);
                 }
                 continue;
             }
-            if self.upgrade_pending
-                && self.tx_done
-                && self.read_live.is_none()
-                && self.write_live.is_none()
-                && self.body_live.is_none()
+            if self.lifecycle.is_upgrade()
+                && self.tx.settled()
+                && self.read.operation().is_none()
+                && self.write.operation().is_none()
+                && self.receive.lease().is_none()
             {
-                if !self.upgrade_notified {
+                if self.lifecycle.notify_upgrade() {
                     self.clear_deadlines();
-                    self.upgrade_notified = true;
                     return ports.upgrade_ready(self.exchange.as_ref().unwrap().id);
                 }
                 return None;
             }
-            if self.tx_done
+            if self.tx.settled()
                 && matches!(self.rx, Rx::Done | Rx::Paused)
-                && self.read_live.is_none()
-                && self.write_live.is_none()
-                && self.body_live.is_none()
+                && self.read.operation().is_none()
+                && self.write.operation().is_none()
+                && self.receive.lease().is_none()
                 && let Some(exchange) = self.exchange.take()
             {
                 let reusable = !self.close_after
                     && (self.server || self.start == self.end)
-                    && !self.graceful
+                    && !self.lifecycle.is_draining()
                     && !self.eof
                     && exchange.persistent
                     && self.exchanges < self.config.max_requests;
-                self.tx_started = false;
-                self.tx_done = false;
-                self.tx_end = false;
-                self.demand_issued = false;
-                self.source_notified = false;
+                self.tx = Transmit::Idle;
                 self.credit = 0;
                 self.received = 0;
                 self.no_content = false;
@@ -1412,7 +1491,6 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 self.outgoing_metadata_fields = 0;
                 self.outgoing_informational = 0;
                 self.outgoing_chunk_metadata_bytes = 0;
-                self.stop_upload = false;
                 self.incoming_connection_fields.clear();
                 self.outgoing_connection_fields.clear();
                 if reusable {
@@ -1424,7 +1502,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                         self.fail(Failure::SequenceExhausted);
                     }
                 } else {
-                    self.closing = true;
+                    self.lifecycle.begin_closing();
                     self.clear_deadlines();
                 }
                 if let Some(output) = ports.exchange_finished(ExchangeFinished {
@@ -1436,17 +1514,15 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 }
                 continue;
             }
-            if self.tx_started
-                && !self.tx_end
-                && !self.wait_continue
-                && !self.demand_issued
+            if self.tx.can_request_data()
+                && !self.waiting_continue()
                 && self.pending_body.is_none()
                 && self.output.is_none()
-                && self.write_live.is_none()
+                && self.write.operation().is_none()
                 && !response_head_ready
             {
-                self.demand_issued = true;
-                let mut max = match self.tx {
+                self.tx.request_data();
+                let mut max = match self.tx.framing() {
                     Framing::Fixed(left) => usize::try_from(left)
                         .unwrap_or(usize::MAX)
                         .min(self.config.max_buffer_bytes),
@@ -1456,7 +1532,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                     usize::try_from(self.config.max_body_bytes - self.outgoing_bytes)
                         .unwrap_or(usize::MAX),
                 );
-                if self.tx == Framing::Chunked {
+                if self.tx.framing() == Framing::Chunked {
                     let digits = self.config.max_chunk_line_bytes.saturating_sub(2).min(
                         self.config
                             .max_chunk_metadata_bytes
@@ -1475,9 +1551,9 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 }
                 continue;
             }
-            if self.body_live.is_none()
+            if self.receive.lease().is_none()
                 && self.start < self.end
-                && self.input.is_some()
+                && self.receive.buffer().is_some()
                 && (self.server || self.exchange.is_some())
             {
                 match self.rx {
@@ -1490,7 +1566,8 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                             && self.server
                             && self.head.is_empty()
                             && self
-                                .phase_timer
+                                .timers
+                                .phase
                                 .is_some_and(|(kind, _)| kind == TimerPhase::Idle)
                             && self
                                 .set_deadline(TimerPhase::Head, self.config.head_timeout_ns)
@@ -1499,7 +1576,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                             self.fail(Failure::SequenceExhausted);
                             continue;
                         }
-                        let byte = self.input.as_ref().unwrap().as_ref()[self.start];
+                        let byte = self.receive.buffer().unwrap().as_ref()[self.start];
                         self.start += 1;
                         if (byte == b'\n' && self.head.last() != Some(&b'\r'))
                             || (self.head.last() == Some(&b'\r') && byte != b'\n')
@@ -1559,12 +1636,11 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                         let Some(id) = self.operation(OperationKind::Body) else {
                             continue;
                         };
-                        self.body_live = Some(id);
                         self.credit -= count;
                         let op = BodyOp {
                             id,
                             exchange: self.exchange.as_ref().unwrap().id,
-                            buffer: self.input.take().unwrap(),
+                            buffer: self.receive.deliver(id),
                             range: self.start..self.start + count,
                             buffered_end: self.end,
                         };
@@ -1579,7 +1655,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             let needs_input = matches!(self.rx, Rx::Head | Rx::Size | Rx::ChunkCrlf | Rx::Trailers)
                 || (matches!(self.rx, Rx::Fixed(_) | Rx::Chunk(_) | Rx::Eof)
                     && (self.credit != 0 || self.no_content));
-            if self.eof && self.start == self.end && self.body_live.is_none() {
+            if self.eof && self.start == self.end && self.receive.lease().is_none() {
                 match self.rx {
                     Rx::Eof => {
                         self.rx = Rx::Done;
@@ -1587,7 +1663,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                         continue;
                     }
                     Rx::Head if self.head.is_empty() && self.exchange.is_none() => {
-                        self.closing = true;
+                        self.lifecycle.begin_closing();
                         continue;
                     }
                     Rx::Done | Rx::Paused => {}
@@ -1600,17 +1676,17 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             if needs_input
                 && !self.eof
                 && self.start == self.end
-                && self.read_live.is_none()
-                && self.body_live.is_none()
+                && self.read.operation().is_none()
+                && self.receive.lease().is_none()
                 && (self.server || self.exchange.is_some())
             {
                 self.start = 0;
                 self.end = 0;
-                if self.read_blocked {
+                if self.read == IoState::NeedsReadiness {
                     let Some(id) = self.operation(OperationKind::Readable) else {
                         continue;
                     };
-                    self.read_live = Some(id);
+                    self.read.issue(id);
                     if let Some(output) = ports.readiness(ReadinessOp {
                         id,
                         direction: Direction::Read,
@@ -1621,9 +1697,9 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                     let Some(id) = self.operation(OperationKind::Read) else {
                         continue;
                     };
-                    let buffer = self.input.take().unwrap();
+                    let buffer = self.receive.read();
                     let len = buffer.as_ref().len();
-                    self.read_live = Some(id);
+                    self.read.issue(id);
                     if let Some(output) = ports.read(ReadOp {
                         id,
                         buffer,
@@ -1764,12 +1840,13 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 self.exchange = Some(Exchange {
                     id,
                     version,
-                    head_method: method == "HEAD",
-                    connect_method: method == "CONNECT",
+                    method: MethodSemantics::from_method(method),
                     persistent: codec::persistent(version, request.headers),
                     upgrade,
                     expect,
-                    incoming_notified: false,
+                    continue_gate: ContinueGate::Open,
+                    incoming_notification: Notification::Pending,
+                    source_notification: Notification::Pending,
                 });
                 self.exchanges += 1;
                 self.set_rx(framing)?;
@@ -1808,7 +1885,8 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 }
                 self.account_fields(response.headers.len())?;
                 let exchange = self.exchange.as_ref().ok_or(Failure::Protocol)?;
-                let tunnel = exchange.connect_method && (200..300).contains(&status);
+                let tunnel =
+                    exchange.method == MethodSemantics::Connect && (200..300).contains(&status);
                 let framing = if tunnel {
                     Framing::Empty
                 } else {
@@ -1830,8 +1908,8 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                         return Err(Failure::Limit);
                     }
                     if status == 100 {
-                        self.wait_continue = false;
-                        self.update_deadline(self.phase_timer, None)
+                        self.release_continue();
+                        self.update_deadline(self.timers.phase, None)
                             .map_err(|_| Failure::SequenceExhausted)?;
                     }
                 } else {
@@ -1846,38 +1924,40 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                             || !exchange.upgrade.as_ref().is_some_and(|requested| {
                                 codec::valid_upgrade(requested, response.headers)
                             })
-                            || !self.tx_end
+                            || !self.tx.source_finished()
                         {
                             return Err(Failure::Protocol);
                         }
-                        self.upgrade_pending = true;
+                        self.lifecycle.begin_upgrade();
                         self.rx = Rx::Done;
                     } else if tunnel {
-                        if !self.tx_end {
+                        if !self.tx.source_finished() {
                             return Err(Failure::Protocol);
                         }
-                        self.upgrade_pending = true;
+                        self.lifecycle.begin_upgrade();
                         self.rx = Rx::Done;
                     } else {
-                        let framing = if exchange.head_method || status == 204 || status == 304 {
+                        let framing = if exchange.method == MethodSemantics::Head
+                            || status == 204
+                            || status == 304
+                        {
                             Framing::Empty
                         } else {
                             framing
                         };
                         self.set_rx(framing)?;
                     }
-                    if !self.tx_done
-                        && self.tx != Framing::Empty
-                        && !self.upgrade_pending
-                        && (status >= 300 || self.wait_continue || self.rx == Rx::Done)
+                    if !self.tx.settled()
+                        && self.tx.framing() != Framing::Empty
+                        && !self.lifecycle.is_upgrade()
+                        && (status >= 300 || self.waiting_continue() || self.rx == Rx::Done)
                     {
-                        self.wait_continue = false;
+                        self.release_continue();
                         self.close_after = true;
-                        self.tx_end = true;
-                        self.stop_upload = true;
-                        self.upload_at = None;
+                        self.tx.stop_upload();
+                        self.timers.upload_at = None;
                     }
-                    self.update_deadline(self.phase_timer, None)
+                    self.update_deadline(self.timers.phase, None)
                         .map_err(|_| Failure::SequenceExhausted)?;
                 }
                 Ok(callback(
@@ -1993,7 +2073,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
     ///
     /// This view is empty while the receive buffer belongs to an operation.
     pub fn buffered_input(&self) -> &[u8] {
-        self.core.input.as_ref().map_or(&[], |buffer| {
+        self.core.receive.buffer().map_or(&[], |buffer| {
             &buffer.as_ref()[self.core.start..self.core.end]
         })
     }
@@ -2059,79 +2139,16 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
         self.fail_source(exchange, Failure::Cancelled)
     }
     pub fn shutdown(&mut self, mode: ShutdownMode) {
-        if self.core.closed || self.core.handed_off {
-            return;
-        }
-        self.core.graceful = true;
-        if mode == ShutdownMode::Abort || self.core.upgrade_pending {
-            self.core.fail(Failure::Cancelled);
-        } else if self.core.exchange.is_none() {
-            self.core.closing = true;
-            self.core.clear_deadlines();
-        }
+        self.core.shutdown(mode);
     }
     pub fn observe_time(&mut self, now: Tick) -> Result<(), CommandError> {
-        if now < self.core.now {
-            return Err(CommandError::TimeRegression);
-        }
-        self.core.now = now;
-        Ok(())
+        self.core.observe_time(now)
     }
     pub fn expire(&mut self, deadline: Deadline, now: Tick) -> Result<(), CommandError> {
-        if self.core.deadline != Some(deadline) {
-            return Err(CommandError::StaleDeadline);
-        }
-        if now < deadline.at {
-            return Err(CommandError::EarlyDeadline);
-        }
-        if self.core.deadline_kind == Some(TimerPhase::Continue) && self.core.phase_timer.is_some()
-        {
-            self.core
-                .sequence
-                .checked_add(1)
-                .filter(|n| *n < u64::MAX)
-                .ok_or(CommandError::SequenceExhausted)?;
-        }
-        self.observe_time(now)?;
-        if self.core.deadline_kind == Some(TimerPhase::Continue) {
-            self.core.wait_continue = false;
-            self.core.update_deadline(self.core.phase_timer, None)?;
-        } else {
-            self.core.fail(Failure::Timeout);
-        }
-        Ok(())
+        self.core.expire(deadline, now)
     }
     pub fn take_upgrade(&mut self) -> Result<Handoff<B>, CommandError> {
-        if !self.core.upgrade_notified
-            || !self.core.upgrade_pending
-            || self.core.handed_off
-            || self.core.input.is_none()
-            || self.core.closing
-            || self.core.closed
-            || self.core.graceful
-            || self.core.failure.is_some()
-            || !self.core.tx_done
-            || self.core.rx != Rx::Done
-            || self.core.read_live.is_some()
-            || self.core.write_live.is_some()
-            || self.core.body_live.is_some()
-            || self.core.close_live.is_some()
-            || self.core.output.is_some()
-            || self.core.pending_body.is_some()
-            || self.core.body_result.is_some()
-        {
-            return Err(CommandError::NotReady);
-        }
-        self.core.handed_off = true;
-        self.core.upgrade_notified = false;
-        self.core.upgrade_pending = false;
-        Ok(Handoff {
-            connection: self.core.id,
-            buffered: BufferedInput {
-                buffer: self.core.input.take().unwrap(),
-                range: self.core.start..self.core.end,
-            },
-        })
+        self.core.take_upgrade()
     }
 }
 
@@ -2168,7 +2185,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Client<B, W> {
     ///
     /// This view is empty while the receive buffer belongs to an operation.
     pub fn buffered_input(&self) -> &[u8] {
-        self.core.input.as_ref().map_or(&[], |buffer| {
+        self.core.receive.buffer().map_or(&[], |buffer| {
             &buffer.as_ref()[self.core.start..self.core.end]
         })
     }
@@ -2234,88 +2251,27 @@ impl<B: Buffer, W: AsRef<[u8]>> Client<B, W> {
         self.fail_source(exchange, Failure::Cancelled)
     }
     pub fn shutdown(&mut self, mode: ShutdownMode) {
-        if self.core.closed || self.core.handed_off {
-            return;
-        }
-        self.core.graceful = true;
-        if mode == ShutdownMode::Abort || self.core.upgrade_pending {
-            self.core.fail(Failure::Cancelled);
-        } else if self.core.exchange.is_none() {
-            self.core.closing = true;
-            self.core.clear_deadlines();
-        }
+        self.core.shutdown(mode);
     }
     pub fn observe_time(&mut self, now: Tick) -> Result<(), CommandError> {
-        if now < self.core.now {
-            return Err(CommandError::TimeRegression);
-        }
-        self.core.now = now;
-        Ok(())
+        self.core.observe_time(now)
     }
     pub fn expire(&mut self, deadline: Deadline, now: Tick) -> Result<(), CommandError> {
-        if self.core.deadline != Some(deadline) {
-            return Err(CommandError::StaleDeadline);
-        }
-        if now < deadline.at {
-            return Err(CommandError::EarlyDeadline);
-        }
-        if self.core.deadline_kind == Some(TimerPhase::Continue) && self.core.phase_timer.is_some()
-        {
-            self.core
-                .sequence
-                .checked_add(1)
-                .filter(|n| *n < u64::MAX)
-                .ok_or(CommandError::SequenceExhausted)?;
-        }
-        self.observe_time(now)?;
-        if self.core.deadline_kind == Some(TimerPhase::Continue) {
-            self.core.wait_continue = false;
-            self.core.update_deadline(self.core.phase_timer, None)?;
-        } else {
-            self.core.fail(Failure::Timeout);
-        }
-        Ok(())
+        self.core.expire(deadline, now)
     }
     pub fn take_upgrade(&mut self) -> Result<Handoff<B>, CommandError> {
-        if !self.core.upgrade_notified
-            || !self.core.upgrade_pending
-            || self.core.handed_off
-            || self.core.input.is_none()
-            || self.core.closing
-            || self.core.closed
-            || self.core.graceful
-            || self.core.failure.is_some()
-            || !self.core.tx_done
-            || self.core.rx != Rx::Done
-            || self.core.read_live.is_some()
-            || self.core.write_live.is_some()
-            || self.core.body_live.is_some()
-            || self.core.close_live.is_some()
-            || self.core.output.is_some()
-            || self.core.pending_body.is_some()
-            || self.core.body_result.is_some()
-        {
-            return Err(CommandError::NotReady);
-        }
-        self.core.handed_off = true;
-        self.core.upgrade_notified = false;
-        self.core.upgrade_pending = false;
-        Ok(Handoff {
-            connection: self.core.id,
-            buffered: BufferedInput {
-                buffer: self.core.input.take().unwrap(),
-                range: self.core.start..self.core.end,
-            },
-        })
+        self.core.take_upgrade()
     }
 }
 
 impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
     pub fn next<P: ServerPorts<B, W>>(&mut self, ports: &mut P) -> Option<P::Output> {
-        self.core.next(ports, |ports, id, head| match head {
+        let output = self.core.next(ports, |ports, id, head| match head {
             ParsedHead::Request(head) => ports.request(id, head),
             ParsedHead::Response(..) => unreachable!(),
-        })
+        });
+        self.core.assert_invariants();
+        output
     }
     pub fn respond(
         &mut self,
@@ -2349,10 +2305,12 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
 
 impl<B: Buffer, W: AsRef<[u8]>> Client<B, W> {
     pub fn next<P: ClientPorts<B, W>>(&mut self, ports: &mut P) -> Option<P::Output> {
-        self.core.next(ports, |ports, id, head| match head {
+        let output = self.core.next(ports, |ports, id, head| match head {
             ParsedHead::Response(head, informational) => ports.response(id, head, informational),
             ParsedHead::Request(..) => unreachable!(),
-        })
+        });
+        self.core.assert_invariants();
+        output
     }
     pub fn request(&mut self, request: Request<'_>) -> Result<ExchangeId, CommandError> {
         self.core.request(request)

@@ -109,6 +109,52 @@ After `next` returns, the composite applies those completions and drives the aff
 A child's `None` does not make the composite idle when a completion or sibling remains ready.
 This completion-return step avoids recursive mutation without requiring a task or queue at every layer.
 
+## Internal state composition
+
+The implementation uses a product of smaller state machines.
+The public commands, callbacks, and completion types remain unchanged.
+
+| State | Responsibility |
+| --- | --- |
+| `Lifecycle` | HTTP admission, upgrade preparation, bounded error output, close settlement, terminal notification, and transferred authority |
+| `Rx` | Receive framing and parser progress |
+| `ReceiveStorage` | Exactly one buffer owner: the machine, a read operation, a body lease, or the next protocol |
+| `Transmit` | Producer demand, source end, early upload termination, and transport settlement |
+| `IoState` | Idle, readiness demand, an outstanding operation, or cancellation requested for that operation |
+| `Timers` | Independent timer candidates and one armed deadline paired with its purpose |
+| Exchange control | Method semantics, the continue gate, and completion notifications for the current exchange |
+| Metadata write role | Informational output, the final head, or body termination |
+
+Lifecycle alternatives are exclusive.
+A closed connection cannot also retain an independent upgrade-ready flag.
+The close-wait state contains the original close identity.
+Repeated shutdown does not replace that identity or issue another close.
+An error response has its own lifecycle state because recording a failure does not immediately terminate its output.
+
+Producer completion and transport settlement remain different states.
+The last payload can remain in flight after the producer ends.
+An early response can stop production while original operations still require completion.
+The continue gate remains independent because an empty streaming source can end before a 100 response arrives.
+
+Cancellation changes an outstanding I/O state without releasing its identity.
+Only the original completion releases the operation slot.
+Receive storage cannot simultaneously belong to the machine and an outstanding body lease.
+The storage transitions move the original buffer without cloning its payload.
+The small control enums introduce no additional allocation.
+
+Some invariants cross component boundaries.
+For example, close issuance requires settled I/O and returned body storage.
+Debug assertions cover these relationships at drive boundaries.
+They also permit a queued final head behind an outstanding informational write.
+Completing that informational write cannot mark the queued final head as settled.
+The write operation retains its metadata role instead of inferring it from current exchange flags.
+Incoming body delivery remains eligible while the final response output is still in flight.
+An already received upgrade response still reaches the client callback before a pending graceful shutdown revokes handoff.
+
+The drive loop retains explicit notification ordering.
+State types remove contradictory local combinations, not the need to order callbacks and settle external resources.
+Transition tests cover cancellation, receive ownership, source versus transport completion, and all timer-candidate combinations.
+
 ## Owned operations
 
 `ReadOp<B>` and `WriteOp<B>` own their storage.
