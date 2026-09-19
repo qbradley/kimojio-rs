@@ -1,0 +1,14 @@
+[package]
+name = "kimojio-fsm-websocket"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Owned-operation RFC 6455 server state machine"
+readme = "README.md"
+
+[dependencies]
+kimojio-fsm-http1.workspace = true
+base64 = "0.22"
+sha1 = "0.10"
