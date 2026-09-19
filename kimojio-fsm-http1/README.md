@@ -151,9 +151,123 @@ The write operation retains its metadata role instead of inferring it from curre
 Incoming body delivery remains eligible while the final response output is still in flight.
 An already received upgrade response still reaches the client callback before a pending graceful shutdown revokes handoff.
 
-The drive loop retains explicit notification ordering.
 State types remove contradictory local combinations, not the need to order callbacks and settle external resources.
+The coordinator makes those ordering rules explicit.
 Transition tests cover cancellation, receive ownership, source versus transport completion, and all timer-candidate combinations.
+
+### Coordination contracts
+
+[`coordinator.rs`](src/coordinator.rs) separates transition selection from transition execution.
+`next_transition` reads state without changing it.
+`advance` commits one selected transition and can call a port.
+`next` repeats these steps until a callback yields or no transition remains eligible.
+A callback that returns `None` continues this loop, including after an upgrade notification.
+
+`Transition` contains private control-flow labels, not operation payloads.
+The executor still receives operations directly through callbacks.
+The coordinator adds no event queue, allocation, dynamic dispatch, or public action enum.
+
+Each lifecycle state selects from a restricted set of transitions:
+
+| Lifecycle | Permitted work after pending deadlines and receipts |
+| --- | --- |
+| HTTP | Cross-direction policy, source notification, upload termination, receive cancellation, continue response, transmit, incoming notification, retirement, demand, receive |
+| Error response | Source notification, receive cancellation, bounded output, entry into closing |
+| Upgrade handshake | Source notification, handshake output, incoming notification, handoff readiness |
+| Revoked upgrade | Failure transition after the response callback |
+| Closing, settling | Source notification, cancellation, resource return, exchange termination, close issuance |
+| Closing, awaiting close | No new work until the original close completes |
+| Closed | One terminal notification |
+| Upgrade ready | No protocol work before handoff |
+| Handed off | No callbacks or transport authority |
+
+The receive and transmit selectors own local eligibility rules.
+For example, the receive selector requires available storage before it considers parsing, body delivery, or a new read.
+The transmit selector requires a free operation slot before it prepares or issues output.
+The lifecycle selector determines whether those local selectors can run.
+
+The coordinator has these ordering dependencies:
+
+| Dependency | Reason |
+| --- | --- |
+| Pending deadlines and receipts precede protocol work | The caller receives timer changes and returned storage before later callbacks |
+| Cross-direction policy precedes new demand and I/O | A completed message can remove permission for work in the other direction |
+| Source notification precedes upload cleanup | The producer learns that no further data is required |
+| Buffered response metadata precedes upload output and demand | An early response can stop the upload |
+| Output precedes new producer demand | The machine has bounded output capacity |
+| Incoming notification precedes normal retirement or handoff readiness | The application observes message completion before those milestones |
+| Resource settlement precedes close or handoff | External operations and body leases retain their original ownership |
+
+A pending receipt has priority over a source notification.
+There is no universal rule that every source notification precedes every receipt.
+Cancellation requests never release operation identities.
+Closing can report exchange termination before outstanding operations return, but it cannot issue close until they return.
+
+Semantic completion boundaries record the cross-direction policy obligation.
+Client receive completion records `IncomingEnded`.
+Server transmit settlement records `OutgoingSettled`.
+Each role records only one kind, so repeated records coalesce without a queue.
+The coordinator applies the obligation during the next drive.
+This preserves completion batches: a caller can return both a write and a body lease before the machine applies early-response policy.
+Failure clears the obligation and transfers control to the error or closing lifecycle.
+
+The selectors only determine eligibility.
+The corresponding transition commits notification state, cancellation state, or operation ownership before it calls a port.
+Every non-yielding transition must consume work or advance state.
+Only the absence of an eligible transition means that the machine is blocked.
+
+The transition reference separates eligibility from the committed effect:
+
+| Transition | Required local fact | Committed effect |
+| --- | --- | --- |
+| `Deadline` | A timer notification is pending | Consume the notification and report the current deadline |
+| `Receipt` | Returned output storage is pending | Transfer the receipt and storage to the caller |
+| `Closed` | The terminal notification is pending | Mark it delivered before the callback |
+| `Coordinate` | A semantic boundary is pending | Consume the boundary and apply cross-direction policy |
+| `RevokeUpgrade` | The upgrade lifecycle is revoked | Record cancellation and enter termination |
+| `SourceFinished` | Source end or failure, with a pending notification | Mark the notification delivered before the callback |
+| `CancelRead`, `CancelWrite` | An original operation is in flight | Record cancellation without releasing its identity |
+| `DiscardOutput` | Unissued or returned output remains during termination | Settle its retained storage |
+| `ReturnBody` | Accepted body storage remains unissued during termination | Create its zero-acceptance receipt |
+| `SettleUpload` | The stopped upload has no retained output or outstanding write | Record transport settlement |
+| `FinishAbortedExchange` | A closing connection retains an exchange | Remove the exchange and report non-reusable termination |
+| `Close` | Closing has no exchange, operation, or body lease | Reserve the close identity before issuance |
+| `Continue` | Request-body demand needs input before a final response starts | Queue one informational response |
+| `Write` | Output exists and the write slot is free | Issue a write or a readiness operation |
+| `PrepareBody` | Accepted body storage has no preceding output | Move that storage into framed output |
+| `BeginClosing` | The bounded error output settled | Enter closing and clear deadlines |
+| `IncomingFinished` | Receive framing is done and its notification is pending | Mark the notification delivered before the callback |
+| `UpgradeReady` | Handshake output and external ownership settled | Record handoff readiness and clear deadlines before the callback |
+| `RetireExchange` | Both directions and external ownership settled | Decide reuse, remove the exchange, and report completion |
+| `Demand` | The producer is ready, the continue gate is open, and output capacity is free | Record outstanding demand before the callback |
+| `Metadata` | The parser has an available byte | Consume one byte and advance or reject metadata |
+| `Body` | Payload, credit, and receive storage are available | Debit credit and transfer a body lease |
+| `RejectBody` | A `205` response with EOF framing contains payload | Record a protocol failure |
+| `Eof` | EOF has no buffered bytes or retained body lease | Complete EOF framing, close an idle connection, or report truncation |
+| `Read` | The parser needs input and has free storage and an operation slot | Issue a read or a readiness operation |
+
+The lifecycle table restricts these local facts further.
+For example, a free write slot cannot authorize normal output during closing.
+Clean idle EOF clears its deadline before close issuance.
+An upgrade callback that returns `None` no longer leaves deadline cancellation pending behind a blocked return.
+
+### Bounded coordinator model
+
+[`coordinator_tests.rs`](src/coordinator_tests.rs) contains an independent ownership model for a two-byte request and response.
+The model explores 474 terminal schedules from three initial input owners: read operation, readiness operation, and body lease.
+The schedules include both completion orders, abort, timeout, short writes, readiness, interruption, and transport reset.
+Each schedule runs with single-transition inspection and three callback modes: continue, yield, and mixed.
+
+The model checks exact receipts, incoming completion, source completion, exchange termination, cancellation identities, and close eligibility.
+Single-transition inspection checks selection purity and rejects repeated internal states.
+An independent ownership join determines when close must become eligible.
+The public drive modes must produce the same callback sequence without intervening external inputs.
+Separate cases cover response priority, completion batches, and deadline cancellation after a non-yielding upgrade callback.
+
+This bounded model is not a proof of all HTTP behavior.
+It does not model arbitrary payload lengths, every parser state, or an executor that never returns its operations.
+The protocol corpus and ownership tests cover additional cases.
+The coordinator requires original operation completions and body-lease returns for eventual closure.
 
 ## Owned operations
 

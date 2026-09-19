@@ -7,6 +7,10 @@ use crate::state::{
 use crate::*;
 use std::io::Write;
 
+#[path = "coordinator.rs"]
+mod coordinator;
+use coordinator::Boundary;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Rx {
     Head,
@@ -72,6 +76,7 @@ struct Core<B, W> {
     close_after: bool,
     failure: Option<Failure>,
     lifecycle: Lifecycle,
+    boundary: Boundary,
 }
 
 /// A single-exchange HTTP/1 server with independently owned I/O operations.
@@ -149,6 +154,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             close_after: false,
             failure: None,
             lifecycle: Lifecycle::Http(Admission::Accepting),
+            boundary: Boundary::None,
         };
         core.set_deadline(
             if server {
@@ -320,6 +326,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             _ => None,
         };
         self.failure.get_or_insert(failure);
+        self.boundary = Boundary::None;
         self.credit = 0;
         self.rx = Rx::Paused;
         self.release_continue();
@@ -733,7 +740,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         }
         self.tx.finish_source();
         if bytes.is_empty() {
-            self.tx.settle();
+            self.settle_transmit();
         } else {
             self.queue_head(bytes, MetadataKind::BodyEnd);
         }
@@ -882,7 +889,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                     && self.tx.started()
                     && self.tx.source_finished()
                 {
-                    self.tx.settle();
+                    self.settle_transmit();
                 }
                 if !self.server
                     && !self.tx.source_finished()
@@ -935,7 +942,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                         self.outgoing_metadata_bytes += 5;
                         self.queue_head(b"0\r\n\r\n".to_vec(), MetadataKind::BodyEnd);
                     } else {
-                        self.tx.settle();
+                        self.settle_transmit();
                     }
                 }
             }
@@ -1030,6 +1037,9 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             }
             other => other,
         };
+        if self.rx == Rx::Done {
+            self.incoming_ended();
+        }
         Ok(())
     }
 
@@ -1141,6 +1151,18 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
     }
 
     fn assert_invariants(&self) {
+        match self.boundary {
+            Boundary::None => {}
+            Boundary::IncomingEnded => {
+                debug_assert!(!self.server);
+                debug_assert_eq!(self.rx, Rx::Done);
+                debug_assert!(matches!(self.lifecycle, Lifecycle::Http(_)));
+            }
+            Boundary::OutgoingSettled => {
+                debug_assert!(self.server && self.tx.settled());
+                debug_assert!(matches!(self.lifecycle, Lifecycle::Http(_)));
+            }
+        }
         let read_owns_input = self
             .read
             .operation()
@@ -1204,513 +1226,6 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             debug_assert!(self.pending_body.is_none());
             debug_assert!(self.body_result.is_none());
             debug_assert!(self.timers.armed.is_none());
-        }
-    }
-
-    fn next<P: Ports<B, W>>(
-        &mut self,
-        ports: &mut P,
-        head_callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
-    ) -> Option<P::Output> {
-        loop {
-            self.assert_invariants();
-            if self.lifecycle == Lifecycle::HandedOff {
-                return None;
-            }
-            let response_head_ready = !self.server && self.rx == Rx::Head && self.start < self.end;
-            if self.timers.notification.take() {
-                if let Some(output) = ports.deadline_changed(self.timers.deadline()) {
-                    return Some(output);
-                }
-                continue;
-            }
-            if let Some(result) = self.body_result.take() {
-                if let Some(output) = ports.body_sent(result) {
-                    return Some(output);
-                }
-                continue;
-            }
-            if let Lifecycle::Closed(notification) = &mut self.lifecycle {
-                if notification.take() {
-                    return ports.closed(self.failure.map_or(Ok(()), Err));
-                }
-                return None;
-            }
-            if self.lifecycle == Lifecycle::Upgrade(Upgrade::Revoked) {
-                self.fail(Failure::Cancelled);
-                continue;
-            }
-            if self.server
-                && self.tx.settled()
-                && !matches!(self.rx, Rx::Done | Rx::Paused)
-                && !self.lifecycle.is_upgrade()
-                && !self.lifecycle.is_closing()
-            {
-                self.rx = Rx::Paused;
-                self.credit = 0;
-                self.close_after = true;
-            }
-            if !self.server
-                && self.rx == Rx::Done
-                && !self.tx.settled()
-                && self.tx.framing() != Framing::Empty
-                && !self.lifecycle.is_upgrade()
-                && !self.lifecycle.is_closing()
-            {
-                self.tx.stop_upload();
-                self.release_continue();
-                self.close_after = true;
-                self.timers.upload_at = None;
-                if self.update_deadline(self.timers.phase, None).is_err() {
-                    self.fail(Failure::SequenceExhausted);
-                }
-            }
-            if (self.tx.source_finished() || self.failure.is_some())
-                && let Some(exchange) = self.exchange.as_mut()
-                && exchange.source_notification.take()
-            {
-                let id = exchange.id;
-                if let Some(output) = ports.source_finished(id) {
-                    return Some(output);
-                }
-                continue;
-            }
-            if self.tx.stopped() && !self.lifecycle.is_closing() {
-                if let Some(target) = self.write.cancel() {
-                    if let Some(output) = ports.cancel(CancelOp { target }) {
-                        return Some(output);
-                    }
-                    continue;
-                }
-                if let Some(op) = self.output.take() {
-                    self.settle_write(op, Acceptance::Exact);
-                    continue;
-                }
-                if let Some((id, command)) = self.pending_body.take() {
-                    self.body_result = Some(BodySent {
-                        exchange: command.exchange,
-                        id,
-                        buffer: command.buffer,
-                        accepted: 0,
-                        acceptance: Acceptance::Exact,
-                        result: Err(Failure::EarlyResponse),
-                    });
-                    continue;
-                }
-                if self.write.operation().is_none() {
-                    self.tx.settle();
-                }
-            }
-            if (self.lifecycle.is_closing() || self.rx == Rx::Paused)
-                && let Some(target) = self.read.cancel()
-            {
-                if let Some(output) = ports.cancel(CancelOp { target }) {
-                    return Some(output);
-                }
-                continue;
-            }
-            if self.lifecycle.is_closing() {
-                self.clear_deadlines();
-                if let Some(target) = self.write.cancel() {
-                    if let Some(output) = ports.cancel(CancelOp { target }) {
-                        return Some(output);
-                    }
-                    continue;
-                }
-                if let Some(op) = self.output.take() {
-                    self.settle_write(op, Acceptance::Exact);
-                    continue;
-                }
-                if let Some((id, command)) = self.pending_body.take() {
-                    self.body_result = Some(BodySent {
-                        exchange: command.exchange,
-                        id,
-                        buffer: command.buffer,
-                        accepted: 0,
-                        acceptance: Acceptance::Exact,
-                        result: Err(self.failure.unwrap_or(Failure::Cancelled)),
-                    });
-                    continue;
-                }
-                if let Some(exchange) = self.exchange.take() {
-                    if let Some(output) = ports.exchange_finished(ExchangeFinished {
-                        exchange: exchange.id,
-                        result: self.failure.map_or(Ok(()), Err),
-                        reusable: false,
-                    }) {
-                        return Some(output);
-                    }
-                    continue;
-                }
-                if self.read.operation().is_none()
-                    && self.write.operation().is_none()
-                    && self.receive.lease().is_none()
-                    && self.lifecycle.close_operation().is_none()
-                {
-                    // This identity is reserved for exhaustion cleanup.
-                    let id = OperationId {
-                        connection: self.id,
-                        sequence: u64::MAX,
-                        kind: OperationKind::Close,
-                    };
-                    self.lifecycle.issue_close(id);
-                    if let Some(output) = ports.close(CloseOp { id }) {
-                        return Some(output);
-                    }
-                }
-                return None;
-            }
-            if self.server
-                && !self.tx.started()
-                && self.credit != 0
-                && self.start == self.end
-                && !self.eof
-                && !matches!(self.rx, Rx::Done | Rx::Paused)
-                && self.write.operation().is_none()
-                && self.output.is_none()
-                && let Some(exchange) = self.exchange.as_ref().filter(|exchange| exchange.expect)
-            {
-                let id = exchange.id;
-                if self
-                    .inform(id, ResponseHead::new(100, "Continue", &[]))
-                    .is_err()
-                {
-                    self.fail(Failure::Limit);
-                }
-                continue;
-            }
-            if self.write.operation().is_none() && self.output.is_some() && !response_head_ready {
-                if self.write == IoState::NeedsReadiness {
-                    let Some(id) = self.operation(OperationKind::Writable) else {
-                        continue;
-                    };
-                    self.write.issue(id);
-                    if let Some(output) = ports.readiness(ReadinessOp {
-                        id,
-                        direction: Direction::Write,
-                    }) {
-                        return Some(output);
-                    }
-                } else {
-                    let Some(id) = self.operation(OperationKind::Write) else {
-                        continue;
-                    };
-                    let mut op = self.output.take().unwrap();
-                    op.id = id;
-                    self.write.issue(id);
-                    if let Some(output) = ports.write(op) {
-                        return Some(output);
-                    }
-                }
-                continue;
-            }
-            if self.write.operation().is_none()
-                && self.output.is_none()
-                && !response_head_ready
-                && let Some((body_id, command)) = self.pending_body.take()
-            {
-                let mut prefix = [0; 24];
-                let chunked = self.tx.framing() == Framing::Chunked;
-                let prefix_len = if chunked {
-                    let mut target = &mut prefix[..];
-                    write!(target, "{:x}\r\n", command.range.len()).unwrap();
-                    24 - target.len()
-                } else {
-                    0
-                };
-                self.output = Some(WriteOp {
-                    id: OperationId {
-                        connection: self.id,
-                        sequence: 0,
-                        kind: OperationKind::Write,
-                    },
-                    storage: WriteStorage::Body {
-                        command,
-                        body_id,
-                        prefix,
-                        prefix_len,
-                        chunked,
-                    },
-                    cursor: 0,
-                });
-                continue;
-            }
-            if self.lifecycle == Lifecycle::ErrorResponse
-                && self.tx.settled()
-                && self.write.operation().is_none()
-                && self.output.is_none()
-            {
-                self.lifecycle.begin_closing();
-                self.clear_deadlines();
-                continue;
-            }
-            if self.rx == Rx::Done
-                && let Some(exchange) = self.exchange.as_mut()
-                && exchange.incoming_notification.take()
-            {
-                if let Some(output) = ports.incoming_finished(exchange.id) {
-                    return Some(output);
-                }
-                continue;
-            }
-            if self.lifecycle.is_upgrade()
-                && self.tx.settled()
-                && self.read.operation().is_none()
-                && self.write.operation().is_none()
-                && self.receive.lease().is_none()
-            {
-                if self.lifecycle.notify_upgrade() {
-                    self.clear_deadlines();
-                    return ports.upgrade_ready(self.exchange.as_ref().unwrap().id);
-                }
-                return None;
-            }
-            if self.tx.settled()
-                && matches!(self.rx, Rx::Done | Rx::Paused)
-                && self.read.operation().is_none()
-                && self.write.operation().is_none()
-                && self.receive.lease().is_none()
-                && let Some(exchange) = self.exchange.take()
-            {
-                let reusable = !self.close_after
-                    && (self.server || self.start == self.end)
-                    && !self.lifecycle.is_draining()
-                    && !self.eof
-                    && exchange.persistent
-                    && self.exchanges < self.config.max_requests;
-                self.tx = Transmit::Idle;
-                self.credit = 0;
-                self.received = 0;
-                self.no_content = false;
-                self.outgoing_bytes = 0;
-                self.metadata_bytes = 0;
-                self.metadata_fields = 0;
-                self.chunk_metadata_bytes = 0;
-                self.informational = 0;
-                self.outgoing_metadata_bytes = 0;
-                self.outgoing_metadata_fields = 0;
-                self.outgoing_informational = 0;
-                self.outgoing_chunk_metadata_bytes = 0;
-                self.incoming_connection_fields.clear();
-                self.outgoing_connection_fields.clear();
-                if reusable {
-                    self.rx = Rx::Head;
-                    if self
-                        .set_deadline(TimerPhase::Idle, self.config.idle_timeout_ns)
-                        .is_err()
-                    {
-                        self.fail(Failure::SequenceExhausted);
-                    }
-                } else {
-                    self.lifecycle.begin_closing();
-                    self.clear_deadlines();
-                }
-                if let Some(output) = ports.exchange_finished(ExchangeFinished {
-                    exchange: exchange.id,
-                    result: Ok(()),
-                    reusable,
-                }) {
-                    return Some(output);
-                }
-                continue;
-            }
-            if self.tx.can_request_data()
-                && !self.waiting_continue()
-                && self.pending_body.is_none()
-                && self.output.is_none()
-                && self.write.operation().is_none()
-                && !response_head_ready
-            {
-                self.tx.request_data();
-                let mut max = match self.tx.framing() {
-                    Framing::Fixed(left) => usize::try_from(left)
-                        .unwrap_or(usize::MAX)
-                        .min(self.config.max_buffer_bytes),
-                    _ => self.config.max_buffer_bytes,
-                };
-                max = max.min(
-                    usize::try_from(self.config.max_body_bytes - self.outgoing_bytes)
-                        .unwrap_or(usize::MAX),
-                );
-                if self.tx.framing() == Framing::Chunked {
-                    let digits = self.config.max_chunk_line_bytes.saturating_sub(2).min(
-                        self.config
-                            .max_chunk_metadata_bytes
-                            .saturating_sub(self.outgoing_chunk_metadata_bytes)
-                            .saturating_sub(7),
-                    );
-                    let chunk_max = if digits >= (usize::BITS / 4) as usize {
-                        usize::MAX
-                    } else {
-                        (1usize << (digits * 4)) - 1
-                    };
-                    max = max.min(chunk_max);
-                }
-                if let Some(output) = ports.send_ready(self.exchange.as_ref().unwrap().id, max) {
-                    return Some(output);
-                }
-                continue;
-            }
-            if self.receive.lease().is_none()
-                && self.start < self.end
-                && self.receive.buffer().is_some()
-                && (self.server || self.exchange.is_some())
-            {
-                match self.rx {
-                    Rx::Eof if self.no_content => {
-                        self.fail(Failure::Protocol);
-                        continue;
-                    }
-                    Rx::Head | Rx::Size | Rx::ChunkCrlf | Rx::Trailers => {
-                        if self.rx == Rx::Head
-                            && self.server
-                            && self.head.is_empty()
-                            && self
-                                .timers
-                                .phase
-                                .is_some_and(|(kind, _)| kind == TimerPhase::Idle)
-                            && self
-                                .set_deadline(TimerPhase::Head, self.config.head_timeout_ns)
-                                .is_err()
-                        {
-                            self.fail(Failure::SequenceExhausted);
-                            continue;
-                        }
-                        let byte = self.receive.buffer().unwrap().as_ref()[self.start];
-                        self.start += 1;
-                        if (byte == b'\n' && self.head.last() != Some(&b'\r'))
-                            || (self.head.last() == Some(&b'\r') && byte != b'\n')
-                        {
-                            self.fail(Failure::Protocol);
-                            continue;
-                        }
-                        let limit = if matches!(self.rx, Rx::Size | Rx::ChunkCrlf) {
-                            self.config.max_chunk_line_bytes
-                        } else {
-                            self.config.max_head_bytes
-                        };
-                        let retained = if matches!(self.rx, Rx::Head | Rx::Trailers) {
-                            self.metadata_bytes
-                        } else {
-                            0
-                        };
-                        if self.head.len().saturating_add(retained) >= limit {
-                            self.fail(Failure::Limit);
-                            continue;
-                        }
-                        if self.head.len() == self.head.capacity() {
-                            let capacity = self.head.len().saturating_mul(2).max(32).min(limit);
-                            self.head.reserve_exact(capacity - self.head.len());
-                        }
-                        self.head.push(byte);
-                        let complete = match self.rx {
-                            Rx::Head => self.head.ends_with(b"\r\n\r\n"),
-                            Rx::Trailers => {
-                                self.head == b"\r\n" || self.head.ends_with(b"\r\n\r\n")
-                            }
-                            _ => self.head.ends_with(b"\r\n"),
-                        };
-                        if complete
-                            && let Some(output) = self.process_metadata(ports, head_callback)
-                        {
-                            return Some(output);
-                        }
-                        continue;
-                    }
-                    Rx::Fixed(_) | Rx::Chunk(_) | Rx::Eof if self.credit != 0 => {
-                        let left = match self.rx {
-                            Rx::Fixed(left) | Rx::Chunk(left) => left,
-                            _ => u64::MAX,
-                        };
-                        let count = (self.end - self.start)
-                            .min(self.credit)
-                            .min(usize::try_from(left).unwrap_or(usize::MAX));
-                        if self
-                            .received
-                            .checked_add(count as u64)
-                            .is_none_or(|n| n > self.config.max_body_bytes)
-                        {
-                            self.fail(Failure::Limit);
-                            continue;
-                        }
-                        let Some(id) = self.operation(OperationKind::Body) else {
-                            continue;
-                        };
-                        self.credit -= count;
-                        let op = BodyOp {
-                            id,
-                            exchange: self.exchange.as_ref().unwrap().id,
-                            buffer: self.receive.deliver(id),
-                            range: self.start..self.start + count,
-                            buffered_end: self.end,
-                        };
-                        if let Some(output) = ports.body(op) {
-                            return Some(output);
-                        }
-                        continue;
-                    }
-                    _ => {}
-                }
-            }
-            let needs_input = matches!(self.rx, Rx::Head | Rx::Size | Rx::ChunkCrlf | Rx::Trailers)
-                || (matches!(self.rx, Rx::Fixed(_) | Rx::Chunk(_) | Rx::Eof)
-                    && (self.credit != 0 || self.no_content));
-            if self.eof && self.start == self.end && self.receive.lease().is_none() {
-                match self.rx {
-                    Rx::Eof => {
-                        self.rx = Rx::Done;
-                        self.close_after = true;
-                        continue;
-                    }
-                    Rx::Head if self.head.is_empty() && self.exchange.is_none() => {
-                        self.lifecycle.begin_closing();
-                        continue;
-                    }
-                    Rx::Done | Rx::Paused => {}
-                    _ => {
-                        self.fail(Failure::UnexpectedEof);
-                        continue;
-                    }
-                }
-            }
-            if needs_input
-                && !self.eof
-                && self.start == self.end
-                && self.read.operation().is_none()
-                && self.receive.lease().is_none()
-                && (self.server || self.exchange.is_some())
-            {
-                self.start = 0;
-                self.end = 0;
-                if self.read == IoState::NeedsReadiness {
-                    let Some(id) = self.operation(OperationKind::Readable) else {
-                        continue;
-                    };
-                    self.read.issue(id);
-                    if let Some(output) = ports.readiness(ReadinessOp {
-                        id,
-                        direction: Direction::Read,
-                    }) {
-                        return Some(output);
-                    }
-                } else {
-                    let Some(id) = self.operation(OperationKind::Read) else {
-                        continue;
-                    };
-                    let buffer = self.receive.read();
-                    let len = buffer.as_ref().len();
-                    self.read.issue(id);
-                    if let Some(output) = ports.read(ReadOp {
-                        id,
-                        buffer,
-                        range: 0..len,
-                    }) {
-                        return Some(output);
-                    }
-                }
-                continue;
-            }
-            return None;
         }
     }
 
@@ -1801,6 +1316,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                     return Err(Failure::Protocol);
                 }
                 self.rx = Rx::Done;
+                self.incoming_ended();
                 Ok(ports.trailers(self.exchange.as_ref().unwrap().id, trailers))
             }
             Rx::Head if self.server => {
@@ -1952,10 +1468,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                         && !self.lifecycle.is_upgrade()
                         && (status >= 300 || self.waiting_continue() || self.rx == Rx::Done)
                     {
-                        self.release_continue();
-                        self.close_after = true;
-                        self.tx.stop_upload();
-                        self.timers.upload_at = None;
+                        self.stop_upload();
                     }
                     self.update_deadline(self.timers.phase, None)
                         .map_err(|_| Failure::SequenceExhausted)?;
@@ -1994,6 +1507,9 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 Rx::Eof
             }
         };
+        if self.rx == Rx::Done {
+            self.incoming_ended();
+        }
         self.set_deadline(TimerPhase::Body, self.config.body_timeout_ns)
             .map_err(|_| Failure::SequenceExhausted)?;
         Ok(())
