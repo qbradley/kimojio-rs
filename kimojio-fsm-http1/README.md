@@ -366,3 +366,87 @@ Shared-output tests preserve payload addresses across partial writes.
 
 The standalone tests do not measure native executor throughput.
 The direct io_uring application and Kimojio facade provide separate integration and performance evidence.
+
+## FSM CPU benchmarks
+
+The `roundtrip` Criterion benchmark drives one real client or server FSM against a simulated peer.
+The peer supplies prepared HTTP bytes and accepts the output through the normal operation completions.
+The driver performs no socket calls, async scheduling, timer callbacks, or sleeps.
+Criterion uses a clock outside the driver to measure elapsed time.
+
+| Workload | Request payload | Response payload | Framing |
+| --- | --- | --- | --- |
+| `fixed_128b/client` | 128 B sent | 128 B received | Content-Length |
+| `fixed_128b/server` | 128 B received | 128 B sent | Content-Length |
+| `chunked_1mib/client` | 1 MiB sent | 1 MiB received | Chunked in both directions |
+| `chunked_1mib/server` | 1 MiB received | 1 MiB sent | Chunked in both directions |
+
+Each workload has `/continue` and `/yield` variants.
+The callbacks return `None` in the first variant and `Some(())` in the second.
+Both variants use bounded completion slots, not a queue or an enum that contains operation payloads.
+The driver applies completions only after `next` returns.
+The simulated peer waits for the complete request before it sends the response.
+The server waits for incoming completion before it accepts the response command.
+
+Each iteration completes one exchange on a reusable connection.
+The receive buffer and outgoing chunks are 16 KiB.
+Each large outgoing body requires 64 payload receipts, a head write, and a terminator write.
+Receive fragmentation also splits chunk boundaries.
+The driver returns each body lease and replenishes its delivery credit.
+The request limit permits continued reuse throughout warmup and measurement.
+
+Connection construction, payload generation, and peer-wire construction occur outside the timed loop.
+Outgoing payloads borrow prepared slices without payload allocation or copying.
+Incoming transport simulation copies bytes into the receive buffer during the timed loop.
+The measurements include those copies, FSM metadata allocations, callback handling, completion forwarding, and constant-time success checks.
+They exclude full payload comparisons and application processing.
+They measure FSM-plus-driver elapsed cost, not isolated CPU cycles or network throughput.
+
+Before timing, the driver checks every outgoing wire byte, incoming payload byte, receipt, and exchange result.
+The timed driver retains checks for successful completion, reuse, byte totals, and notification counts.
+Both paths use `black_box` for wire slices, received payload views, and returned statistics.
+A failed or incomplete exchange stops the benchmark instead of contributing a timing sample.
+Criterion reports time per exchange and aggregate payload throughput across both directions: 256 B or 2 MiB per iteration.
+
+Run all measurements:
+
+```sh
+cargo bench -p kimojio-fsm-http1 --bench roundtrip
+```
+
+Run the optimized smoke cases and the independent workload tests:
+
+```sh
+cargo bench -p kimojio-fsm-http1 --bench roundtrip -- --test
+cargo test -p kimojio-fsm-http1 --test benchmark_workloads
+```
+
+The workload tests include repeated connection reuse, one-byte reads and writes, and chunks with a short final payload.
+They also compare callback modes and the timed path against the full byte-checking path.
+
+### Revision comparisons
+
+Use the same benchmark source, compiler, build flags, and CPU for each revision.
+Run measurements sequentially on an otherwise idle machine.
+On Linux, use `taskset -c <cpu>` before the command to select an available CPU.
+Use a separate `CARGO_TARGET_DIR` for each revision.
+A shared build directory can retain stale artifacts across worktrees.
+Copy only Criterion results between those directories.
+
+Save a baseline in the benchmark change, then compare from a descendant checkout:
+
+```sh
+export FOUNDATION_TARGET="$PWD/target/bench-foundation"
+CARGO_TARGET_DIR="$FOUNDATION_TARGET" cargo bench -p kimojio-fsm-http1 --bench roundtrip -- --save-baseline foundation
+# In the explicit-state or coordinator checkout:
+export CANDIDATE_TARGET="$PWD/target/bench-candidate"
+mkdir -p "$CANDIDATE_TARGET/criterion"
+cp -R "$FOUNDATION_TARGET/criterion/." "$CANDIDATE_TARGET/criterion/"
+CARGO_TARGET_DIR="$CANDIDATE_TARGET" cargo bench -p kimojio-fsm-http1 --bench roundtrip -- --baseline foundation
+```
+
+The benchmark change precedes both refactors, so each descendant inherits the same workloads.
+Criterion stores estimates and samples in the selected target directory, under `criterion`.
+The normal command uses Criterion's default sample size and measurement durations.
+For a preliminary run, append `--sample-size 20 --warm-up-time 1 --measurement-time 2` after `--`.
+Short runs remain sensitive to CPU frequency, shared-host load, and compiler code layout.
