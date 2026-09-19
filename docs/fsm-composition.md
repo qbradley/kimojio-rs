@@ -334,6 +334,112 @@ A composite can expose the earliest unresolved deadline through one wakeup.
 It retains the owning component and generation for completion routing.
 The runtime adapter executes the wakeup without interpreting its protocol purpose.
 
+## Maintainable state and coordination
+
+Valid state representation and correct coordination are separate requirements.
+An enum can remove contradictory local states without making a global priority scan easy to review.
+These rules apply to new machines and to refactors of existing machines.
+They do not require a shared implementation crate or a universal transition enum.
+
+### State decomposition
+
+Each fact has one authoritative representation.
+Mutually exclusive alternatives belong in an enum.
+State-specific identities and resources belong with the state that requires them.
+For example, awaiting transport close contains its original close identity.
+A terminal connection cannot also have an independent "close pending" flag.
+
+Independent progress belongs in separate components.
+Receive parsing, transmit ownership, external I/O, protocol lifecycle, and timers can advance independently.
+A product of those components preserves duplex progress without a flattened enum for every combination.
+Independent facts can remain booleans, but each boolean needs a meaning that does not depend on check order.
+
+Protocol shutdown and transport settlement are distinct.
+A WebSocket close frame is not a transport close.
+A producer end is not a completed write.
+A cancellation request is not an operation completion.
+The state model must retain these distinctions and the original resources.
+
+Local enums cannot exclude every invalid combination across components.
+Cross-component invariants need explicit guards and assertions at command, completion, and drive boundaries.
+Assertions support transition contracts. They do not replace them.
+
+### Selection, transition, and scheduling
+
+A coordinator has three responsibilities with separate contracts:
+
+| Responsibility | Contract |
+| --- | --- |
+| Selection | Inspect state without mutation and determine eligible work |
+| Transition | Commit the selected state and ownership changes before a callback |
+| Scheduling | Choose among eligible transitions using documented dependencies |
+
+Lifecycle dispatch restricts the available transitions before local eligibility checks run.
+Normal producer demand must not remain reachable through a transport-termination driver.
+Bounded protocol error output needs its own permitted path.
+A closed machine permits only its pending terminal notifications.
+
+Local receive and transmit drivers own their eligibility rules.
+The coordinator owns cross-component policy, not parser details or duplicate transport cursors.
+Long conjunctions are acceptable when each condition has a local resource or protocol justification.
+Extracting a predicate name does not remove a hidden ordering dependency.
+
+For each transition, the design records its prerequisites, state changes, resource transfers, callbacks, and effects on other eligible work.
+Eligibility checks must not consume notifications or take ownership.
+The selected transition performs those mutations.
+No external command or completion can intervene between selection and commitment in the synchronous drive.
+
+Semantic boundaries trigger cross-component policy.
+Examples include incoming-message completion, final output settlement, peer close, and cancellation settlement.
+When drive-time ordering matters, a bounded pending obligation can defer that policy until the next drive.
+Such an obligation must name its cause and define coalescing and invalidation.
+It must not become a second, contradictory copy of protocol state.
+
+Not every pair of transitions needs a fixed order.
+Independent transitions can commute.
+Observable or safety-sensitive dependencies need explicit reasons.
+For example, a partial frame must finish before close bytes can enter the stream.
+Each machine documents its actual notification order rather than assuming one universal family-wide order.
+
+### Progress and cost
+
+A selected transition that produces no caller output still represents progress.
+It must consume work or advance a defined state.
+A callback returning `None` resumes selection, including after terminal or handoff notifications.
+Only the absence of eligible work permits a blocked return.
+Internal cycles require a termination argument or an explicit rescheduling contract.
+
+Private unit-sized transition labels are control flow, not a public operation representation.
+They must not contain owned operations, borrowed metadata, or large buffers.
+Direct calls and static specialization preserve the callback architecture.
+The refactor must not introduce heap queues, payload copies, dynamic dispatch, or repeated resource scans without a demonstrated need.
+Performance claims require equivalent workloads and measurements, not shorter functions.
+
+### Review and refactoring procedure
+
+1. Inventory facts, resource owners, public commands, completions, and observable callback sequences.
+2. Separate exclusive alternatives from independent progress and independent policy.
+3. Record local invariants and cross-component settlement conditions.
+4. Define lifecycle-specific transition sets and pure eligibility rules.
+5. Record semantic boundaries and correctness-sensitive scheduling dependencies.
+6. Separate transition effects from selection without changing public ownership contracts.
+7. Exercise competing enabled transitions and each relevant completion order.
+8. Compare the resulting implementation with the contracts, not only with the old control flow.
+
+Necessary bug fixes need explicit regression cases.
+The previous implementation is compatibility evidence, not the sole specification.
+Refactors must distinguish intended callback ordering from incidental source ordering.
+
+A bounded executable model can explore ownership joins, cancellation races, deadlines, and callback yields without reproducing the parser.
+Its expected behavior must come from independent contracts, not a copy of the production selector.
+The evidence includes exact resource returns, notification counts, forbidden effects, quiescence, and eventual settlement under stated external-completion assumptions.
+Comparisons between yielding and continuing callbacks use the same external input schedule.
+Parser corpora, native integration, and independent peers complement this model.
+The report states the explored bounds and does not claim a complete proof.
+
+The HTTP/1 [coordination contracts](../kimojio-fsm-http1/README.md#coordination-contracts) provide one concrete implementation.
+Other protocols retain their own lifecycle and ordering rules.
+
 ## Conventional and mixed integration
 
 An async facade implements ports and exposes conventional methods, futures, and body streams.

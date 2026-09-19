@@ -103,6 +103,79 @@ Rejected completions retain their operations and results.
 `ChunkCompletion::into_op` recovers a rejected chunk.
 Wrong-owner, stale, and invalid-count completions do not change live operations.
 
+## Internal state and coordination
+
+The implementation follows the family-wide [state and coordination guidance](../docs/fsm-composition.md#maintainable-state-and-coordination).
+
+`Server` contains independent state components instead of overlapping lifecycle and ownership flags.
+The public commands, callbacks, completions, and storage bounds remain unchanged.
+
+| Component | Exclusive alternatives |
+| --- | --- |
+| Lifecycle | Open, close handshake, transport termination, transport closed |
+| Local close | Pending close reason or completed close write |
+| Transport close | Resource settlement or an outstanding close identity |
+| Peer close | Absent, pending notification, or reported reason |
+| Each I/O direction | Idle, readiness needed, original operation in flight, or cancellation requested |
+| Receive storage | Available buffer, outstanding read, or retained chunk lease |
+| Outgoing message | Idle, pending payload, framed payload ownership, or returned receipt |
+| Incoming message | Idle, active message with start notification, or completed message notification |
+| Receive framing | Partial header or payload with a complete header |
+| Timers | Independent deadline candidates and the selected notification |
+
+A framed payload belongs either to queued output or to the original external write.
+Its receipt contains the same payload storage.
+The machine cannot accept another message until it reports that receipt.
+Parser state cannot simultaneously contain a partial header and an active frame.
+The active message retains UTF-8 and fragmentation state across control frames.
+
+[`coordinator.rs`](src/coordinator.rs) separates pure transition selection from committed effects.
+`next` selects one transition, applies it, and repeats unless a callback yields.
+No eligible transition means that the machine is blocked.
+Private transition labels contain no operations or buffers.
+The coordinator introduces no queue, payload allocation, payload clone, or runtime dependency.
+
+The lifecycle restricts eligible work:
+
+| Lifecycle | Permitted protocol work |
+| --- | --- |
+| Open | Transmit control or data, report message boundaries, parse input, and issue reads |
+| Closing handshake | Return unstarted data, finish a partial frame, send close, and receive permitted peer frames |
+| Transport termination | Return retained output, cancel original operations, await storage, and issue transport close |
+| Awaiting transport close | Wait for the original close completion |
+| Closed | Report one terminal result |
+
+Pending timer changes, outgoing receipts, and peer-close notifications precede lifecycle work.
+Close output takes priority over pending pong and message output.
+A protocol failure or peer close stops new input and requests cancellation of the original read or readiness operation.
+A local close without failure still permits input because the peer close can follow unread frames.
+Transport termination does not issue reads, writes, or readiness requests.
+It does not deliver incoming messages.
+
+Soft close cannot discard a partly accepted frame or insert close bytes into that frame.
+Transport termination can abandon retained output, including a partial pong after the close handshake completes.
+It still waits for the original write completion before returning externally owned storage.
+The final transport close requires settled read, write, readiness, and chunk ownership.
+Repeated aborts preserve an outstanding close identity.
+
+Close-write completion and peer-close acceptance explicitly advance the handshake.
+The coordinator does not reconstruct handshake completion from an ordered scan of booleans.
+The recorded close-write outcome survives transport settlement and contributes to `ConnectionResult::clean`.
+The first failure remains separate from handshake progress.
+
+Deadline refresh is an explicit transition.
+It precedes notification delivery and preserves the existing timeout policy.
+Selection neither consumes a notification nor changes timer generations.
+Each selected transition commits its notification or operation state before the callback.
+
+Debug assertions cover local ownership and cross-component relationships at drive and public transition boundaries.
+The bounded termination model explores 108 schedules in four drive modes.
+It covers three input owners, five output states, both settlement orders, abort, timeout, exact completion, and unknown write progress.
+An independent ownership join determines when close must become eligible.
+The model checks exact receipts, retained identities, forbidden effects, selection purity, and internal-cycle absence.
+Additional cases cover both handshake orders, partial pong settlement, and operation or timer sequence exhaustion.
+This model has fixed payloads and bounded completion schedules. It is not a proof of the complete protocol.
+
 ## Incoming messages
 
 `message_started` identifies an incoming message.

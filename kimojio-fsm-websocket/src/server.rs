@@ -2,7 +2,15 @@ use crate::operations::{Outgoing, WriteStorage};
 use crate::*;
 use kimojio_fsm_http1::Handoff;
 
+#[path = "state.rs"]
+mod state;
+use state::*;
+
+#[path = "coordinator.rs"]
+mod coordinator;
+
 #[derive(Default)]
+#[cfg_attr(test, derive(Debug))]
 struct Utf8 {
     remaining: u8,
     low: u8,
@@ -39,11 +47,13 @@ impl Utf8 {
     }
 }
 
+#[cfg_attr(test, derive(Debug))]
 struct Incoming {
     info: MessageInfo,
     utf8: Utf8,
     fragments: u64,
 }
+#[cfg_attr(test, derive(Debug))]
 struct Frame {
     opcode: u8,
     fin: bool,
@@ -58,53 +68,26 @@ struct Frame {
 ///
 /// One receive buffer, one accepted outgoing message and fixed control slots
 /// bound storage. The core allocates no message payloads and never clones `W`.
+#[cfg_attr(test, derive(Debug))]
 pub struct Server<B, W = B> {
     id: ConnectionId,
     config: Config,
     sequence: u64,
     now: Tick,
-    input: Option<B>,
+    receive: ReceiveStorage<B>,
     start: usize,
     end: usize,
-    read_live: Option<OperationId>,
-    write_live: Option<OperationId>,
-    chunk_live: Option<OperationId>,
-    read_wait: Option<OperationId>,
-    write_wait: Option<OperationId>,
-    read_blocked: bool,
-    write_blocked: bool,
-    read_cancelled: bool,
-    write_cancelled: bool,
-    read_wait_cancelled: bool,
-    write_wait_cancelled: bool,
+    read: IoState,
+    write: IoState,
     output: Option<WriteOp<W>>,
-    outgoing: Option<Outgoing<W>>,
-    tx_active: bool,
-    receipt: Option<MessageSent<W>>,
-    header: [u8; 14],
-    header_len: usize,
-    frame: Option<Frame>,
-    incoming: Option<Incoming>,
-    started: Option<MessageInfo>,
-    finished: Option<MessageInfo>,
+    tx: Transmit<W>,
+    rx: Receive,
+    incoming: IncomingState,
     pong: Option<([u8; 125], usize)>,
-    close_reason: Option<CloseReason>,
-    close_sent: bool,
-    peer_close: Option<CloseReason>,
-    peer_notice: bool,
+    lifecycle: Lifecycle,
+    peer: PeerClose,
     failure: Option<Failure>,
-    hard_abort: bool,
-    close_live: Option<OperationId>,
-    transport_closed: bool,
-    closed_notified: bool,
-    idle_at: Option<Tick>,
-    frame_at: Option<Tick>,
-    message_at: Option<Tick>,
-    write_at: Option<Tick>,
-    close_at: Option<Tick>,
-    deadline: Option<Deadline>,
-    deadline_dirty: bool,
-    timer_sequence: u64,
+    timers: Timers,
 }
 
 fn after(now: Tick, duration: Option<u64>) -> Option<Tick> {
@@ -187,62 +170,39 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
             config,
             sequence: 0,
             now,
-            input: Some(buffer),
+            receive: ReceiveStorage::Available(buffer),
             start,
             end,
-            read_live: None,
-            write_live: None,
-            chunk_live: None,
-            read_wait: None,
-            write_wait: None,
-            read_blocked: false,
-            write_blocked: false,
-            read_cancelled: false,
-            write_cancelled: false,
-            read_wait_cancelled: false,
-            write_wait_cancelled: false,
+            read: IoState::Idle,
+            write: IoState::Idle,
             output: None,
-            outgoing: None,
-            tx_active: false,
-            receipt: None,
-            header: [0; 14],
-            header_len: 0,
-            frame: None,
-            incoming: None,
-            started: None,
-            finished: None,
+            tx: Transmit::Idle,
+            rx: Receive::Header(HeaderState::default()),
+            incoming: IncomingState::Idle,
             pong: None,
-            close_reason: None,
-            close_sent: false,
-            peer_close: None,
-            peer_notice: false,
+            lifecycle: Lifecycle::Open,
+            peer: PeerClose::Absent,
             failure: None,
-            hard_abort: false,
-            close_live: None,
-            transport_closed: false,
-            closed_notified: false,
-            idle_at,
-            frame_at: None,
-            message_at: None,
-            write_at: None,
-            close_at: None,
-            deadline: None,
-            deadline_dirty: false,
-            timer_sequence: 0,
+            timers: Timers {
+                idle: idle_at,
+                frame: None,
+                message: None,
+                write: None,
+                close: None,
+                armed: None,
+                notification: Notification::Delivered,
+                sequence: 0,
+            },
         }
     }
     pub fn connection(&self) -> ConnectionId {
         self.id
     }
     pub fn can_send(&self) -> bool {
-        !self.tx_active
-            && self.receipt.is_none()
-            && self.close_reason.is_none()
-            && !self.hard_abort
-            && !self.transport_closed
+        matches!(self.tx, Transmit::Idle) && self.lifecycle.open()
     }
     pub fn is_closing(&self) -> bool {
-        self.close_reason.is_some() || self.hard_abort
+        !self.lifecycle.open()
     }
 
     fn sequence(&mut self) -> Result<u64, CommandError> {
@@ -303,51 +263,51 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
             connection: self.id,
             sequence,
         };
-        self.tx_active = true;
-        self.outgoing = Some(Outgoing {
+        self.tx = Transmit::Pending(Outgoing {
             id,
             offset: command.range.start,
             command,
             accepted: 0,
             acceptance: Acceptance::Exact,
         });
-        self.write_at = after(self.now, self.config.write_timeout_ns);
+        self.timers.write = after(self.now, self.config.write_timeout_ns);
+        self.assert_invariants();
         Ok(id)
     }
     pub fn close(&mut self, reason: CloseReason) -> Result<(), CommandError> {
         if reason.code() == Some(1010) {
             return Err(CommandError::InvalidClose);
         }
-        if self.is_closing() || self.transport_closed {
+        if self.is_closing() {
             return Err(CommandError::InvalidState);
         }
         self.begin_close(reason);
+        self.assert_invariants();
         Ok(())
     }
     fn begin_close(&mut self, reason: CloseReason) {
-        if self.close_reason.is_none() {
-            self.close_reason = Some(reason);
-            self.close_at = after(self.now, self.config.close_timeout_ns);
+        if self.lifecycle.open() {
+            self.lifecycle = Lifecycle::Closing(LocalClose::Pending(reason));
+            self.timers.close = after(self.now, self.config.close_timeout_ns);
         }
-        self.started = None;
-        self.finished = None;
-        self.incoming = None;
-        self.message_at = None;
-        if self.peer_close.is_some() || self.failure.is_some() {
+        self.incoming = IncomingState::Idle;
+        self.timers.message = None;
+        if self.peer.reason().is_some() || self.failure.is_some() {
             self.pong = None;
         }
+        self.settle_handshake();
     }
     /// Reports application/source failure. No outgoing producer streaming exists.
     pub fn fail_source(&mut self) {
         self.fail(Failure::Application);
+        self.assert_invariants();
     }
     pub fn abort(&mut self, failure: Failure) {
         self.failure.get_or_insert(failure);
-        self.hard_abort = true;
-        self.started = None;
-        self.finished = None;
-        self.incoming = None;
+        self.lifecycle.terminate();
+        self.incoming = IncomingState::Idle;
         self.pong = None;
+        self.assert_invariants();
     }
     fn fail(&mut self, failure: Failure) {
         self.failure.get_or_insert(failure);
@@ -360,8 +320,12 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
         self.begin_close(CloseReason::new(code, "").unwrap());
     }
     fn terminating(&self) -> bool {
-        self.hard_abort
-            || (self.close_sent && (self.peer_close.is_some() || self.failure.is_some()))
+        self.lifecycle.terminating()
+    }
+    fn settle_handshake(&mut self) {
+        if self.lifecycle.sent() && (self.peer.reason().is_some() || self.failure.is_some()) {
+            self.lifecycle.terminate();
+        }
     }
     fn reject<T>(
         &self,
@@ -386,43 +350,44 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
         &mut self,
         completion: ReadCompletion<B>,
     ) -> Result<(), Rejected<ReadCompletion<B>>> {
-        let c = self.reject(completion.op.id, self.read_live, completion)?;
+        let c = self.reject(completion.op.id, self.read.raw(), completion)?;
         if c.result.is_ok_and(|n| n > c.op.range.len()) {
             return Err(Rejected {
                 reason: RejectReason::InvalidCount,
                 value: c,
             });
         }
-        self.read_live = None;
-        self.read_cancelled = false;
-        self.input = Some(c.op.buffer);
+        self.read.complete();
+        assert!(matches!(self.receive, ReceiveStorage::Reading));
+        self.receive = ReceiveStorage::Available(c.op.buffer);
         match c.result {
             Ok(n) if n > 0 => {
                 self.start = c.op.range.start;
                 self.end = c.op.range.start + n;
-                self.idle_at = after(self.now, self.config.idle_timeout_ns);
+                self.timers.idle = after(self.now, self.config.idle_timeout_ns);
             }
             _ if self.terminating() || self.failure.is_some() => {}
             Ok(_) => self.abort(Failure::UnexpectedEof),
             Err(IoError {
                 kind: IoErrorKind::WouldBlock,
                 ..
-            }) => self.read_blocked = true,
+            }) => self.read = IoState::NeedsReadiness,
             Err(IoError {
                 kind: IoErrorKind::Interrupted,
                 ..
             }) => {}
             Err(error) => self.abort(Failure::Transport(error)),
         }
+        self.assert_invariants();
         Ok(())
     }
     pub fn release_chunk(
         &mut self,
         completion: ChunkCompletion<B>,
     ) -> Result<(), Rejected<ChunkCompletion<B>>> {
-        let c = self.reject(completion.op.id, self.chunk_live, completion)?;
-        self.chunk_live = None;
-        self.input = Some(c.op.buffer);
+        let c = self.reject(completion.op.id, self.receive.lease(), completion)?;
+        self.receive = ReceiveStorage::Available(c.op.buffer);
+        self.assert_invariants();
         Ok(())
     }
     #[allow(clippy::result_large_err)] // Rejection returns the original inline operation without allocation.
@@ -430,15 +395,14 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
         &mut self,
         completion: WriteCompletion<W>,
     ) -> Result<(), Rejected<WriteCompletion<W>>> {
-        let c = self.reject(completion.op.id, self.write_live, completion)?;
+        let c = self.reject(completion.op.id, self.write.raw(), completion)?;
         if c.result.is_ok_and(|n| n > c.op.remaining()) {
             return Err(Rejected {
                 reason: RejectReason::InvalidCount,
                 value: c,
             });
         }
-        self.write_live = None;
-        self.write_cancelled = false;
+        self.write.complete();
         let mut op = c.op;
         match c.result {
             Ok(n) if n > 0 => {
@@ -448,7 +412,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
                 if let WriteStorage::Data { outgoing, .. } = &mut op.storage {
                     outgoing.accepted += accepted;
                 }
-                self.write_at = after(self.now, self.config.write_timeout_ns);
+                self.timers.write = after(self.now, self.config.write_timeout_ns);
                 if op.remaining() == 0 {
                     match op.storage {
                         WriteStorage::Data {
@@ -465,10 +429,17 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
                                 };
                                 self.finish_outgoing(outgoing, result);
                             } else {
-                                self.outgoing = Some(outgoing);
+                                self.tx = Transmit::Pending(outgoing);
                             }
                         }
-                        WriteStorage::Control { close: true, .. } => self.close_sent = true,
+                        WriteStorage::Control { close: true, .. } => {
+                            match &mut self.lifecycle {
+                                Lifecycle::Closing(local) => *local = LocalClose::Sent,
+                                Lifecycle::Terminating { sent, .. } => *sent = true,
+                                _ => unreachable!("a close write requires closing authority"),
+                            }
+                            self.settle_handshake();
+                        }
                         _ => {}
                     }
                 } else {
@@ -484,7 +455,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
                 ..
             }) if !self.terminating() => {
                 self.output = Some(op);
-                self.write_blocked = true;
+                self.write = IoState::NeedsReadiness;
             }
             Err(IoError {
                 kind: IoErrorKind::Interrupted,
@@ -504,11 +475,12 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
                 }
             }
         }
+        self.assert_invariants();
         Ok(())
     }
     fn finish_outgoing(&mut self, outgoing: Outgoing<W>, result: Result<(), Failure>) {
-        self.tx_active = false;
-        self.receipt = Some(MessageSent {
+        assert!(matches!(self.tx, Transmit::Framed));
+        self.tx = Transmit::Receipt(MessageSent {
             id: outgoing.id,
             buffer: outgoing.command.buffer,
             accepted: outgoing.accepted,
@@ -521,44 +493,40 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
         completion: ReadinessCompletion,
     ) -> Result<(), Rejected<ReadinessCompletion>> {
         let expected = match completion.op.direction {
-            Direction::Read => self.read_wait,
-            Direction::Write => self.write_wait,
+            Direction::Read => self.read.readiness(),
+            Direction::Write => self.write.readiness(),
         };
         let c = self.reject(completion.op.id, expected, completion)?;
         let cancelled = match c.op.direction {
-            Direction::Read => self.read_wait_cancelled,
-            Direction::Write => self.write_wait_cancelled,
+            Direction::Read => self.read.complete(),
+            Direction::Write => self.write.complete(),
         };
-        match c.op.direction {
-            Direction::Read => {
-                self.read_wait = None;
-                self.read_blocked = false;
-                self.read_wait_cancelled = false;
-            }
-            Direction::Write => {
-                self.write_wait = None;
-                self.write_blocked = false;
-                self.write_wait_cancelled = false;
-            }
-        }
         if let Err(error) = c.result
             && !self.terminating()
             && !cancelled
         {
             self.abort(Failure::Transport(error));
         }
+        self.assert_invariants();
         Ok(())
     }
     pub fn complete_close(
         &mut self,
         completion: CloseCompletion,
     ) -> Result<(), Rejected<CloseCompletion>> {
-        let c = self.reject(completion.op.id, self.close_live, completion)?;
-        self.close_live = None;
-        self.transport_closed = true;
+        let c = self.reject(
+            completion.op.id,
+            self.lifecycle.close_operation(),
+            completion,
+        )?;
+        self.lifecycle = Lifecycle::Closed {
+            sent: self.lifecycle.sent(),
+            notification: Notification::Pending,
+        };
         if let Err(error) = c.result {
             self.failure.get_or_insert(Failure::Transport(error));
         }
+        self.assert_invariants();
         Ok(())
     }
     pub fn observe_time(&mut self, now: Tick) -> Result<(), CommandError> {
@@ -570,7 +538,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
     }
     pub fn expire(&mut self, deadline: Deadline, now: Tick) -> Result<(), CommandError> {
         self.refresh_deadline();
-        if self.deadline != Some(deadline) {
+        if self.timers.armed != Some(deadline) {
             return Err(CommandError::StaleDeadline);
         }
         if now < self.now {
@@ -584,298 +552,23 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
         Ok(())
     }
     fn refresh_deadline(&mut self) {
-        let at = if self.terminating() || self.transport_closed {
-            None
-        } else if self.is_closing() {
-            [self.close_at, self.write_at].into_iter().flatten().min()
-        } else {
-            [self.idle_at, self.frame_at, self.message_at, self.write_at]
-                .into_iter()
-                .flatten()
-                .min()
-        };
-        if self.deadline.map(|d| d.at) != at {
-            if let Some(sequence) = self.timer_sequence.checked_add(1) {
-                self.timer_sequence = sequence;
-                self.deadline = at.map(|at| Deadline {
+        let at = self.deadline_at();
+        if self.timers.armed.map(|d| d.at) != at {
+            if let Some(sequence) = self.timers.sequence.checked_add(1) {
+                self.timers.sequence = sequence;
+                self.timers.armed = at.map(|at| Deadline {
                     connection: self.id,
                     sequence,
                     at,
                 });
             } else {
                 self.abort(Failure::SequenceExhausted);
-                self.deadline = None;
+                self.timers.armed = None;
             }
-            self.deadline_dirty = true;
+            self.timers.notification = Notification::Pending;
         }
     }
 
-    /// Drains finite buffered work. Scheduling budgets belong to the caller.
-    pub fn next<P: Ports<B, W>>(&mut self, ports: &mut P) -> Option<P::Output> {
-        loop {
-            if self.write_live.is_none() && self.output.is_none() && self.outgoing.is_none() {
-                self.write_at = None;
-            }
-            self.refresh_deadline();
-            if self.deadline_dirty {
-                self.deadline_dirty = false;
-                if let Some(output) = ports.deadline_changed(self.deadline) {
-                    return Some(output);
-                }
-                continue;
-            }
-            if let Some(receipt) = self.receipt.take() {
-                if let Some(output) = ports.message_sent(receipt) {
-                    return Some(output);
-                }
-                continue;
-            }
-            if self.peer_notice {
-                self.peer_notice = false;
-                if let Some(output) = ports.peer_closed(self.peer_close.unwrap()) {
-                    return Some(output);
-                }
-                continue;
-            }
-            if self.is_closing() {
-                let discard_output = self.output.as_ref().is_some_and(|op| {
-                    self.hard_abort
-                        || (op.cursor == 0
-                            && match op.storage {
-                                WriteStorage::Data { .. } => true,
-                                WriteStorage::Control { close, .. } => {
-                                    !close && (self.peer_close.is_some() || self.failure.is_some())
-                                }
-                            })
-                });
-                if discard_output && let Some(op) = self.output.take() {
-                    if let WriteStorage::Data { outgoing, .. } = op.storage {
-                        self.finish_outgoing(
-                            outgoing,
-                            Err(self.failure.unwrap_or(Failure::Closing)),
-                        );
-                    }
-                    continue;
-                }
-                if let Some(outgoing) = self.outgoing.take() {
-                    self.finish_outgoing(outgoing, Err(self.failure.unwrap_or(Failure::Closing)));
-                    continue;
-                }
-            }
-            if let Some(cancel) = self.next_cancel() {
-                if let Some(output) = ports.cancel(cancel) {
-                    return Some(output);
-                }
-                continue;
-            }
-            if self.terminating() {
-                if self.read_live.is_some()
-                    || self.write_live.is_some()
-                    || self.chunk_live.is_some()
-                    || self.read_wait.is_some()
-                    || self.write_wait.is_some()
-                {
-                    return None;
-                }
-                if self.transport_closed {
-                    if !self.closed_notified {
-                        self.closed_notified = true;
-                        return ports.closed(ConnectionResult {
-                            result: self.failure.map_or(Ok(()), Err),
-                            peer_close: self.peer_close,
-                            clean: self.failure.is_none()
-                                && self.peer_close.is_some()
-                                && self.close_sent,
-                        });
-                    }
-                    return None;
-                }
-                if self.close_live.is_none() {
-                    let id = OperationId {
-                        connection: self.id,
-                        sequence: u64::MAX,
-                        kind: OperationKind::Close,
-                    };
-                    self.close_live = Some(id);
-                    if let Some(output) = ports.close(CloseOp { id }) {
-                        return Some(output);
-                    }
-                    continue;
-                }
-                return None;
-            }
-            if self.write_live.is_none() && self.write_wait.is_none() {
-                if self.write_blocked {
-                    let Some(id) = self.operation(OperationKind::Writable) else {
-                        continue;
-                    };
-                    self.write_wait = Some(id);
-                    if let Some(output) = ports.readiness(ReadinessOp {
-                        id,
-                        direction: Direction::Write,
-                    }) {
-                        return Some(output);
-                    }
-                    continue;
-                }
-                self.prepare_output();
-                if let Some(mut op) = self.output.take() {
-                    let Some(id) = self.operation(OperationKind::Write) else {
-                        self.output = Some(op);
-                        continue;
-                    };
-                    op.id = id;
-                    self.write_live = Some(id);
-                    self.write_at.get_or_insert_with(|| {
-                        after(self.now, self.config.write_timeout_ns).unwrap_or(Tick(u64::MAX))
-                    });
-                    if self.config.write_timeout_ns.is_none() {
-                        self.write_at = None;
-                    }
-                    if let Some(output) = ports.write(op) {
-                        return Some(output);
-                    }
-                    continue;
-                }
-            }
-            if let Some(info) = self.started.take() {
-                if let Some(output) = ports.message_started(info) {
-                    return Some(output);
-                }
-                continue;
-            }
-            if let Some(info) = self.finished.take() {
-                if let Some(output) = ports.message_finished(info) {
-                    return Some(output);
-                }
-                continue;
-            }
-            if self.failure.is_some() || self.peer_close.is_some() {
-                return None;
-            }
-            if self.chunk_live.is_none() && self.input.is_some() {
-                if let Some(frame) = &self.frame
-                    && frame.remaining == 0
-                {
-                    self.finish_frame();
-                    continue;
-                }
-                if self.start < self.end {
-                    if self.frame.is_none() {
-                        self.parse_header();
-                        continue;
-                    }
-                    if let Some(chunk) = self.parse_payload()
-                        && let Some(output) = ports.chunk(chunk)
-                    {
-                        return Some(output);
-                    }
-                    continue;
-                }
-                if self.read_live.is_none() && self.read_wait.is_none() {
-                    if self.read_blocked {
-                        let Some(id) = self.operation(OperationKind::Readable) else {
-                            continue;
-                        };
-                        self.read_wait = Some(id);
-                        if let Some(output) = ports.readiness(ReadinessOp {
-                            id,
-                            direction: Direction::Read,
-                        }) {
-                            return Some(output);
-                        }
-                        continue;
-                    }
-                    let Some(id) = self.operation(OperationKind::Read) else {
-                        continue;
-                    };
-                    let buffer = self.input.take().unwrap();
-                    let len = buffer.as_ref().len();
-                    self.start = 0;
-                    self.end = 0;
-                    self.read_live = Some(id);
-                    if let Some(output) = ports.read(ReadOp {
-                        id,
-                        buffer,
-                        range: 0..len,
-                    }) {
-                        return Some(output);
-                    }
-                    continue;
-                }
-            }
-            return None;
-        }
-    }
-    fn next_cancel(&mut self) -> Option<CancelOp> {
-        if self.terminating() || self.failure.is_some() || self.peer_close.is_some() {
-            for (id, cancelled) in [
-                (self.read_live, &mut self.read_cancelled),
-                (self.read_wait, &mut self.read_wait_cancelled),
-            ] {
-                if let Some(target) = id
-                    && !*cancelled
-                {
-                    *cancelled = true;
-                    return Some(CancelOp { target });
-                }
-            }
-        }
-        if self.terminating() {
-            for (id, cancelled) in [
-                (self.write_live, &mut self.write_cancelled),
-                (self.write_wait, &mut self.write_wait_cancelled),
-            ] {
-                if let Some(target) = id
-                    && !*cancelled
-                {
-                    *cancelled = true;
-                    return Some(CancelOp { target });
-                }
-            }
-        }
-        None
-    }
-    fn prepare_output(&mut self) {
-        if self.output.is_some() {
-            return;
-        }
-        if let Some(reason) = self.close_reason
-            && !self.close_sent
-        {
-            self.control_output(8, reason.bytes, usize::from(reason.len), true);
-        } else if let Some((bytes, len)) = self.pong.take() {
-            self.control_output(10, bytes, len, false);
-        } else if let Some(outgoing) = self.outgoing.take() {
-            let start = outgoing.offset;
-            let end = (start.saturating_add(self.config.outgoing_frame_bytes))
-                .min(outgoing.command.range.end);
-            let last = end == outgoing.command.range.end;
-            let opcode = if start != outgoing.command.range.start {
-                0
-            } else if outgoing.command.kind == MessageKind::Text {
-                1
-            } else {
-                2
-            };
-            let (header, header_len) = encode_header(opcode, last, end - start);
-            self.output = Some(WriteOp {
-                id: OperationId {
-                    connection: self.id,
-                    sequence: 0,
-                    kind: OperationKind::Write,
-                },
-                header,
-                header_len,
-                cursor: 0,
-                storage: WriteStorage::Data {
-                    outgoing,
-                    range: start..end,
-                    last,
-                },
-            });
-        }
-    }
     fn control_output(&mut self, opcode: u8, bytes: [u8; 125], len: usize, close: bool) {
         let (header, header_len) = encode_header(opcode, true, len);
         self.output = Some(WriteOp {
@@ -891,21 +584,24 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
         });
     }
     fn parse_header(&mut self) {
-        if self.header_len == 0 {
-            self.frame_at = after(self.now, self.config.frame_timeout_ns);
+        if matches!(&self.rx, Receive::Header(HeaderState { len: 0, .. })) {
+            self.timers.frame = after(self.now, self.config.frame_timeout_ns);
         }
         while self.start < self.end {
-            self.header[self.header_len] = self.input.as_ref().unwrap().as_ref()[self.start];
-            self.header_len += 1;
+            let Receive::Header(header) = &mut self.rx else {
+                unreachable!("header parsing requires header state");
+            };
+            header.bytes[header.len] = self.receive.buffer().unwrap().as_ref()[self.start];
+            header.len += 1;
             self.start += 1;
-            if self.header_len < 2 {
+            if header.len < 2 {
                 continue;
             }
-            let first = self.header[0];
-            let marker = self.header[1] & 127;
+            let first = header.bytes[0];
+            let marker = header.bytes[1] & 127;
             let opcode = first & 15;
             if first & 0x70 != 0
-                || self.header[1] & 128 == 0
+                || header.bytes[1] & 128 == 0
                 || !matches!(opcode, 0 | 1 | 2 | 8 | 9 | 10)
                 || (opcode >= 8 && (first & 128 == 0 || marker > 125))
             {
@@ -917,18 +613,18 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
                 127 => 8,
                 _ => 0,
             };
-            if self.header_len != 2 + extra + 4 {
+            if header.len != 2 + extra + 4 {
                 continue;
             }
             let fin = first & 128 != 0;
             let opcode = first & 15;
             let length = match marker {
-                126 => u64::from(u16::from_be_bytes([self.header[2], self.header[3]])),
-                127 => u64::from_be_bytes(self.header[2..10].try_into().unwrap()),
+                126 => u64::from(u16::from_be_bytes([header.bytes[2], header.bytes[3]])),
+                127 => u64::from_be_bytes(header.bytes[2..10].try_into().unwrap()),
                 value => u64::from(value),
             };
             if first & 0x70 != 0
-                || self.header[1] & 128 == 0
+                || header.bytes[1] & 128 == 0
                 || !matches!(opcode, 0 | 1 | 2 | 8 | 9 | 10)
                 || (marker == 126 && length < 126)
                 || (marker == 127 && length < 65536)
@@ -938,13 +634,14 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
                 self.fail(Failure::Protocol);
                 return;
             }
+            let mask = header.bytes[2 + extra..6 + extra].try_into().unwrap();
             if opcode < 8 && length > self.config.max_frame_bytes {
                 self.fail(Failure::Limit);
                 return;
             }
             if opcode < 8 && !self.is_closing() {
                 if opcode == 0 {
-                    let Some(incoming) = &mut self.incoming else {
+                    let Some(incoming) = self.incoming.active_mut() else {
                         self.fail(Failure::Protocol);
                         return;
                     };
@@ -959,7 +656,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
                     };
                     incoming.info.length = total;
                 } else {
-                    if self.incoming.is_some() {
+                    if !matches!(self.incoming, IncomingState::Idle) {
                         self.fail(Failure::Protocol);
                         return;
                     }
@@ -979,15 +676,17 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
                         },
                         length,
                     };
-                    self.started = Some(MessageInfo { length: 0, ..info });
-                    self.incoming = Some(Incoming {
-                        info,
-                        utf8: Utf8::default(),
-                        fragments: 1,
-                    });
-                    self.message_at = after(self.now, self.config.message_timeout_ns);
+                    self.incoming = IncomingState::Active {
+                        message: Incoming {
+                            info,
+                            utf8: Utf8::default(),
+                            fragments: 1,
+                        },
+                        notification: Notification::Pending,
+                    };
+                    self.timers.message = after(self.now, self.config.message_timeout_ns);
                 }
-                let incoming = self.incoming.as_ref().unwrap();
+                let incoming = self.incoming.active().unwrap();
                 if incoming.info.length > self.config.max_message_bytes
                     || incoming.fragments > self.config.max_fragments
                 {
@@ -995,25 +694,26 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
                     return;
                 }
             }
-            self.frame = Some(Frame {
+            self.rx = Receive::Payload(Frame {
                 opcode,
                 fin,
                 remaining: length,
                 offset: 0,
-                mask: self.header[2 + extra..6 + extra].try_into().unwrap(),
+                mask,
                 control: [0; 125],
                 control_len: 0,
             });
-            self.header_len = 0;
             return;
         }
     }
     fn parse_payload(&mut self) -> Option<ChunkOp<B>> {
         let closing = self.is_closing();
-        let frame = self.frame.as_mut().unwrap();
+        let Receive::Payload(frame) = &mut self.rx else {
+            unreachable!("payload parsing requires a complete header");
+        };
         let count = frame.remaining.min((self.end - self.start) as u64) as usize;
         let range = self.start..self.start + count;
-        let bytes = &mut self.input.as_mut().unwrap().as_mut()[range.clone()];
+        let bytes = &mut self.receive.buffer_mut().unwrap().as_mut()[range.clone()];
         for (index, byte) in bytes.iter_mut().enumerate() {
             *byte ^= frame.mask[((frame.offset + index as u64) & 3) as usize];
         }
@@ -1028,32 +728,35 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
         if closing {
             return None;
         }
-        let incoming = self.incoming.as_mut().unwrap();
+        let incoming = self.incoming.active_mut().unwrap();
         if incoming.info.kind == MessageKind::Text && !incoming.utf8.feed(bytes) {
             self.fail(Failure::InvalidUtf8);
             return None;
         }
         let message = incoming.info.id;
         let id = self.operation(OperationKind::Chunk)?;
-        self.chunk_live = Some(id);
         Some(ChunkOp {
             id,
             message,
-            buffer: self.input.take().unwrap(),
+            buffer: self.receive.take(ReceiveStorage::Leased(id)),
             range,
         })
     }
     fn finish_frame(&mut self) {
-        let frame = self.frame.take().unwrap();
-        self.frame_at = None;
+        let Receive::Payload(frame) =
+            std::mem::replace(&mut self.rx, Receive::Header(HeaderState::default()))
+        else {
+            unreachable!("only a payload state completes a frame");
+        };
+        self.timers.frame = None;
         match frame.opcode {
             0..=2 if frame.fin && !self.is_closing() => {
-                let incoming = self.incoming.take().unwrap();
-                self.message_at = None;
+                let incoming = self.incoming.finish();
+                self.timers.message = None;
                 if incoming.info.kind == MessageKind::Text && incoming.utf8.remaining != 0 {
                     self.fail(Failure::InvalidUtf8);
                 } else {
-                    self.finished = Some(incoming.info);
+                    self.incoming = IncomingState::Finished(incoming.info);
                 }
             }
             8 => {
@@ -1076,9 +779,8 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
                     self.fail(Failure::InvalidUtf8);
                     return;
                 }
-                if self.peer_close.is_none() {
-                    self.peer_close = Some(reason);
-                    self.peer_notice = true;
+                if self.peer.reason().is_none() {
+                    self.peer = PeerClose::Pending(reason);
                 }
                 let reply = if reason.code() == Some(1010) {
                     CloseReason::new(1000, "").unwrap()
@@ -1087,7 +789,9 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
                 };
                 self.begin_close(reply);
             }
-            9 if self.peer_close.is_none() => self.pong = Some((frame.control, frame.control_len)),
+            9 if self.peer.reason().is_none() => {
+                self.pong = Some((frame.control, frame.control_len))
+            }
             _ => {}
         }
     }
