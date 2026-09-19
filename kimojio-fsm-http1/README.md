@@ -1,0 +1,368 @@
+# kimojio-fsm-http1
+
+This crate contains HTTP/1 client and server state machines.
+The machines perform no I/O and read no clock.
+They have no dependency on Kimojio, io_uring, or HTTP/2.
+
+## Supported protocol surface
+
+The machines support HTTP/1.0 and HTTP/1.1 with one active exchange.
+They support fixed-length, chunked, and applicable close-delimited bodies.
+The server retains pipelined input and processes requests in order.
+The client does not initiate concurrent pipelining or replay requests.
+If buffered bytes follow a completed final response, the client closes without reuse.
+The completed response remains successful, but unsolicited bytes cannot become a response to a later request.
+Explicit upgrade handoff still preserves bytes for the next protocol.
+
+The core handles HEAD, bodyless responses, informational responses, trailers, and `100-continue`.
+It rejects ambiguous framing, malformed chunks, forbidden trailers, and unsupported transfer codings.
+Transfer codings other than `chunked` are outside this implementation.
+Unsupported HTTP/1.1 expectations receive 417 before application dispatch.
+HTTP/1.0 does not use the continue gate.
+
+Upgrade and successful CONNECT responses use explicit transport handoff.
+The core checks HTTP upgrade tokens and completion ordering.
+The next protocol owns its additional handshake checks.
+For example, WebSocket key verification does not belong to HTTP.
+
+## Construction
+
+Both constructors use the same arguments:
+
+```rust
+use kimojio_fsm_http1::{Client, Config, ConnectionId, Server, Tick};
+
+let server = Server::new(
+    ConnectionId { slot: 1, generation: 1 },
+    Config::default(),
+    vec![0_u8; 16 * 1024],
+    Tick(0),
+)?;
+let client = Client::new(
+    ConnectionId { slot: 2, generation: 1 },
+    Config::default(),
+    vec![0_u8; 16 * 1024],
+    Tick(0),
+)?;
+# Ok::<(), kimojio_fsm_http1::CommandError>(())
+```
+
+The receive buffer contains initialized bytes.
+Its length defines transport read capacity.
+The root assigns unique connection identities, including a generation for each reused connection slot.
+An identity must remain unique while old completions can exist.
+
+`Config` has public resource limits and timeout durations.
+Durations and `Tick` values use nanoseconds in one monotonic domain.
+The caller supplies time through `observe_time` and exact deadline observations through `expire`.
+
+## Separate payload storage
+
+The types are `Server<B, W = B>` and `Client<B, W = B>`.
+The input type `B` implements `AsRef<[u8]> + AsMut<[u8]>`.
+The output type `W` implements only `AsRef<[u8]>`.
+The corresponding callback traits are `Ports<B, W>`, `ServerPorts<B, W>`, and `ClientPorts<B, W>`.
+
+`new` retains the one-buffer-type default.
+`with_output_type` selects a distinct output type without an output allocation.
+This separation does not add a storage registry or shared ownership inside the machine.
+The caller can choose reference counting for shared payloads.
+
+```rust
+use kimojio_fsm_http1::{Config, ConnectionId, Server, Tick};
+use std::sync::Arc;
+
+let server = Server::<Vec<u8>, Arc<[u8]>>::with_output_type(
+    ConnectionId { slot: 4, generation: 1 },
+    Config::default(),
+    vec![0; 8192],
+    Tick(0),
+)?;
+# let _ = server;
+# Ok::<(), kimojio_fsm_http1::CommandError>(())
+```
+
+`WriteOp<W>` borrows read-only slices from the retained output value.
+The core does not clone or copy payload storage.
+Its small framing prefix and suffix remain separate from the payload.
+`BodySent<W>` returns the same retained output value.
+The HTTP/1 storage contract does not impose a family-wide transport storage type.
+
+## One progress method
+
+`next(&mut ports)` returns `Option<P::Output>`.
+Each callback has the same optional output contract.
+`Some(value)` suspends progress with the caller's value.
+`None` from a callback continues progress without settling an operation.
+`None` from `next` means that the machine has no immediate work.
+
+An internal connector can use `Output = Infallible`.
+An executor can use its own enum for `Output`.
+The crate does not define an action enum.
+
+The machine records issuance before each callback.
+The callback accepts responsibility for completion, regardless of its return value.
+The callback must not re-enter the active machine.
+
+An `Infallible` connector records immediate completions in bounded local slots.
+After `next` returns, the composite applies those completions and drives the affected children again.
+A child's `None` does not make the composite idle when a completion or sibling remains ready.
+This completion-return step avoids recursive mutation without requiring a task or queue at every layer.
+
+## Owned operations
+
+`ReadOp<B>` and `WriteOp<B>` own their storage.
+They do not borrow the machine.
+One read and one write can remain outstanding together.
+
+A read executor borrows `op.bytes_mut()` for I/O.
+A write executor borrows `op.slices()` for scatter/gather I/O.
+Both borrows can stay inside a future that owns the operation.
+The executor must preserve the address of submitted storage until I/O settles.
+
+The executor returns `op.complete(result)` through the matching completion method.
+The machine handles short I/O, interruption, readiness, and write cursors.
+A zero-byte write is a failure, not successful completion.
+
+`WouldBlock` and `Interrupted` require zero progress during that operation.
+A write-all adapter can report success with the complete offered length.
+If a write-all operation fails after unknown progress, its adapter must report `IoErrorKind::UnknownProgress`.
+That error is terminal and never causes a retry.
+`WouldBlock`, `Interrupted`, `Cancelled`, `Reset`, and `Other` report no additional accepted bytes for that operation.
+An adapter with exact write counts avoids this uncertainty.
+
+`CancelledUnknownProgress` represents a confirmed write-all cancellation with an unknown accepted prefix.
+During an early final response, this result stops the upload without discarding the response.
+It still prohibits reuse and reports lower-bound acceptance.
+An ordinary transport error remains fatal through `UnknownProgress`.
+
+Rejected completions contain the original completion in `Rejected::value`.
+`into_parts()` recovers the operation and result.
+Wrong-owner, stale, and invalid-count completions do not change live state.
+
+`CancelOp` identifies an outstanding operation.
+Cancellation does not release that operation's resources.
+The original operation must still complete.
+
+## Metadata and commands
+
+Request, response, and trailer callbacks borrow metadata only for that callback.
+An async facade must copy metadata that survives the callback.
+Body bytes use exclusive owned buffers instead.
+
+```rust
+use kimojio_fsm_http1::*;
+
+let mut client = Client::new(
+    ConnectionId { slot: 3, generation: 1 },
+    Config::default(),
+    vec![0; 8192],
+    Tick(0),
+)?;
+let exchange = client.request(Request {
+    head: RequestHead {
+        method: "GET",
+        target: "/index.html",
+        version: Version::Http11,
+        headers: &[Header { name: "host", value: b"localhost" }],
+    },
+    body: BodyLength::Empty,
+    expect_continue: false,
+})?;
+# let _ = exchange;
+# Ok::<(), CommandError>(())
+```
+
+The server callback supplies an `ExchangeId`.
+The application uses that identity for `respond`, `inform`, and body commands.
+`Response` contains a `ResponseHead` and a `BodyLength`.
+The explicit body length controls framing.
+Caller headers must not include `Content-Length`, `Transfer-Encoding`, or `Expect`.
+These fields come from the command.
+
+The server selects the response wire version from its request state.
+It ignores the version field supplied in outgoing response metadata.
+Incoming response metadata still reports the actual peer version.
+The application does not need to retain or reconstruct request-version policy.
+
+```rust
+use kimojio_fsm_http1::{BodyLength, Response};
+
+let response = Response::new(200, "OK", &[], BodyLength::Known(1024));
+# let _ = response;
+```
+
+`ResponseHead::new(status, reason, headers)` also constructs informational response metadata without a version argument.
+The core accepts one pending final response while informational output is queued or outstanding.
+A second final response is an invalid command, not temporary backpressure.
+Adapters do not need to retry `respond` after `InvalidState`.
+
+`BodyLength::Empty` completes the outgoing body with its head.
+`BodyLength::Known(n)` requires exactly `n` payload bytes.
+`BodyLength::Streaming` uses chunked HTTP/1.1 output or close-delimited HTTP/1.0 responses.
+
+`send_ready` represents one producer demand.
+The machine issues that demand once, until `send_body`, `finish_body`, or `fail_source` resolves it.
+`send_body` accepts a `SendBody` with an exchange, buffer, range, and end flag.
+Rejection returns the complete command and buffer.
+Cancellation and late producer commands cannot silently consume the buffer.
+
+`source_finished` reports that the machine needs no further producer payload for the exchange.
+The application can then release its body source.
+This includes an input stream that an echo source retains.
+The callback avoids adapter-owned HEAD, status, or early-response policy.
+
+The machine emits this notification once, independently of transport completion.
+Owned writes and `body_sent` receipts can remain pending.
+The default callback returns `None` for callers without a retained body source.
+
+`BodySent` returns outgoing storage.
+Its `accepted` count contains payload bytes accepted by the transport.
+It does not imply peer receipt.
+`BodySent::acceptance` distinguishes `Acceptance::Exact` from `Acceptance::LowerBound`.
+An unknown-progress failure reports a lower bound, even when an earlier cancellation already determined the exchange outcome.
+The machine does not infer replay safety from this count.
+`fail_source(exchange, Failure::Application)` reports handler or producer failure.
+
+## Delivery credit
+
+Each exchange starts with zero incoming payload credit.
+The request or response head callback occurs before any body delivery.
+The application can grant capacity after that callback returns.
+Heads, informational responses, chunk metadata, and trailers do not consume payload credit.
+
+Bodyless messages complete without a credit grant.
+This includes HEAD responses, 204 and 304 responses, and zero-length bodies.
+The machine can emit `incoming_finished` after the head callback without application input.
+
+`grant_body_credit(exchange, bytes)` declares application capacity.
+It is not an instruction for the adapter to compute HTTP framing or transport policy.
+The credit cannot exceed `Config::max_buffer_bytes`.
+
+For an expected HTTP/1.1 body, positive credit authorizes the core's continue policy.
+The core sends 100 only when more input is necessary.
+It omits 100 when buffered bytes contain the complete body.
+A completed request body or final response prevents a later 100.
+Authorized successful streaming responses preserve 100-before-final ordering when input is necessary.
+Adapters do not parse Expect headers or issue automatic informational responses.
+
+`body` transfers a `BodyOp` with an exact visible payload range.
+`BodyOp::release(consumed)` returns storage and reports exact consumption.
+Only `release_body` applies this result.
+
+Offered bytes consume credit.
+Storage release does not add credit.
+Unconsumed bytes remain in the receive buffer.
+A zero-consumption release clears residual credit and cannot cause a busy loop.
+While the application holds a body operation, writes can still progress.
+
+One `BodyOp` owns the complete receive buffer, including bytes outside its visible payload range.
+Until the application returns it, the machine cannot read more transport data or parse the retained remainder.
+Writes and unrelated completion settlement can continue.
+This bound does not provide unlimited receive concurrency.
+
+## Resource limits
+
+`max_head_bytes` and `max_headers` apply cumulatively to heads, informational responses, and trailers in each direction.
+Generated outgoing headers count toward the field limit.
+Outgoing chunk termination also reserves space in the metadata budget.
+
+`max_body_bytes` limits actual payload bytes in each direction.
+HEAD and 304 representation lengths do not count as payload.
+`max_chunk_line_bytes` limits each chunk-size line.
+`max_chunk_metadata_bytes` limits cumulative chunk lines and delimiters in each direction.
+`max_informational_responses` limits repeated informational responses.
+
+`max_buffer_bytes` limits the addressable length of each accepted input or output buffer.
+It also limits delivery credit and the size of an outgoing body command.
+The caller accounts for hidden backing capacity in custom leases or shared allocations.
+The core cannot inspect storage outside the slices that the buffer exposes.
+
+There is one receive buffer and at most one accepted outgoing payload buffer.
+Operation transfer moves these buffers rather than adding copies.
+Head scratch, encoded heads, and retained connection tokens have limits proportional to `max_head_bytes`.
+The parser uses a fixed stack array with at most 128 header fields.
+No protocol queue grows with the number of exchanges.
+
+`send_ready` reports the remaining payload and framing capacity.
+A capacity of zero permits only `finish_body` or `fail_source`.
+It never causes a zero-byte transport write.
+
+## Deadline policies
+
+The server starts with a head deadline.
+An idle persistent connection uses the idle deadline until the next request starts.
+The client starts idle and arms its response-head deadline when it accepts a request.
+That head deadline includes time spent on the upload.
+
+Body-progress deadlines cover application work and incoming body progress.
+The client also has an independent upload-progress deadline after its request head leaves the transport operation.
+Positive transport progress and application body release reset the applicable progress deadline.
+A stalled consumer or producer does not reset it.
+
+The continue deadline starts after the request head completes.
+Its expiration permits body production without replacing other deadlines.
+A 100 response also releases that gate.
+A rejecting response, an Expect refusal, or a completed response stops an unfinished upload and prohibits reuse.
+Successful streaming responses can progress alongside an upload.
+
+`deadline_changed` exposes only the earliest active deadline.
+The executor schedules it without interpreting the policy.
+`expire(deadline, now)` rejects stale, early, wrong-owner, and regressed observations.
+`observe_time(now)` updates time but does not expire a deadline by itself.
+`None` disables an individual timeout policy.
+
+## Lifecycle and handoff
+
+`incoming_finished` marks the end of incoming message framing.
+`exchange_finished` reports the semantic exchange outcome and reuse permission.
+`closed` follows transport close and operation settlement.
+These notifications have different meanings.
+
+An early server response permits incoming body delivery while response output continues.
+After output ends, the machine abandons unread request data and closes.
+This permits streaming echo sources that consume request data after the response head.
+An abandoned request does not receive successful incoming-body completion.
+A rejecting early client response cancels pending upload work but permits response delivery.
+`BodySent` reports `Failure::EarlyResponse` for a stopped upload.
+Known accepted payload bytes remain distinct from the exchange outcome.
+
+An exchange failure can precede late `body_sent` notifications.
+The owner continues progress until `closed` and returns every outstanding body lease.
+Cancellation acknowledges intent, not resource release.
+Wrong-owner and stale completions return their resources without reviving a retired exchange.
+
+Before final response output starts, the server can send a bounded error response.
+Malformed requests receive 400, payload limits receive 413, and header limits receive 431.
+A partial-request timeout receives 408.
+The machine then closes and reports the original failure.
+An unusable transport, an insufficient metadata budget, or an already started final response prevents automatic error output.
+The application and transport adapter do not synthesize these protocol responses.
+
+`shutdown(Graceful)` completes the current exchange without admitting another.
+`shutdown(Abort)` cancels outstanding work and requests resource settlement.
+
+An upgrade uses `accept_upgrade` on the server.
+The machine reports `upgrade_ready` only after handshake output and HTTP operations settle.
+`take_upgrade` returns transport identity and exact unread input.
+The outer owner then transfers its transport to the next protocol.
+The HTTP machine does not perform WebSocket handshake validation.
+
+An upgrade-ready notification is not permanent transport authority.
+Failure, cancellation, timeout, or shutdown before `take_upgrade` revokes the pending handoff.
+The transfer method checks terminal state and all outstanding operation slots again.
+After a successful transfer, HTTP cannot issue close and ignores later shutdown commands.
+A stale deadline from before upgrade readiness does not revoke a valid handoff.
+
+## Validation
+
+The regression suite includes an independent response-framing corpus.
+It runs each corpus case at every transport split point.
+Historical request-framing and chunk-syntax negatives receive the same split coverage.
+
+Other tests cover short writes across chunk prefixes, payloads, suffixes, and termination.
+Lifecycle traces include deadline phases, early-final uploads, cancellation completion orders, retained body leases, and handoff.
+Shared-output tests preserve payload addresses across partial writes.
+
+The standalone tests do not measure native executor throughput.
+The direct io_uring application and Kimojio facade provide separate integration and performance evidence.

@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "encoding": "latin-1",
+  "scope": "bounded strict response-framing oracle; not every legal HTTP transfer coding",
+  "cases": [
+    {
+      "name": "content-length-with-next-message",
+      "method": "GET",
+      "wire": "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabcHTTP/1.1 204 No Content\r\n\r\n",
+      "status": 200,
+      "body": "abc",
+      "leftover": "HTTP/1.1 204 No Content\r\n\r\n"
+    },
+    {
+      "name": "head-metadata-with-upgrade-like-leftover",
+      "method": "HEAD",
+      "wire": "HTTP/1.1 200 OK\r\nContent-Length: 999\r\n\r\n\u0081\u0002hi",
+      "status": 200,
+      "body": "",
+      "leftover": "\u0081\u0002hi"
+    },
+    {
+      "name": "upgrade-leftover",
+      "method": "GET",
+      "wire": "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n\u0081\u0002hi",
+      "status": 101,
+      "body": "",
+      "leftover": "\u0081\u0002hi"
+    },
+    {
+      "name": "connect-ignores-framing-fields",
+      "method": "CONNECT",
+      "wire": "HTTP/1.1 200 Connection Established\r\nContent-Length: invalid\r\nTransfer-Encoding: ignored\r\n\r\ntunnel",
+      "status": 200,
+      "body": "",
+      "leftover": "tunnel"
+    },
+    {
+      "name": "chunked-trailer",
+      "method": "GET",
+      "wire": "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3 ; part = \"one\"\r\nabc\r\n0\r\nX-End: yes\r\n\r\n",
+      "status": 200,
+      "body": "abc",
+      "trailers": [["x-end", "yes"]],
+      "leftover": ""
+    },
+    {
+      "name": "close-delimited",
+      "method": "GET",
+      "wire": "HTTP/1.0 200 OK\r\n\r\nabc",
+      "status": 200,
+      "body": "abc",
+      "leftover": "",
+      "requires_eof": true
+    },
+    {
+      "name": "conflicting-length",
+      "method": "GET",
+      "wire": "HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab",
+      "error": true
+    },
+    {
+      "name": "transfer-encoding-and-length",
+      "method": "GET",
+      "wire": "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n0\r\n\r\n",
+      "error": true
+    },
+    {
+      "name": "length-truncation",
+      "method": "GET",
+      "wire": "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabc",
+      "error": true
+    },
+    {
+      "name": "chunk-truncation",
+      "method": "GET",
+      "wire": "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nab",
+      "error": true
+    },
+    {
+      "name": "missing-terminal-chunk",
+      "method": "GET",
+      "wire": "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n",
+      "error": true
+    },
+    {
+      "name": "length-on-204",
+      "method": "GET",
+      "wire": "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n",
+      "error": true
+    }
+  ]
+}

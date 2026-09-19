@@ -1,0 +1,15 @@
+[package]
+name = "kimojio-fsm-http1"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Owned-operation HTTP/1 client and server state machines"
+readme = "README.md"
+
+[dependencies]
+httparse.workspace = true
+
+[dev-dependencies]
+serde_json = "1"

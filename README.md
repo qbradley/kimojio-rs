@@ -56,6 +56,15 @@ async fn main() -> Result<(), Errno> {
 
 Please see [CONTRIBUTING.md](CONTRIBUTING.md) for more information on how to contribute to this project.
 
+## FSM Architecture
+
+The [FSM composition pattern](docs/fsm-composition.md) records the family-wide
+design for synchronous state machines, layered protocols, and async adapters.
+The [HTTP/1 implementation plan](docs/http1-fsm-plan.md) applies that pattern
+through independent native-FSM and Kimojio consumers.
+The [standalone HTTP/1 crate](kimojio-fsm-http1/README.md) contains synchronous
+client and server machines with caller-owned I/O execution.
+
 ## Virtual Clock for Testing
 
 Kimojio supports deterministic timing via a virtual clock, enabling tests
