@@ -10,6 +10,7 @@ import uuid
 
 from h2.events import DataReceived, RequestReceived, StreamEnded
 
+from cases import SUCCESS_CONNECTION_OUTCOMES
 from peer import Peer, Received, digest_for
 from socket_peer import Channel, ScriptedPeer, prerequisites, require, run_command
 from suite import ROOT, adapter, command, read_json, write_json
@@ -107,12 +108,15 @@ def run_probe(client_adapter, directory, *, consume=True, timeout_ms=8000):
     stream = streams[0] if len(streams) == 1 else {}
     response_ok = (
         result is not None and result.get("schema") == 1
-        and result.get("connection") == {"closed": True, "error": None}
+        and result.get("connection", {}).get("closed") is True
+        and result["connection"].get("error") is None
+        and result["connection"].get("outcome") in SUCCESS_CONNECTION_OUTCOMES
         and stream.get("stream_id") == 1 and stream.get("status") == 200
         and stream.get("content_length") == 0 and stream.get("bytes") == 0
         and stream.get("sha256") == digest_for(1, 0) and stream.get("ended") is True
         and stream.get("error") is None and stream.get("trailers") == []
         and stream.get("informational") == []
+        and stream.get("outcome") == "complete"
     )
     peer_clean = (
         peer["peer_error"] is None and peer["native_socket_close"] is not None

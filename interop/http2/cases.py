@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from peer import digest_for
 from socket_peer import require
 
+SUCCESS_CONNECTION_OUTCOMES = {"graceful", "peer_closed"}
+
 
 @dataclass(frozen=True)
 class Case:
@@ -102,6 +104,10 @@ def validate_results(case, report, *, echo=False):
     connection = report.get("connection", {})
     require(connection.get("closed") is True, "client did not explicitly close its socket")
     require(connection.get("error") is None, f"connection error: {connection}")
+    require(
+        connection.get("outcome") in SUCCESS_CONNECTION_OUTCOMES,
+        f"unsuccessful connection terminal outcome: {connection.get('outcome')!r}",
+    )
     streams = report.get("streams")
     require(isinstance(streams, list) and len(streams) == case.count, "wrong result count")
     indexed = {entry["stream_id"]: entry for entry in streams}
@@ -123,6 +129,10 @@ def validate_results(case, report, *, echo=False):
         require(result.get("bytes") == length, f"stream {stream}: body length mismatch")
         require(result.get("sha256") == digest_for(stream, length), f"stream {stream}: body hash mismatch")
         require(result.get("ended") is (not limited), f"stream {stream}: wrong END_STREAM result")
+        require(
+            result.get("outcome") == ("reset" if limited else "complete"),
+            f"stream {stream}: unsuccessful terminal outcome {result.get('outcome')!r}",
+        )
         require(
             result.get("error") == ({"scope": "stream", "code": 11} if limited else None),
             f"stream {stream}: unexpected error",

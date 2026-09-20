@@ -233,12 +233,12 @@ class SocketTests(unittest.TestCase):
     def test_result_hash_end_and_close_are_required(self):
         case = Case("result", 3)
         result = {
-            "schema": 1, "connection": {"closed": True, "error": None},
+            "schema": 1, "connection": {"closed": True, "error": None, "outcome": "graceful"},
             "streams": [{
                 "stream_id": 1, "status": 200, "bytes": 3,
                 "content_length": 3,
                 "sha256": digest_for(1, 3), "trailers": [], "informational": [],
-                "ended": True, "error": None,
+                "ended": True, "outcome": "complete", "error": None,
             }],
         }
         validate_results(case, result)
@@ -251,14 +251,44 @@ class SocketTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "explicitly close"):
             validate_results(case, result)
 
+    def test_receive_success_cannot_hide_failed_terminal_outcomes(self):
+        case = Case("terminal", 3)
+        report = {
+            "schema": 1, "connection": {"closed": True, "error": None, "outcome": "graceful"},
+            "streams": [{
+                "stream_id": 1, "status": 200, "content_length": 3,
+                "bytes": 3, "sha256": digest_for(1, 3),
+                "trailers": [], "informational": [], "ended": True,
+                "outcome": "complete", "error": None,
+            }],
+        }
+        validate_results(case, report)
+        for outcome in ("connection_failed", "unprocessed", "deadline", "reset", "source_failed", None):
+            broken = json.loads(json.dumps(report))
+            broken["streams"][0]["outcome"] = outcome
+            with self.assertRaisesRegex(AssertionError, "terminal outcome"):
+                validate_results(case, broken)
+        for outcome in ("io_failed", "resource_exhausted", "protocol", None):
+            broken = json.loads(json.dumps(report))
+            broken["connection"]["outcome"] = outcome
+            with self.assertRaisesRegex(AssertionError, "connection terminal outcome"):
+                validate_results(case, broken)
+        for target in ("stream", "connection"):
+            broken = json.loads(json.dumps(report))
+            del (broken["streams"][0] if target == "stream" else broken["connection"])["outcome"]
+            with self.assertRaisesRegex(AssertionError, "terminal outcome"):
+                validate_results(case, broken)
+        report["connection"]["outcome"] = "peer_closed"
+        validate_results(case, report)
+
     def test_head_requires_declared_length_despite_empty_body(self):
         case = Case("head", 999, method="HEAD")
         result = {
-            "schema": 1, "connection": {"closed": True, "error": None},
+            "schema": 1, "connection": {"closed": True, "error": None, "outcome": "graceful"},
             "streams": [{
                 "stream_id": 1, "status": 200, "content_length": 999,
                 "bytes": 0, "sha256": digest_for(1, 0), "trailers": [],
-                "informational": [], "ended": True, "error": None,
+                "informational": [], "ended": True, "outcome": "complete", "error": None,
             }],
         }
         validate_results(case, result)
@@ -269,16 +299,21 @@ class SocketTests(unittest.TestCase):
     def test_empty_frame_resource_limit_requires_successful_sibling(self):
         case = Case("empty-data-sibling", 4096, 2, 2)
         report = {
-            "schema": 1, "connection": {"closed": True, "error": None},
+            "schema": 1, "connection": {"closed": True, "error": None, "outcome": "graceful"},
             "streams": [{
                 "stream_id": stream, "status": 200, "content_length": 4096,
                 "bytes": 0 if stream == 1 else 4096,
                 "sha256": digest_for(stream, 0 if stream == 1 else 4096),
                 "trailers": [], "informational": [], "ended": stream == 3,
+                "outcome": "reset" if stream == 1 else "complete",
                 "error": {"scope": "stream", "code": 11} if stream == 1 else None,
             } for stream in (1, 3)],
         }
         validate_results(case, report)
+        broken = json.loads(json.dumps(report))
+        broken["streams"][0]["outcome"] = "connection_failed"
+        with self.assertRaisesRegex(AssertionError, "terminal outcome"):
+            validate_results(case, broken)
         for stream_index in (0, 1):
             broken = json.loads(json.dumps(report))
             broken["streams"][stream_index]["error"] = {"scope": "stream", "code": 8}
@@ -287,6 +322,37 @@ class SocketTests(unittest.TestCase):
         report["connection"]["error"] = {"scope": "connection", "code": 11}
         with self.assertRaises(AssertionError):
             validate_results(case, report)
+
+    def test_early_rejection_requires_local_cancel_not_global_failure(self):
+        from protocol_suite import validate
+
+        report = {
+            "schema": 1, "connection": {"closed": True, "error": None, "outcome": "graceful"},
+            "streams": [{
+                "stream_id": stream, "status": 413 if stream == 1 else 200,
+                "content_length": 0 if stream == 1 else 37,
+                "bytes": 0 if stream == 1 else 37,
+                "sha256": digest_for(stream, 0 if stream == 1 else 37),
+                "trailers": [], "informational": [], "ended": True,
+                "outcome": "reset" if stream == 1 else "complete",
+                "error": {"scope": "stream", "code": 8} if stream == 1 else None,
+            } for stream in (1, 3)],
+        }
+        witness = {
+            "peer_eof": True, "requests": 2, "received": {"1": 1024},
+            "window_updates": {}, "resets": {"1": 8},
+        }
+        validate("early-response", report, witness)
+        broken = json.loads(json.dumps(report))
+        broken["streams"][0]["outcome"] = "connection_failed"
+        with self.assertRaisesRegex(AssertionError, "terminal outcome"):
+            validate("early-response", broken, witness)
+        broken["streams"][0]["error"] = None
+        with self.assertRaises(AssertionError):
+            validate("early-response", broken, witness)
+        witness["resets"] = {}
+        with self.assertRaisesRegex(AssertionError, "explicit stream-local CANCEL"):
+            validate("early-response", report, witness)
 
     def test_bounded_process_output_and_timeout(self):
         with self.assertRaisesRegex(AssertionError, "output exceeds"):

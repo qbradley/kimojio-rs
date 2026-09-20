@@ -63,6 +63,7 @@ The result file contains:
       "trailers":[],
       "informational":[],
       "ended":true,
+      "outcome":"complete",
       "error":null
     },
     {
@@ -74,14 +75,27 @@ The result file contains:
       "trailers":[["x-end","done"]],
       "informational":[],
       "ended":true,
+      "outcome":"complete",
       "error":null
     }
   ],
-  "connection":{"error":null,"closed":true}
+  "connection":{"error":null,"outcome":"graceful","closed":true}
 }
 ```
 
 Every issued stream needs exactly one result.
+`stream.outcome` records full stream retirement, separately from receive completion.
+Its values are `complete`, `reset`, `unprocessed`, `connection_failed`, and `deadline`.
+It remains null until retirement.
+`ended` records normal receive END_STREAM, not successful transmission or full retirement.
+An unexpected producer failure must remain a non-complete outcome, even after a successful response.
+
+`connection.outcome` records the terminal connection result.
+Its values are `graceful`, `peer_closed`, `io_failed`, `protocol`, and `resource_exhausted`.
+Normal cases require every stream outcome to be `complete`.
+They also require a `graceful` or `peer_closed` connection outcome and an actual socket close.
+Missing or null terminal outcomes cannot qualify a completed case.
+
 `content_length` is the declared response length, or null when the response has no Content-Length field.
 HEAD reports the declared length even though `bytes` is zero.
 `trailers` contains ordered string pairs, such as `[["x-end","done"]]`.
@@ -91,6 +105,8 @@ A connection error uses `{"scope":"connection","code":1}`.
 The `connection.error` field reports terminal connection errors.
 Pending streams retain null errors when a connection error prevents their completion.
 Codes are HTTP/2 wire error codes.
+Transport, source, resource, and unprocessed failures must not invent HTTP/2 error codes.
+Their non-complete terminal outcomes remain mandatory even when `error` is null.
 `closed` means that the fixture explicitly closed its socket.
 It does not mean that the fixture observed EOF from the server.
 Successful commands return zero, including expected protocol-error scenarios.
@@ -191,3 +207,16 @@ It requires stream PROTOCOL_ERROR without a connection error.
 The empty-DATA pressure case permits stream 1 to fail with code 11 and zero delivered bytes.
 That outcome requires a matching RST_STREAM, no connection error, and a complete response on sibling stream 3.
 The report distinguishes this bounded resource rejection from full body delivery.
+The rejected stream outcome must be `reset`, while the sibling outcome must be `complete`.
+
+## Early rejected-upload policy
+
+After a complete status-413 response, the client explicitly cancels the unfinished upload with RST_STREAM(CANCEL).
+It preserves the completed receive result and lets its sibling finish.
+The rejected stream reports `ended: true`, `outcome: "reset"`, and the actual stream error code 8.
+The independent peer must observe that CANCEL frame.
+The connection still requires a normal terminal outcome and an actual close.
+`connection_failed` is not an acceptable substitute for this stream-local cancellation.
+
+A successful early status-200 response does not authorize cancellation of the upload.
+The duplex probe requires the complete request body and request END_STREAM after that response.

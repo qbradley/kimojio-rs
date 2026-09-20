@@ -6,7 +6,7 @@ import sys
 import uuid
 
 from peer import digest_for
-from cases import Case, validate_results
+from cases import Case, SUCCESS_CONNECTION_OUTCOMES, validate_results
 from socket_peer import PeerProcess, prerequisites, require, run_command
 from suite import ROOT, adapter, command, read_json, write_json
 
@@ -49,6 +49,12 @@ def validate(scenario, report, witness):
         "bad-continuation", "push-after-ack",
     ) else None
     require(report["connection"].get("error") == connection_error, "wrong connection error scope/code")
+    require(
+        report["connection"].get("outcome") in (
+            {"protocol"} if connection_error else SUCCESS_CONNECTION_OUTCOMES
+        ),
+        "wrong connection terminal outcome",
+    )
     count = 2 if scenario in ("reset-isolation", "content-length", "early-response", "reset-discard", "no-body-data") else 1
     require(witness["requests"] == count, "wire request count mismatch")
     results = report.get("streams", [])
@@ -56,9 +62,10 @@ def validate(scenario, report, witness):
     require({result["stream_id"] for result in results} == set(range(1, 2 * count, 2)), "wrong stream IDs")
     for result in results:
         stream = result["stream_id"]
-        status, length, ended, error = 200, 37, True, None
+        status, length, ended, error, outcome = 200, 37, True, None, "complete"
         if connection_error:
             status, length, ended = None, 0, False
+            outcome = "connection_failed"
         elif stream == 1 and scenario == "reset-isolation":
             status, length, ended = None, 0, False
             error = {"scope": "stream", "code": 8}
@@ -70,6 +77,9 @@ def validate(scenario, report, witness):
             status, length, ended, error = 204, 0, False, {"scope": "stream", "code": 1}
         elif stream == 1 and scenario == "early-response":
             status, length = 413, 0
+            error = {"scope": "stream", "code": 8}
+        if error is not None:
+            outcome = "reset"
         require(result.get("status") == status, f"stream {stream}: wrong status")
         declared = None if status is None or status == 204 or scenario == "connect" else length
         if stream == 1 and scenario == "content-length":
@@ -81,6 +91,7 @@ def validate(scenario, report, witness):
         require(result.get("sha256") == digest_for(stream, length), f"stream {stream}: wrong body hash")
         require(result.get("ended") is ended, f"stream {stream}: wrong END_STREAM result")
         require(result.get("error") == error, f"stream {stream}: wrong error scope/code")
+        require(result.get("outcome") == outcome, f"stream {stream}: wrong terminal outcome")
         require(result.get("trailers") == [] and result.get("informational") == [], "unexpected metadata")
     if scenario == "push-before-ack":
         require(witness["resets"].get("2") in (7, 8), "client did not refuse the promised stream")
@@ -94,6 +105,7 @@ def validate(scenario, report, witness):
     if scenario == "early-response":
         require(witness["received"].get("1") == 1024, "upload did not stop at actual advertised stream credit")
         require(not witness["window_updates"].get("1"), "unexpected response receive-credit update")
+        require(witness["resets"].get("1") == 8, "rejected upload needs explicit stream-local CANCEL")
     if scenario == "reset-discard":
         require(witness["resets"].get("1") == 8, "missing client CANCEL")
         require(witness["window_updates"].get("0", 0) >= 32768, "discarded DATA stranded connection credit")
@@ -102,6 +114,7 @@ def validate(scenario, report, witness):
             "discarded DATA reopened stream credit",
         )
     if scenario == "graceful-close":
+        require(report["connection"]["outcome"] == "graceful", "graceful close did not finish gracefully")
         require(witness["goaway_count"] >= 1 and witness["goaway"] == 0, "missing graceful GOAWAY before actual close")
 
 

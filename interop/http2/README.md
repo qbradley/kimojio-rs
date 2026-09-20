@@ -76,6 +76,12 @@ Either command accepts one adapter instead of both.
 Repeated `--case` arguments select several cases.
 A selection without a matching adapter role fails.
 Reports contain only cases that the command actually ran.
+Every final result requires explicit stream and connection terminal outcomes.
+Normal success requires `stream.outcome == "complete"` and a `graceful` or `peer_closed` connection outcome.
+`ended: true` records receive completion only.
+It cannot hide a failed producer, incomplete retirement, transport failure, resource failure, or unprocessed request.
+The `error` field contains only actual HTTP/2 wire codes.
+Null wire errors do not make a failed terminal outcome successful.
 
 ## Diagnose an early successful response
 
@@ -100,6 +106,9 @@ The main protocol suite's early-413 case differs from this probe.
 That case withholds upload credit deliberately.
 The application must stop that rejected upload explicitly after it accepts the final response.
 It must not wait indefinitely for the rejected producer to finish.
+This case requires a wire RST_STREAM(CANCEL), stream outcome `reset`, and preserved receive END_STREAM.
+Its sibling must retire as `complete`, and the connection must close normally.
+Global `connection_failed` outcomes cannot satisfy this stream-local cancellation policy.
 
 ## Implemented flow and socket checks
 
@@ -163,6 +172,7 @@ The empty-frame case proves bounded peer traffic and sibling progress.
 It does **not** measure native fragment-descriptor capacity.
 It permits full delivery or stream-local ENHANCE_YOUR_CALM on stream 1 with zero delivered body bytes.
 The latter outcome requires the matching wire RST_STREAM, successful sibling 3, and no connection error.
+It also requires a `reset` terminal outcome, not a hidden `connection_failed` outcome.
 Reports distinguish `bounded-stream-rejection` from complete delivery.
 
 ## Implemented protocol checks
@@ -210,6 +220,7 @@ Another control rejects a server that waits for the complete upload before it se
 A socket test requires response headers before the first request DATA.
 It then requires echo DATA before request END_STREAM.
 An ownership test withholds input credit until the echo write settles.
+Outcome controls reject `ended: true` and null wire errors when retirement or connection outcomes indicate failure.
 The tests also reject workloads that are too small for 8 MiB windows.
 Separate socket runs qualify both 8 MiB balances with large bodies and serial/concurrent aggregates.
 

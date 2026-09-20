@@ -84,7 +84,7 @@ func TestClassicConnectUsesIndependentSocketPeer(t *testing.T) {
 		t.Fatalf("client=%v server=%v", clientErr, serverErr)
 	}
 	results := output["streams"].([]*result)
-	if len(results) != 1 || results[0].Bytes != 37 || !results[0].Ended {
+	if len(results) != 1 || results[0].Bytes != 37 || !results[0].Ended || results[0].Outcome != "complete" {
 		t.Fatalf("bad result: %v", results)
 	}
 }

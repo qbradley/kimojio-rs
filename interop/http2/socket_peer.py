@@ -132,7 +132,7 @@ class Channel:
         return self.results.setdefault(stream, {
             "stream_id": stream, "status": None, "bytes": 0, "sha256": "",
             "content_length": None,
-            "trailers": [], "informational": [], "ended": False, "error": None,
+            "trailers": [], "informational": [], "ended": False, "outcome": None, "error": None,
         })
 
     def after_write(self, callback):
@@ -206,8 +206,10 @@ class Channel:
         raise AssertionError("handshake turn limit exceeded")
 
     def flush(self):
-        self.queue()
-        while self.out:
+        while True:
+            self.queue()
+            if not self.out:
+                break
             self.step()
 
     def close(self):
@@ -216,17 +218,28 @@ class Channel:
             self.closed = True
 
     def report(self):
+        termination = self.peer.termination
+        failed_connection = termination is not None and termination.error_code != 0
         for stream, result in self.results.items():
             received = self.peer.received.get(stream, Received())
             result["bytes"] = received.payload
             result["sha256"] = received.digest.hexdigest()
             if stream in self.peer.resets:
                 result["error"] = {"scope": "stream", "code": self.peer.resets[stream]}
-        termination = self.peer.termination
+                result["outcome"] = "reset"
+            else:
+                live = self.peer.connection.streams.get(stream)
+                result["outcome"] = (
+                    "complete" if result["ended"] and (live is None or live.closed) and not self.out
+                    else "connection_failed" if failed_connection or self.closed else None
+                )
         return {
             "schema": 1, "streams": list(self.results.values()),
             "connection": {
                 "closed": self.closed,
+                "outcome": "protocol" if failed_connection else (
+                    ("peer_closed" if self.eof else "graceful") if self.closed else None
+                ),
                 "error": None if termination is None or not termination.error_code else {
                     "scope": "connection", "code": int(termination.error_code),
                 },

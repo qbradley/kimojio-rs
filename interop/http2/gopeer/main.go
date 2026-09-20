@@ -394,6 +394,7 @@ type result struct {
 	Trailers      [][]string `json:"trailers"`
 	Informational []int      `json:"informational"`
 	Ended         bool       `json:"ended"`
+	Outcome       string     `json:"outcome"`
 	Error         any        `json:"error"`
 	digest        hash.Hash
 	length        int
@@ -418,13 +419,15 @@ func rawClient(input spec) (map[string]any, error) {
 		return nil, err
 	}
 	results := make(map[uint32]*result)
+	requestEnded := make(map[uint32]bool)
 	for index, req := range input.Requests {
 		stream := uint32(index*2 + 1)
 		headers := []hpack.HeaderField{{Name: ":method", Value: req.Method}, {Name: ":authority", Value: "localhost"}}
 		if req.Method != "CONNECT" {
 			headers = append(headers, hpack.HeaderField{Name: ":scheme", Value: "http"}, hpack.HeaderField{Name: ":path", Value: req.Path})
 		}
-		if err := p.headers(stream, headers, req.BodyBytes == 0 && len(req.Trailers) == 0, input.WireScenario == "request-continuation"); err != nil {
+		requestEnded[stream] = req.BodyBytes == 0 && len(req.Trailers) == 0
+		if err := p.headers(stream, headers, requestEnded[stream], input.WireScenario == "request-continuation"); err != nil {
 			return nil, err
 		}
 		results[stream] = &result{
@@ -477,6 +480,13 @@ func rawClient(input spec) (map[string]any, error) {
 			if frame.StreamEnded() {
 				r.Ended = true
 				done++
+				if r.Status != nil && *r.Status == 413 && !requestEnded[frame.StreamID] {
+					if err := p.framer.WriteRSTStream(frame.StreamID, http2.ErrCodeCancel); err != nil {
+						return nil, err
+					}
+					r.Error = map[string]any{"scope": "stream", "code": uint32(http2.ErrCodeCancel)}
+					uploaded[frame.StreamID] = true
+				}
 			}
 		case *http2.DataFrame:
 			r := results[frame.StreamID]
@@ -578,6 +588,7 @@ func rawClient(input spec) (map[string]any, error) {
 				if err := p.body(stream, bytes.Repeat([]byte{byte(stream % 251)}, amount), final && len(req.Trailers) == 0); err != nil {
 					return nil, err
 				}
+				requestEnded[stream] = final && len(req.Trailers) == 0
 				if len(req.Trailers) > 0 {
 					if !final {
 						return nil, errors.New("reference trailers require a one-frame upload")
@@ -592,6 +603,7 @@ func rawClient(input spec) (map[string]any, error) {
 					if err := p.headers(stream, fields, true, false); err != nil {
 						return nil, err
 					}
+					requestEnded[stream] = true
 				}
 				uploadProgress[stream] += amount
 				uploaded[stream] = final || req.Method != "CONNECT"
@@ -602,6 +614,14 @@ func rawClient(input spec) (map[string]any, error) {
 	for index := range input.Requests {
 		r := results[uint32(index*2+1)]
 		r.SHA256 = hex.EncodeToString(r.digest.Sum(nil))
+		switch {
+		case r.Error != nil:
+			r.Outcome = "reset"
+		case r.Ended && requestEnded[r.StreamID]:
+			r.Outcome = "complete"
+		default:
+			r.Outcome = "connection_failed"
+		}
 		ordered = append(ordered, r)
 	}
 	for _, action := range input.Actions {
@@ -614,9 +634,13 @@ func rawClient(input spec) (map[string]any, error) {
 	if err := conn.Close(); err != nil {
 		return nil, err
 	}
+	connectionOutcome := "graceful"
+	if connectionError != nil {
+		connectionOutcome = "protocol"
+	}
 	return map[string]any{
 		"schema": 1, "streams": ordered,
-		"connection": map[string]any{"closed": true, "error": connectionError},
+		"connection": map[string]any{"closed": true, "error": connectionError, "outcome": connectionOutcome},
 	}, nil
 }
 
