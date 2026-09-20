@@ -170,10 +170,9 @@ fn connection_error(result: ConnectionResult) -> Option<Error> {
 
 fn stream_error(outcome: StreamOutcome) -> Option<Error> {
     let code = match outcome {
-        StreamOutcome::Complete => return None,
+        StreamOutcome::Complete | StreamOutcome::ConnectionFailed => return None,
         StreamOutcome::Reset(code) => code,
         StreamOutcome::Unprocessed => 7,
-        StreamOutcome::ConnectionFailed => 2,
         StreamOutcome::Deadline => 8,
     };
     Some(Error {
@@ -193,11 +192,18 @@ pub fn main() -> Result<(), String> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("client") if args.len() == 3 => client(&args[1], &args[2]),
+        Some("server") if args.len() == 2 && !args[1].starts_with("--") => {
+            let input: ServerInput = checked(serde_json::from_slice(&read_input(&args[1])?))?;
+            if input.schema != 1 || !(1..=120_000).contains(&input.timeout_ms) {
+                return Err("invalid server schema or timeout".into());
+            }
+            server(input.config.config()?, Duration::from_millis(input.timeout_ms))
+        }
         Some("server") => {
             let windows = server_args(&args[1..])?;
-            server(windows.config()?)
+            server(windows.config()?, Duration::from_secs(120))
         }
-        _ => Err("usage: interop client REQUEST_JSON RESULT_JSON | server [--stream-window N/default] [--connection-window N/default]".into()),
+        _ => Err("usage: interop client REQUEST_JSON RESULT_JSON | server REQUEST_JSON | server [--stream-window N/default] [--connection-window N/default]".into()),
     }
 }
 
@@ -222,14 +228,18 @@ fn server_args(args: &[String]) -> Result<Windows, String> {
     Ok(windows)
 }
 
-fn client(request_file: &str, result_file: &str) -> Result<(), String> {
+fn read_input(request_file: &str) -> Result<Vec<u8>, String> {
     let file = checked(File::open(request_file))?;
     let mut bytes = Vec::new();
     checked(file.take(MAX_INPUT + 1).read_to_end(&mut bytes))?;
     if bytes.len() as u64 > MAX_INPUT {
         return Err("request file exceeds fixture size limit".into());
     }
-    let input: Input = checked(serde_json::from_slice(&bytes))?;
+    Ok(bytes)
+}
+
+fn client(request_file: &str, result_file: &str) -> Result<(), String> {
+    let input: Input = checked(serde_json::from_slice(&read_input(request_file)?))?;
     input.validate()?;
     let address: IpAddr = checked(input.host.parse())?;
     if !address.is_loopback() {
@@ -292,6 +302,7 @@ fn client_loop(
     let mut ended = BTreeSet::new();
     let mut reset = BTreeSet::new();
     let mut report_metadata = 0usize;
+    let mut settings_processed = false;
     loop {
         if transport.now() > timeout {
             let state: Vec<_> = producers
@@ -482,33 +493,44 @@ fn client_loop(
                 });
             }
             Some(Event::Again) => (),
-            None if !progress => transport.wait(timeout)?,
-            None => (),
+            None => {
+                settings_processed |= transport.initial_settings_received();
+                if !progress
+                    && (!settings_processed
+                        || producers
+                            .values()
+                            .all(|p| p.permit.is_none() || p.stopped || p.busy))
+                {
+                    transport.wait(timeout)?;
+                }
+            }
         }
-        for (&id, producer) in producers.iter_mut() {
-            producer.drive(core, id)?;
+        if settings_processed {
+            for (&id, producer) in producers.iter_mut() {
+                producer.drive(core, id)?;
+            }
         }
     }
 }
 
-fn server(config: Config) -> Result<(), String> {
+fn server(config: Config, timeout: Duration) -> Result<(), String> {
     let listener = checked(TcpListener::bind(("127.0.0.1", 0)))?;
     println!("LISTEN {}", checked(listener.local_addr())?);
     checked(std::io::stdout().flush())?;
     for socket in listener.incoming() {
         let socket = checked(socket)?;
-        if let Err(error) = server_connection(socket, config.clone()) {
+        if let Err(error) = server_connection(socket, config.clone(), timeout) {
             eprintln!("interop connection: {error}");
         }
     }
     Ok(())
 }
 
-fn server_connection(socket: TcpStream, config: Config) -> Result<(), String> {
+fn server_connection(socket: TcpStream, config: Config, timeout: Duration) -> Result<(), String> {
     let mut transport = Transport::new(socket)?;
     let mut core = checked(Server::<Buffer>::new(config, Duration::ZERO))?;
     let mut producers = BTreeMap::new();
-    let result = server_loop(&mut core, &mut transport, &mut producers);
+    let result = server_loop(&mut core, &mut transport, &mut producers, timeout);
     if result.is_err() {
         for producer in producers.values_mut() {
             producer.release(&mut core)?;
@@ -586,8 +608,8 @@ fn server_loop(
     core: &mut Server<Buffer>,
     transport: &mut Transport,
     producers: &mut BTreeMap<StreamId, Producer>,
+    timeout: Duration,
 ) -> Result<(), String> {
-    let timeout = Duration::from_secs(120);
     loop {
         if transport.now() > timeout {
             return Err("server connection watchdog expired".into());

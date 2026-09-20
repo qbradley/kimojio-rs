@@ -18,8 +18,11 @@ pub struct Windows {
 
 impl Windows {
     pub fn config(&self) -> Result<Config, String> {
-        let stream = self.stream_window.unwrap_or(65_535);
-        let connection = self.connection_window.unwrap_or(65_535);
+        let defaults = Config::default();
+        let stream = self.stream_window.unwrap_or(defaults.stream_receive_window);
+        let connection = self
+            .connection_window
+            .unwrap_or(defaults.connection_receive_window);
         // A fixture bound, not a restriction on valid HTTP/2 window sizes.
         if stream > 1024 * 1024 || !(65_535..=4 * 1024 * 1024).contains(&connection) {
             return Err("receive windows exceed fixture bounds".into());
@@ -81,6 +84,15 @@ pub struct Input {
     pub requests: Vec<Request>,
     #[serde(default)]
     pub actions: Vec<Action>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerInput {
+    pub schema: u32,
+    #[serde(default)]
+    pub config: Windows,
+    pub timeout_ms: u64,
 }
 
 impl Input {
@@ -152,7 +164,6 @@ pub struct Error {
 pub struct StreamReport {
     pub stream_id: u32,
     pub status: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub content_length: Option<u64>,
     pub bytes: u64,
     pub sha256: String,
@@ -233,11 +244,29 @@ mod tests {
         assert_eq!(v["status"], serde_json::Value::Null);
         assert_eq!(v["error"], serde_json::Value::Null);
         assert_eq!(v["ended"], false);
-        assert!(v.get("content_length").is_none());
+        assert_eq!(v["content_length"], serde_json::Value::Null);
+        assert!(v.get("content_length").is_some());
         assert_eq!(
             v["sha256"],
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
         assert!(!ConnectionReport::default().closed);
+    }
+
+    #[test]
+    fn server_json_and_absent_windows_preserve_native_defaults() {
+        let server: ServerInput =
+            serde_json::from_str(r#"{"schema":1,"config":{},"timeout_ms":60000}"#).unwrap();
+        let config = server.config.config().unwrap();
+        assert_eq!(server.schema, 1);
+        assert_eq!(server.timeout_ms, 60000);
+        assert_eq!(
+            config.stream_receive_window,
+            Config::default().stream_receive_window
+        );
+        assert_eq!(
+            config.connection_receive_window,
+            Config::default().connection_receive_window
+        );
     }
 }

@@ -60,12 +60,57 @@ pub enum Event {
     Again,
 }
 
+/// The public ports have no SETTINGS-ready event. Observe only the first frame
+/// boundary; the engine still validates and interprets every received byte.
+#[derive(Default)]
+struct SettingsBoundary {
+    header: [u8; 9],
+    header_bytes: usize,
+    remaining: Option<usize>,
+    received: bool,
+}
+
+impl SettingsBoundary {
+    fn observe(&mut self, mut bytes: &[u8]) {
+        if self.received {
+            return;
+        }
+        let copied = (9 - self.header_bytes).min(bytes.len());
+        self.header[self.header_bytes..self.header_bytes + copied]
+            .copy_from_slice(&bytes[..copied]);
+        self.header_bytes += copied;
+        bytes = &bytes[copied..];
+        if self.header_bytes != 9 {
+            return;
+        }
+        if self.remaining.is_none() {
+            let length = usize::from(self.header[0]) << 16
+                | usize::from(self.header[1]) << 8
+                | usize::from(self.header[2]);
+            if self.header[3] != 4
+                || self.header[4] & 1 != 0
+                || self.header[5] & 0x7f != 0
+                || self.header[6..] != [0, 0, 0]
+                || length > 16384
+                || length % 6 != 0
+            {
+                return;
+            }
+            self.remaining = Some(length);
+        }
+        let remaining = self.remaining.as_mut().unwrap();
+        *remaining = remaining.saturating_sub(bytes.len());
+        self.received = *remaining == 0;
+    }
+}
+
 pub struct Transport {
     socket: Option<TcpStream>,
     read: Option<ReadOp>,
     write: Option<WriteOp<Buffer>>,
     alarms: Vec<WakeOp>,
     origin: Instant,
+    settings_boundary: SettingsBoundary,
     pub physically_closed: bool,
 }
 
@@ -79,11 +124,15 @@ impl Transport {
             write: None,
             alarms: Vec::new(),
             origin: Instant::now(),
+            settings_boundary: SettingsBoundary::default(),
             physically_closed: false,
         })
     }
     pub fn now(&self) -> Duration {
         self.origin.elapsed()
+    }
+    pub fn initial_settings_received(&self) -> bool {
+        self.settings_boundary.received
     }
 
     /// Each turn tries both directions once, even while the engine has ready work.
@@ -106,6 +155,9 @@ impl Transport {
                     Err(_) => Some(ReadOutcome::Failed(IoFailure::Failed)),
                 };
                 if let Some(outcome) = outcome {
+                    if let ReadOutcome::Read(n) = outcome {
+                        self.settings_boundary.observe(&op.buffer_mut()[..n]);
+                    }
                     trace(("read complete", op.token().sequence(), outcome));
                     checked(core.complete_read(op.complete(outcome)))?;
                     progress = true;
@@ -338,6 +390,24 @@ impl Ports<Buffer> for Transport {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[test]
+    fn settings_boundary_accepts_fragmentation_without_waiting_for_ack() {
+        let frame = [0, 0, 6, 4, 0, 0, 0, 0, 0, 0, 4, 0, 0, 4, 0];
+        for split in 0..frame.len() {
+            let mut boundary = SettingsBoundary::default();
+            boundary.observe(&frame[..split]);
+            assert!(!boundary.received);
+            boundary.observe(&frame[split..]);
+            assert!(boundary.received);
+        }
+        let mut ack = SettingsBoundary::default();
+        ack.observe(&[0, 0, 0, 4, 1, 0, 0, 0, 0]);
+        assert!(!ack.received);
+        let mut reserved = SettingsBoundary::default();
+        reserved.observe(&[0, 0, 0, 4, 0, 0x80, 0, 0, 0]);
+        assert!(reserved.received);
+    }
 
     #[test]
     fn shutdown_settles_original_operations_and_closes_the_fd() {
