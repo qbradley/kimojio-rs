@@ -195,6 +195,18 @@ Applications do not poll `send` or calculate window balances.
 One admitted buffer can span several DATA frames.
 
 The permit states separate maximum byte length and retained capacity.
+The byte allowance includes declared content length and the remaining message-body limit.
+Applications do not recalculate those limits.
+A zero-byte permit still accepts empty final DATA without stream or connection wire credit.
+The application can also finish with trailers.
+Zero allowance does not assert that the producer reached EOF.
+Rejected bytes leave the original permit and buffer available to the caller.
+
+Client CONNECT source demand waits for a final response.
+A successful response removes the HTTP body limit before the first source permit.
+This avoids a stale zero-byte permit when a CONNECT request becomes a tunnel.
+An unsuccessful response does not implicitly abort the request producer.
+
 `Vec<u8>` reports its allocation capacity.
 `BodyOp` reports the complete page capacity, even for a one-byte range.
 Custom buffers must report all backing allocations that their ownership retains.
@@ -208,6 +220,10 @@ Its stream outcome can still report that reset.
 A later connection failure preserves an already completed exchange and an existing reset, deadline, or retry outcome.
 An observed response prevents a later GOAWAY boundary from making that exchange retryable.
 Producer completion alone does not establish successful transport settlement of END_STREAM.
+A subsequent RST_STREAM(NO_ERROR) does not discard a complete response.
+Its metadata and body fragments remain available.
+Its `ReceiveEnd` keeps `StreamOutcome::Complete`.
+The separate source-stop and retirement outcomes can report `Reset(0)`.
 
 ## Pages and drive cost
 
@@ -309,7 +325,7 @@ The pure engine does not create or drive an HTTP/1 parser.
 
 ## Standalone qualification
 
-The all-feature suite contains 211 unit tests, 53 integration tests, and two doctests.
+The all-feature suite contains 211 unit tests, 56 integration tests, and two doctests.
 Six unit tests cover new direct-engine bounds and defensive state transitions.
 The default suite omits five feature-specific component tests.
 These counts do not include the six Criterion smoke workloads.
@@ -320,6 +336,10 @@ The stream schedules combine 14 write cuts, six event orders, and four callback 
 The connection schedules use all 120 orders of five outstanding completions and four callback suspension policies.
 Assertions cover exact wire bytes, original buffer identity, forbidden duplicate writes, receipts, and retirement joins.
 This is bounded schedule exploration, not an exhaustive proof or a concurrency model.
+Another 48 schedules place response END_STREAM and RST_STREAM(NO_ERROR) in one read batch.
+They cover HEADERS, DATA, and trailer endings, four callback policies, two release orders, and two write cuts.
+An upload remains outstanding throughout response processing.
+Assertions preserve the complete response and require sibling completion.
 
 The sustained-credit cases send 9 MiB plus 17 bytes in each direction with the message-body limit raised.
 The advertised flow windows retain their defaults.

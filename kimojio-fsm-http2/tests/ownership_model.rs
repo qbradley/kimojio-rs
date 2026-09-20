@@ -6,6 +6,169 @@ use kimojio_fsm_http2::*;
 use std::time::Duration;
 use support::{MemoryPorts, Pair, request, response};
 
+#[test]
+fn completed_response_survives_no_error_reset_in_the_same_read_batch() {
+    fn frame(kind: u8, flags: u8, stream: StreamId, payload: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![0, 0, payload.len() as u8, kind, flags];
+        bytes.extend(stream.get().to_be_bytes());
+        bytes.extend(payload);
+        bytes
+    }
+    for ending in 0..3 {
+        for mask in [0, u16::MAX, 0x5555, 0xaaaa] {
+            for release_first in [false, true] {
+                for written in [10, 109] {
+                    let mut pair = Pair::new(Config::default());
+                    let id = pair.client.request(&request(b"POST"), false).unwrap();
+                    let sibling = pair.client.request(&request(b"GET"), true).unwrap();
+                    pair.pump(32_768);
+                    let upload = vec![7; 100];
+                    let pointer = upload.as_ptr();
+                    pair.client
+                        .send(
+                            pair.client_ports.permits.pop_front().unwrap(),
+                            upload,
+                            false,
+                        )
+                        .unwrap();
+                    pair.client.next(&mut pair.client_ports);
+                    let write = pair.client_ports.write.take().unwrap();
+                    let mut ports = Selective {
+                        ports: pair.client_ports,
+                        mask,
+                    };
+                    let mut encoder = H2HeaderBlockEncoder::new();
+                    let mut fields = response(b"200");
+                    fields.push(H2HeaderField::new(
+                        b"content-length",
+                        if ending == 0 { b"0" } else { b"3" },
+                    ));
+                    let mut batch = frame(
+                        1,
+                        if ending == 0 { 5 } else { 4 },
+                        id,
+                        &encoder.try_encode_fields(&fields).unwrap(),
+                    );
+                    if ending != 0 {
+                        batch.extend(frame(0, u8::from(ending == 1), id, b"abc"));
+                    }
+                    if ending == 2 {
+                        batch.extend(frame(
+                            1,
+                            5,
+                            id,
+                            &encoder
+                                .try_encode_fields(&[H2HeaderField::new(b"x-end", b"yes")])
+                                .unwrap(),
+                        ));
+                    }
+                    batch.extend(frame(3, 0, id, &0u32.to_be_bytes()));
+                    batch.extend(frame(
+                        1,
+                        5,
+                        sibling,
+                        &encoder.try_encode_fields(&response(b"200")).unwrap(),
+                    ));
+                    let mut read = ports.ports.read.take().unwrap();
+                    read.buffer_mut()[..batch.len()].copy_from_slice(&batch);
+                    pair.client
+                        .complete_read(read.complete(ReadOutcome::Read(batch.len())))
+                        .unwrap();
+                    drive(&mut pair.client, &mut ports);
+                    assert_eq!(ports.ports.heads[0].0, id);
+                    assert_eq!(ports.ports.heads[0].1, HeadKind::Response(200));
+                    assert_eq!(ports.ports.heads[0].2, fields);
+                    assert_eq!(ports.ports.heads.len(), if ending == 2 { 3 } else { 2 });
+                    if ending == 2 {
+                        assert_eq!(ports.ports.heads[1].1, HeadKind::Trailers);
+                        assert_eq!(
+                            ports.ports.heads[1].2,
+                            [H2HeaderField::new(b"x-end", b"yes")]
+                        );
+                    }
+                    assert_eq!(
+                        ports.ports.ends,
+                        [
+                            ReceiveEnd {
+                                stream: id,
+                                outcome: StreamOutcome::Complete
+                            },
+                            ReceiveEnd {
+                                stream: sibling,
+                                outcome: StreamOutcome::Complete
+                            },
+                        ]
+                    );
+                    assert_eq!(
+                        ports
+                            .ports
+                            .stopped
+                            .iter()
+                            .filter(|(stream, _)| *stream == id)
+                            .copied()
+                            .collect::<Vec<_>>(),
+                        [(id, SendStop::Reset(0))]
+                    );
+                    assert_eq!(
+                        ports.ports.retired,
+                        [StreamResult {
+                            stream: sibling,
+                            outcome: StreamOutcome::Complete
+                        }]
+                    );
+                    assert_eq!(ports.ports.bodies.len(), usize::from(ending != 0));
+                    if ending != 0 {
+                        assert_eq!(ports.ports.bodies[0].bytes(), b"abc");
+                    }
+                    if release_first {
+                        while let Some(body) = ports.ports.bodies.pop_front() {
+                            pair.client.release_body(body.release()).unwrap();
+                        }
+                    }
+                    let mut wire: Vec<_> = write
+                        .slices()
+                        .iter()
+                        .flat_map(|part| part.iter().copied())
+                        .take(written)
+                        .collect();
+                    pair.client
+                        .complete_write(write.complete(WriteOutcome::Written(written)))
+                        .unwrap();
+                    flush_writes(&mut pair.client, &mut ports, &mut wire);
+                    while let Some(body) = ports.ports.bodies.pop_front() {
+                        assert_eq!(body.bytes(), b"abc");
+                        pair.client.release_body(body.release()).unwrap();
+                    }
+                    flush_writes(&mut pair.client, &mut ports, &mut wire);
+                    let mut expected = frame(0, 0, id, &[7; 100]);
+                    if ending != 0 {
+                        expected.extend([0, 0, 4, 8, 0, 0, 0, 0, 0, 0, 0, 0, 3]);
+                    }
+                    assert_eq!(wire, expected);
+                    assert_eq!(ports.ports.sent.len(), 1);
+                    assert_eq!(ports.ports.sent[0].buffer.as_ptr(), pointer);
+                    assert_eq!(ports.ports.sent[0].accepted, 100);
+                    assert_eq!(ports.ports.sent[0].result, Ok(()));
+                    assert_eq!(
+                        ports.ports.retired,
+                        [
+                            StreamResult {
+                                stream: sibling,
+                                outcome: StreamOutcome::Complete
+                            },
+                            StreamResult {
+                                stream: id,
+                                outcome: StreamOutcome::Reset(0)
+                            },
+                        ]
+                    );
+                    assert!(ports.ports.closed.is_empty());
+                }
+            }
+        }
+    }
+}
+
 struct Selective {
     ports: MemoryPorts,
     mask: u16,

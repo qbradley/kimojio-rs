@@ -242,6 +242,9 @@ impl SendPermit {
     pub fn stream(&self) -> StreamId {
         self.stream
     }
+    /// Maximum next payload length, including remaining HTTP message limits.
+    ///
+    /// Zero still admits empty final DATA. It does not assert producer EOF.
     pub fn max_bytes(&self) -> usize {
         self.max_bytes
     }
