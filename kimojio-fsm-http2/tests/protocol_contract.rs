@@ -345,6 +345,55 @@ fn content_length_and_trailer_rejection_do_not_mutate_encoder_or_permit() {
 }
 
 #[test]
+fn streaming_body_limit_without_content_length_preserves_both_role_buffers() {
+    let mut pair = Pair::new(Config {
+        http: HttpLimits::new().set_max_body_bytes(1),
+        ..Config::default()
+    });
+    let id = pair.client.request(&request(b"POST"), false).unwrap();
+    pair.pump(32_768);
+    pair.server.respond(id, &response(b"200"), false).unwrap();
+    pair.pump(32_768);
+    for (connection, ports) in [
+        (&mut *pair.client, &mut pair.client_ports),
+        (&mut *pair.server, &mut pair.server_ports),
+    ] {
+        let buffer = vec![1, 2];
+        let pointer = buffer.as_ptr();
+        let permit = ports.permits.pop_front().unwrap();
+        let rejected = connection.send(permit, buffer, true).unwrap_err();
+        assert_eq!(
+            rejected.error,
+            CommandError::Message(ServerError::BodyTooLarge {
+                limit: 1,
+                actual: 2
+            })
+        );
+        let (permit, mut buffer) = rejected.value;
+        assert_eq!(permit.stream(), id);
+        assert_eq!(buffer.as_ptr(), pointer);
+        assert_eq!(buffer, [1, 2]);
+        buffer.truncate(1);
+        connection.send(permit, buffer, true).unwrap();
+    }
+    pair.pump(32_768);
+    assert_eq!(pair.client_ports.bodies[0].bytes(), [1]);
+    assert_eq!(pair.server_ports.bodies[0].bytes(), [1]);
+    pair.release_all();
+    pair.pump(32_768);
+    assert_eq!(
+        pair.client_ports.retired,
+        [StreamResult {
+            stream: id,
+            outcome: StreamOutcome::Complete
+        }]
+    );
+    assert_eq!(pair.server_ports.retired, pair.client_ports.retired);
+    assert!(pair.client_ports.closed.is_empty());
+    assert!(pair.server_ports.closed.is_empty());
+}
+
+#[test]
 fn oversized_decoded_headers_preserve_hpack_for_following_stream() {
     let config = Config {
         http: HttpLimits::new().set_max_headers(2),

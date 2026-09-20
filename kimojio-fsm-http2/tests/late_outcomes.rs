@@ -224,52 +224,66 @@ fn completed_and_reset_outcomes_survive_late_connection_failure_and_release() {
 
 #[test]
 fn original_final_write_receipt_decides_success_after_unrelated_read_failure() {
-    for full in [false, true] {
-        let mut pair = Pair::new(Config::default());
-        let id = pair.client.request(&request(b"POST"), false).unwrap();
-        pair.pump(32_768);
-        let buffer = vec![7; 4];
-        let pointer = buffer.as_ptr();
-        pair.client
-            .send(pair.client_ports.permits.pop_front().unwrap(), buffer, true)
-            .unwrap();
-        pair.client.next(&mut pair.client_ports);
-        let write = pair.client_ports.write.take().unwrap();
-        pair.server.respond(id, &response(b"200"), true).unwrap();
-        pair.pump(32_768);
-        let bytes: Vec<_> = write
-            .slices()
-            .iter()
-            .flat_map(|s| s.iter().copied())
-            .collect();
-        assert_eq!(bytes, [0, 0, 4, 0, 1, 0, 0, 0, 1, 7, 7, 7, 7]);
-        let read = pair.client_ports.read.take().unwrap();
-        pair.client
-            .complete_read(read.complete(ReadOutcome::Failed(IoFailure::Failed)))
-            .unwrap();
-        pair.client.next(&mut pair.client_ports);
-        assert!(pair.client_ports.retired.is_empty());
-        pair.client
-            .complete_write(write.complete(WriteOutcome::Written(if full { 13 } else { 5 })))
-            .unwrap();
-        assert!(settle(&mut pair.client, &mut pair.client_ports).is_empty());
-        assert_eq!(pair.client_ports.sent.len(), 1);
-        let receipt = &pair.client_ports.sent[0];
-        assert_eq!(receipt.buffer.as_ptr(), pointer);
-        assert_eq!(receipt.accepted, if full { 4 } else { 0 });
-        assert_eq!(receipt.result.is_ok(), full);
-        assert_eq!(
-            pair.client_ports.retired,
-            [StreamResult {
-                stream: id,
-                outcome: if full {
-                    StreamOutcome::Complete
-                } else {
-                    StreamOutcome::ConnectionFailed
+    for (written, accepted, full) in [(5, 0, false), (10, 1, false), (109, 100, true)] {
+        for deliver_notices in [false, true] {
+            for (read_outcome, closed) in [
+                (
+                    ReadOutcome::Failed(IoFailure::Failed),
+                    ConnectionResult::IoFailed,
+                ),
+                (ReadOutcome::Eof, ConnectionResult::PeerClosed),
+            ] {
+                let mut pair = Pair::new(Config::default());
+                let id = pair.client.request(&request(b"POST"), false).unwrap();
+                pair.pump(32_768);
+                let buffer = vec![7; 100];
+                let pointer = buffer.as_ptr();
+                pair.client
+                    .send(pair.client_ports.permits.pop_front().unwrap(), buffer, true)
+                    .unwrap();
+                pair.client.next(&mut pair.client_ports);
+                let write = pair.client_ports.write.take().unwrap();
+                pair.server.respond(id, &response(b"200"), true).unwrap();
+                pair.pump(32_768);
+                let bytes: Vec<_> = write
+                    .slices()
+                    .iter()
+                    .flat_map(|s| s.iter().copied())
+                    .collect();
+                let mut expected = vec![0, 0, 100, 0, 1, 0, 0, 0, 1];
+                expected.extend([7; 100]);
+                assert_eq!(bytes, expected);
+                let read = pair.client_ports.read.take().unwrap();
+                pair.client
+                    .complete_read(read.complete(read_outcome))
+                    .unwrap();
+                if deliver_notices {
+                    pair.client.next(&mut pair.client_ports);
                 }
-            }]
-        );
-        assert_eq!(pair.client_ports.closed, [ConnectionResult::IoFailed]);
+                assert!(pair.client_ports.retired.is_empty());
+                pair.client
+                    .complete_write(write.complete(WriteOutcome::Written(written)))
+                    .unwrap();
+                assert!(settle(&mut pair.client, &mut pair.client_ports).is_empty());
+                assert_eq!(pair.client_ports.sent.len(), 1);
+                let receipt = &pair.client_ports.sent[0];
+                assert_eq!(receipt.buffer.as_ptr(), pointer);
+                assert_eq!(receipt.accepted, accepted);
+                assert_eq!(receipt.result.is_ok(), full);
+                assert_eq!(
+                    pair.client_ports.retired,
+                    [StreamResult {
+                        stream: id,
+                        outcome: if full {
+                            StreamOutcome::Complete
+                        } else {
+                            StreamOutcome::ConnectionFailed
+                        }
+                    }]
+                );
+                assert_eq!(pair.client_ports.closed, [closed]);
+            }
+        }
     }
 }
 

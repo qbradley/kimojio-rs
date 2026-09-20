@@ -4,6 +4,102 @@ mod support;
 use support::{MemoryPorts, Pair, request, response, step};
 
 #[test]
+fn unexpected_planner_failure_resets_all_stream_layers_before_retirement() {
+    let mut pair = Pair::new(Config::default());
+    let id = pair.client.request(&request(b"POST"), false).unwrap();
+    let sibling = pair.client.request(&request(b"GET"), true).unwrap();
+    pair.pump(32_768);
+    let buffer = vec![7; 2];
+    let pointer = buffer.as_ptr();
+    pair.client
+        .send(
+            pair.client_ports.permits.pop_front().unwrap(),
+            buffer,
+            false,
+        )
+        .unwrap();
+    let Protocol::Client(role) = &mut pair.client.0.protocol else {
+        unreachable!()
+    };
+    // Inject an inconsistent private limit to exercise the defensive planner path.
+    role.send_mut(id.0).unwrap().sent.limit = Some(1);
+    pair.client.next(&mut pair.client_ports);
+    let reset = pair.client_ports.write.take().unwrap();
+    let wire: Vec<_> = reset
+        .slices()
+        .iter()
+        .flat_map(|part| part.iter().copied())
+        .collect();
+    assert_eq!(wire, [0, 0, 4, 3, 0, 0, 0, 0, 1, 0, 0, 0, 2]);
+    assert!(pair.client_ports.retired.is_empty());
+    assert_eq!(pair.client_ports.sent.len(), 1);
+    assert_eq!(pair.client_ports.sent[0].buffer.as_ptr(), pointer);
+    assert_eq!(pair.client_ports.sent[0].accepted, 0);
+    assert_eq!(pair.client_ports.sent[0].result, Err(SendStop::Reset(2)));
+    pair.client
+        .complete_write(reset.complete(WriteOutcome::Written(wire.len())))
+        .unwrap();
+    pair.client.next(&mut pair.client_ports);
+    assert_eq!(
+        pair.client_ports.retired,
+        [StreamResult {
+            stream: id,
+            outcome: StreamOutcome::Reset(2)
+        }]
+    );
+    let Protocol::Client(role) = &pair.client.0.protocol else {
+        unreachable!()
+    };
+    assert!(!role.endpoint.streams.contains_key(&id.0));
+    assert!(role.is_reset_tolerant(id.0));
+
+    let mut encoder = crate::H2HeaderBlockEncoder::new();
+    let fields = [
+        H2HeaderField::new(b":status", b"200"),
+        H2HeaderField::new(b"x-shared", b"late"),
+    ];
+    let late = encoder.try_encode_fields(&fields).unwrap();
+    let next = encoder.try_encode_fields(&fields).unwrap();
+    assert_eq!(next, [0x88, 0xbe]);
+    for (stream, block) in [(id, late), (sibling, next)] {
+        let mut frame = vec![0, 0, block.len() as u8, 1, 5];
+        frame.extend(stream.0.to_be_bytes());
+        frame.extend(block);
+        pair.to_client.extend(frame);
+    }
+    let mut output = VecDeque::new();
+    for _ in 0..32 {
+        if !step(
+            &mut pair.client,
+            &mut pair.client_ports,
+            &mut pair.to_client,
+            &mut output,
+            32_768,
+        ) {
+            break;
+        }
+    }
+    assert!(pair.to_client.is_empty());
+    assert!(output.is_empty());
+    assert_eq!(pair.client_ports.heads.len(), 1);
+    assert_eq!(pair.client_ports.heads[0].0, sibling);
+    assert_eq!(
+        pair.client_ports.retired,
+        [
+            StreamResult {
+                stream: id,
+                outcome: StreamOutcome::Reset(2)
+            },
+            StreamResult {
+                stream: sibling,
+                outcome: StreamOutcome::Complete
+            },
+        ]
+    );
+    assert!(pair.client_ports.closed.is_empty());
+}
+
+#[test]
 fn stream_identifier_exhaustion_does_not_wrap_or_reuse() {
     let mut client = Client::<Vec<u8>>::new(Config::default(), Duration::ZERO).unwrap();
     let Protocol::Client(role) = &mut client.0.protocol else {
