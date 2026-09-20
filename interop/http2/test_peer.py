@@ -8,6 +8,26 @@ from peer import CreditSender, Peer, digest_for, exchange, handshake
 
 
 class CreditTests(unittest.TestCase):
+    def test_server_never_advertises_enable_push(self):
+        from socket_peer import Trace
+
+        trace = Trace()
+        trace.feed(Peer(client=False).take_wire())
+        self.assertTrue(trace.settings)
+        self.assertTrue(all(2 not in settings for settings in trace.settings))
+
+    def test_receive_window_is_in_first_settings_without_inflight_resize(self):
+        from socket_peer import Trace
+
+        for client in (True, False):
+            peer = Peer(client=client, stream_window=1024, connection_window=8 * 1024 * 1024)
+            trace = Trace(preface=client)
+            trace.feed(peer.take_wire())
+            self.assertEqual(len(trace.settings), 1)
+            self.assertEqual(trace.settings[0][4], 1024)
+            self.assertEqual(trace.updates[0], 8 * 1024 * 1024 - 65535)
+            self.assertEqual(peer.connection.inbound_flow_control_window, 8 * 1024 * 1024)
+
     def pair(self, window=65535):
         client, server = Peer(client=True, stream_window=window), Peer(client=False)
         handshake(client, server)
@@ -138,6 +158,45 @@ class CreditTests(unittest.TestCase):
             client.consume(1, 1)
         with self.assertRaises(ValueError):
             sender.drive(0)
+
+    def test_streaming_echo_waits_for_write_settlement_to_refund(self):
+        client, server = Peer(client=True), Peer(client=False, stream_window=1024)
+        handshake(client, server)
+        client.connection.send_headers(1, [
+            (b":method", b"POST"), (b":scheme", b"http"),
+            (b":authority", b"localhost"), (b":path", b"/echo"),
+        ])
+        exchange(client, server, consume=False)
+        sender = CreditSender(server)
+        sender.echo_response(1, None)
+        exchange(client, server, consume=False)
+        self.assertNotIn(1, client.received)
+        client.connection.send_data(1, b"\x01" * 512)
+        exchange(client, server, consume=False)
+        sender.feed(1, b"\x01" * 512, 512)
+        self.assertEqual(sender.drive(), 1)
+        self.assertEqual(server.received[1].unconsumed, 512)
+        self.assertEqual(sender.owned_bytes, 512)
+        exchange(client, server, consume=False)
+        self.assertEqual(client.received[1].payload, 512)
+        self.assertFalse(client.received[1].ended)
+        released = sender.releases.pop()
+        sender.settle(released)
+        with self.assertRaises(ValueError):
+            sender.settle(released)
+        self.assertEqual(server.received[1].unconsumed, 0)
+        self.assertEqual(sender.owned_bytes, 0)
+        exchange(client, server, consume=False)
+        self.assertEqual(client.window_updates[1], 512)
+        client.connection.send_data(1, b"", end_stream=True)
+        exchange(client, server, consume=False)
+        sender.feed(1, b"", 0)
+        sender.end(1)
+        self.assertEqual(sender.drive(), 1)
+        exchange(client, server, consume=False)
+        self.assertTrue(client.received[1].ended)
+        sender.settle(sender.releases.pop())
+        self.assertEqual(sender.owned_items, 0)
 
 
 if __name__ == "__main__":

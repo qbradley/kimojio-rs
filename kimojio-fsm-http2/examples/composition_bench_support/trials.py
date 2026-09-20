@@ -3,12 +3,14 @@
 import hashlib
 import itertools
 import json
+import os
 import pathlib
 import statistics
 import subprocess
 import sys
 
 binary = pathlib.Path(sys.argv[1]).resolve()
+assert "BENCH_DIAGNOSTICS" not in os.environ, "diagnostic instrumentation is not a timing workload"
 out = pathlib.Path(sys.argv[2])
 out.mkdir(parents=True, exist_ok=True)
 cases = list(itertools.product(["empty", "duplex", "32k", "1m", "paused"],

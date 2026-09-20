@@ -131,6 +131,12 @@ fn chunk_len(remaining: u64, max_bytes: usize, capacity: usize) -> usize {
     remaining.min(CHUNK.min(max_bytes).min(capacity) as u64) as usize
 }
 
+/// The fixture cancels an unfinished upload only after the complete 413 response.
+/// Other responses do not close the request send half.
+fn cancel_early_upload(status: Option<u16>, end: StreamOutcome, producer: &Producer) -> bool {
+    status == Some(413) && end == StreamOutcome::Complete && (!producer.stopped || producer.busy)
+}
+
 fn fields(values: &Fields) -> Vec<H2HeaderField> {
     values
         .iter()
@@ -454,6 +460,12 @@ fn client_loop(
                         index += 1;
                     }
                 }
+                if producers.get(&end.stream).is_some_and(|producer| {
+                    cancel_early_upload(report.status, end.outcome, producer)
+                }) && reset.insert(end.stream.get())
+                {
+                    checked(core.reset(end.stream, H2ErrorCode::Cancel))?;
+                }
                 if !shutdown
                     && input.actions.iter().any(|action| {
                         matches!(action, Action::GracefulClose {
@@ -744,5 +756,39 @@ mod tests {
         assert!(stream_error(StreamOutcome::Unprocessed).is_none());
         assert!(stream_error(StreamOutcome::Deadline).is_none());
         assert_eq!(stream_error(StreamOutcome::Reset(8)).unwrap().code, 8);
+    }
+
+    #[test]
+    fn early_upload_policy_requires_complete_413_and_an_unfinished_source() {
+        let mut producer = Producer::bytes(131071, Vec::new());
+        assert!(cancel_early_upload(
+            Some(413),
+            StreamOutcome::Complete,
+            &producer
+        ));
+        assert!(!cancel_early_upload(
+            Some(200),
+            StreamOutcome::Complete,
+            &producer
+        ));
+        assert!(!cancel_early_upload(
+            Some(413),
+            StreamOutcome::Reset(0),
+            &producer
+        ));
+        producer.remaining = 0;
+        producer.stopped = true;
+        producer.busy = true;
+        assert!(cancel_early_upload(
+            Some(413),
+            StreamOutcome::Complete,
+            &producer
+        ));
+        producer.busy = false;
+        assert!(!cancel_early_upload(
+            Some(413),
+            StreamOutcome::Complete,
+            &producer
+        ));
     }
 }

@@ -1,0 +1,51 @@
+8172604f7e5bb90d747e9a75e8176f79f4b43e8d
+BASE: 7d19cd8551191be92af945a452dd472fdf7d8440 (core34ee)
+BUILD: taskset -c 8-31 env CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http2-program/build-http2-performance-halfclosure CARGO_PROFILE_RELEASE_DEBUG=2 cargo build --release -p kimojio-fsm-http2 --example composition_bench
+TEST BUILD: same environment cargo test --release -p kimojio-fsm-http2 --example composition_bench
+DIAGNOSTIC: BENCH_DIAGNOSTICS=1, CPU8-31, not a timing workload
+RUSTFLAGS: unset
+rustc 1.98.1 (48a229cea 2026-09-01)
+binary: rustc
+commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985
+commit-date: 2026-09-01
+host: x86_64-unknown-linux-gnu
+release: 1.98.1
+LLVM version: 22.1.8
+ce256d33a97d05e65f93e4a0dbeb0bca01b3e11715892483fdf0a736cb23bb80  /workspace/kimojio-rs/target/http2-program/build-http2-performance-halfclosure/frozen-diagnostic/composition_bench
+5296fd277cd2e1052546e5ceedc4a99c05906665d9fe005f970147af4daa65db  /workspace/kimojio-rs/target/http2-program/build-http2-performance-halfclosure/frozen-diagnostic/composition_bench-tests
+7720879af251637f8518b6a8f6c6b4124a03a157631a96bc5152d63163d1396f  kimojio-fsm-http2/examples/composition_bench.rs
+84357abbe417cbe5120c355102fd9881d9f56e5936a1331a6d5d1d3471265ad5  kimojio-fsm-http2/examples/composition_bench_support/diagnostics.rs
+af6a369e0eeb926046518daf57a8de4f3ecaddf4a5f9ecc7146a7bf4ce9d868a  kimojio-fsm-http2/examples/composition_bench_support/mod.rs
+d1d9773acc5139ee281b25a4e547277aae0f5fe384d60b54cdc869ceb8791cce  kimojio-fsm-http2/src/api.rs
+387daa2c97ed7137d6e0fb1b39bef1f7b00896d09847ce059a06c66af9c738ae  kimojio-fsm-http2/src/engine.rs
+9e6f666efe0e440b83face2521a20cdaafd976cf266cffcec418af4d85b0066b  kimojio-fsm-http2/src/engine_tests.rs
+ed3608320faca2c22adee75b14eec0498dc02300e79ba297bdf3b0d91d0cc21e  kimojio-fsm-http2/src/error.rs
+32b206c4ef8ba7ee888722e381dc1afcd17ec98120839ca1340236c20289cbd3  kimojio-fsm-http2/src/head.rs
+5124b3df124b8cd46a67a35cccd3a1ef743b18e180bfff6905e3e14bf2033f9a  kimojio-fsm-http2/src/hpack.rs
+1525156cf8196f3c66ae0a00dea7e40aef66bfcff9adce91da0d7eef576cd029  kimojio-fsm-http2/src/hpack/static_table.rs
+0fee855c3832710ab8c8099a37d967e3231ff55594ffc45dca3890ee65600c6b  kimojio-fsm-http2/src/hpack/tests.rs
+e6b497d9d87fba07f0ccca3e1f911e06c6f06a9f5c93c9573cc3f7057c4f7d6f  kimojio-fsm-http2/src/http/detect.rs
+be8ee23260fb4026b35617fe70c113b1aeefe8703ab727670581ceec5d1dae85  kimojio-fsm-http2/src/http/mod.rs
+0761679a357f0b846f0e63824257a7b5606834c9ddc9da9147dcedee1b79cde2  kimojio-fsm-http2/src/http/probe.rs
+df960b3dc67b4a370ab0360ce82a70f6001893888858f47105308222566e4e4d  kimojio-fsm-http2/src/http/replay.rs
+86d2a79390d1be3cde85be3e746ea855566886655526e22c56a3070f615885bd  kimojio-fsm-http2/src/huffman_table.rs
+2c1539b173484b7919af5379af04a8f5d71ca89324dff55d048d4f9cef3c658d  kimojio-fsm-http2/src/lib.rs
+aeefe8f5e3b29146660a67bebf06993418537f823cbbbea9171d308415d587bc  kimojio-fsm-http2/src/limits.rs
+cd53f9eeba55faa5ecb3d77fd1ca3841622ca401b0182bcbd5e17ac8102c6bbb  kimojio-fsm-http2/src/server/error.rs
+7562e1a3d93ac41309f92099a6c057e0f9bb7bea08ada316e0f238f00ce53866  kimojio-fsm-http2/src/server/h2/client.rs
+5f41a355a9da863cba42d0a3d50ee626880fa202782f81126f5c62fc453a7040  kimojio-fsm-http2/src/server/h2/compact_headers.rs
+1b2fc30c6c3ce12d9d3a00a57f4f6c9fb3b3b75fdcf287565518442a8f0cab1d  kimojio-fsm-http2/src/server/h2/endpoint.rs
+4949adebc5d4c5eeb6d0054575c11fdb60c967cd53af7a2a13a1104af95e9971  kimojio-fsm-http2/src/server/h2/events.rs
+e342c170b0b4de41676c56a48dd6c1546bccdbe151245891e6cef8ab473afb94  kimojio-fsm-http2/src/server/h2/flow.rs
+34cd4aa990bab3829748baf73726e44a69eb2b0602468ca359100cdd05e29e2a  kimojio-fsm-http2/src/server/h2/headers.rs
+474afda49e7f38306947139eb30a7d32a05373ec4e70627415f53978c65832a1  kimojio-fsm-http2/src/server/h2/mod.rs
+c5b9b85c25aac5e508a4b5a36c0d38c21a76d492ee70501fc43f25bddafb24ba  kimojio-fsm-http2/src/server/h2/server.rs
+431275f00d5a377bd9aaa6ab4fc6d8ed8b5c012f0f97d95398784b7765e95163  kimojio-fsm-http2/src/server/h2/wire.rs
+65d7567d9ba29f5c122c9bb9cc86aaa5830b79bb52fb9689ef39344b1282cc1a  kimojio-fsm-http2/src/server/mod.rs
+594110713cbd77687469b227a15fa9c5bbc1327a2b6588f910b28e64ac46eb39  kimojio-fsm-http2/src/server/tests/h2_connection.rs
+2e4215333bd5b0777eb86f398841fa5ccd427416cc0b6b5de68ead9f0b972ce6  kimojio-fsm-http2/src/server/tests/h2_flow.rs
+9ab6dd04397721f22e62116af8451e428facaadd8bedd5bb422b65f33a2e2a3b  kimojio-fsm-http2/src/server/tests/h2_headers.rs
+d0ab8423084a7188325e4af4995c8d08a37921e6256b9eb9dd48b794691856d6  kimojio-fsm-http2/src/server/tests/h2_wire.rs
+8abae5f0e71aa4079fc8ede15c4b354957749596d3ace5ca776dd7166b5a887b  kimojio-fsm-http2/src/server/tests/mod.rs
+f03dbbc9594ecbad9f55e7893e67d420ea535ccff677b655ab0e794588498e11  kimojio-fsm-http2/src/server/tests/support.rs
+e08529393e590c505d4cce035cb91ca4ace0c58b9dcf9b50819c97cb899a2ba8  kimojio-fsm-http2/src/server/util.rs

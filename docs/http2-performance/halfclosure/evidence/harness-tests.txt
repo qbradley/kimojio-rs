@@ -1,0 +1,14 @@
+   Compiling kimojio-fsm-http2 v0.17.0 (/workspace/kimojio-rs/target/http2-program/worktrees/http2-performance/kimojio-fsm-http2)
+    Finished `release` profile [optimized + debuginfo] target(s) in 2.21s
+     Running unittests examples/composition_bench.rs (/workspace/kimojio-rs/target/http2-program/build-http2-performance-halfclosure/release/examples/composition_bench-4c6023a0f7e5c5a7)
+
+running 6 tests
+test composition_bench_support::diagnostics::tests::fragmented_preface_frames_and_goaway ... ok
+test tests::large_duplex_regression ... ignored, integrated 7d19cd85/core34ee: concurrent 1MiB duplex returns ResourceExhausted and GOAWAY11; strict repro
+test composition_bench_support::diagnostics::tests::first_failure_snapshot_and_history_are_bounded ... ok
+test tests::fragmented_duplex_regression ... ok
+test tests::concurrency_and_construction ... ok
+test tests::routes_and_fragmentation ... ok
+
+test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.33s
+

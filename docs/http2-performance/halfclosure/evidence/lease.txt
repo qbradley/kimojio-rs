@@ -1,0 +1,4 @@
+Audit timestamp: 2026-09-20T10:41:56Z
+CPU2 lease RELEASED: corrected-core resource-progress prerequisite failed.
+No CPU2 measurements or profiles occurred on this integration.
+Release notice delivered to core, interop, and fixture owners.
