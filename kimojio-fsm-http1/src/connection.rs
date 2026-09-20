@@ -714,6 +714,50 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         Ok(id)
     }
 
+    fn send_body_eager(&mut self, command: SendBody<W>) -> Result<BodyId, Rejected<SendBody<W>>> {
+        let eligible = matches!(self.tx.framing(), Framing::Fixed(left) if left == command.range.len() as u64)
+            && command.end
+            && self.write == IoState::Idle
+            && self.output.as_ref().is_some_and(|op| {
+                op.cursor == 0
+                    && matches!(
+                        op.storage,
+                        WriteStorage::Head {
+                            kind: MetadataKind::FinalHead,
+                            ..
+                        }
+                    )
+            });
+        if !eligible {
+            return Err(Rejected {
+                reason: RejectReason::NoCapacity,
+                value: command,
+            });
+        }
+        let head = self.output.take().unwrap();
+        let admitted = self.send_body(command);
+        self.output = Some(head);
+        let id = admitted?;
+        let WriteStorage::Head { bytes, .. } = self.output.take().unwrap().storage else {
+            unreachable!()
+        };
+        let (body_id, command) = self.pending_body.take().unwrap();
+        self.output = Some(WriteOp {
+            id: OperationId {
+                connection: self.id,
+                sequence: 0,
+                kind: OperationKind::Write,
+            },
+            storage: WriteStorage::HeadBody {
+                bytes,
+                command,
+                body_id,
+            },
+            cursor: 0,
+        });
+        Ok(id)
+    }
+
     fn finish_body(
         &mut self,
         exchange: ExchangeId,
@@ -871,6 +915,16 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             Ok(n) => {
                 op.cursor += n;
                 self.progress();
+                if !self.server
+                    && !self.lifecycle.is_closing()
+                    && !self.tx.stopped()
+                    && let WriteStorage::HeadBody { bytes, .. } = &op.storage
+                    && op.cursor >= bytes.len()
+                    && op.remaining() != 0
+                    && self.timers.upload_at.is_none()
+                {
+                    self.arm_upload();
+                }
             }
             Err(IoError {
                 kind: IoErrorKind::WouldBlock,
@@ -927,6 +981,13 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                     }
                 }
             }
+            WriteStorage::HeadBody {
+                bytes,
+                command,
+                body_id,
+            } => {
+                self.settle_body(command, body_id, op.cursor, bytes.len(), false, acceptance);
+            }
             WriteStorage::Body {
                 command,
                 body_id,
@@ -934,29 +995,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 chunked,
                 ..
             } => {
-                let accepted = op
-                    .cursor
-                    .saturating_sub(prefix_len)
-                    .min(command.range.len());
-                self.body_result = Some(BodySent {
-                    exchange: command.exchange,
-                    id: body_id,
-                    buffer: command.buffer,
-                    accepted,
-                    acceptance,
-                    result: self
-                        .failure
-                        .or(self.tx.stopped().then_some(Failure::EarlyResponse))
-                        .map_or(Ok(()), Err),
-                });
-                if self.tx.source_finished() && !self.lifecycle.is_closing() && !self.tx.stopped() {
-                    if chunked {
-                        self.outgoing_metadata_bytes += 5;
-                        self.queue_head(b"0\r\n\r\n".to_vec(), MetadataKind::BodyEnd);
-                    } else {
-                        self.settle_transmit();
-                    }
-                }
+                self.settle_body(command, body_id, op.cursor, prefix_len, chunked, acceptance);
             }
         }
         if self.tx.settled()
@@ -966,6 +1005,37 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 .is_err()
         {
             self.fail(Failure::SequenceExhausted);
+        }
+    }
+
+    fn settle_body(
+        &mut self,
+        command: SendBody<W>,
+        body_id: BodyId,
+        cursor: usize,
+        prefix_len: usize,
+        chunked: bool,
+        acceptance: Acceptance,
+    ) {
+        let accepted = cursor.saturating_sub(prefix_len).min(command.range.len());
+        self.body_result = Some(BodySent {
+            exchange: command.exchange,
+            id: body_id,
+            buffer: command.buffer,
+            accepted,
+            acceptance,
+            result: self
+                .failure
+                .or(self.tx.stopped().then_some(Failure::EarlyResponse))
+                .map_or(Ok(()), Err),
+        });
+        if self.tx.source_finished() && !self.lifecycle.is_closing() && !self.tx.stopped() {
+            if chunked {
+                self.outgoing_metadata_bytes += 5;
+                self.queue_head(b"0\r\n\r\n".to_vec(), MetadataKind::BodyEnd);
+            } else {
+                self.settle_transmit();
+            }
         }
     }
 
@@ -1609,6 +1679,19 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
     pub fn send_body(&mut self, command: SendBody<W>) -> Result<BodyId, Rejected<SendBody<W>>> {
         self.core.send_body(command)
     }
+    /// Attaches a complete fixed-length body to an unstarted final-head write.
+    ///
+    /// Call after `respond` or `respond_duplex`, before driving the machine.
+    /// The payload remains separately owned and is not copied into the head.
+    /// Admission ends the source, but storage returns only through `body_sent`.
+    /// A rejection returns the command unchanged for the normal demand path.
+    /// Suppressed, streaming, incomplete, or already-issued bodies cannot attach.
+    pub fn send_body_eager(
+        &mut self,
+        command: SendBody<W>,
+    ) -> Result<BodyId, Rejected<SendBody<W>>> {
+        self.core.send_body_eager(command)
+    }
     pub fn finish_body(
         &mut self,
         exchange: ExchangeId,
@@ -1720,6 +1803,19 @@ impl<B: Buffer, W: AsRef<[u8]>> Client<B, W> {
     }
     pub fn send_body(&mut self, command: SendBody<W>) -> Result<BodyId, Rejected<SendBody<W>>> {
         self.core.send_body(command)
+    }
+    /// Attaches a complete fixed-length body to an unstarted request-head write.
+    ///
+    /// Call after `request`, before driving the machine.
+    /// The payload remains separately owned and is not copied into the head.
+    /// Admission ends the source, but storage returns only through `body_sent`.
+    /// An unresolved `Expect: 100-continue` gate rejects eager admission.
+    /// A rejection returns the command unchanged for the normal demand path.
+    pub fn send_body_eager(
+        &mut self,
+        command: SendBody<W>,
+    ) -> Result<BodyId, Rejected<SendBody<W>>> {
+        self.core.send_body_eager(command)
     }
     pub fn finish_body(
         &mut self,
