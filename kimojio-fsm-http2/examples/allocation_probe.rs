@@ -51,5 +51,24 @@ mod tests {
                 assert!(result["allocation_counts"]["allocations"].as_u64().unwrap() > 0);
             }
         }
+        let retention = run(
+            &ALLOCATOR,
+            Workload {
+                mode: "direct",
+                case: Case::named("empty"),
+                concurrency: 1,
+                fragment: 65536,
+                batches: 10000,
+                phase: "retention",
+            },
+        );
+        let samples = retention["samples"].as_array().unwrap();
+        assert_eq!(samples.len(), 11);
+        assert_eq!(samples[0]["through_cohort"], 0);
+        assert_eq!(samples.last().unwrap()["retired_each_endpoint"], 10000);
+        assert_eq!(retention["exchanges"], 10000);
+        assert_eq!(retention["payload_bytes"], 1280000);
+        assert_eq!(retention["same_connection"], true);
+        assert_eq!(retention["shutdown_settled"], true);
     }
 }

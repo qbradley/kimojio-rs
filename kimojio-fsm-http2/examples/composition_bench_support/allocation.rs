@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "retention.rs"]
+mod retention;
+
 pub trait Meter {
     type Sample: serde::Serialize;
 
@@ -23,6 +26,9 @@ fn execute<C: Client, S: Server>(
     meter: &impl Meter,
     workload: Workload<'_>,
 ) -> serde_json::Value {
+    if workload.phase == "retention" {
+        return retention::execute(make, meter, workload);
+    }
     let Workload {
         mode,
         case,
@@ -83,8 +89,12 @@ pub fn run(meter: &impl Meter, workload: Workload<'_>) -> serde_json::Value {
     assert!(workload.concurrency > 0 && workload.concurrency <= 128);
     assert!(workload.fragment > 0 && workload.batches > 0);
     assert!(
-        workload.phase == "steady" || (workload.phase == "cold" && workload.batches == 1),
-        "cold measures construction and exactly one cohort"
+        workload.phase == "steady"
+            || (workload.phase == "cold" && workload.batches == 1)
+            || (workload.phase == "retention"
+                && workload.case.name == "empty"
+                && (10..=10000).contains(&workload.batches)),
+        "cold requires one cohort; retention requires 10..=10000 empty cohorts"
     );
     assert!(
         std::env::var_os("BENCH_DIAGNOSTICS").is_none(),
