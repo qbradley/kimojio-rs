@@ -4,6 +4,8 @@ use std::time::{Duration, Instant};
 
 mod diagnostics;
 use diagnostics::Diagnostics;
+#[cfg(test)]
+mod overlap;
 
 type Buffer = &'static [u8];
 static PAYLOAD: [u8; 32768] = [0x5a; 32768];
@@ -21,6 +23,8 @@ pub struct Case {
     request: usize,
     response: usize,
     paused: bool,
+    #[cfg(test)]
+    require_overlap: bool,
 }
 
 impl Case {
@@ -38,7 +42,16 @@ impl Case {
             request,
             response,
             paused,
+            #[cfg(test)]
+            require_overlap: false,
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_overlap_assertion(mut self) -> Self {
+        assert!(self.request > 0 && self.response > 0 && !self.paused);
+        self.require_overlap = true;
+        self
     }
 }
 
@@ -71,6 +84,8 @@ struct Ports {
     wire_bytes: usize,
     paused: bool,
     diagnostics: Option<Box<Diagnostics>>,
+    #[cfg(test)]
+    overlap: overlap::Observer,
 }
 
 impl Ports {
@@ -93,6 +108,11 @@ impl Ports {
             wire_bytes: 0,
             paused: case.paused && !server,
             diagnostics: Diagnostics::from_env(server),
+            #[cfg(test)]
+            overlap: overlap::Observer::new(
+                !server && case.require_overlap,
+                case.request * concurrency,
+            ),
         }
     }
     fn slot(&mut self, stream: h2::StreamId) -> &mut Slot {
@@ -106,6 +126,8 @@ impl Ports {
         None
     }
     fn begin(&mut self) {
+        #[cfg(test)]
+        self.overlap.begin_batch();
         for slot in &mut self.slots {
             *slot = Slot::default();
         }
@@ -154,6 +176,8 @@ impl h2::Ports<Buffer> for Ports {
     fn body(&mut self, op: h2::BodyOp) -> Option<()> {
         // Compare all bytes, not merely the length or a sampled byte.
         assert_eq!(op.bytes(), &PAYLOAD[..op.bytes().len()]);
+        #[cfg(test)]
+        self.overlap.response_delivered(op.bytes().len());
         if let Some(diagnostics) = &mut self.diagnostics {
             diagnostics.body_received(op.bytes().len());
         }
@@ -553,6 +577,8 @@ fn transfer(
     let length = write.remaining().min(read.buffer_mut().len()).min(fragment);
     assert!(length > 0);
     let mut cursor = 0;
+    #[cfg(test)]
+    let payload_accepted = length.saturating_sub(write.slices()[0].len());
     for slice in write.slices() {
         let count = slice.len().min(length - cursor);
         read.buffer_mut()[cursor..cursor + count].copy_from_slice(&slice[..count]);
@@ -566,6 +592,8 @@ fn transfer(
     from.core()
         .complete_write(write.complete(h2::WriteOutcome::Written(length)))
         .unwrap();
+    #[cfg(test)]
+    outgoing.overlap.transport_accepted(payload_accepted);
     to.read(read.complete(h2::ReadOutcome::Read(length)));
     true
 }
@@ -637,6 +665,8 @@ impl<C: Client, S: Server> Pair<C, S> {
                 self.diagnostic_failure();
             }
             if self.cp.retired == goal && self.sp.retired == goal {
+                #[cfg(test)]
+                self.cp.overlap.complete_batch();
                 return;
             }
             assert!(
@@ -722,6 +752,8 @@ impl<C: Client, S: Server> Pair<C, S> {
                 assert!(self.cp.write.is_none() && self.sp.write.is_none());
                 assert!(self.cp.alarms.is_empty() && self.sp.alarms.is_empty());
                 assert!(self.cp.cancels.is_empty() && self.sp.cancels.is_empty());
+                #[cfg(test)]
+                self.cp.overlap.assert_complete();
                 return;
             }
         }

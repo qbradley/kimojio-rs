@@ -51,4 +51,16 @@ mod tests {
     fn large_duplex_regression() {
         run("direct", Case::named("1m"), 8, 65536, 2, "steady");
     }
+
+    #[test]
+    fn duplex_payload_overlap_regression() {
+        run(
+            "direct",
+            Case::named("1m").with_overlap_assertion(),
+            8,
+            65536,
+            2,
+            "steady",
+        );
+    }
 }
