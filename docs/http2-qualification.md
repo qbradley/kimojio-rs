@@ -492,6 +492,23 @@ It is not yet implemented or accepted in this baseline.
 Four report-accounting and call-site attribution controls passed after parent integration.
 CPU2 was released after the baseline measurements.
 
+### Direct-read experiment
+
+Candidate `458b2bcd2f371b234087f04d2e96e19b61837390` remains separate from the accepted integration.
+It bypasses the internal buffer only when that buffer is empty and the caller offers at least 16 KiB.
+It preserves the existing 16 KiB native read limit.
+The existing native read helper retains the caller's destination until original-operation settlement.
+
+An earlier destination-sized variant reproduced `Reset(11)` in the paused-consumer regression.
+The core charges retained pages against the stream receive-capacity bound, so larger reads changed resource pressure.
+The candidate does not change protocol budgets or test expectations to hide that failure.
+The narrower experiment targets only the buffered copy, not the proposed frame-assembly reduction.
+
+The implementation owner passed focused runtime and HTTP/1/HTTP/2 suites in debug/release and default/all-feature configurations.
+Independent review, a rebuilt fixture, and paired measurements remain in progress.
+CPU2 is leased only to the measurement owner for this experiment.
+Acceptance requires a supported benefit without weaker ownership or resource behavior.
+
 ### Initial wrapper client fixture
 
 The client fixture uses the public native wrapper, not the direct core executor.
