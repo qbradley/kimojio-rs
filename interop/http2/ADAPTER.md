@@ -35,9 +35,11 @@ The request file contains:
 ```
 
 The fixture uses one connection for all requests.
-For upload scenarios, the fixture waits for the peer's initial SETTINGS before it starts body DATA.
+For these strict-success upload scenarios, the fixture waits for the peer's initial SETTINGS before it starts body DATA.
 It must not wait for acknowledgment of its own SETTINGS before it sends request headers.
 That distinction permits the legal pre-ACK push scenario.
+This upload gate is a test-scenario choice, not a production handshake requirement or a general Python-h2 requirement.
+It is not a recipe for raw-frame parsing in production wrappers.
 Request array order determines stream IDs: 1, 3, 5, and subsequent odd IDs.
 `concurrency` limits active requests, not lifetime requests.
 Upload bytes repeat the byte `stream_id % 251`.
@@ -47,6 +49,19 @@ The fixture must not retain the complete body.
 Values larger than 65,535 require an initial connection WINDOW_UPDATE.
 An absent key selects the fixture default without an override.
 Default cases use an empty `config` object and measure both actual balances.
+
+### Startup window changes
+
+A client can send request DATA before server SETTINGS, within its current credit.
+When an initial-window reduction affects DATA already in flight, RFC 9113 section 6.9.3 permits a stream FLOW_CONTROL_ERROR reset.
+That stream reset does not, by itself, require a connection error or GOAWAY.
+The sender must retain any negative window balance and remain blocked until new credit makes the balance positive.
+
+The normal flow cases avoid that startup race so they can require complete, successful streams.
+They still measure actual SETTINGS and connection credit.
+No ungated-startup case is currently part of these suites.
+Such a case must distinguish a permitted wire RST_STREAM(3) from successful, credit-compliant delivery.
+It must not label that permitted stream reset as a new protocol defect.
 
 The result file contains:
 
