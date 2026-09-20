@@ -1,0 +1,8 @@
+native-empty 3977 {'shared_or_unattributed': 3643, 'client': 218, 'server': 116}
+native-duplex1m 3501 {'shared_or_unattributed': 3310, 'client': 118, 'server': 73}
+generic-empty 4607 {'shared_or_unattributed': 4246, 'client': 217, 'server': 144}
+generic-duplex1m 4356 {'shared_or_unattributed': 4114, 'server': 115, 'client': 127}
+native-empty-fp 4082 {'server': 1734, 'shared_or_unattributed': 570, 'client': 1778}
+native-duplex1m-fp 3531 {'client': 1585, 'server': 1432, 'shared_or_unattributed': 514}
+generic-empty-fp64 5343 {'server': 2272, 'client': 2417, 'shared_or_unattributed': 654}
+generic-duplex1m-fp64-f499 2615 {'server': 1138, 'client': 1142, 'shared_or_unattributed': 335}

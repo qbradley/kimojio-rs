@@ -1,0 +1,212 @@
+[
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-duplex1m-fp-script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-duplex1m-fp.data",
+    "bytes": 151908120,
+    "sha256": "9f95e4564a0ba3297491dbd4a80cc2d61694857fe4adeab846b266e8251bb1b7"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-duplex1m-fp.raw.txt",
+    "bytes": 7236406,
+    "sha256": "611decbd1c3adca30c5e3e41011590479656214cb4dcb0f0072f6b23b8d92579"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-duplex1m-fp64-buffered.data",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-duplex1m-fp64-f499-script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-duplex1m-fp64-f499.data",
+    "bytes": 171390896,
+    "sha256": "d2f63981de79130b996855064bedf727989516eb2e234f5db7fef092d2e8f1cd"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-duplex1m-fp64-f499.raw.txt",
+    "bytes": 6560050,
+    "sha256": "1d4be70e83be35bf568dff516ea158d979375f235a0936522f821c14e3b78f0c"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-duplex1m-fp64-script-errors.txt",
+    "bytes": 75,
+    "sha256": "ca6424e356ff54181f5b98de9701ab0748dde53f877368f84f11540b3e2c440d"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-duplex1m-fp64.data",
+    "bytes": 318571352,
+    "sha256": "4db6f063903f9d483fdb990c69d8a10c6bb9906e159266085e2c5b3f1a0f32ea"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-duplex1m-fp64.raw.txt",
+    "bytes": 12073401,
+    "sha256": "41e42166a4b63b6de45fbf188855fd7916c7888998ce22d5bd79302e31837ee3"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-duplex1m-script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-duplex1m.data",
+    "bytes": 143851976,
+    "sha256": "139467428917aa51e1d75355fa5a48a316cb3fe705858c420de05178b0e1d9f3"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-duplex1m.raw.txt",
+    "bytes": 1979586,
+    "sha256": "67f49bb77726716cfa03460bc102ec1ab6ae767c1e268e44373925e60917682e"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-empty-fp-script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-empty-fp.data",
+    "bytes": 154351184,
+    "sha256": "34ed8f506c6bf25583910fa5e3177a343b61dfad18d637b5cf50d86fb8e6ee9f"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-empty-fp.raw.txt",
+    "bytes": 8007157,
+    "sha256": "92fcb438dee315515f148390c1e9fb4e07fcb354d57918bb67077672988e2577"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-empty-fp64-script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-empty-fp64.data",
+    "bytes": 350156576,
+    "sha256": "0f55e48c8066e5e79da220b2d21a184cf7e4f5dd3de8e2b251e30327a443ed4b"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-empty-fp64.raw.txt",
+    "bytes": 14115041,
+    "sha256": "65307beb8da4081fd70e416c70ef74a19705d687f3e8adf20cd5cffc78610735"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-empty-script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-empty.data",
+    "bytes": 152139056,
+    "sha256": "29a4b6417ec65c0095486f47f2cddb8cde99ddb5e6305804e4c0e56814a2ab1f"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/generic-empty.raw.txt",
+    "bytes": 2060641,
+    "sha256": "a2de075601d8eb8e46748bdef7adb341f67c2feed94ddaa1649b4f6736980b79"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-duplex1m-fp-script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-duplex1m-fp.data",
+    "bytes": 116611976,
+    "sha256": "65d317f3582f93aa1790f87ed0ce91ee428f9b32afe042c9968ba694423f50c2"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-duplex1m-fp.raw.txt",
+    "bytes": 10930287,
+    "sha256": "0dce7045a5ac386668595351dfd034751c46b90284dd3c690c7704d0677d9c86"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-duplex1m-script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-duplex1m.data",
+    "bytes": 115621376,
+    "sha256": "7632a26184fc978a38c9103a441799eb9c8153a8fce9a0757db059a1a46c00cc"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-duplex1m.raw.txt",
+    "bytes": 1434175,
+    "sha256": "e4f1edab3be7895c3e364f16ae99af0fc2840cd0e6b797912829c72595039d64"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-empty-deep.data",
+    "bytes": 67327680,
+    "sha256": "51c7fa06c98009612f58e6c4e8795bd569031be2c2e2d842a74f166bec0778dd"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-empty-deep.txt",
+    "bytes": 502077,
+    "sha256": "abbb6a43257e62a0b053efe06f50c6b2a11e2101ad898c7eb342083b1300b9ed"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-empty-fp-pilot.data",
+    "bytes": 34564408,
+    "sha256": "f16d3db2017a92fac4eceb271a3a9ef6bbad1d75df4462adad9bfd3e7601d1ba"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-empty-fp-pilot.txt",
+    "bytes": 4503078,
+    "sha256": "ef5537a21170809f27e71afef59a4768dc9b499e6e03580f0ddbb1aeafa12e09"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-empty-fp-script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-empty-fp.data",
+    "bytes": 134804160,
+    "sha256": "a858d232f3df573207757a7d6307fc07bd464a3cc88ac394cb1af873cc8028d2"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-empty-fp.raw.txt",
+    "bytes": 13060538,
+    "sha256": "384ee3e20a0fc7a100b2065ee97b33f66b5974a7d47b2f88c46282807b2caffc"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-empty.data",
+    "bytes": 131337376,
+    "sha256": "cfc694153f4174fdac51ad6cc52d4f9bb953b8a20da2f9fdf242b304319b80d6"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-empty.raw.txt",
+    "bytes": 1674276,
+    "sha256": "51186ba7b912e4e9f5bb57dabe0a17d563d7403a43469b471986f340ab00474a"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-empty.txt",
+    "bytes": 1888091,
+    "sha256": "5bcddf1ff2f09dd3c28095ebb4498b18eeea4b1a45a57449788766edfac1ee2e"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/runtime-frame-pointer-nm.txt",
+    "bytes": 719721,
+    "sha256": "13eb4a3476734304d82dc68b16a47d7e496ecbd6ad16f4ed1f85790f98e785ac"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/runtime-frame-pointer-objdump.txt",
+    "bytes": 21952639,
+    "sha256": "fd29dba768939916aadd8f2b596dfe54bc2f4131a3b7a2dc3eeaf5c331f57059"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/runtime-nm.txt",
+    "bytes": 720116,
+    "sha256": "02fd07747ddac388e9b27554825b80432e0d343a7d7ba9dc44bd4d95d349de29"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/runtime-objdump.txt",
+    "bytes": 21663252,
+    "sha256": "fcbef4689a38f996eb5869e8b4f6bbf8dc7900eb01f3030d5bf65b67e029a160"
+  }
+]

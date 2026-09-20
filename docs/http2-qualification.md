@@ -11,7 +11,7 @@ The native client and server have focused runtime coverage.
 The explicit wrapper interoperability profile passed for native and generic transports.
 Lifecycle evidence is recorded with explicit limits.
 The runtime scope-retention repair passed independent review, socket qualification, and bounded retention measurements.
-Statistical wrapper performance measurements are now in progress.
+The wrapper performance baseline is measured. A profile-directed copy-reduction experiment is in progress.
 
 The current socket qualification covers the direct HTTP/2 engine.
 Separate models cover the HTTP/1 plus HTTP/2 composite.
@@ -204,7 +204,7 @@ That review did not independently inject kernel cancellation races or close fail
 | Concurrent native server | Implemented with focused runtime tests |
 | Generic established transports | Implemented with focused runtime tests |
 | Independent wrapper socket fixture and peers | All 65 wrapper-profile cases passed per transport on `b3789dc6` |
-| Wrapper performance and final review | Retention gate passed; statistical measurements in progress |
+| Wrapper performance and final review | Measured baseline complete; first profile-directed experiment in progress |
 
 The current core socket results do not qualify the new wrapper.
 The wrapper needs its own fixture, peer runs, and source-specific measurements.
@@ -457,6 +457,40 @@ The all-feature workspace suite, excluding the runtime package, passed 794 tests
 The runtime package has the separate 183-test focused run recorded earlier.
 Filesystem-dependent and hardware-only runtime tests remain outside this regression run.
 Logs are in `target/http2-program/reports/runtime-a4-parent/`.
+
+### Measured wrapper baseline
+
+Report `8ba74acb59a607d30fae614f2866c475860ec4dc` records measurements of source `6e003746`, with runtime repair `a4af94fd`.
+The normal runtime binary SHA-256 is `0a362f7029ead27d25b1046df1ae0cdd4838b87f5cfc275c8f042096b7ec00ad`.
+The [measured report](http2-performance/wrapper/measured/) preserves all 80 cells, five alternating trial groups per cell, and separate allocation evidence.
+All workload assertions passed.
+The normal timing binary uses no allocation instrumentation.
+
+| Warmed workload, concurrency eight | Native wall time per exchange | Generic wall time per exchange |
+| --- | ---: | ---: |
+| Empty request, 128-byte response | 25.55 microseconds | 28.93 microseconds |
+| Fixed 4 KiB in each direction | 35.45 microseconds | 40.96 microseconds |
+| Gated 1 MiB duplex | 1,287.24 microseconds | 1,556.01 microseconds |
+
+These times are inverse throughput, not individual request latency or pure wrapper overhead.
+Both endpoints share a runtime thread and a local UNIX socketpair.
+The workload includes payload assertions, application tasks, protocol work, runtime work, and kernel transport.
+It excludes TCP connection establishment, TLS, DNS, and a remote network.
+The five-group intervals have limited precision, and the report retains visible host variability.
+
+The allocation probe reproduced the accepted long-connection plateau.
+Its largest observed requested-byte peak across 80 cells was 2,323,215 bytes.
+That is not RSS or a universal memory bound.
+The repair's allocation-call increase remains explicit, without an unsupported before/after CPU claim.
+
+Normal-binary profiles identified generic buffered-read and frame-assembly copies in 313 of 4,356 user-CPU samples.
+A separate frame-pointer build supports endpoint attribution but does not supply primary timings.
+Those samples justify an empty-buffer direct-read experiment, not a predicted 7.2 percent wall-time improvement.
+The experiment must preserve borrowed-buffer settlement, buffered tails, cancellation, deadlines, and all existing outcome contracts.
+It is not yet implemented or accepted in this baseline.
+
+Four report-accounting and call-site attribution controls passed after parent integration.
+CPU2 was released after the baseline measurements.
 
 ### Initial wrapper client fixture
 

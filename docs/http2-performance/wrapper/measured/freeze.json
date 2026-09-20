@@ -1,0 +1,24 @@
+{
+  "source_revision": "6e00374698d40dedebd33b87d3fd183ebb0e2682",
+  "runtime_fix": "a4af94fd97c986877f1ba23188d923dbe31fae2d",
+  "wrapper_source": "d8ca94b6c6ba8439085609b289ff1ddbd6698357",
+  "source_manifest_sha256": "67e6a7f31d52e8d7e62db319089d114ac6ecb83d66fbe586503278dc8be497a8",
+  "binaries": {
+    "runtime": {
+      "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/runtime",
+      "sha256": "0a362f7029ead27d25b1046df1ae0cdd4838b87f5cfc275c8f042096b7ec00ad"
+    },
+    "allocations": {
+      "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/allocations",
+      "sha256": "c62c7f0d2755f40824aa45850e5ffc00e9f1fc21e1ff841def21f400e16602c8"
+    }
+  },
+  "build_command": "CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance CARGO_PROFILE_RELEASE_DEBUG=2 taskset -c 8-31 cargo build --release -p kimojio-http2 --bench runtime --bench allocations",
+  "rustflags": "",
+  "encoded_rustflags": "",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "kernel": "Linux 6.6.137.mshv2-2.azl3 x86_64 GNU/Linux",
+  "timing_cpu": 2,
+  "build_cpus": "8-31",
+  "normal_allocator": "System/default; no CountingAllocator module in runtime executable"
+}

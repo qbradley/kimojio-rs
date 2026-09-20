@@ -1,0 +1,2 @@
+[ perf record: Woken up 257 times to write data ]
+[ perf record: Captured and wrote 64.193 MB /workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/profiles/native-empty-deep.data (1027 samples) ]

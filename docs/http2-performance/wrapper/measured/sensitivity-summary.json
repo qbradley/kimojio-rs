@@ -1,0 +1,194 @@
+[
+  {
+    "backend": "generic",
+    "variant": "owned-16k",
+    "wall_ns_per_exchange_median": 1671140.235,
+    "wall_ns_per_exchange_min": 1603110.91,
+    "wall_ns_per_exchange_max": 1706516.915,
+    "cpu_ns_per_exchange_median": 1670961.0,
+    "paired_ratio_to_static16k_median": 1.0300688386959511,
+    "paired_ratio_bootstrap95_low": 0.7556395894028123,
+    "paired_ratio_bootstrap95_high": 1.0503889351938365,
+    "wall_trial_values": [
+      1689932.945,
+      1706516.915,
+      1663557.66,
+      1671140.235,
+      1603110.91
+    ],
+    "paired_ratios": [
+      0.8544382775344502,
+      1.0503889351938365,
+      1.0321014489476197,
+      0.7556395894028123,
+      1.0300688386959511
+    ],
+    "measured_exchanges_per_trial": [
+      200,
+      200,
+      200,
+      200,
+      200
+    ]
+  },
+  {
+    "backend": "generic",
+    "variant": "static-16k",
+    "wall_ns_per_exchange_median": 1624652.41,
+    "wall_ns_per_exchange_min": 1556314.345,
+    "wall_ns_per_exchange_max": 2211557.28,
+    "cpu_ns_per_exchange_median": 1624606.5,
+    "paired_ratio_to_static16k_median": 1.0,
+    "paired_ratio_bootstrap95_low": 1.0,
+    "paired_ratio_bootstrap95_high": 1.0,
+    "wall_trial_values": [
+      1977829.165,
+      1624652.41,
+      1611816.03,
+      2211557.28,
+      1556314.345
+    ],
+    "paired_ratios": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "measured_exchanges_per_trial": [
+      200,
+      200,
+      200,
+      200,
+      200
+    ]
+  },
+  {
+    "backend": "generic",
+    "variant": "static-1k",
+    "wall_ns_per_exchange_median": 21297939.15625,
+    "wall_ns_per_exchange_min": 20713981.96875,
+    "wall_ns_per_exchange_max": 28871827.0,
+    "cpu_ns_per_exchange_median": 21297675.0,
+    "paired_ratio_to_static16k_median": 12.768672450219675,
+    "paired_ratio_bootstrap95_low": 10.473089554602659,
+    "paired_ratio_bootstrap95_high": 18.551410961903073,
+    "wall_trial_values": [
+      20713981.96875,
+      20744654.46875,
+      21297939.15625,
+      23623832.9375,
+      28871827.0
+    ],
+    "paired_ratios": [
+      10.473089554602659,
+      12.768672450219675,
+      13.213629074187828,
+      10.681990085058978,
+      18.551410961903073
+    ],
+    "measured_exchanges_per_trial": [
+      32,
+      32,
+      32,
+      32,
+      32
+    ]
+  },
+  {
+    "backend": "native",
+    "variant": "owned-16k",
+    "wall_ns_per_exchange_median": 1438878.425,
+    "wall_ns_per_exchange_min": 1351707.37,
+    "wall_ns_per_exchange_max": 1690233.715,
+    "cpu_ns_per_exchange_median": 1438862.0,
+    "paired_ratio_to_static16k_median": 1.0755860981869574,
+    "paired_ratio_bootstrap95_low": 1.030557632814879,
+    "paired_ratio_bootstrap95_high": 1.2528755048515214,
+    "wall_trial_values": [
+      1489393.055,
+      1690233.715,
+      1416536.665,
+      1438878.425,
+      1351707.37
+    ],
+    "paired_ratios": [
+      1.0797346821288574,
+      1.2528755048515214,
+      1.030557632814879,
+      1.0755860981869574,
+      1.05630072896739
+    ],
+    "measured_exchanges_per_trial": [
+      200,
+      200,
+      200,
+      200,
+      200
+    ]
+  },
+  {
+    "backend": "native",
+    "variant": "static-16k",
+    "wall_ns_per_exchange_median": 1349083.535,
+    "wall_ns_per_exchange_min": 1279661.495,
+    "wall_ns_per_exchange_max": 1379406.515,
+    "cpu_ns_per_exchange_median": 1349067.5,
+    "paired_ratio_to_static16k_median": 1.0,
+    "paired_ratio_bootstrap95_low": 1.0,
+    "paired_ratio_bootstrap95_high": 1.0,
+    "wall_trial_values": [
+      1379406.515,
+      1349083.535,
+      1374534.155,
+      1337762.2,
+      1279661.495
+    ],
+    "paired_ratios": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "measured_exchanges_per_trial": [
+      200,
+      200,
+      200,
+      200,
+      200
+    ]
+  },
+  {
+    "backend": "native",
+    "variant": "static-1k",
+    "wall_ns_per_exchange_median": 17342350.75,
+    "wall_ns_per_exchange_min": 16418227.9375,
+    "wall_ns_per_exchange_max": 20690941.34375,
+    "cpu_ns_per_exchange_median": 17342118.75,
+    "paired_ratio_to_static16k_median": 12.654975299286592,
+    "paired_ratio_bootstrap95_low": 12.401541474448898,
+    "paired_ratio_bootstrap95_high": 15.337034962590364,
+    "wall_trial_values": [
+      17456355.375,
+      20690941.34375,
+      17342350.75,
+      16590313.40625,
+      16418227.9375
+    ],
+    "paired_ratios": [
+      12.654975299286592,
+      15.337034962590364,
+      12.616893284838017,
+      12.401541474448898,
+      12.830133595213004
+    ],
+    "measured_exchanges_per_trial": [
+      32,
+      32,
+      32,
+      32,
+      32
+    ]
+  }
+]

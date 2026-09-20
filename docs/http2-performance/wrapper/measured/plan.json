@@ -1,0 +1,182 @@
+[
+  {
+    "label": "empty",
+    "case": "empty",
+    "bytes": 1048576,
+    "concurrency": 1,
+    "cohorts": 7850,
+    "warmup": 2048,
+    "cold_repeats": 31
+  },
+  {
+    "label": "empty",
+    "case": "empty",
+    "bytes": 1048576,
+    "concurrency": 8,
+    "cohorts": 1223,
+    "warmup": 256,
+    "cold_repeats": 21
+  },
+  {
+    "label": "empty",
+    "case": "empty",
+    "bytes": 1048576,
+    "concurrency": 32,
+    "cohorts": 321,
+    "warmup": 64,
+    "cold_repeats": 9
+  },
+  {
+    "label": "empty",
+    "case": "empty",
+    "bytes": 1048576,
+    "concurrency": 128,
+    "cohorts": 77,
+    "warmup": 32,
+    "cold_repeats": 3
+  },
+  {
+    "label": "fixed4k",
+    "case": "fixed",
+    "bytes": 1048576,
+    "concurrency": 1,
+    "cohorts": 5584,
+    "warmup": 2048,
+    "cold_repeats": 31
+  },
+  {
+    "label": "fixed4k",
+    "case": "fixed",
+    "bytes": 1048576,
+    "concurrency": 8,
+    "cohorts": 885,
+    "warmup": 256,
+    "cold_repeats": 15
+  },
+  {
+    "label": "fixed4k",
+    "case": "fixed",
+    "bytes": 1048576,
+    "concurrency": 32,
+    "cohorts": 234,
+    "warmup": 64,
+    "cold_repeats": 7
+  },
+  {
+    "label": "fixed4k",
+    "case": "fixed",
+    "bytes": 1048576,
+    "concurrency": 128,
+    "cohorts": 58,
+    "warmup": 32,
+    "cold_repeats": 2
+  },
+  {
+    "label": "stream32k",
+    "case": "stream",
+    "bytes": 32768,
+    "concurrency": 1,
+    "cohorts": 2998,
+    "warmup": 2048,
+    "cold_repeats": 30
+  },
+  {
+    "label": "stream32k",
+    "case": "stream",
+    "bytes": 32768,
+    "concurrency": 8,
+    "cohorts": 430,
+    "warmup": 256,
+    "cold_repeats": 11
+  },
+  {
+    "label": "stream32k",
+    "case": "stream",
+    "bytes": 32768,
+    "concurrency": 32,
+    "cohorts": 110,
+    "warmup": 64,
+    "cold_repeats": 4
+  },
+  {
+    "label": "stream32k",
+    "case": "stream",
+    "bytes": 32768,
+    "concurrency": 128,
+    "cohorts": 28,
+    "warmup": 32,
+    "cold_repeats": 1
+  },
+  {
+    "label": "stream1m",
+    "case": "stream",
+    "bytes": 1048576,
+    "concurrency": 1,
+    "cohorts": 173,
+    "warmup": 8,
+    "cold_repeats": 6
+  },
+  {
+    "label": "stream1m",
+    "case": "stream",
+    "bytes": 1048576,
+    "concurrency": 8,
+    "cohorts": 25,
+    "warmup": 8,
+    "cold_repeats": 1
+  },
+  {
+    "label": "stream1m",
+    "case": "stream",
+    "bytes": 1048576,
+    "concurrency": 32,
+    "cohorts": 7,
+    "warmup": 8,
+    "cold_repeats": 1
+  },
+  {
+    "label": "stream1m",
+    "case": "stream",
+    "bytes": 1048576,
+    "concurrency": 128,
+    "cohorts": 2,
+    "warmup": 8,
+    "cold_repeats": 1
+  },
+  {
+    "label": "duplex1m",
+    "case": "duplex",
+    "bytes": 1048576,
+    "concurrency": 1,
+    "cohorts": 174,
+    "warmup": 8,
+    "cold_repeats": 6
+  },
+  {
+    "label": "duplex1m",
+    "case": "duplex",
+    "bytes": 1048576,
+    "concurrency": 8,
+    "cohorts": 25,
+    "warmup": 8,
+    "cold_repeats": 1
+  },
+  {
+    "label": "duplex1m",
+    "case": "duplex",
+    "bytes": 1048576,
+    "concurrency": 32,
+    "cohorts": 7,
+    "warmup": 8,
+    "cold_repeats": 1
+  },
+  {
+    "label": "duplex1m",
+    "case": "duplex",
+    "bytes": 1048576,
+    "concurrency": 128,
+    "cohorts": 2,
+    "warmup": 8,
+    "cold_repeats": 1
+  }
+]

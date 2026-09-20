@@ -1,0 +1,9 @@
+{
+  "source_revision": "6e00374698d40dedebd33b87d3fd183ebb0e2682",
+  "binary": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/runtime-frame-pointer",
+  "sha256": "2290ec695935e26634997a979cb2cf77bcdb210364b65d25360bf6c9a03f32e2",
+  "rustflags": "-C force-frame-pointers=yes",
+  "profile": "release debug=2",
+  "purpose": "supplementary endpoint attribution after default DWARF unwinding failed; not primary timing evidence",
+  "build_command": "CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/frame-pointer CARGO_PROFILE_RELEASE_DEBUG=2 RUSTFLAGS=\"-C force-frame-pointers=yes\" taskset -c 8-31 cargo build --release -p kimojio-http2 --bench runtime --message-format=json"
+}

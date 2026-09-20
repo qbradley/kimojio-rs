@@ -1,0 +1,34 @@
+[
+  {
+    "case": "empty",
+    "backend": "native",
+    "user_seconds": 3.86106,
+    "system_seconds": 1.260346,
+    "user_fraction": 0.75390625152546,
+    "scope": "whole child process including runtime startup, warmup, close, report; not the primary measured window"
+  },
+  {
+    "case": "empty",
+    "backend": "generic",
+    "user_seconds": 4.845357,
+    "system_seconds": 1.21634,
+    "user_fraction": 0.799340019799736,
+    "scope": "whole child process including runtime startup, warmup, close, report; not the primary measured window"
+  },
+  {
+    "case": "duplex1m",
+    "backend": "native",
+    "user_seconds": 3.5340170000000004,
+    "system_seconds": 2.002877,
+    "user_fraction": 0.6382670500825914,
+    "scope": "whole child process including runtime startup, warmup, close, report; not the primary measured window"
+  },
+  {
+    "case": "duplex1m",
+    "backend": "generic",
+    "user_seconds": 4.436520999999999,
+    "system_seconds": 2.124249,
+    "user_fraction": 0.6762195595943769,
+    "scope": "whole child process including runtime startup, warmup, close, report; not the primary measured window"
+  }
+]

@@ -1,0 +1,198 @@
+0xfd77e
+kimojio_http2::driver::run_io::<kimojio_http2::io::NativeIo<kimojio_http2::io::read_once::{closure#0}, kimojio_http2::io::read_once, kimojio_http2::io::write_once::{closure#0}, kimojio_http2::io::write_once>>::{closure#0}
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio-http2/src/driver.rs:582
+kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}::<i32>
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio-http2/src/driver.rs:512
+<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio/src/operations.rs:1913
+<core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}> as core::ops::function::FnOnce<()>>::call_once
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:275
+std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}>, core::task::poll::Poll<core::result::Result<(), kimojio_http2::Error>>>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:576
+std::panicking::catch_unwind::<core::task::poll::Poll<core::result::Result<(), kimojio_http2::Error>>, core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}>>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:544
+std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}>, core::task::poll::Poll<core::result::Result<(), kimojio_http2::Error>>>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:359
+<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio/src/operations.rs:1913
+<kimojio::operations::IoScopeFuture<kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio/src/operations.rs:1975
+
+   fd751:	mov    rdi,rbx
+   fd754:	mov    rsi,r12
+   fd757:	call   b3e20 <_RINvMs8_NtCsdCAuUgzphct_17kimojio_fsm_http26engineINtB6_10ConnectionNtNtCs1SI3Cbo7jWe_13kimojio_http24body4DataE4nextINtNtB18_6driver5PortsINtNtB18_2io8NativeIoNCNvB2g_9read_once0B2A_NCNvB2g_10write_once0B2X_EEECsh9yz1NzX0YE_7runtime>
+   fd75c:	mov    BYTE PTR [r14+0x2715],0x1
+   fd764:	cmp    DWORD PTR [r14+0x26c8],0xffffffff
+   fd76c:	je     fd7fa <_RNvXsc_NtCscUOoqF9Cpfl_7kimojio10operationsINtB5_13IoScopeFutureINCNCNCNvNtCs1SI3Cbo7jWe_13kimojio_http26driver10run_native000lEENtNtNtCsgxBkk5gSRhY_4core6future6future6Future4pollCsh9yz1NzX0YE_7runtime+0xa9a>
+   fd772:	mov    BYTE PTR [r14+0x2715],0x0
+   fd77a:	movdqu xmm0,XMMWORD PTR [rbx]
+   fd77e:	movups xmm1,XMMWORD PTR [rbx+0x10]
+   fd782:	movups xmm2,XMMWORD PTR [rbx+0x20]
+   fd786:	movups xmm3,XMMWORD PTR [rbx+0x30]
+   fd78a:	movdqa XMMWORD PTR [rsp+0xe0],xmm0
+   fd793:	mov    rax,QWORD PTR [rbx+0x40]
+   fd797:	mov    QWORD PTR [rsp+0x120],rax
+   fd79f:	movaps XMMWORD PTR [rsp+0x110],xmm3
+   fd7a7:	movaps XMMWORD PTR [rsp+0x100],xmm2
+   fd7af:	movaps XMMWORD PTR [rsp+0xf0],xmm1
+   fd7b7:	cmp    DWORD PTR [rsp+0xe0],0x1
+   fd7bf:	jne    fd812 <_RNvXsc_NtCscUOoqF9Cpfl_7kimojio10operationsINtB5_13IoScopeFutureINCNCNCNvNtCs1SI3Cbo7jWe_13kimojio_http26driver10run_native000lEENtNtNtCsgxBkk5gSRhY_4core6future6future6Future4pollCsh9yz1NzX0YE_7runtime+0xab2>
+   fd7c1:	mov    rdx,QWORD PTR [r14+0x2050]
+   fd7c8:	test   rdx,rdx
+   fd7cb:	je     fe02e <_RNvXsc_NtCscUOoqF9Cpfl_7kimojio10operationsINtB5_13IoScopeFutureINCNCNCNvNtCs1SI3Cbo7jWe_13kimojio_http26driver10run_native000lEENtNtNtCsgxBkk5gSRhY_4core6future6future6Future4pollCsh9yz1NzX0YE_7runtime+0x12ce>
+
+0xfdc48
+kimojio_http2::driver::run_io::<kimojio_http2::io::NativeIo<kimojio_http2::io::read_once::{closure#0}, kimojio_http2::io::read_once, kimojio_http2::io::write_once::{closure#0}, kimojio_http2::io::write_once>>::{closure#0}
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio-http2/src/driver.rs:619
+kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}::<i32>
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio-http2/src/driver.rs:512
+<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio/src/operations.rs:1913
+<core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}> as core::ops::function::FnOnce<()>>::call_once
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:275
+std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}>, core::task::poll::Poll<core::result::Result<(), kimojio_http2::Error>>>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:576
+std::panicking::catch_unwind::<core::task::poll::Poll<core::result::Result<(), kimojio_http2::Error>>, core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}>>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:544
+std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}>, core::task::poll::Poll<core::result::Result<(), kimojio_http2::Error>>>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:359
+<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio/src/operations.rs:1913
+<kimojio::operations::IoScopeFuture<kimojio_http2::driver::run_native::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio/src/operations.rs:1975
+
+   fdc15:	mov    rdx,r13
+   fdc18:	call   f96a0 <_RNCNvMsc_NtCs1SI3Cbo7jWe_13kimojio_http26driverNtB7_5State5input0Csh9yz1NzX0YE_7runtime>
+   fdc1d:	movzx  ebp,BYTE PTR [rsp+0x340]
+   fdc25:	cmp    bpl,0xfe
+   fdc29:	je     fdcd3 <_RNvXsc_NtCscUOoqF9Cpfl_7kimojio10operationsINtB5_13IoScopeFutureINCNCNCNvNtCs1SI3Cbo7jWe_13kimojio_http26driver10run_native000lEENtNtNtCsgxBkk5gSRhY_4core6future6future6Future4pollCsh9yz1NzX0YE_7runtime+0xf73>
+   fdc2f:	movdqu xmm0,XMMWORD PTR [rsp+0x341]
+   fdc38:	movups xmm1,XMMWORD PTR [rsp+0x351]
+   fdc40:	movups xmm2,XMMWORD PTR [rsp+0x361]
+   fdc48:	movups xmm3,XMMWORD PTR [rsp+0x370]
+   fdc50:	movups XMMWORD PTR [rsp+0x28f],xmm3
+   fdc58:	movaps XMMWORD PTR [rsp+0x280],xmm2
+   fdc60:	movaps XMMWORD PTR [rsp+0x270],xmm1
+   fdc68:	movdqa XMMWORD PTR [rsp+0x260],xmm0
+   fdc71:	mov    rdi,rbx
+   fdc74:	call   f8050 <_RINvNtCsgxBkk5gSRhY_4core3ptr9drop_glueNCNvMsc_NtCs1SI3Cbo7jWe_13kimojio_http26driverNtBJ_5State5input0ECsh9yz1NzX0YE_7runtime>
+   fdc79:	cmp    bpl,0xff
+   fdc7d:	jne    fdd25 <_RNvXsc_NtCscUOoqF9Cpfl_7kimojio10operationsINtB5_13IoScopeFutureINCNCNCNvNtCs1SI3Cbo7jWe_13kimojio_http26driver10run_native000lEENtNtNtCsgxBkk5gSRhY_4core6future6future6Future4pollCsh9yz1NzX0YE_7runtime+0xfc5>
+   fdc83:	mov    rbp,r15
+   fdc86:	mov    rax,QWORD PTR [r14+0x26c0]
+   fdc8d:	inc    rax
+   fdc90:	mov    QWORD PTR [r14+0x26c0],rax
+   fdc97:	cmp    rax,QWORD PTR [r14+0x2578]
+
+0xdd4ad
+<kimojio::ring_future::RingFuture<usize, kimojio::ring_future::ResultToUsize>>::with_polled::<rustix_uring::squeue::Entry>
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio/src/ring_future.rs:99
+
+   dd485:	movups xmm0,XMMWORD PTR [rcx]
+   dd488:	movaps XMMWORD PTR [rsp+0x20],xmm0
+   dd48d:	mov    rcx,QWORD PTR [rcx+0x10]
+   dd491:	mov    QWORD PTR [rsp+0x30],rcx
+   dd496:	movzx  ecx,WORD PTR [r15+0x6c]
+   dd49b:	mov    BYTE PTR [rsp+0x38],0x0
+   dd4a0:	setne  BYTE PTR [rsp+0x39]
+   dd4a5:	movups xmm0,XMMWORD PTR [rsp+0x132]
+   dd4ad:	movups XMMWORD PTR [rsp+0x3a],xmm0
+   dd4b2:	movups xmm0,XMMWORD PTR [rsp+0x142]
+   dd4ba:	movups XMMWORD PTR [rsp+0x4a],xmm0
+   dd4bf:	movups xmm0,XMMWORD PTR [rsp+0x152]
+   dd4c7:	movups XMMWORD PTR [rsp+0x5a],xmm0
+   dd4cc:	movups xmm0,XMMWORD PTR [rsp+0x162]
+   dd4d4:	movups XMMWORD PTR [rsp+0x6a],xmm0
+   dd4d9:	mov    rdx,QWORD PTR [rsp+0x170]
+   dd4e1:	mov    QWORD PTR [rsp+0x78],rdx
+   dd4e6:	mov    QWORD PTR [rsp+0x80],0x0
+   dd4f2:	mov    QWORD PTR [rsp+0x88],rax
+   dd4fa:	mov    QWORD PTR [rsp+0x90],r13
+   dd502:	mov    DWORD PTR [rsp+0x98],r12d
+   dd50a:	mov    WORD PTR [rsp+0x9c],cx
+
+0xfb7d6
+kimojio_http2::driver::run_io::<kimojio_http2::io::stream::StreamIo<kimojio::async_stream::OwnedFdStreamRead, kimojio::async_stream::OwnedFdStreamWrite, kimojio_http2::io::stream::read_once<kimojio::async_stream::OwnedFdStreamRead>::{closure#0}, kimojio_http2::io::stream::read_once<kimojio::async_stream::OwnedFdStreamRead>, kimojio_http2::io::stream::write_once<kimojio::async_stream::OwnedFdStreamWrite>::{closure#0}, kimojio_http2::io::stream::write_once<kimojio::async_stream::OwnedFdStreamWrite>>>::{closure#0}
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio-http2/src/driver.rs:582
+kimojio_http2::driver::run_stream::<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}::<i32>
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio-http2/src/driver.rs:540
+<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_stream<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio/src/operations.rs:1913
+<core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_stream<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}> as core::ops::function::FnOnce<()>>::call_once
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:275
+std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_stream<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}>, core::task::poll::Poll<core::result::Result<(), kimojio_http2::Error>>>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:576
+std::panicking::catch_unwind::<core::task::poll::Poll<core::result::Result<(), kimojio_http2::Error>>, core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_stream<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}>>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:544
+std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_stream<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}>, core::task::poll::Poll<core::result::Result<(), kimojio_http2::Error>>>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:359
+<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_stream<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio/src/operations.rs:1913
+<kimojio::operations::IoScopeFuture<kimojio_http2::driver::run_stream<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio/src/operations.rs:1975
+
+   fb7a9:	mov    rdi,rbx
+   fb7ac:	mov    rsi,r12
+   fb7af:	call   b6e60 <_RINvMs8_NtCsdCAuUgzphct_17kimojio_fsm_http26engineINtB6_10ConnectionNtNtCs1SI3Cbo7jWe_13kimojio_http24body4DataE4nextINtNtB18_6driver5PortsINtNtNtB18_2io6stream8StreamIoNtNtCscUOoqF9Cpfl_7kimojio12async_stream17OwnedFdStreamReadNtB2J_18OwnedFdStreamWriteNCINvB2g_9read_onceB2H_E0B46_NCINvB2g_10write_onceB3E_E0B4z_EEECsh9yz1NzX0YE_7runtime>
+   fb7b4:	mov    BYTE PTR [r14+0x2735],0x1
+   fb7bc:	cmp    DWORD PTR [r14+0x26e8],0xffffffff
+   fb7c4:	je     fb852 <_RNvXsc_NtCscUOoqF9Cpfl_7kimojio10operationsINtB5_13IoScopeFutureINCNCNCINvNtCs1SI3Cbo7jWe_13kimojio_http26driver10run_streamNtNtB7_12async_stream13OwnedFdStreamE000lEENtNtNtCsgxBkk5gSRhY_4core6future6future6Future4pollCsh9yz1NzX0YE_7runtime+0xc82>
+   fb7ca:	mov    BYTE PTR [r14+0x2735],0x0
+   fb7d2:	movdqu xmm0,XMMWORD PTR [rbx]
+   fb7d6:	movups xmm1,XMMWORD PTR [rbx+0x10]
+   fb7da:	movups xmm2,XMMWORD PTR [rbx+0x20]
+   fb7de:	movups xmm3,XMMWORD PTR [rbx+0x30]
+   fb7e2:	movdqa XMMWORD PTR [rsp+0x150],xmm0
+   fb7eb:	mov    rax,QWORD PTR [rbx+0x40]
+   fb7ef:	mov    QWORD PTR [rsp+0x190],rax
+   fb7f7:	movaps XMMWORD PTR [rsp+0x180],xmm3
+   fb7ff:	movaps XMMWORD PTR [rsp+0x170],xmm2
+   fb807:	movaps XMMWORD PTR [rsp+0x160],xmm1
+   fb80f:	cmp    DWORD PTR [rsp+0x150],0x1
+   fb817:	jne    fb86a <_RNvXsc_NtCscUOoqF9Cpfl_7kimojio10operationsINtB5_13IoScopeFutureINCNCNCINvNtCs1SI3Cbo7jWe_13kimojio_http26driver10run_streamNtNtB7_12async_stream13OwnedFdStreamE000lEENtNtNtCsgxBkk5gSRhY_4core6future6future6Future4pollCsh9yz1NzX0YE_7runtime+0xc9a>
+   fb819:	mov    rdx,QWORD PTR [r14+0x2070]
+   fb820:	test   rdx,rdx
+   fb823:	je     fc15e <_RNvXsc_NtCscUOoqF9Cpfl_7kimojio10operationsINtB5_13IoScopeFutureINCNCNCINvNtCs1SI3Cbo7jWe_13kimojio_http26driver10run_streamNtNtB7_12async_stream13OwnedFdStreamE000lEENtNtNtCsgxBkk5gSRhY_4core6future6future6Future4pollCsh9yz1NzX0YE_7runtime+0x158e>
+
+0xfbc99
+kimojio_http2::driver::run_io::<kimojio_http2::io::stream::StreamIo<kimojio::async_stream::OwnedFdStreamRead, kimojio::async_stream::OwnedFdStreamWrite, kimojio_http2::io::stream::read_once<kimojio::async_stream::OwnedFdStreamRead>::{closure#0}, kimojio_http2::io::stream::read_once<kimojio::async_stream::OwnedFdStreamRead>, kimojio_http2::io::stream::write_once<kimojio::async_stream::OwnedFdStreamWrite>::{closure#0}, kimojio_http2::io::stream::write_once<kimojio::async_stream::OwnedFdStreamWrite>>>::{closure#0}
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio-http2/src/driver.rs:619
+kimojio_http2::driver::run_stream::<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}::<i32>
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio-http2/src/driver.rs:540
+<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_stream<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio/src/operations.rs:1913
+<core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_stream<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}> as core::ops::function::FnOnce<()>>::call_once
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:275
+std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_stream<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}>, core::task::poll::Poll<core::result::Result<(), kimojio_http2::Error>>>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:576
+std::panicking::catch_unwind::<core::task::poll::Poll<core::result::Result<(), kimojio_http2::Error>>, core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_stream<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}>>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:544
+std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_stream<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll::{closure#0}>, core::task::poll::Poll<core::result::Result<(), kimojio_http2::Error>>>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:359
+<kimojio::operations::CatchUnwindFuture<kimojio_http2::driver::run_stream<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio/src/operations.rs:1913
+<kimojio::operations::IoScopeFuture<kimojio_http2::driver::run_stream<kimojio::async_stream::OwnedFdStream>::{closure#0}::{closure#0}::{closure#0}<i32>> as core::future::future::Future>::poll
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio/src/operations.rs:1975
+
+   fbc64:	mov    rdx,QWORD PTR [rsp+0x20]
+   fbc69:	call   f96a0 <_RNCNvMsc_NtCs1SI3Cbo7jWe_13kimojio_http26driverNtB7_5State5input0Csh9yz1NzX0YE_7runtime>
+   fbc6e:	movzx  ebp,BYTE PTR [rsp+0x310]
+   fbc76:	cmp    bpl,0xfe
+   fbc7a:	je     fbd0a <_RNvXsc_NtCscUOoqF9Cpfl_7kimojio10operationsINtB5_13IoScopeFutureINCNCNCINvNtCs1SI3Cbo7jWe_13kimojio_http26driver10run_streamNtNtB7_12async_stream13OwnedFdStreamE000lEENtNtNtCsgxBkk5gSRhY_4core6future6future6Future4pollCsh9yz1NzX0YE_7runtime+0x113a>
+   fbc80:	movdqu xmm0,XMMWORD PTR [rsp+0x311]
+   fbc89:	movups xmm1,XMMWORD PTR [rsp+0x321]
+   fbc91:	movups xmm2,XMMWORD PTR [rsp+0x331]
+   fbc99:	movups xmm3,XMMWORD PTR [rsp+0x340]
+   fbca1:	movups XMMWORD PTR [rsp+0x26f],xmm3
+   fbca9:	movaps XMMWORD PTR [rsp+0x260],xmm2
+   fbcb1:	movaps XMMWORD PTR [rsp+0x250],xmm1
+   fbcb9:	movdqa XMMWORD PTR [rsp+0x240],xmm0
+   fbcc2:	mov    rdi,rbx
+   fbcc5:	call   f8050 <_RINvNtCsgxBkk5gSRhY_4core3ptr9drop_glueNCNvMsc_NtCs1SI3Cbo7jWe_13kimojio_http26driverNtBJ_5State5input0ECsh9yz1NzX0YE_7runtime>
+   fbcca:	cmp    bpl,0xff
+   fbcce:	jne    fbd68 <_RNvXsc_NtCscUOoqF9Cpfl_7kimojio10operationsINtB5_13IoScopeFutureINCNCNCINvNtCs1SI3Cbo7jWe_13kimojio_http26driver10run_streamNtNtB7_12async_stream13OwnedFdStreamE000lEENtNtNtCsgxBkk5gSRhY_4core6future6future6Future4pollCsh9yz1NzX0YE_7runtime+0x1198>
+   fbcd4:	mov    rax,QWORD PTR [r14+0x26e0]
+   fbcdb:	inc    rax
+   fbcde:	mov    QWORD PTR [r14+0x26e0],rax
+   fbce5:	cmp    rax,QWORD PTR [r14+0x2598]
+   fbcec:	jb     fb6ab <_RNvXsc_NtCscUOoqF9Cpfl_7kimojio10operationsINtB5_13IoScopeFutureINCNCNCINvNtCs1SI3Cbo7jWe_13kimojio_http26driver10run_streamNtNtB7_12async_stream13OwnedFdStreamE000lEENtNtNtCsgxBkk5gSRhY_4core6future6future6Future4pollCsh9yz1NzX0YE_7runtime+0xadb>
