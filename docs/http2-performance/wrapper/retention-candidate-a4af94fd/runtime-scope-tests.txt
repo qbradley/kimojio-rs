@@ -1,0 +1,64 @@
+   Compiling serde_core v1.0.228
+   Compiling zerocopy v0.8.52
+   Compiling serde v1.0.228
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v2.0.1
+   Compiling anstyle v1.0.14
+   Compiling ciborium-io v0.2.2
+   Compiling clap_lex v1.1.0
+   Compiling regex-syntax v0.8.11
+   Compiling num-traits v0.2.19
+   Compiling either v1.16.0
+   Compiling cast v0.3.0
+   Compiling same-file v1.0.6
+   Compiling oorandom v11.1.5
+   Compiling fastrand v2.4.1
+   Compiling once_cell v1.21.4
+   Compiling anes v0.1.6
+   Compiling page_size v0.6.0
+   Compiling walkdir v2.5.0
+   Compiling cc v1.2.64
+   Compiling clap_builder v4.6.0
+   Compiling tempfile v3.27.0
+   Compiling itertools v0.13.0
+   Compiling alloca v0.4.0
+   Compiling regex-automata v0.4.14
+   Compiling criterion-plot v0.8.2
+   Compiling clap v4.6.1
+   Compiling serde_json v1.0.150
+   Compiling regex v1.12.4
+   Compiling tinytemplate v1.2.1
+   Compiling half v2.7.1
+   Compiling ciborium-ll v0.2.2
+   Compiling ciborium v0.2.2
+   Compiling criterion v0.8.2
+   Compiling kimojio v0.17.0 (/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio)
+    Finished `release` profile [optimized + debuginfo] target(s) in 34.50s
+     Running unittests src/lib.rs (/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/release/deps/kimojio-e31c8be270f30949)
+
+running 22 tests
+test ring_future::test::io_scope_acknowledgement_owner_prevents_reuse_in_both_settlement_orders ... ok
+test operations::test::test_io_scope_futures_unordered_sibling_connections ... ok
+test operations::test::test_io_scope_does_not_cancel_sibling_future ... ok
+test ring_future::test::io_scope_drop_settles_borrowed_storage_with_wrapped_waker ... ok
+test operations::test::test_cancel_wait_with_io_scope ... ok
+test task::io_scope::tests::old_scope_cancellation_does_not_reach_a_retried_wait_generation ... ok
+test operations::test::test_io_scope_normal_futures_unordered_wait ... ok
+test operations::test::test_io_scope_drop_futures_unordered_wait ... ok
+test operations::test::test_io_scope_cancel_futures_unordered_wait ... ok
+test operations::test::test_cancel_sleep_with_io_scope ... ok
+test task::io_scope::tests::repeated_pending_polls_deduplicate_without_forgetting_woken_waits ... ok
+test operations::test::test_nested_io_scope_wait ... ok
+test task::io_scope::tests::scope_wait_and_io_wakers_can_reenter_task_state_and_registry ... ok
+test operations::test::test_nested_io_scope ... ok
+test ring_future::test::io_scope_cancel_request_keeps_submitted_original_registered ... ok
+test ring_future::test::io_scope_panic_settles_borrowed_storage_before_unwinding ... ok
+test operations::test::test_nested_io_scope_preserves_outer_wait ... ok
+test task::io_scope::tests::long_scope_retires_ready_and_dropped_wait_generations ... ok
+test operations::test::test_io_scope_exit_futures_unordered_wait ... ok
+test ring_future::test::io_scope_owned_completion_resources_drop_outside_task_state_on_reuse ... ok
+test task::io_scope::tests::scope_native_waker_can_drop_a_completed_task_result_reentrantly ... ok
+test task::io_scope::tests::long_scope_retires_completed_io_and_shrinks_concurrency_slack ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 243 filtered out; finished in 0.04s
+

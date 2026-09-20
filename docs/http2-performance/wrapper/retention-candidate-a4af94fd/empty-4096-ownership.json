@@ -1,0 +1,802 @@
+[
+  {
+    "backend": "native",
+    "label": "pre_runtime",
+    "cohort_field": 0,
+    "allocations": 3,
+    "reallocations": 0,
+    "deallocations": 0,
+    "live": 710,
+    "groups": {}
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 1,
+    "allocations": 1050,
+    "reallocations": 18,
+    "deallocations": 884,
+    "live": 205322,
+    "groups": {
+      "runtime": {
+        "live_bytes": 37780,
+        "live_objects": 44,
+        "allocations": 489,
+        "reallocations": 2,
+        "deallocations": 445
+      },
+      "harness": {
+        "live_bytes": 3741,
+        "live_objects": 35,
+        "allocations": 97,
+        "reallocations": 0,
+        "deallocations": 62
+      },
+      "wrapper": {
+        "live_bytes": 44380,
+        "live_objects": 24,
+        "allocations": 340,
+        "reallocations": 0,
+        "deallocations": 316
+      },
+      "core/protocol": {
+        "live_bytes": 118873,
+        "live_objects": 61,
+        "allocations": 121,
+        "reallocations": 16,
+        "deallocations": 60
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 2,
+    "allocations": 1849,
+    "reallocations": 20,
+    "deallocations": 1683,
+    "live": 205674,
+    "groups": {
+      "runtime": {
+        "live_bytes": 37780,
+        "live_objects": 44,
+        "allocations": 909,
+        "reallocations": 2,
+        "deallocations": 865
+      },
+      "harness": {
+        "live_bytes": 3741,
+        "live_objects": 35,
+        "allocations": 130,
+        "reallocations": 0,
+        "deallocations": 95
+      },
+      "wrapper": {
+        "live_bytes": 44380,
+        "live_objects": 24,
+        "allocations": 652,
+        "reallocations": 0,
+        "deallocations": 628
+      },
+      "core/protocol": {
+        "live_bytes": 119225,
+        "live_objects": 61,
+        "allocations": 155,
+        "reallocations": 18,
+        "deallocations": 94
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 8,
+    "allocations": 6674,
+    "reallocations": 25,
+    "deallocations": 6507,
+    "live": 207882,
+    "groups": {
+      "runtime": {
+        "live_bytes": 37876,
+        "live_objects": 45,
+        "allocations": 3474,
+        "reallocations": 3,
+        "deallocations": 3429
+      },
+      "harness": {
+        "live_bytes": 3741,
+        "live_objects": 35,
+        "allocations": 328,
+        "reallocations": 0,
+        "deallocations": 293
+      },
+      "wrapper": {
+        "live_bytes": 44380,
+        "live_objects": 24,
+        "allocations": 2524,
+        "reallocations": 0,
+        "deallocations": 2500
+      },
+      "core/protocol": {
+        "live_bytes": 121337,
+        "live_objects": 61,
+        "allocations": 345,
+        "reallocations": 22,
+        "deallocations": 284
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 32,
+    "allocations": 25775,
+    "reallocations": 29,
+    "deallocations": 25608,
+    "live": 216330,
+    "groups": {
+      "runtime": {
+        "live_bytes": 37876,
+        "live_objects": 45,
+        "allocations": 13544,
+        "reallocations": 3,
+        "deallocations": 13499
+      },
+      "harness": {
+        "live_bytes": 3741,
+        "live_objects": 35,
+        "allocations": 1120,
+        "reallocations": 0,
+        "deallocations": 1085
+      },
+      "wrapper": {
+        "live_bytes": 44380,
+        "live_objects": 24,
+        "allocations": 10012,
+        "reallocations": 0,
+        "deallocations": 9988
+      },
+      "core/protocol": {
+        "live_bytes": 129785,
+        "live_objects": 61,
+        "allocations": 1096,
+        "reallocations": 26,
+        "deallocations": 1035
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 128,
+    "allocations": 102191,
+    "reallocations": 33,
+    "deallocations": 102024,
+    "live": 250122,
+    "groups": {
+      "runtime": {
+        "live_bytes": 37876,
+        "live_objects": 45,
+        "allocations": 53858,
+        "reallocations": 3,
+        "deallocations": 53813
+      },
+      "harness": {
+        "live_bytes": 3741,
+        "live_objects": 35,
+        "allocations": 4288,
+        "reallocations": 0,
+        "deallocations": 4253
+      },
+      "wrapper": {
+        "live_bytes": 44380,
+        "live_objects": 24,
+        "allocations": 39964,
+        "reallocations": 0,
+        "deallocations": 39940
+      },
+      "core/protocol": {
+        "live_bytes": 163577,
+        "live_objects": 61,
+        "allocations": 4078,
+        "reallocations": 30,
+        "deallocations": 4017
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 256,
+    "allocations": 204024,
+    "reallocations": 35,
+    "deallocations": 203857,
+    "live": 258314,
+    "groups": {
+      "runtime": {
+        "live_bytes": 37876,
+        "live_objects": 45,
+        "allocations": 107560,
+        "reallocations": 3,
+        "deallocations": 107515
+      },
+      "harness": {
+        "live_bytes": 3741,
+        "live_objects": 35,
+        "allocations": 8512,
+        "reallocations": 0,
+        "deallocations": 8477
+      },
+      "wrapper": {
+        "live_bytes": 44380,
+        "live_objects": 24,
+        "allocations": 79900,
+        "reallocations": 0,
+        "deallocations": 79876
+      },
+      "core/protocol": {
+        "live_bytes": 171769,
+        "live_objects": 61,
+        "allocations": 8049,
+        "reallocations": 32,
+        "deallocations": 7988
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 1024,
+    "allocations": 814956,
+    "reallocations": 35,
+    "deallocations": 814789,
+    "live": 258314,
+    "groups": {
+      "runtime": {
+        "live_bytes": 37876,
+        "live_objects": 45,
+        "allocations": 429712,
+        "reallocations": 3,
+        "deallocations": 429667
+      },
+      "harness": {
+        "live_bytes": 3741,
+        "live_objects": 35,
+        "allocations": 33856,
+        "reallocations": 0,
+        "deallocations": 33821
+      },
+      "wrapper": {
+        "live_bytes": 44380,
+        "live_objects": 24,
+        "allocations": 319516,
+        "reallocations": 0,
+        "deallocations": 319492
+      },
+      "core/protocol": {
+        "live_bytes": 171769,
+        "live_objects": 61,
+        "allocations": 31869,
+        "reallocations": 32,
+        "deallocations": 31808
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 4096,
+    "allocations": 3258761,
+    "reallocations": 35,
+    "deallocations": 3258594,
+    "live": 258314,
+    "groups": {
+      "runtime": {
+        "live_bytes": 37876,
+        "live_objects": 45,
+        "allocations": 1718392,
+        "reallocations": 3,
+        "deallocations": 1718347
+      },
+      "harness": {
+        "live_bytes": 3741,
+        "live_objects": 35,
+        "allocations": 135232,
+        "reallocations": 0,
+        "deallocations": 135197
+      },
+      "wrapper": {
+        "live_bytes": 44380,
+        "live_objects": 24,
+        "allocations": 1277980,
+        "reallocations": 0,
+        "deallocations": 1277956
+      },
+      "core/protocol": {
+        "live_bytes": 171769,
+        "live_objects": 61,
+        "allocations": 127154,
+        "reallocations": 32,
+        "deallocations": 127093
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "post_driver_close",
+    "cohort_field": 32768,
+    "allocations": 3258858,
+    "reallocations": 38,
+    "deallocations": 3258793,
+    "live": 37971,
+    "groups": {
+      "runtime": {
+        "live_bytes": 33976,
+        "live_objects": 19,
+        "allocations": 1718416,
+        "reallocations": 3,
+        "deallocations": 1718397
+      },
+      "harness": {
+        "live_bytes": 3447,
+        "live_objects": 44,
+        "allocations": 135303,
+        "reallocations": 0,
+        "deallocations": 135259
+      },
+      "wrapper": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 1277980,
+        "reallocations": 0,
+        "deallocations": 1277980
+      },
+      "core/protocol": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 127156,
+        "reallocations": 35,
+        "deallocations": 127156
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "post_runtime_cleanup",
+    "cohort_field": 0,
+    "allocations": 3258940,
+    "reallocations": 38,
+    "deallocations": 3258937,
+    "live": 1572,
+    "groups": {
+      "runtime": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 1718417,
+        "reallocations": 3,
+        "deallocations": 1718417
+      },
+      "harness": {
+        "live_bytes": 1024,
+        "live_objects": 1,
+        "allocations": 135384,
+        "reallocations": 0,
+        "deallocations": 135383
+      },
+      "wrapper": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 1277980,
+        "reallocations": 0,
+        "deallocations": 1277980
+      },
+      "core/protocol": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 127156,
+        "reallocations": 35,
+        "deallocations": 127156
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "pre_runtime",
+    "cohort_field": 0,
+    "allocations": 3,
+    "reallocations": 0,
+    "deallocations": 0,
+    "live": 711,
+    "groups": {}
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 1,
+    "allocations": 1183,
+    "reallocations": 17,
+    "deallocations": 1009,
+    "live": 281667,
+    "groups": {
+      "runtime": {
+        "live_bytes": 38200,
+        "live_objects": 49,
+        "allocations": 620,
+        "reallocations": 1,
+        "deallocations": 571
+      },
+      "harness": {
+        "live_bytes": 3742,
+        "live_objects": 35,
+        "allocations": 97,
+        "reallocations": 0,
+        "deallocations": 62
+      },
+      "wrapper": {
+        "live_bytes": 124096,
+        "live_objects": 27,
+        "allocations": 343,
+        "reallocations": 0,
+        "deallocations": 316
+      },
+      "core/protocol": {
+        "live_bytes": 115081,
+        "live_objects": 61,
+        "allocations": 120,
+        "reallocations": 16,
+        "deallocations": 59
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 2,
+    "allocations": 2114,
+    "reallocations": 20,
+    "deallocations": 1940,
+    "live": 282051,
+    "groups": {
+      "runtime": {
+        "live_bytes": 38232,
+        "live_objects": 49,
+        "allocations": 1172,
+        "reallocations": 2,
+        "deallocations": 1123
+      },
+      "harness": {
+        "live_bytes": 3742,
+        "live_objects": 35,
+        "allocations": 130,
+        "reallocations": 0,
+        "deallocations": 95
+      },
+      "wrapper": {
+        "live_bytes": 124096,
+        "live_objects": 27,
+        "allocations": 655,
+        "reallocations": 0,
+        "deallocations": 628
+      },
+      "core/protocol": {
+        "live_bytes": 115433,
+        "live_objects": 61,
+        "allocations": 154,
+        "reallocations": 18,
+        "deallocations": 93
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 8,
+    "allocations": 7724,
+    "reallocations": 24,
+    "deallocations": 7550,
+    "live": 284163,
+    "groups": {
+      "runtime": {
+        "live_bytes": 38232,
+        "live_objects": 49,
+        "allocations": 4516,
+        "reallocations": 2,
+        "deallocations": 4467
+      },
+      "harness": {
+        "live_bytes": 3742,
+        "live_objects": 35,
+        "allocations": 328,
+        "reallocations": 0,
+        "deallocations": 293
+      },
+      "wrapper": {
+        "live_bytes": 124096,
+        "live_objects": 27,
+        "allocations": 2527,
+        "reallocations": 0,
+        "deallocations": 2500
+      },
+      "core/protocol": {
+        "live_bytes": 117545,
+        "live_objects": 61,
+        "allocations": 350,
+        "reallocations": 22,
+        "deallocations": 289
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 32,
+    "allocations": 30224,
+    "reallocations": 29,
+    "deallocations": 30050,
+    "live": 292675,
+    "groups": {
+      "runtime": {
+        "live_bytes": 38296,
+        "live_objects": 49,
+        "allocations": 17964,
+        "reallocations": 3,
+        "deallocations": 17915
+      },
+      "harness": {
+        "live_bytes": 3742,
+        "live_objects": 35,
+        "allocations": 1120,
+        "reallocations": 0,
+        "deallocations": 1085
+      },
+      "wrapper": {
+        "live_bytes": 124096,
+        "live_objects": 27,
+        "allocations": 10015,
+        "reallocations": 0,
+        "deallocations": 9988
+      },
+      "core/protocol": {
+        "live_bytes": 125993,
+        "live_objects": 61,
+        "allocations": 1122,
+        "reallocations": 26,
+        "deallocations": 1061
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 128,
+    "allocations": 119673,
+    "reallocations": 33,
+    "deallocations": 119499,
+    "live": 330259,
+    "groups": {
+      "runtime": {
+        "live_bytes": 38296,
+        "live_objects": 49,
+        "allocations": 71218,
+        "reallocations": 3,
+        "deallocations": 71169
+      },
+      "harness": {
+        "live_bytes": 3742,
+        "live_objects": 35,
+        "allocations": 4288,
+        "reallocations": 0,
+        "deallocations": 4253
+      },
+      "wrapper": {
+        "live_bytes": 124096,
+        "live_objects": 27,
+        "allocations": 39967,
+        "reallocations": 0,
+        "deallocations": 39940
+      },
+      "core/protocol": {
+        "live_bytes": 163577,
+        "live_objects": 61,
+        "allocations": 4197,
+        "reallocations": 30,
+        "deallocations": 4136
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 256,
+    "allocations": 238816,
+    "reallocations": 35,
+    "deallocations": 238642,
+    "live": 338451,
+    "groups": {
+      "runtime": {
+        "live_bytes": 38296,
+        "live_objects": 49,
+        "allocations": 142112,
+        "reallocations": 3,
+        "deallocations": 142063
+      },
+      "harness": {
+        "live_bytes": 3742,
+        "live_objects": 35,
+        "allocations": 8512,
+        "reallocations": 0,
+        "deallocations": 8477
+      },
+      "wrapper": {
+        "live_bytes": 124096,
+        "live_objects": 27,
+        "allocations": 79903,
+        "reallocations": 0,
+        "deallocations": 79876
+      },
+      "core/protocol": {
+        "live_bytes": 171769,
+        "live_objects": 61,
+        "allocations": 8286,
+        "reallocations": 32,
+        "deallocations": 8225
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 1024,
+    "allocations": 953691,
+    "reallocations": 35,
+    "deallocations": 953517,
+    "live": 338451,
+    "groups": {
+      "runtime": {
+        "live_bytes": 38296,
+        "live_objects": 49,
+        "allocations": 567494,
+        "reallocations": 3,
+        "deallocations": 567445
+      },
+      "harness": {
+        "live_bytes": 3742,
+        "live_objects": 35,
+        "allocations": 33856,
+        "reallocations": 0,
+        "deallocations": 33821
+      },
+      "wrapper": {
+        "live_bytes": 124096,
+        "live_objects": 27,
+        "allocations": 319519,
+        "reallocations": 0,
+        "deallocations": 319492
+      },
+      "core/protocol": {
+        "live_bytes": 171769,
+        "live_objects": 61,
+        "allocations": 32819,
+        "reallocations": 32,
+        "deallocations": 32758
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 4096,
+    "allocations": 3813227,
+    "reallocations": 35,
+    "deallocations": 3813053,
+    "live": 338451,
+    "groups": {
+      "runtime": {
+        "live_bytes": 38296,
+        "live_objects": 49,
+        "allocations": 2269056,
+        "reallocations": 3,
+        "deallocations": 2269007
+      },
+      "harness": {
+        "live_bytes": 3742,
+        "live_objects": 35,
+        "allocations": 135232,
+        "reallocations": 0,
+        "deallocations": 135197
+      },
+      "wrapper": {
+        "live_bytes": 124096,
+        "live_objects": 27,
+        "allocations": 1277983,
+        "reallocations": 0,
+        "deallocations": 1277956
+      },
+      "core/protocol": {
+        "live_bytes": 171769,
+        "live_objects": 61,
+        "allocations": 130953,
+        "reallocations": 32,
+        "deallocations": 130892
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "post_driver_close",
+    "cohort_field": 32768,
+    "allocations": 3813331,
+    "reallocations": 38,
+    "deallocations": 3813266,
+    "live": 37972,
+    "groups": {
+      "runtime": {
+        "live_bytes": 33976,
+        "live_objects": 19,
+        "allocations": 2269087,
+        "reallocations": 3,
+        "deallocations": 2269068
+      },
+      "harness": {
+        "live_bytes": 3448,
+        "live_objects": 44,
+        "allocations": 135303,
+        "reallocations": 0,
+        "deallocations": 135259
+      },
+      "wrapper": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 1277983,
+        "reallocations": 0,
+        "deallocations": 1277983
+      },
+      "core/protocol": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 130955,
+        "reallocations": 35,
+        "deallocations": 130955
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "post_runtime_cleanup",
+    "cohort_field": 0,
+    "allocations": 3813413,
+    "reallocations": 38,
+    "deallocations": 3813410,
+    "live": 1572,
+    "groups": {
+      "runtime": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 2269088,
+        "reallocations": 3,
+        "deallocations": 2269088
+      },
+      "harness": {
+        "live_bytes": 1024,
+        "live_objects": 1,
+        "allocations": 135384,
+        "reallocations": 0,
+        "deallocations": 135383
+      },
+      "wrapper": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 1277983,
+        "reallocations": 0,
+        "deallocations": 1277983
+      },
+      "core/protocol": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 130955,
+        "reallocations": 35,
+        "deallocations": 130955
+      }
+    }
+  }
+]

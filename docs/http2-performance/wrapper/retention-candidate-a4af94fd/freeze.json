@@ -1,0 +1,40 @@
+{
+  "candidate_runtime_fix": "a4af94fd97c986877f1ba23188d923dbe31fae2d",
+  "wrapper_revision": "d8ca94b6c6ba8439085609b289ff1ddbd6698357",
+  "baseline_report": "598dad5164c667fba4a50127b05a69c3227dcd6b",
+  "runtime_paths_identical_to_candidate": [
+    "kimojio/src/async_event.rs",
+    "kimojio/src/lib.rs",
+    "kimojio/src/operations.rs",
+    "kimojio/src/ring_future.rs",
+    "kimojio/src/runtime.rs",
+    "kimojio/src/task.rs",
+    "kimojio/src/task/io_scope.rs",
+    "kimojio/src/task/io_scope/tests.rs",
+    "kimojio/src/task_ref.rs"
+  ],
+  "wrapper_and_core_source_unchanged": true,
+  "review_status_at_measurement": "candidate, independent safety review pending",
+  "freezes": [
+    {
+      "binary": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/retention-candidate-752381ee/allocations",
+      "sha256": "ba2579a516e53c8c43e9ef438b15bd4b7eb00883a6d05cbc5d149e4f0c1dcc07",
+      "source_revision": "752381ee456e5f7f366c011bd2d19fbe7ca434c1",
+      "git_tree": "16e731f3720e31394462786a14596e4b44f975ca",
+      "source_manifest_sha256": "a1eaa602072363a4ce7a3138fa2339660ca2c2478793731af2ad05ed2d553990"
+    },
+    {
+      "binary": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/retention-empty-candidate/allocations",
+      "sha256": "c62c7f0d2755f40824aa45850e5ffc00e9f1fc21e1ff841def21f400e16602c8",
+      "source_revision": "d7df50032e0f757c31c6884d55308eed21209a62",
+      "git_tree": "75965e5f78582b3202e7372970e5f0477c2005a0",
+      "source_manifest_sha256": "67e6a7f31d52e8d7e62db319089d114ac6ecb83d66fbe586503278dc8be497a8"
+    }
+  ],
+  "build": "CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance CARGO_PROFILE_RELEASE_DEBUG=2 taskset -c 8-31 cargo build --release -p kimojio-http2 --bench allocations",
+  "rustflags": "",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "all_execution_cpus": "8-31",
+  "cpu2_lease": false,
+  "statistical_performance_claim": false
+}

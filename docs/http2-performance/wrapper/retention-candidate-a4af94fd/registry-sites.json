@@ -1,0 +1,104 @@
+{
+  "native": {
+    "other": {
+      "allocations": 49823,
+      "reallocations": 37,
+      "deallocations": 49674,
+      "live_bytes": 314740,
+      "live_allocations": 149
+    },
+    "Completion Rc": {
+      "allocations": 7,
+      "reallocations": 0,
+      "deallocations": 0,
+      "live_bytes": 1008,
+      "live_allocations": 7
+    },
+    "WaitData Rc": {
+      "allocations": 374923,
+      "reallocations": 0,
+      "deallocations": 374916,
+      "live_bytes": 672,
+      "live_allocations": 7
+    },
+    "registry Rc": {
+      "allocations": 772,
+      "reallocations": 0,
+      "deallocations": 770,
+      "live_bytes": 224,
+      "live_allocations": 2
+    },
+    "completion registry map": {
+      "allocations": 4,
+      "reallocations": 0,
+      "deallocations": 2,
+      "live_bytes": 168,
+      "live_allocations": 2
+    },
+    "wait registry map": {
+      "allocations": 771,
+      "reallocations": 0,
+      "deallocations": 769,
+      "live_bytes": 236,
+      "live_allocations": 2
+    },
+    "wait reverse membership Vec": {
+      "allocations": 341115,
+      "reallocations": 0,
+      "deallocations": 341108,
+      "live_bytes": 224,
+      "live_allocations": 7
+    }
+  },
+  "generic": {
+    "other": {
+      "allocations": 49828,
+      "reallocations": 38,
+      "deallocations": 49670,
+      "live_bytes": 492889,
+      "live_allocations": 158
+    },
+    "Completion Rc": {
+      "allocations": 7,
+      "reallocations": 0,
+      "deallocations": 0,
+      "live_bytes": 1008,
+      "live_allocations": 7
+    },
+    "WaitData Rc": {
+      "allocations": 363210,
+      "reallocations": 0,
+      "deallocations": 363203,
+      "live_bytes": 672,
+      "live_allocations": 7
+    },
+    "registry Rc": {
+      "allocations": 133806,
+      "reallocations": 0,
+      "deallocations": 133802,
+      "live_bytes": 448,
+      "live_allocations": 4
+    },
+    "completion registry map": {
+      "allocations": 133036,
+      "reallocations": 0,
+      "deallocations": 133034,
+      "live_bytes": 168,
+      "live_allocations": 2
+    },
+    "wait registry map": {
+      "allocations": 771,
+      "reallocations": 0,
+      "deallocations": 769,
+      "live_bytes": 236,
+      "live_allocations": 2
+    },
+    "wait reverse membership Vec": {
+      "allocations": 329414,
+      "reallocations": 0,
+      "deallocations": 329407,
+      "live_bytes": 224,
+      "live_allocations": 7
+    }
+  }
+}

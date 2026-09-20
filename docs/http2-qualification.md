@@ -10,7 +10,8 @@ Kimojio HTTP/2 wrapper implementation is in progress.
 The native client and server have focused runtime coverage.
 The explicit wrapper interoperability profile passed for native and generic transports.
 Lifecycle evidence is recorded with explicit limits.
-Runtime scope registries retain completed work for a connection's lifetime. That defect blocks performance qualification.
+The runtime scope-retention repair passed independent review, socket qualification, and bounded retention measurements.
+Statistical wrapper performance measurements are now in progress.
 
 The current socket qualification covers the direct HTTP/2 engine.
 Separate models cover the HTTP/1 plus HTTP/2 composite.
@@ -203,7 +204,7 @@ That review did not independently inject kernel cancellation races or close fail
 | Concurrent native server | Implemented with focused runtime tests |
 | Generic established transports | Implemented with focused runtime tests |
 | Independent wrapper socket fixture and peers | All 65 wrapper-profile cases passed per transport on `b3789dc6` |
-| Wrapper performance and final review | Runtime scope-retention defect blocks statistical runs |
+| Wrapper performance and final review | Retention gate passed; statistical measurements in progress |
 
 The current core socket results do not qualify the new wrapper.
 The wrapper needs its own fixture, peer runs, and source-specific measurements.
@@ -404,9 +405,9 @@ The reviewer built a clean detached checkout of `a4af94fd` with a private target
 All 22 scope/ownership tests passed in three configurations: debug with no default features plus virtual clock, debug all-features, and release all-features.
 Nine event/waiter tests and the cross-task future-completion migration test also passed.
 These runs do not force both kernel cancellation-acknowledgment orders or establish exhaustive race and unwind safety.
-Repeated allocation-site measurements remain in progress.
+Separate allocation-site measurements followed this review.
 The earlier socket and retention reports describe the old runtime, not this candidate.
-The candidate does not yet establish a retained-storage plateau or a performance result.
+Source review alone does not establish a retained-storage plateau or a performance result.
 
 The rebuilt fixture source is `86da3f3f90c59a5895c116c689c991ae59887a08`.
 Its release binary SHA-256 is `8e8550c0d771ea20a2a6b7c4eab24fb9e64f3f918a21e0c06df1bf44e2d9b80e`.
@@ -423,7 +424,39 @@ The peer owner checked the same binary hash before and after both modes.
 The authoritative report is `target/http2-program/reports/runtime-86da3f3f-summary.json`, with peer source `1df3ea1e`.
 No exercised socket case had a failure or unresolved observation.
 Ambiguous split/I/O/close error observations remain outside this qualification.
-Safety review and socket qualification are complete for their recorded scope, but retention acceptance still awaits fresh measurements.
+Safety review and socket qualification are complete for their recorded scope.
+The following measurements provide the separate retention evidence.
+
+### Retention repair acceptance
+
+Checkpoint `6e00374698d40dedebd33b87d3fd183ebb0e2682` measures byte-identical runtime repair `a4af94fd`.
+The [repair report](http2-performance/wrapper/retention-candidate-a4af94fd/) records rebuilt binaries, allocation sites, counters, and all 18 capped runs.
+The measured retention gate passed.
+Independent safety review and the rebuilt socket suite also passed for their recorded scope.
+
+At duplex cohort 32, native requested live storage fell from 46,063,760 to 317,820 bytes.
+Generic storage fell from 25,991,877 to 496,193 bytes.
+Runtime allocation-site storage stopped increasing by cohort eight.
+The remaining duplex growth belongs to bounded core storage, not completed runtime operation history.
+
+The empty-body extension passed 32,768 exchanges on each connection.
+Requested live storage, live allocation counts, and reallocation counts stayed unchanged from cohort 256 through cohort 4096.
+The plateau was 258,314 bytes native and 338,451 bytes generic.
+Runtime cleanup released all traced runtime, wrapper, and protocol storage.
+These are workload-specific requested-byte results, not RSS or universal peak-memory limits.
+
+The repair increases allocation activity in the measured duplex workload.
+Native allocation calls increased from 556,667 to 767,418, approximately 38 percent.
+Generic allocation calls increased from 546,854 to 1,010,075, approximately 85 percent.
+Those counts do not establish a CPU regression.
+The next phase measures runtime cost and profiles sampled bottlenecks before any optimization.
+
+The integrated workspace formatting check and both required Clippy configurations passed.
+Clippy retained the two existing `pipe.rs` warnings.
+The all-feature workspace suite, excluding the runtime package, passed 794 tests across 77 result groups, with four ignored tests.
+The runtime package has the separate 183-test focused run recorded earlier.
+Filesystem-dependent and hardware-only runtime tests remain outside this regression run.
+Logs are in `target/http2-program/reports/runtime-a4-parent/`.
 
 ### Initial wrapper client fixture
 

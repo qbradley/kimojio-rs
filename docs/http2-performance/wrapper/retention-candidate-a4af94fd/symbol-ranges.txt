@@ -1,0 +1,7 @@
+0000000000199560 00000000000001f9 t <kimojio::task::io_scope::IoScopeRegistry>::register_wait
+00000000001a2930 000000000000021c T <kimojio::task::TaskState>::new_completion
+0000000000199db0 00000000000000df t <kimojio::async_event::WaitFuture<kimojio::async_event::TaskSource>>::unregister_wait
+0000000000100670 000000000000007c t <kimojio::async_event::WaitFuture<kimojio::async_event::TaskSource>>::unregister_wait
+0000000000199e90 00000000000000dd t <kimojio::async_event::WaitFuture<kimojio::async_event::AsyncEventSource>>::unregister_wait
+00000000001a32a0 0000000000000065 T <kimojio::task::Task>::register_wait
+000000000019a8f0 0000000000000586 T <kimojio::async_event::WaitAsyncEventFuture as core::future::future::Future>::poll

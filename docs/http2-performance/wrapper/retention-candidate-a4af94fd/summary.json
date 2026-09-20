@@ -1,0 +1,12 @@
+{
+  "bounded_runs": 18,
+  "socket_runs": 14,
+  "runtime_controls": 4,
+  "retirements_per_endpoint": 70448,
+  "checked_payload_bytes": 1720188928,
+  "driver_closes": 28,
+  "required_overlap_witnesses": 816,
+  "site_ledger_reconciliation": "exact; 548 pretrace bytes, 3 pretrace allocations and 1 pretrace free",
+  "candidate_retention_gate": "PASS on measured source; safety review pending",
+  "statistical_performance_claim": false
+}

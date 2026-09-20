@@ -20,6 +20,7 @@ use kimojio_http2::{
 use serde_json::{Value, json};
 
 const BLOCK: usize = 16384;
+const RETENTION_COHORTS: [usize; 8] = [1, 2, 8, 32, 128, 256, 1024, 4096];
 const fn pattern(reverse: bool) -> [u8; BLOCK] {
     let mut bytes = [0; BLOCK];
     let mut index = 0;
@@ -596,7 +597,7 @@ async fn drive<M: Meter>(
             if options.phase == "steady" {
                 for index in 0..options.warmup {
                     cohort(&client, &shared, options, meter).await?;
-                    if [1, 2, 8, 32].contains(&(index + 1)) {
+                    if RETENTION_COHORTS.contains(&(index + 1)) {
                         meter.checkpoint("connection_live", index + 1);
                     }
                 }
@@ -612,7 +613,7 @@ async fn drive<M: Meter>(
                     } else {
                         0
                     };
-                if [1, 2, 8, 32].contains(&total) {
+                if RETENTION_COHORTS.contains(&total) {
                     meter.checkpoint("connection_live", total);
                 }
             }

@@ -1,0 +1,19 @@
+{
+  "command": [
+    "taskset",
+    "-c",
+    "8-31",
+    "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/retention-candidate-752381ee/allocations"
+  ],
+  "environment": {
+    "KIMOJIO_RETENTION_CONTROL": "nop-unscoped",
+    "KIMOJIO_RETENTION_OUTPUT": "/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/docs/http2-performance/wrapper/retention-candidate-a4af94fd/nop-unscoped.jsonl"
+  },
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "",
+  "binary_sha256": "ba2579a516e53c8c43e9ef438b15bd4b7eb00883a6d05cbc5d149e4f0c1dcc07",
+  "address_space_limit_bytes": 536870912,
+  "cpu_limit_seconds": 100,
+  "wall_limit_seconds": 110
+}

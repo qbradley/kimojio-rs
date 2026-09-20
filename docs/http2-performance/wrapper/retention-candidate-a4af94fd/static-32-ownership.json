@@ -1,0 +1,490 @@
+[
+  {
+    "backend": "native",
+    "label": "pre_runtime",
+    "cohort_field": 0,
+    "allocations": 3,
+    "reallocations": 0,
+    "deallocations": 0,
+    "live": 709,
+    "groups": {}
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 1,
+    "allocations": 23423,
+    "reallocations": 25,
+    "deallocations": 23247,
+    "live": 273596,
+    "groups": {
+      "runtime": {
+        "live_bytes": 38836,
+        "live_objects": 45,
+        "allocations": 21807,
+        "reallocations": 9,
+        "deallocations": 21762
+      },
+      "harness": {
+        "live_bytes": 3752,
+        "live_objects": 35,
+        "allocations": 101,
+        "reallocations": 0,
+        "deallocations": 66
+      },
+      "wrapper": {
+        "live_bytes": 45020,
+        "live_objects": 26,
+        "allocations": 358,
+        "reallocations": 0,
+        "deallocations": 332
+      },
+      "core/protocol": {
+        "live_bytes": 185440,
+        "live_objects": 68,
+        "allocations": 1154,
+        "reallocations": 16,
+        "deallocations": 1086
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 2,
+    "allocations": 49056,
+    "reallocations": 27,
+    "deallocations": 48880,
+    "live": 273948,
+    "groups": {
+      "runtime": {
+        "live_bytes": 38836,
+        "live_objects": 45,
+        "allocations": 46021,
+        "reallocations": 9,
+        "deallocations": 45976
+      },
+      "harness": {
+        "live_bytes": 3752,
+        "live_objects": 35,
+        "allocations": 134,
+        "reallocations": 0,
+        "deallocations": 99
+      },
+      "wrapper": {
+        "live_bytes": 45020,
+        "live_objects": 26,
+        "allocations": 686,
+        "reallocations": 0,
+        "deallocations": 660
+      },
+      "core/protocol": {
+        "live_bytes": 185792,
+        "live_objects": 68,
+        "allocations": 2212,
+        "reallocations": 18,
+        "deallocations": 2144
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 8,
+    "allocations": 191594,
+    "reallocations": 33,
+    "deallocations": 191418,
+    "live": 276572,
+    "groups": {
+      "runtime": {
+        "live_bytes": 39348,
+        "live_objects": 45,
+        "allocations": 180076,
+        "reallocations": 11,
+        "deallocations": 180031
+      },
+      "harness": {
+        "live_bytes": 3752,
+        "live_objects": 35,
+        "allocations": 332,
+        "reallocations": 0,
+        "deallocations": 297
+      },
+      "wrapper": {
+        "live_bytes": 45020,
+        "live_objects": 26,
+        "allocations": 2654,
+        "reallocations": 0,
+        "deallocations": 2628
+      },
+      "core/protocol": {
+        "live_bytes": 187904,
+        "live_objects": 68,
+        "allocations": 8529,
+        "reallocations": 22,
+        "deallocations": 8461
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 32,
+    "allocations": 767418,
+    "reallocations": 37,
+    "deallocations": 767240,
+    "live": 317820,
+    "groups": {
+      "runtime": {
+        "live_bytes": 39348,
+        "live_objects": 45,
+        "allocations": 721964,
+        "reallocations": 11,
+        "deallocations": 721919
+      },
+      "harness": {
+        "live_bytes": 3752,
+        "live_objects": 35,
+        "allocations": 1124,
+        "reallocations": 0,
+        "deallocations": 1089
+      },
+      "wrapper": {
+        "live_bytes": 45020,
+        "live_objects": 26,
+        "allocations": 10526,
+        "reallocations": 0,
+        "deallocations": 10500
+      },
+      "core/protocol": {
+        "live_bytes": 229152,
+        "live_objects": 70,
+        "allocations": 33801,
+        "reallocations": 26,
+        "deallocations": 33731
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "post_driver_close",
+    "cohort_field": 256,
+    "allocations": 767509,
+    "reallocations": 40,
+    "deallocations": 767444,
+    "live": 38548,
+    "groups": {
+      "runtime": {
+        "live_bytes": 34552,
+        "live_objects": 19,
+        "allocations": 721982,
+        "reallocations": 11,
+        "deallocations": 721963
+      },
+      "harness": {
+        "live_bytes": 3448,
+        "live_objects": 44,
+        "allocations": 1195,
+        "reallocations": 0,
+        "deallocations": 1151
+      },
+      "wrapper": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 10526,
+        "reallocations": 0,
+        "deallocations": 10526
+      },
+      "core/protocol": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 33803,
+        "reallocations": 29,
+        "deallocations": 33803
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "post_runtime_cleanup",
+    "cohort_field": 0,
+    "allocations": 767591,
+    "reallocations": 40,
+    "deallocations": 767588,
+    "live": 1572,
+    "groups": {
+      "runtime": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 721983,
+        "reallocations": 11,
+        "deallocations": 721983
+      },
+      "harness": {
+        "live_bytes": 1024,
+        "live_objects": 1,
+        "allocations": 1276,
+        "reallocations": 0,
+        "deallocations": 1275
+      },
+      "wrapper": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 10526,
+        "reallocations": 0,
+        "deallocations": 10526
+      },
+      "core/protocol": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 33803,
+        "reallocations": 29,
+        "deallocations": 33803
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "pre_runtime",
+    "cohort_field": 0,
+    "allocations": 3,
+    "reallocations": 0,
+    "deallocations": 0,
+    "live": 710,
+    "groups": {}
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 1,
+    "allocations": 34114,
+    "reallocations": 25,
+    "deallocations": 33929,
+    "live": 419137,
+    "groups": {
+      "runtime": {
+        "live_bytes": 39060,
+        "live_objects": 47,
+        "allocations": 32491,
+        "reallocations": 9,
+        "deallocations": 32444
+      },
+      "harness": {
+        "live_bytes": 3753,
+        "live_objects": 35,
+        "allocations": 101,
+        "reallocations": 0,
+        "deallocations": 66
+      },
+      "wrapper": {
+        "live_bytes": 124736,
+        "live_objects": 29,
+        "allocations": 361,
+        "reallocations": 0,
+        "deallocations": 332
+      },
+      "core/protocol": {
+        "live_bytes": 251040,
+        "live_objects": 72,
+        "allocations": 1158,
+        "reallocations": 16,
+        "deallocations": 1086
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 2,
+    "allocations": 64733,
+    "reallocations": 29,
+    "deallocations": 64544,
+    "live": 485185,
+    "groups": {
+      "runtime": {
+        "live_bytes": 39124,
+        "live_objects": 47,
+        "allocations": 61695,
+        "reallocations": 10,
+        "deallocations": 61648
+      },
+      "harness": {
+        "live_bytes": 3753,
+        "live_objects": 35,
+        "allocations": 134,
+        "reallocations": 0,
+        "deallocations": 99
+      },
+      "wrapper": {
+        "live_bytes": 124736,
+        "live_objects": 29,
+        "allocations": 689,
+        "reallocations": 0,
+        "deallocations": 660
+      },
+      "core/protocol": {
+        "live_bytes": 317024,
+        "live_objects": 76,
+        "allocations": 2212,
+        "reallocations": 19,
+        "deallocations": 2136
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 8,
+    "allocations": 252296,
+    "reallocations": 34,
+    "deallocations": 252107,
+    "live": 487745,
+    "groups": {
+      "runtime": {
+        "live_bytes": 39572,
+        "live_objects": 47,
+        "allocations": 240775,
+        "reallocations": 11,
+        "deallocations": 240728
+      },
+      "harness": {
+        "live_bytes": 3753,
+        "live_objects": 35,
+        "allocations": 332,
+        "reallocations": 0,
+        "deallocations": 297
+      },
+      "wrapper": {
+        "live_bytes": 124736,
+        "live_objects": 29,
+        "allocations": 2657,
+        "reallocations": 0,
+        "deallocations": 2628
+      },
+      "core/protocol": {
+        "live_bytes": 319136,
+        "live_objects": 76,
+        "allocations": 8529,
+        "reallocations": 23,
+        "deallocations": 8453
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 32,
+    "allocations": 1010075,
+    "reallocations": 38,
+    "deallocations": 1009886,
+    "live": 496193,
+    "groups": {
+      "runtime": {
+        "live_bytes": 39572,
+        "live_objects": 47,
+        "allocations": 964616,
+        "reallocations": 11,
+        "deallocations": 964569
+      },
+      "harness": {
+        "live_bytes": 3753,
+        "live_objects": 35,
+        "allocations": 1124,
+        "reallocations": 0,
+        "deallocations": 1089
+      },
+      "wrapper": {
+        "live_bytes": 124736,
+        "live_objects": 29,
+        "allocations": 10529,
+        "reallocations": 0,
+        "deallocations": 10500
+      },
+      "core/protocol": {
+        "live_bytes": 327584,
+        "live_objects": 76,
+        "allocations": 33803,
+        "reallocations": 27,
+        "deallocations": 33727
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "post_driver_close",
+    "cohort_field": 256,
+    "allocations": 1010171,
+    "reallocations": 41,
+    "deallocations": 1010106,
+    "live": 38549,
+    "groups": {
+      "runtime": {
+        "live_bytes": 34552,
+        "live_objects": 19,
+        "allocations": 964639,
+        "reallocations": 11,
+        "deallocations": 964620
+      },
+      "harness": {
+        "live_bytes": 3449,
+        "live_objects": 44,
+        "allocations": 1195,
+        "reallocations": 0,
+        "deallocations": 1151
+      },
+      "wrapper": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 10529,
+        "reallocations": 0,
+        "deallocations": 10529
+      },
+      "core/protocol": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 33805,
+        "reallocations": 30,
+        "deallocations": 33805
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "post_runtime_cleanup",
+    "cohort_field": 0,
+    "allocations": 1010253,
+    "reallocations": 41,
+    "deallocations": 1010250,
+    "live": 1572,
+    "groups": {
+      "runtime": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 964640,
+        "reallocations": 11,
+        "deallocations": 964640
+      },
+      "harness": {
+        "live_bytes": 1024,
+        "live_objects": 1,
+        "allocations": 1276,
+        "reallocations": 0,
+        "deallocations": 1275
+      },
+      "wrapper": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 10529,
+        "reallocations": 0,
+        "deallocations": 10529
+      },
+      "core/protocol": {
+        "live_bytes": 0,
+        "live_objects": 0,
+        "allocations": 33805,
+        "reallocations": 30,
+        "deallocations": 33805
+      }
+    }
+  }
+]
