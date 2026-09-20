@@ -1,9 +1,27 @@
-# Final integrated HTTP/2 measurements
+# Source-specific integrated HTTP/2 measurements
 
 This report measures immutable integration `5505efc469c7939c43d6d42a2ecb10b94ab4d9e4`.
 It includes the corrected core APIs, composition handling, overlap regression, allocation probe, and bounded-retention probe.
 All requested measured gates pass on this source.
 The report does not establish a universal overhead bound or qualify a socket executor or Kimojio wrapper.
+
+## Later API findings: qualification remains open
+
+Subsequent wrapper research identified admission gaps outside these measured workloads:
+
+- `Capacity` conflates transient pressure with a permanently oversized request.
+- A zero peer-concurrency limit reports `InvalidFrame`.
+- The API lacks a metadata-admission readiness signal.
+
+The pending correction introduces distinct `Blocked` handling and coalesced `admission_changed` notifications.
+That correction is not part of this freeze.
+These results are **source-specific measurements, not final API qualification**.
+They do not establish the cost or behavior of the future admission paths.
+The parent will supply another immutable integration for affected-path measurements after the correction and regressions.
+
+The `5505efc4` binaries, raw measurements, profiles, and memory evidence remain unchanged.
+No candidate replaced the measured source.
+The CPU2 lease was already released at the measurement checkpoint.
 
 ## Completion
 
