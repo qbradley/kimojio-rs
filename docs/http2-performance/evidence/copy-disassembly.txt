@@ -1,0 +1,380 @@
+
+<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref+0x69c file-address=0x9634c
+{"direct-empty": 79, "selected-empty": 89, "direct-empty128": 27, "direct-1m": 151}
+   96325:	48 8b 34 24          	mov    (%rsp),%rsi
+   96329:	48 85 f6             	test   %rsi,%rsi
+   9632c:	0f 85 08 ff ff ff    	jne    9623a <<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref+0x58a>
+   96332:	e9 06 fa ff ff       	jmp    95d3d <<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref+0x8d>
+   96337:	48 8d b4 24 e8 00 00 	lea    0xe8(%rsp),%rsi
+   9633e:	00 
+   9633f:	48 8d bc 24 e8 01 00 	lea    0x1e8(%rsp),%rdi
+   96346:	00 
+   96347:	ba 90 00 00 00       	mov    $0x90,%edx
+   9634c:	ff 15 46 6d 05 00    	call   *0x56d46(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   96352:	4c 8b b4 24 78 01 00 	mov    0x178(%rsp),%r14
+   96359:	00 
+   9635a:	48 8b 84 24 80 01 00 	mov    0x180(%rsp),%rax
+   96361:	00 
+   96362:	48 89 44 24 18       	mov    %rax,0x18(%rsp)
+   96367:	4c 8b a4 24 88 01 00 	mov    0x188(%rsp),%r12
+   9636e:	00 
+
+<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x146b file-address=0x6527b
+{"direct-empty": 9, "selected-empty": 0, "direct-empty128": 7, "direct-1m": 132}
+   65259:	49 89 ef             	mov    %rbp,%r15
+   6525c:	4d 01 ef             	add    %r13,%r15
+   6525f:	0f 82 d0 07 00 00    	jb     65a35 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x1c25>
+   65265:	84 c9                	test   %cl,%cl
+   65267:	0f 85 b0 07 00 00    	jne    65a1d <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x1c0d>
+   6526d:	4c 01 e8             	add    %r13,%rax
+   65270:	48 89 c7             	mov    %rax,%rdi
+   65273:	48 8b 74 24 08       	mov    0x8(%rsp),%rsi
+   65278:	48 89 ea             	mov    %rbp,%rdx
+   6527b:	ff 15 17 7e 08 00    	call   *0x87e17(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   65281:	4c 89 bc 24 20 01 00 	mov    %r15,0x120(%rsp)
+   65288:	00 
+   65289:	4d 39 f7             	cmp    %r14,%r15
+   6528c:	0f 85 e8 08 00 00    	jne    65b7a <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x1d6a>
+   65292:	4c 01 b3 50 1e 00 00 	add    %r14,0x1e50(%rbx)
+   65299:	48 8b 84 24 10 01 00 	mov    0x110(%rsp),%rax
+   652a0:	00 
+
+<hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::insert+0x147 file-address=0x70117
+{"direct-empty": 55, "selected-empty": 40, "direct-empty128": 30, "direct-1m": 0}
+   700ec:	e9 9f 00 00 00       	jmp    70190 <<hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::insert+0x1c0>
+   700f1:	44 89 44 24 0c       	mov    %r8d,0xc(%rsp)
+   700f6:	48 89 6c 24 10       	mov    %rbp,0x10(%rsp)
+   700fb:	41 0f b6 2c 1c       	movzbl (%r12,%rbx,1),%ebp
+   70100:	40 84 ed             	test   %bpl,%bpl
+   70103:	0f 89 b5 00 00 00    	jns    701be <<hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::insert+0x1ee>
+   70109:	48 8d 7c 24 20       	lea    0x20(%rsp),%rdi
+   7010e:	ba b8 00 00 00       	mov    $0xb8,%edx
+   70113:	48 8b 34 24          	mov    (%rsp),%rsi
+   70117:	ff 15 7b cf 07 00    	call   *0x7cf7b(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   7011d:	40 80 e5 01          	and    $0x1,%bpl
+   70121:	48 8d 43 f0          	lea    -0x10(%rbx),%rax
+   70125:	4c 21 f0             	and    %r14,%rax
+   70128:	45 88 2c 1c          	mov    %r13b,(%r12,%rbx,1)
+   7012c:	45 88 6c 04 10       	mov    %r13b,0x10(%r12,%rax,1)
+   70131:	40 0f b6 c5          	movzbl %bpl,%eax
+   70135:	66 0f 6e c0          	movd   %eax,%xmm0
+
+<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x10fa file-address=0x64f0a
+{"direct-empty": 7, "selected-empty": 0, "direct-empty128": 6, "direct-1m": 102}
+   64ee8:	49 89 ef             	mov    %rbp,%r15
+   64eeb:	4d 01 ef             	add    %r13,%r15
+   64eee:	0f 82 17 0b 00 00    	jb     65a0b <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x1bfb>
+   64ef4:	84 c9                	test   %cl,%cl
+   64ef6:	0f 85 f7 0a 00 00    	jne    659f3 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x1be3>
+   64efc:	4c 01 e8             	add    %r13,%rax
+   64eff:	48 89 c7             	mov    %rax,%rdi
+   64f02:	48 8b 74 24 08       	mov    0x8(%rsp),%rsi
+   64f07:	48 89 ea             	mov    %rbp,%rdx
+   64f0a:	ff 15 88 81 08 00    	call   *0x88188(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   64f10:	4c 89 bc 24 20 01 00 	mov    %r15,0x120(%rsp)
+   64f17:	00 
+   64f18:	4d 39 f7             	cmp    %r14,%r15
+   64f1b:	0f 85 72 0b 00 00    	jne    65a93 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x1c83>
+   64f21:	4c 01 b3 18 1d 00 00 	add    %r14,0x1d18(%rbx)
+   64f28:	48 8b 84 24 10 01 00 	mov    0x110(%rsp),%rax
+   64f2f:	00 
+
+<kimojio_fsm_http2::engine::Connection<&[u8]>>::maybe_retire+0x134 file-address=0x4eea4
+{"direct-empty": 33, "selected-empty": 34, "direct-empty128": 42, "direct-1m": 0}
+   4ee7a:	48 8d 54 24 04       	lea    0x4(%rsp),%rdx
+   4ee7f:	48 89 c6             	mov    %rax,%rsi
+   4ee82:	e8 19 ed 01 00       	call   6dba0 <<hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::remove::<kimojio_fsm_http2::api::StreamId>>
+   4ee87:	83 7c 24 08 02       	cmpl   $0x2,0x8(%rsp)
+   4ee8c:	0f 84 bf 00 00 00    	je     4ef51 <<kimojio_fsm_http2::engine::Connection<&[u8]>>::maybe_retire+0x1e1>
+   4ee92:	48 8d bc 24 c0 00 00 	lea    0xc0(%rsp),%rdi
+   4ee99:	00 
+   4ee9a:	48 8d 74 24 08       	lea    0x8(%rsp),%rsi
+   4ee9f:	ba b8 00 00 00       	mov    $0xb8,%edx
+   4eea4:	ff 15 ee e1 09 00    	call   *0x9e1ee(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   4eeaa:	8b 84 24 00 01 00 00 	mov    0x100(%rsp),%eax
+   4eeb1:	83 f8 ff             	cmp    $0xffffffff,%eax
+   4eeb4:	4c 89 f1             	mov    %r14,%rcx
+   4eeb7:	74 31                	je     4eeea <<kimojio_fsm_http2::engine::Connection<&[u8]>>::maybe_retire+0x17a>
+   4eeb9:	48 8b 94 24 f8 00 00 	mov    0xf8(%rsp),%rdx
+   4eec0:	00 
+   4eec1:	48 8d b9 d8 0d 00 00 	lea    0xdd8(%rcx),%rdi
+
+<hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::insert+0x1ae file-address=0x7017e
+{"direct-empty": 24, "selected-empty": 30, "direct-empty128": 47, "direct-1m": 0}
+   70155:	48 8d 04 5b          	lea    (%rbx,%rbx,2),%rax
+   70159:	48 c1 e0 06          	shl    $0x6,%rax
+   7015d:	8b 4c 24 0c          	mov    0xc(%rsp),%ecx
+   70161:	41 89 8c 04 40 ff ff 	mov    %ecx,-0xc0(%r12,%rax,1)
+   70168:	ff 
+   70169:	49 8d 3c 04          	lea    (%r12,%rax,1),%rdi
+   7016d:	48 81 c7 44 ff ff ff 	add    $0xffffffffffffff44,%rdi
+   70174:	48 8d 74 24 1c       	lea    0x1c(%rsp),%rsi
+   70179:	ba bc 00 00 00       	mov    $0xbc,%edx
+   7017e:	ff 15 14 cf 07 00    	call   *0x7cf14(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   70184:	48 8b 44 24 10       	mov    0x10(%rsp),%rax
+   70189:	48 c7 00 02 00 00 00 	movq   $0x2,(%rax)
+   70190:	48 81 c4 d8 00 00 00 	add    $0xd8,%rsp
+   70197:	5b                   	pop    %rbx
+   70198:	41 5c                	pop    %r12
+   7019a:	41 5d                	pop    %r13
+   7019c:	41 5e                	pop    %r14
+
+kimojio_fsm_http2::server::h2::headers::validate_decoded_header_fields_by::<<kimojio_fsm_http2::engine::Client<&[u8]>>::request_ref::{closure#0}>+0x1c2 file-address=0x781e2
+{"direct-empty": 26, "selected-empty": 32, "direct-empty128": 23, "direct-1m": 0}
+   781ba:	ff 15 38 53 07 00    	call   *0x75338(%rip)        # ed4f8 <_DYNAMIC+0x738>
+   781c0:	49 83 c7 28          	add    $0x28,%r15
+   781c4:	4d 39 f4             	cmp    %r14,%r12
+   781c7:	0f 85 63 ff ff ff    	jne    78130 <kimojio_fsm_http2::server::h2::headers::validate_decoded_header_fields_by::<<kimojio_fsm_http2::engine::Client<&[u8]>>::request_ref::{closure#0}>+0x110>
+   781cd:	4c 8d b4 24 e8 00 00 	lea    0xe8(%rsp),%r14
+   781d4:	00 
+   781d5:	48 8d 74 24 18       	lea    0x18(%rsp),%rsi
+   781da:	ba d0 00 00 00       	mov    $0xd0,%edx
+   781df:	4c 89 f7             	mov    %r14,%rdi
+   781e2:	ff 15 b0 4e 07 00    	call   *0x74eb0(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   781e8:	48 8b 5c 24 10       	mov    0x10(%rsp),%rbx
+   781ed:	48 89 df             	mov    %rbx,%rdi
+   781f0:	4c 89 f6             	mov    %r14,%rsi
+   781f3:	e8 48 10 00 00       	call   79240 <<kimojio_fsm_http2::server::h2::headers::H2HeaderValidator>::finish>
+   781f8:	48 89 d8             	mov    %rbx,%rax
+   781fb:	48 81 c4 b8 01 00 00 	add    $0x1b8,%rsp
+   78202:	5b                   	pop    %rbx
+
+kimojio_fsm_http2::server::h2::headers::validate_decoded_header_fields_by::<<kimojio_fsm_http2::engine::Server<&[u8]>>::respond_ref::{closure#0}>+0x1c2 file-address=0x783f2
+{"direct-empty": 10, "selected-empty": 18, "direct-empty128": 42, "direct-1m": 0}
+   783ca:	ff 15 28 51 07 00    	call   *0x75128(%rip)        # ed4f8 <_DYNAMIC+0x738>
+   783d0:	49 83 c7 28          	add    $0x28,%r15
+   783d4:	4d 39 f4             	cmp    %r14,%r12
+   783d7:	0f 85 63 ff ff ff    	jne    78340 <kimojio_fsm_http2::server::h2::headers::validate_decoded_header_fields_by::<<kimojio_fsm_http2::engine::Server<&[u8]>>::respond_ref::{closure#0}>+0x110>
+   783dd:	4c 8d b4 24 e8 00 00 	lea    0xe8(%rsp),%r14
+   783e4:	00 
+   783e5:	48 8d 74 24 18       	lea    0x18(%rsp),%rsi
+   783ea:	ba d0 00 00 00       	mov    $0xd0,%edx
+   783ef:	4c 89 f7             	mov    %r14,%rdi
+   783f2:	ff 15 a0 4c 07 00    	call   *0x74ca0(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   783f8:	48 8b 5c 24 10       	mov    0x10(%rsp),%rbx
+   783fd:	48 89 df             	mov    %rbx,%rdi
+   78400:	4c 89 f6             	mov    %r14,%rsi
+   78403:	e8 38 0e 00 00       	call   79240 <<kimojio_fsm_http2::server::h2::headers::H2HeaderValidator>::finish>
+   78408:	48 89 d8             	mov    %rbx,%rax
+   7840b:	48 81 c4 b8 01 00 00 	add    $0x1b8,%rsp
+   78412:	5b                   	pop    %rbx
+
+kimojio_fsm_http2::server::h2::headers::decode_connection_header_fields::<kimojio_fsm_http2::server::h2::compact_headers::CompactHeaderFields>+0x11e file-address=0x99a3e
+{"direct-empty": 7, "selected-empty": 18, "direct-empty128": 22, "direct-1m": 0}
+   99a1d:	4d 89 e0             	mov    %r12,%r8
+   99a20:	e8 7b 78 fe ff       	call   812a0 <<kimojio_fsm_http2::hpack::Decoder>::decode_with_visitor_into::<kimojio_fsm_http2::server::h2::compact_headers::CompactHeaderFields, kimojio_fsm_http2::server::h2::headers::H2HeaderValidator>>
+   99a25:	49 89 c5             	mov    %rax,%r13
+   99a28:	49 89 d7             	mov    %rdx,%r15
+   99a2b:	48 8d ac 24 48 01 00 	lea    0x148(%rsp),%rbp
+   99a32:	00 
+   99a33:	ba d0 00 00 00       	mov    $0xd0,%edx
+   99a38:	48 89 ef             	mov    %rbp,%rdi
+   99a3b:	4c 89 e6             	mov    %r12,%rsi
+   99a3e:	ff 15 54 36 05 00    	call   *0x53654(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   99a44:	48 8d bc 24 d8 00 00 	lea    0xd8(%rsp),%rdi
+   99a4b:	00 
+   99a4c:	48 89 ee             	mov    %rbp,%rsi
+   99a4f:	e8 3c 07 00 00       	call   9a190 <<kimojio_fsm_http2::server::h2::headers::H2HeaderValidator>::finish>
+   99a54:	49 ff c5             	inc    %r13
+   99a57:	48 8d 05 92 16 f9 ff 	lea    -0x6e96e(%rip),%rax        # 2b0f0 <anon.265894fa976b50001a7729173b633fc9.13.llvm.12703676867144656279+0x7ae>
+   99a5e:	4a 63 0c a8          	movslq (%rax,%r13,4),%rcx
+
+<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x1414 file-address=0x65224
+{"direct-empty": 11, "selected-empty": 0, "direct-empty128": 10, "direct-1m": 20}
+   65200:	4d 0f 42 ee          	cmovb  %r14,%r13
+   65204:	48 8d bc 24 d0 01 00 	lea    0x1d0(%rsp),%rdi
+   6520b:	00 
+   6520c:	ff 15 66 80 08 00    	call   *0x88066(%rip)        # ed278 <_DYNAMIC+0x4b8>
+   65212:	49 39 d5             	cmp    %rdx,%r13
+   65215:	0f 87 fc 07 00 00    	ja     65a17 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x1c07>
+   6521b:	48 89 c7             	mov    %rax,%rdi
+   6521e:	4c 89 fe             	mov    %r15,%rsi
+   65221:	4c 89 ea             	mov    %r13,%rdx
+   65224:	ff 15 6e 7e 08 00    	call   *0x87e6e(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   6522a:	4c 89 ac 24 20 01 00 	mov    %r13,0x120(%rsp)
+   65231:	00 
+   65232:	4c 89 f5             	mov    %r14,%rbp
+   65235:	4c 29 ed             	sub    %r13,%rbp
+   65238:	4c 39 e5             	cmp    %r12,%rbp
+   6523b:	49 0f 43 ec          	cmovae %r12,%rbp
+   6523f:	48 8d bc 24 d0 01 00 	lea    0x1d0(%rsp),%rdi
+
+<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x10a3 file-address=0x64eb3
+{"direct-empty": 7, "selected-empty": 0, "direct-empty128": 11, "direct-1m": 18}
+   64e8f:	4d 0f 42 ee          	cmovb  %r14,%r13
+   64e93:	48 8d bc 24 d0 01 00 	lea    0x1d0(%rsp),%rdi
+   64e9a:	00 
+   64e9b:	ff 15 d7 83 08 00    	call   *0x883d7(%rip)        # ed278 <_DYNAMIC+0x4b8>
+   64ea1:	49 39 d5             	cmp    %rdx,%r13
+   64ea4:	0f 87 43 0b 00 00    	ja     659ed <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x1bdd>
+   64eaa:	48 89 c7             	mov    %rax,%rdi
+   64ead:	4c 89 fe             	mov    %r15,%rsi
+   64eb0:	4c 89 ea             	mov    %r13,%rdx
+   64eb3:	ff 15 df 81 08 00    	call   *0x881df(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   64eb9:	4c 89 ac 24 20 01 00 	mov    %r13,0x120(%rsp)
+   64ec0:	00 
+   64ec1:	4c 89 f5             	mov    %r14,%rbp
+   64ec4:	4c 29 ed             	sub    %r13,%rbp
+   64ec7:	4c 39 e5             	cmp    %r12,%rbp
+   64eca:	49 0f 43 ec          	cmovae %r12,%rbp
+   64ece:	48 8d bc 24 d0 01 00 	lea    0x1d0(%rsp),%rdi
+
+<hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::remove::<kimojio_fsm_http2::api::StreamId>+0x15f file-address=0x6dcff
+{"direct-empty": 13, "selected-empty": 9, "direct-empty128": 10, "direct-1m": 0}
+   6dce1:	5b                   	pop    %rbx
+   6dce2:	c3                   	ret
+   6dce3:	48 81 c1 50 ff ff ff 	add    $0xffffffffffffff50,%rcx
+   6dcea:	48 89 10             	mov    %rdx,(%rax)
+   6dced:	48 89 c7             	mov    %rax,%rdi
+   6dcf0:	48 83 c7 08          	add    $0x8,%rdi
+   6dcf4:	ba b0 00 00 00       	mov    $0xb0,%edx
+   6dcf9:	48 89 ce             	mov    %rcx,%rsi
+   6dcfc:	48 89 c3             	mov    %rax,%rbx
+   6dcff:	ff 15 93 f3 07 00    	call   *0x7f393(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   6dd05:	48 89 d8             	mov    %rbx,%rax
+   6dd08:	5b                   	pop    %rbx
+   6dd09:	c3                   	ret
+   6dd0a:	cc                   	int3
+   6dd0b:	cc                   	int3
+   6dd0c:	cc                   	int3
+   6dd0d:	cc                   	int3
+
+<kimojio_fsm_http2::server::h2::wire::H2Frame>::encode+0x4a file-address=0x9e8ba
+{"direct-empty": 2, "selected-empty": 3, "direct-empty128": 3, "direct-1m": 19}
+   9e8a0:	48 29 f0             	sub    %rsi,%rax
+   9e8a3:	49 39 c6             	cmp    %rax,%r14
+   9e8a6:	77 29                	ja     9e8d1 <<kimojio_fsm_http2::server::h2::wire::H2Frame>::encode+0x61>
+   9e8a8:	4d 85 f6             	test   %r14,%r14
+   9e8ab:	74 17                	je     9e8c4 <<kimojio_fsm_http2::server::h2::wire::H2Frame>::encode+0x54>
+   9e8ad:	48 03 73 08          	add    0x8(%rbx),%rsi
+   9e8b1:	48 89 f7             	mov    %rsi,%rdi
+   9e8b4:	4c 89 fe             	mov    %r15,%rsi
+   9e8b7:	4c 89 f2             	mov    %r14,%rdx
+   9e8ba:	ff 15 d8 e7 04 00    	call   *0x4e7d8(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   9e8c0:	48 8b 73 10          	mov    0x10(%rbx),%rsi
+   9e8c4:	4c 01 f6             	add    %r14,%rsi
+   9e8c7:	48 89 73 10          	mov    %rsi,0x10(%rbx)
+   9e8cb:	5b                   	pop    %rbx
+   9e8cc:	41 5e                	pop    %r14
+   9e8ce:	41 5f                	pop    %r15
+   9e8d0:	c3                   	ret
+
+<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x14c5 file-address=0x62b85
+{"direct-empty": 0, "selected-empty": 15, "direct-empty128": 0, "direct-1m": 0}
+   62b61:	4d 0f 42 ee          	cmovb  %r14,%r13
+   62b65:	48 8d bc 24 30 01 00 	lea    0x130(%rsp),%rdi
+   62b6c:	00 
+   62b6d:	ff 15 05 a7 08 00    	call   *0x8a705(%rip)        # ed278 <_DYNAMIC+0x4b8>
+   62b73:	49 39 d5             	cmp    %rdx,%r13
+   62b76:	0f 87 22 06 00 00    	ja     6319e <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x1ade>
+   62b7c:	48 89 c7             	mov    %rax,%rdi
+   62b7f:	4c 89 fe             	mov    %r15,%rsi
+   62b82:	4c 89 ea             	mov    %r13,%rdx
+   62b85:	ff 15 0d a5 08 00    	call   *0x8a50d(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   62b8b:	4c 89 ac 24 28 01 00 	mov    %r13,0x128(%rsp)
+   62b92:	00 
+   62b93:	4c 89 f5             	mov    %r14,%rbp
+   62b96:	4c 29 ed             	sub    %r13,%rbp
+   62b99:	4c 39 e5             	cmp    %r12,%rbp
+   62b9c:	49 0f 43 ec          	cmovae %r12,%rbp
+   62ba0:	48 8d bc 24 30 01 00 	lea    0x130(%rsp),%rdi
+
+<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x11d5 file-address=0x62895
+{"direct-empty": 0, "selected-empty": 10, "direct-empty128": 0, "direct-1m": 0}
+   62873:	49 89 ef             	mov    %rbp,%r15
+   62876:	4d 01 ef             	add    %r13,%r15
+   62879:	0f 82 13 09 00 00    	jb     63192 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x1ad2>
+   6287f:	84 c9                	test   %cl,%cl
+   62881:	0f 85 f3 08 00 00    	jne    6317a <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x1aba>
+   62887:	4c 01 e8             	add    %r13,%rax
+   6288a:	48 89 c7             	mov    %rax,%rdi
+   6288d:	48 8b 74 24 10       	mov    0x10(%rsp),%rsi
+   62892:	48 89 ea             	mov    %rbp,%rdx
+   62895:	ff 15 fd a7 08 00    	call   *0x8a7fd(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   6289b:	4c 89 bc 24 28 01 00 	mov    %r15,0x128(%rsp)
+   628a2:	00 
+   628a3:	4d 39 f7             	cmp    %r14,%r15
+   628a6:	0f 85 80 09 00 00    	jne    6322c <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x1b6c>
+   628ac:	4c 01 b3 70 01 00 00 	add    %r14,0x170(%rbx)
+   628b3:	80 3b 00             	cmpb   $0x0,(%rbx)
+   628b6:	0f 84 9c 09 00 00    	je     63258 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x1b98>
+
+<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x117e file-address=0x6283e
+{"direct-empty": 0, "selected-empty": 8, "direct-empty128": 0, "direct-1m": 0}
+   6281a:	4d 0f 42 ee          	cmovb  %r14,%r13
+   6281e:	48 8d bc 24 30 01 00 	lea    0x130(%rsp),%rdi
+   62825:	00 
+   62826:	ff 15 4c aa 08 00    	call   *0x8aa4c(%rip)        # ed278 <_DYNAMIC+0x4b8>
+   6282c:	49 39 d5             	cmp    %rdx,%r13
+   6282f:	0f 87 3f 09 00 00    	ja     63174 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x1ab4>
+   62835:	48 89 c7             	mov    %rax,%rdi
+   62838:	4c 89 fe             	mov    %r15,%rsi
+   6283b:	4c 89 ea             	mov    %r13,%rdx
+   6283e:	ff 15 54 a8 08 00    	call   *0x8a854(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   62844:	4c 89 ac 24 28 01 00 	mov    %r13,0x128(%rsp)
+   6284b:	00 
+   6284c:	4c 89 f5             	mov    %r14,%rbp
+   6284f:	4c 29 ed             	sub    %r13,%rbp
+   62852:	4c 39 e5             	cmp    %r12,%rbp
+   62855:	49 0f 43 ec          	cmovae %r12,%rbp
+   62859:	48 8d bc 24 30 01 00 	lea    0x130(%rsp),%rdi
+
+<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref+0x722 file-address=0x963d2
+{"direct-empty": 0, "selected-empty": 2, "direct-empty128": 0, "direct-1m": 2}
+   963b1:	48 29 f0             	sub    %rsi,%rax
+   963b4:	49 39 c4             	cmp    %rax,%r12
+   963b7:	0f 87 58 01 00 00    	ja     96515 <<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref+0x865>
+   963bd:	4d 85 e4             	test   %r12,%r12
+   963c0:	74 1b                	je     963dd <<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref+0x72d>
+   963c2:	48 03 74 24 08       	add    0x8(%rsp),%rsi
+   963c7:	48 89 f7             	mov    %rsi,%rdi
+   963ca:	48 8b 74 24 18       	mov    0x18(%rsp),%rsi
+   963cf:	4c 89 e2             	mov    %r12,%rdx
+   963d2:	ff 15 c0 6c 05 00    	call   *0x56cc0(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   963d8:	48 8b 74 24 10       	mov    0x10(%rsp),%rsi
+   963dd:	48 01 dd             	add    %rbx,%rbp
+   963e0:	4c 01 e6             	add    %r12,%rsi
+   963e3:	48 89 74 24 10       	mov    %rsi,0x10(%rsp)
+   963e8:	48 8b 84 24 70 02 00 	mov    0x270(%rsp),%rax
+   963ef:	00 
+   963f0:	4c 89 ef             	mov    %r13,%rdi
+
+<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x151c file-address=0x62bdc
+{"direct-empty": 0, "selected-empty": 3, "direct-empty128": 0, "direct-1m": 0}
+   62bba:	49 89 ef             	mov    %rbp,%r15
+   62bbd:	4d 01 ef             	add    %r13,%r15
+   62bc0:	0f 82 f6 05 00 00    	jb     631bc <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x1afc>
+   62bc6:	84 c9                	test   %cl,%cl
+   62bc8:	0f 85 d6 05 00 00    	jne    631a4 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x1ae4>
+   62bce:	4c 01 e8             	add    %r13,%rax
+   62bd1:	48 89 c7             	mov    %rax,%rdi
+   62bd4:	48 8b 74 24 10       	mov    0x10(%rsp),%rsi
+   62bd9:	48 89 ea             	mov    %rbp,%rdx
+   62bdc:	ff 15 b6 a4 08 00    	call   *0x8a4b6(%rip)        # ed098 <memcpy@GLIBC_2.14>
+   62be2:	4c 89 bc 24 28 01 00 	mov    %r15,0x128(%rsp)
+   62be9:	00 
+   62bea:	4d 39 f7             	cmp    %r14,%r15
+   62bed:	0f 85 c3 06 00 00    	jne    632b6 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x1bf6>
+   62bf3:	4c 01 b3 a8 02 00 00 	add    %r14,0x2a8(%rbx)
+   62bfa:	48 8b 4b 10          	mov    0x10(%rbx),%rcx
+   62bfe:	b8 08 00 00 00       	mov    $0x8,%eax
+
+<kimojio_fsm_http2::engine::Connection<&[u8]>>::next::<composition_bench::composition_bench_support::Ports>+0xed3 file-address=0x4ade3
+{"direct-empty": 30, "selected-empty": 29, "direct-empty128": 43, "direct-1m": 66}
+   4adbb:	0f 10 49 10          	movups 0x10(%rcx),%xmm1
+   4adbf:	0f 10 51 20          	movups 0x20(%rcx),%xmm2
+   4adc3:	0f 10 59 30          	movups 0x30(%rcx),%xmm3
+   4adc7:	0f 29 5c 24 40       	movaps %xmm3,0x40(%rsp)
+   4adcc:	0f 29 54 24 30       	movaps %xmm2,0x30(%rsp)
+   4add1:	0f 29 4c 24 20       	movaps %xmm1,0x20(%rsp)
+   4add6:	0f 29 44 24 10       	movaps %xmm0,0x10(%rsp)
+   4addb:	0f 28 84 24 c0 00 00 	movaps 0xc0(%rsp),%xmm0
+   4ade2:	00 
+   4ade3:	0f 11 41 40          	movups %xmm0,0x40(%rcx)
+   4ade7:	48 8b 84 24 d0 00 00 	mov    0xd0(%rsp),%rax
+   4adee:	00 
+   4adef:	48 89 41 50          	mov    %rax,0x50(%rcx)
+   4adf3:	66 0f 6f 84 24 80 00 	movdqa 0x80(%rsp),%xmm0
+   4adfa:	00 00 
+   4adfc:	66 0f 6f 8c 24 90 00 	movdqa 0x90(%rsp),%xmm1
+   4ae03:	00 00 

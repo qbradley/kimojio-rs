@@ -985,8 +985,10 @@ impl H2Client {
     }
 
     pub(crate) fn finish_client_stream(&mut self, stream_id: u32) {
-        self.endpoint
-            .forget_stream(stream_id, H2StreamTombstone::Closed);
+        if let Some(stream) = self.endpoint.streams.get_mut(&stream_id) {
+            stream.receive = None;
+        }
+        self.retire_if_complete(stream_id, H2StreamTombstone::Closed);
     }
 
     pub(crate) fn forget_stream(&mut self, stream_id: u32, kind: H2StreamTombstone) {
@@ -2235,10 +2237,23 @@ impl H2Client {
     }
 
     pub(crate) fn validate_header_stream_state(
-        &self,
+        &mut self,
         stream_id: u32,
         flags: u8,
     ) -> Result<(), ServerError> {
+        if self
+            .endpoint
+            .streams
+            .get(&stream_id)
+            .is_some_and(|stream| stream.receive.is_none())
+        {
+            self.endpoint.last_protocol_error = Some(H2ProtocolError::stream(
+                stream_id,
+                H2ErrorCode::StreamClosed,
+                "HEADERS arrived after the receive half closed",
+            ));
+            return Err(ServerError::InvalidFrame);
+        }
         if self.has_receive_body(stream_id) {
             return if flags & 0x1 != 0 {
                 Ok(())
@@ -2388,6 +2403,18 @@ impl H2Client {
             return Err(ServerError::InvalidFrame);
         }
         let Some(state) = self.receive_body_mut(stream_id) else {
+            if self
+                .endpoint
+                .streams
+                .get(&stream_id)
+                .is_some_and(|stream| stream.receive.is_none())
+            {
+                self.endpoint.last_protocol_error = Some(H2ProtocolError::stream(
+                    stream_id,
+                    H2ErrorCode::StreamClosed,
+                    "DATA arrived after the receive half closed",
+                ));
+            }
             return Err(ServerError::InvalidFrame);
         };
         state.receive_data(payload_len, end_stream)?;

@@ -152,12 +152,22 @@ impl ReadCompletion {
 
 #[derive(Debug)]
 pub(crate) enum WriteStorage<B> {
-    Control(Vec<u8>),
+    Control {
+        bytes: Vec<u8>,
+        purpose: ControlPurpose,
+    },
     Data {
         header: [u8; 9],
         buffer: B,
         range: Range<usize>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ControlPurpose {
+    Ordinary,
+    LocalSettings,
+    ShutdownPing,
 }
 
 #[derive(Debug)]
@@ -177,7 +187,7 @@ impl<B: SendBuffer> WriteOp<B> {
     /// Remaining slices at the exact transport cursor. Empty slices are valid.
     pub fn slices(&self) -> [IoSlice<'_>; 2] {
         match &self.storage {
-            WriteStorage::Control(bytes) => {
+            WriteStorage::Control { bytes, .. } => {
                 [IoSlice::new(&bytes[self.cursor..]), IoSlice::new(&[])]
             }
             WriteStorage::Data {
@@ -196,7 +206,7 @@ impl<B: SendBuffer> WriteOp<B> {
     }
     pub fn remaining(&self) -> usize {
         match &self.storage {
-            WriteStorage::Control(bytes) => bytes.len() - self.cursor,
+            WriteStorage::Control { bytes, .. } => bytes.len() - self.cursor,
             WriteStorage::Data { range, .. } => 9 + range.len() - self.cursor,
         }
     }

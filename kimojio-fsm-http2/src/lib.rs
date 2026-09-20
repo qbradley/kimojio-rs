@@ -1,4 +1,6 @@
 //! Synchronous HTTP/2 protocol components.
+#[cfg(test)]
+extern crate self as kimojio_fsm_http2;
 
 mod api;
 mod engine;

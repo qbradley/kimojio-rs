@@ -2,7 +2,7 @@
 const DEFAULT_MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Default maximum number of header occurrences.
 const DEFAULT_MAX_HEADERS: usize = 100;
-/// Default maximum buffered message body size.
+/// Default maximum total HTTP message body size.
 const DEFAULT_MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 /// Default maximum number of concurrently active HTTP/2 streams.
 pub(crate) const DEFAULT_MAX_ACTIVE_STREAMS: usize = 100;
@@ -14,9 +14,9 @@ pub const DEFAULT_MAX_REQUESTS_PER_CONNECTION: usize = 1_000;
 
 /// HTTP message and connection resource limits enforced by the protocol state machines.
 ///
-/// Connection drivers apply the body limit to accumulated bodies. Their
-/// explicit streaming modes retain framing and flow-control bounds without
-/// imposing this buffered-memory limit on total streamed bytes.
+/// The direct engine applies the body limit to total streamed message bytes,
+/// independently of retained storage and flow-control windows. Established
+/// CONNECT tunnels do not use the message body limit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HttpLimits {
     max_header_bytes: usize,
@@ -38,12 +38,12 @@ impl HttpLimits {
         }
     }
 
-    /// Returns the maximum aggregate encoded header size.
+    /// Returns the limit for encoded sections and decoded field accounting.
     pub const fn max_header_bytes(&self) -> usize {
         self.max_header_bytes
     }
 
-    /// Sets the maximum aggregate encoded header size.
+    /// Sets the limit for encoded sections and decoded field accounting.
     pub const fn set_max_header_bytes(mut self, value: usize) -> Self {
         self.max_header_bytes = value;
         self
@@ -60,12 +60,12 @@ impl HttpLimits {
         self
     }
 
-    /// Returns the maximum buffered message body size.
+    /// Returns the maximum total HTTP message body size.
     pub const fn max_body_bytes(&self) -> usize {
         self.max_body_bytes
     }
 
-    /// Sets the maximum buffered message body size.
+    /// Sets the maximum total HTTP message body size.
     pub const fn set_max_body_bytes(mut self, value: usize) -> Self {
         self.max_body_bytes = value;
         self
@@ -82,12 +82,12 @@ impl HttpLimits {
         self
     }
 
-    /// Returns the maximum number of HTTP/1 requests served by one connection.
+    /// Returns an inherited compatibility limit unused by the HTTP/2 engine.
     pub const fn max_requests_per_connection(&self) -> usize {
         self.max_requests_per_connection
     }
 
-    /// Sets the maximum number of HTTP/1 requests served by one connection.
+    /// Sets an inherited compatibility limit unused by the HTTP/2 engine.
     pub const fn set_max_requests_per_connection(mut self, value: usize) -> Self {
         self.max_requests_per_connection = value;
         self
