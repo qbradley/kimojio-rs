@@ -416,3 +416,89 @@ async fn native_cancellation_case(success: bool) {
     .unwrap();
     assert!(closed.get());
 }
+
+#[kimojio::test]
+async fn raw_native_worker_preserves_forwarded_lease_and_exact_cancel_or_success_receipt() {
+    use crate::transport::{NativeTransport, Transport};
+
+    for success in [false, true] {
+        let (server, chunk, returned) = lease();
+        let pointer = chunk.as_ptr();
+        let (mut client, id) = destination();
+        client
+            .send_body(core::SendBody {
+                exchange: id,
+                buffer: OutgoingData::Forward(chunk),
+                range: 0..7,
+                end: false,
+            })
+            .unwrap();
+        let write = (0..32)
+            .find_map(|_| match client.next(&mut Ports) {
+                Some(Event::Write(op)) => Some(op),
+                Some(Event::SourceFinished(_) | Event::Deadline(_)) | None => None,
+                _ => panic!("unexpected write event"),
+            })
+            .expect("missing forwarded write");
+        assert_eq!(write.slices()[1].as_ptr(), pointer);
+        let (fd, peer) = kimojio::pipe::bipipe();
+        if !success {
+            rustix::net::sockopt::set_socket_send_buffer_size(&fd, 4096).unwrap();
+            loop {
+                match rustix::net::send(&fd, &[0x33; 4096], rustix::net::SendFlags::DONTWAIT) {
+                    Ok(count) => assert!(count > 0),
+                    Err(kimojio::Errno::AGAIN) => break,
+                    result => panic!("socket fill failed: {result:?}"),
+                }
+            }
+        }
+        let (reader, writer) = NativeTransport(fd).split().await.unwrap();
+        drop(reader);
+        let (send, requests) = async_channel();
+        let (complete, completions) = async_channel();
+        let cancel = Rc::new(CancellationToken::new());
+        send.try_send(WriteAction::Write(Pending {
+            op: write,
+            cancel: cancel.clone(),
+        }))
+        .ok()
+        .unwrap();
+        let mut worker = Box::pin(io::write_worker(Box::new(writer), requests, complete));
+        assert!(futures::poll!(worker.as_mut()).is_pending());
+        operations::yield_io().await;
+        if success {
+            let mut bytes = [0; 16];
+            assert_eq!(operations::read(&peer, &mut bytes).await, Ok(7));
+            assert_eq!(&bytes[..7], b"payload");
+        }
+        assert_not_returned(&returned);
+        cancel.cancel();
+        let app = async {
+            let WriteResult::Write(completion) = completions.recv().await.unwrap() else {
+                panic!("missing write completion");
+            };
+            assert_not_returned(&returned);
+            client.complete_write(completion).unwrap();
+            let receipt = (0..32)
+                .find_map(|_| match client.next(&mut Ports) {
+                    Some(Event::BodySent(receipt)) => Some(receipt),
+                    Some(Event::SourceFinished(_) | Event::Deadline(_) | Event::Cancel(_))
+                    | None => None,
+                    _ => panic!("unexpected receipt event"),
+                })
+                .expect("missing forwarded receipt");
+            assert_eq!(receipt.acceptance, core::Acceptance::Exact);
+            assert_eq!(receipt.accepted, if success { 7 } else { 0 });
+            assert_eq!(receipt.result.is_ok(), success);
+            assert_not_returned(&returned);
+            drop(receipt);
+            assert_returned(server, returned, pointer);
+            drop(send);
+        };
+        operations::timeout_at(kimojio::clock_now() + Duration::from_secs(3), async {
+            futures::join!(app, worker);
+        })
+        .await
+        .unwrap();
+    }
+}

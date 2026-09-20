@@ -7,10 +7,13 @@ mod body;
 mod driver;
 mod io;
 mod metadata;
+mod transport;
 
 pub use body::{BodyChunk, IncomingBody, IncomingFrame, OutgoingBody, OutgoingFrame};
 pub use driver::{
-    Client, Config, Connection, Shutdown, connect, serve_connection, serve_connection_with_shutdown,
+    Client, Config, Connection, NativeConnection, Shutdown, connect, connect_native,
+    serve_connection, serve_connection_native, serve_connection_native_with_shutdown,
+    serve_connection_with_shutdown,
 };
 pub use http;
 pub use kimojio_fsm_http1::ConnectionId;

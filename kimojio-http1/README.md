@@ -40,6 +40,43 @@ A dropped `send` future cancels admission or the active exchange.
 The driver never sends an abandoned queued request.
 The next exchange waits for the core's retirement notification.
 
+## Native one-shot sockets
+
+The generic `connect` and `serve_connection` APIs still accept `SplittableStream`.
+They retain the stream adapter's read and write-all behavior, including TLS support where the supplied stream provides it.
+
+The native APIs take ownership of an established `kimojio::OwnedFd` socket:
+
+- `connect_native(socket, config)` returns the same `Client` and a caller-owned `NativeConnection`.
+- `serve_connection_native(socket, config, handler)` serves one native socket.
+- `serve_connection_native_with_shutdown(socket, config, shutdown, handler)` also accepts cooperative shutdown.
+
+For a native client, replace the generic construction with:
+
+```rust,no_run
+use kimojio_http1::{connect_native, Config};
+
+fn connection(
+    socket: kimojio::OwnedFd,
+    config: Config,
+) -> (kimojio_http1::Client, kimojio_http1::NativeConnection) {
+    connect_native(socket, config)
+}
+```
+
+The application must poll `NativeConnection::run` concurrently with client operations and through shutdown.
+Both backends use the same HTTP driver, body types, protocol machine, and connection policy.
+Native reads fill the supplied receive storage without a staged receive buffer.
+Each native write submits one `writev` and reports its exact completed byte count.
+The protocol machine, not a transport write-all cursor, decides the next write after partial progress.
+Native cancellation targets the original operation and awaits its result.
+A late success retains its exact byte count.
+Native close waits for the read worker to release its descriptor owner, then awaits an actual close operation.
+
+This backend supplies neither TLS nor a user-space readiness retry loop.
+Unexpected native `EAGAIN` is terminal.
+See the [raw transport record](../docs/http1-wrapper-lab/raw-transport.md) for ownership details, tests, and benchmark integration.
+
 ## Server
 
 `serve_connection(stream, config, handler)` serves one established transport.
@@ -136,7 +173,7 @@ Neither transport future borrows the HTTP machine.
 Native single-slot channels connect workers to the driver.
 The wrapper creates no transport task for each frame.
 
-A native write-all success reports the complete offered length.
+In the generic stream backend, a write-all success reports the complete offered length.
 A write-all error can hide partial progress.
 Ordinary errors use `UnknownProgress`, which is terminal and forbids replay.
 A confirmed `ECANCELED` uses `CancelledUnknownProgress`.
@@ -144,15 +181,16 @@ This distinction lets the core receive a final response after it cancels an uplo
 Both error kinds report a lower bound instead of an invented exact acceptance count.
 
 Cancellation requests target the original operation.
-Each native operation has a separate `io_scope`.
+Each generic stream operation has a separate `io_scope`.
 The worker requests cancellation, then awaits the original result.
 After cancellation, each pending poll cancels newly submitted native operations.
 This covers write-all continuations after a positive partial completion.
 A concurrent success remains a success.
 Exchange completion does not imply complete input.
 If the core retires an exchange without `incoming_finished`, its input body returns cancellation.
-The driver settles reads before it explicitly closes the writer.
-It then drops the read half, because `AsyncStreamRead` has no close method.
+The driver settles reads and stops the read worker before it requests writer close.
+The read worker drops its half, because `AsyncStreamRead` has no close method.
+Native close also waits for that destructor before it consumes the shared descriptor.
 
 Custom transports must cooperate with Kimojio cancellation.
 A transport future that waits forever outside native cancellation cannot promise bounded shutdown.
@@ -186,7 +224,8 @@ The `virtual-clock` feature preserves the runtime's virtual time domain.
 The wrapper is not allocation-free.
 It allocates channels, metadata, per-operation cancellation tokens, and boxed handler or body sources.
 Connection-level boxes keep large native transport buffers out of caller future frames.
-The native `OwnedFdStream` also copies received bytes through its own 16-KiB buffer.
+The generic `OwnedFdStream` also copies received bytes through its own 16-KiB buffer.
+The explicit native backend omits that buffer and copy.
 These costs belong in adapter measurements, separate from core measurements.
 No throughput or allocation improvement is claimed here.
 

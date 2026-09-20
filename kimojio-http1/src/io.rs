@@ -32,7 +32,7 @@ pub(crate) enum WriteResult {
 }
 
 pub(crate) fn transport_error(error: kimojio::Errno) -> IoError {
-    // Native streams already perform their own retry/readiness handling.
+    // Stream adapters perform their own retry/readiness handling.
     IoError {
         kind: if error == kimojio::Errno::CANCELED {
             IoErrorKind::Cancelled
@@ -84,29 +84,74 @@ async fn await_io<T>(
     .await
 }
 
-pub(crate) async fn read_worker<R: AsyncStreamRead>(
+pub(crate) trait ReadTransport {
+    async fn receive(&mut self, buffer: &mut [u8], cancel: &CancellationToken) -> IoResult<usize>;
+}
+
+pub(crate) trait WriteTransport {
+    async fn transmit<'a>(
+        &'a mut self,
+        slices: &'a mut [IoSlice<'a>],
+        cancel: &'a CancellationToken,
+    ) -> IoResult<usize>;
+
+    async fn close_transport(&mut self) -> IoResult<()>;
+}
+
+impl<R: AsyncStreamRead> ReadTransport for R {
+    async fn receive(&mut self, buffer: &mut [u8], cancel: &CancellationToken) -> IoResult<usize> {
+        if cancel.is_cancelled() {
+            cancelled()
+        } else {
+            operations::io_scope(async || {
+                await_io(self.try_read(buffer, None), cancel)
+                    .await
+                    .map_err(transport_error)
+            })
+            .await
+        }
+    }
+}
+
+impl<W: AsyncStreamWrite> WriteTransport for W {
+    async fn transmit<'a>(
+        &'a mut self,
+        slices: &'a mut [IoSlice<'a>],
+        cancel: &'a CancellationToken,
+    ) -> IoResult<usize> {
+        if cancel.is_cancelled() {
+            cancelled()
+        } else {
+            operations::io_scope(async || {
+                let offered = slices.iter().map(|bytes| bytes.len()).sum();
+                await_io(self.writev(slices, None), cancel)
+                    .await
+                    .map(|()| offered)
+                    .map_err(write_error)
+            })
+            .await
+        }
+    }
+
+    async fn close_transport(&mut self) -> IoResult<()> {
+        AsyncStreamWrite::close(self).await.map_err(transport_error)
+    }
+}
+
+pub(crate) async fn read_worker<R: ReadTransport>(
     mut stream: Box<R>,
     requests: Receiver<Pending<ReadOp<Vec<u8>>>>,
     completions: Sender<ReadCompletion<Vec<u8>>>,
 ) {
     while let Ok(Pending { mut op, cancel }) = requests.recv().await {
-        let result = if cancel.is_cancelled() {
-            cancelled()
-        } else {
-            operations::io_scope(async || {
-                await_io(stream.try_read(op.bytes_mut(), None), &cancel)
-                    .await
-                    .map_err(transport_error)
-            })
-            .await
-        };
+        let result = stream.receive(op.bytes_mut(), &cancel).await;
         if completions.send(op.complete(result)).await.is_err() {
             break;
         }
     }
 }
 
-pub(crate) async fn write_worker<W: AsyncStreamWrite>(
+pub(crate) async fn write_worker<W: WriteTransport>(
     mut stream: Box<W>,
     requests: Receiver<WriteAction>,
     completions: Sender<WriteResult>,
@@ -115,23 +160,15 @@ pub(crate) async fn write_worker<W: AsyncStreamWrite>(
     while let Ok(action) = requests.recv().await {
         let result = match action {
             WriteAction::Write(Pending { op, cancel }) => {
-                let result = if cancel.is_cancelled() {
-                    cancelled()
-                } else {
-                    operations::io_scope(async || {
-                        let slices = op.slices();
-                        let offered = slices.iter().map(|bytes| bytes.len()).sum();
-                        let mut slices = slices.map(IoSlice::new);
-                        let result = await_io(stream.writev(&mut slices, None), &cancel).await;
-                        result.map(|()| offered).map_err(write_error)
-                    })
-                    .await
+                let result = {
+                    let mut slices = op.slices().map(IoSlice::new);
+                    stream.transmit(&mut slices, &cancel).await
                 };
                 WriteResult::Write(op.complete(result))
             }
             WriteAction::Close(op) => {
                 closed = true;
-                WriteResult::Close(op.complete(stream.close().await.map_err(transport_error)))
+                WriteResult::Close(op.complete(stream.close_transport().await))
             }
         };
         if completions.send(result).await.is_err() || closed {
@@ -139,7 +176,7 @@ pub(crate) async fn write_worker<W: AsyncStreamWrite>(
         }
     }
     if !closed {
-        let _ = stream.close().await;
+        let _ = stream.close_transport().await;
     }
 }
 
