@@ -49,6 +49,16 @@ Handlers run sequentially on each connection.
 The core chooses the response wire version from the request.
 Handlers do not reconstruct this choice.
 
+`OutgoingBody::continue_request_body()` explicitly keeps request input active after the response starts or finishes.
+The handler must retain an active request consumer, usually through `OutgoingBody::from_incoming`.
+The core permits reuse only after input completion and operation settlement.
+Dropping an unfinished duplex consumer cancels the exchange instead of silently discarding its remaining input.
+The wrapper first permits an outstanding lease to return and drains core completion notifications.
+This ordering protects a final forwarded lease after a known-length source ends.
+Client request bodies reject this response-only policy with `Error::InvalidMetadata`.
+The default response policy does not change.
+See [explicit duplex responses](../docs/http1-wrapper-lab/duplex-wrapper.md) for API examples and lifetime rules.
+
 `serve_connection_with_shutdown` also accepts a `Shutdown` handle.
 `Shutdown::graceful` stops admission and waits for the current exchange.
 `Shutdown::abort` requests cancellation through the core.
@@ -114,6 +124,7 @@ See [lease forwarding](../docs/http1-wrapper-lab/lease-forwarding.md) for owners
 
 A dropped client response body cancels its unfinished exchange.
 A dropped server request body causes the wrapper to discard further body deliveries within the core's limits.
+An explicitly selected `continue_request_body` response instead cancels input that remains incomplete after outstanding leases return.
 The core still decides connection reuse and early-response behavior.
 This permits a handler to return an early response without retaining an unwanted request body.
 
@@ -214,8 +225,10 @@ Socket creation and binding are synchronous setup operations.
 The echo fixture does not collect the complete upload or copy each chunk.
 Its outgoing frame owns the incoming lease until the write settles and its receipt returns.
 It can return response headers before the first upload byte arrives.
-The current core conservatively closes exchanges whose response starts before the complete request arrives.
+The default core policy conservatively closes exchanges whose response starts before the complete request arrives.
 Ordinary exchanges can reuse a connection when the handler consumes the request before it responds.
+The `/echo` fixture retains this default policy.
+Applications can explicitly select reusable duplex forwarding through `continue_request_body`.
 
 Run the client against the printed address:
 
