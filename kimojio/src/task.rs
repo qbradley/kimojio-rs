@@ -26,7 +26,6 @@ use crate::{
     Completion, EAGAIN, EBUSY, EINTR, HandleTable,
     async_event::{WaitData, WaitList},
     mut_in_place_cell::MutInPlaceCell,
-    task_ref::wake_task,
     task_state_cell::{TaskStateCell, TaskStateCellRef},
     tracing::{EventEnvelope, Events},
     uring_stats::URingStats,
@@ -179,11 +178,8 @@ pub struct Task {
     pub task_state: *const TaskState,
 }
 
-#[derive(Default)]
-pub(crate) struct IoScopeCompletions {
-    pub completions: Vec<Rc<Completion>>,
-    pub waits: Vec<Rc<WaitData>>,
-}
+mod io_scope;
+pub(crate) use io_scope::{IoScopeCompletions, IoScopeRegistry};
 
 impl Task {
     pub(crate) fn replace_io_scope_completions(
@@ -197,40 +193,29 @@ impl Task {
     }
 
     pub(crate) fn register_io(&self, completion: &Rc<Completion>) {
-        self.io_scope_completions.use_mut(|io_scope_completions| {
-            if let Some(io_scope_completions) = io_scope_completions {
-                io_scope_completions.completions.push(completion.clone());
-            }
-        })
+        if let Some(registry) = self.scope_registry() {
+            registry.register_io(completion);
+        }
     }
 
-    pub(crate) fn cancel_io_scope_completions(&self, mut task_state: TaskStateCellRef<'_>) {
-        self.io_scope_completions.use_mut(|io_scope_completions| {
-            let io_scope_completions = io_scope_completions
-                .as_mut()
-                .expect("must be called from an io_scope callback");
-            for completion in io_scope_completions.completions.drain(..) {
-                completion.cancel(&mut task_state);
-                task_state.return_completion(completion);
-            }
-            // flush the added SQE
-            task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
-
-            for wait in io_scope_completions.waits.drain(..) {
-                wait.canceled.set(true);
-                if let Some(waker) = wait.waker.use_mut(Option::take) {
-                    task_state = wake_task(task_state, waker);
-                }
-            }
-        })
+    pub(crate) fn cancel_io_scope_completions(&self) {
+        let scope = self.io_scope_completions.use_mut(|scope| {
+            scope
+                .clone()
+                .expect("must be called from an io_scope callback")
+        });
+        scope.cancel();
     }
 
     pub(crate) fn register_wait(&self, wait: &Rc<WaitData>) {
-        self.io_scope_completions.use_mut(|io_scope_completions| {
-            if let Some(io_scope_completions) = io_scope_completions {
-                io_scope_completions.waits.push(wait.clone());
-            }
-        })
+        if let Some(registry) = self.scope_registry() {
+            registry.register_wait(wait);
+        }
+    }
+
+    fn scope_registry(&self) -> Option<Rc<IoScopeRegistry>> {
+        self.io_scope_completions
+            .use_mut(|scope| scope.as_mut().map(IoScopeCompletions::registry))
     }
 
     fn new<F>(
@@ -862,7 +847,11 @@ impl TaskState {
         }
     }
 
-    pub(crate) fn return_completion(&mut self, completion: Rc<Completion>) {
+    /// Returns an unpooled owner for destruction after the TaskState borrow ends.
+    pub(crate) fn return_completion(
+        &mut self,
+        completion: Rc<Completion>,
+    ) -> Option<Rc<Completion>> {
         debug_assert!(
             Rc::weak_count(&completion) == 0,
             "Completion should not have weak refs"
@@ -872,18 +861,29 @@ impl TaskState {
             // on our owned Rc<> indicates that we are the only owner of the completion.
             && Rc::strong_count(&completion) == 1
         {
-            self.completion_pool.push_back(completion)
+            debug_assert!(completion.state.use_mut(|state| matches!(
+                state,
+                crate::CompletionState::Completed { .. } | crate::CompletionState::Terminated
+            )));
+            debug_assert!(completion.scope.use_mut(|scope| scope.is_none()));
+            self.completion_pool.push_back(completion);
+            None
+        } else {
+            Some(completion)
         }
     }
 
-    pub(crate) fn new_completion(&mut self, completion: Completion) -> Rc<Completion> {
+    pub(crate) fn new_completion(
+        &mut self,
+        completion: Completion,
+    ) -> (Rc<Completion>, Option<Completion>) {
         if let Some(mut existing) = self.completion_pool.pop_front() {
             let ptr =
                 Rc::get_mut(&mut existing).expect("Pooled completion must have singular refcount");
-            *ptr = completion;
-            existing
+            let previous = std::mem::replace(ptr, completion);
+            (existing, Some(previous))
         } else {
-            Rc::new(completion)
+            (Rc::new(completion), None)
         }
     }
 }

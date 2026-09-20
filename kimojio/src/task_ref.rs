@@ -17,6 +17,11 @@ pub fn wake_task<'a>(
     if waker.vtable() == &VTABLE {
         let task = clone_waker_task(waker.data());
         task_state.schedule_io(task);
+        // A completed task can be owned only by this waker. Its result's
+        // destructor must not run under the TaskState borrow either.
+        let cell = task_state.into_inner();
+        drop(waker);
+        task_state = cell.borrow_mut();
     } else {
         let cell = task_state.into_inner();
         waker.wake();
@@ -39,7 +44,9 @@ static VTABLE: std::task::RawWakerVTable = std::task::RawWakerVTable::new(
         // wake_by_ref followed by drop.
         let task = consume_waker_task(task);
         let mut task_state = TaskState::get();
-        task_state.schedule_io(task);
+        // Keep the final task owner until the TaskState borrow ends.
+        task_state.schedule_io(task.clone());
+        drop(task_state);
     },
     |task| {
         // wake_by_ref can potentially be called multiple times.

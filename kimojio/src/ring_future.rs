@@ -96,11 +96,12 @@ impl<'a, T: Unpin, C: MakeResult<T>> RingFuture<'a, T, C> {
                 .sec(timeout.as_secs())
         });
 
-        let handle = task_state.new_completion(Completion {
+        let (handle, previous) = task_state.new_completion(Completion {
             state: MutInPlaceCell::new(CompletionState::Idle {
                 entry,
                 timespec: timespec.is_some(),
             }),
+            scope: MutInPlaceCell::default(),
             owned_resources,
             timespec: timespec.unwrap_or_default(),
             tag,
@@ -120,6 +121,8 @@ impl<'a, T: Unpin, C: MakeResult<T>> RingFuture<'a, T, C> {
                 activity_id,
             },
         );
+        drop(task_state);
+        drop(previous);
 
         Self {
             handle: Some(handle),
@@ -149,7 +152,9 @@ impl<'a, T: Unpin, C: MakeResult<T>> Future for RingFuture<'a, T, C> {
     type Output = Result<T, Errno>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut new_waker = Some(cx.waker().clone());
         let mut task_state = TaskState::get();
+        let mut old_waker = None;
 
         #[cfg(feature = "fault_injection")]
         if let Some((count, fault)) = &mut task_state.fault {
@@ -222,7 +227,7 @@ impl<'a, T: Unpin, C: MakeResult<T>> Future for RingFuture<'a, T, C> {
                 };
 
                 *state = CompletionState::Submitted {
-                    waker: cx.waker().clone(),
+                    waker: new_waker.take().unwrap(),
                     activity_id,
                     tag,
                     canceled: false,
@@ -238,7 +243,7 @@ impl<'a, T: Unpin, C: MakeResult<T>> Future for RingFuture<'a, T, C> {
                 }
 
                 // Update the waker in case we were polled from a different task.
-                waker.clone_from(cx.waker());
+                old_waker = Some(std::mem::replace(waker, new_waker.take().unwrap()));
 
                 // still waiting for a completion
                 Poll::Pending
@@ -275,10 +280,16 @@ impl<'a, T: Unpin, C: MakeResult<T>> Future for RingFuture<'a, T, C> {
             }
         });
 
-        if matches!(result, Poll::Ready(_)) {
+        let unpooled = if matches!(result, Poll::Ready(_)) {
             let completion = handle_ref.take().unwrap();
-            task_state.return_completion(completion);
-        }
+            task_state.return_completion(completion)
+        } else {
+            None
+        };
+        drop(task_state);
+        drop(unpooled);
+        drop(old_waker);
+        drop(new_waker);
 
         result
     }
@@ -401,6 +412,167 @@ impl MakeResult<[u64; 2]> for ResultToCqe {
 mod test {
     use crate::{AsyncEvent, Errno, OwnedFd, operations};
     use std::rc::Rc;
+
+    #[crate::test]
+    async fn io_scope_cancel_request_keeps_submitted_original_registered() {
+        let (fd, peer) = crate::pipe::bipipe();
+        let mut bytes = [0; 1];
+        operations::io_scope(async || {
+            let mut read = Box::pin(operations::read(&fd, &mut bytes));
+            assert!(futures::poll!(read.as_mut()).is_pending());
+            let completion = read.handle.as_ref().unwrap().clone();
+            {
+                let mut state = crate::task::TaskState::get();
+                completion.cancel(&mut state);
+                let owners = Rc::strong_count(&completion);
+                completion.cancel(&mut state);
+                assert_eq!(
+                    Rc::strong_count(&completion),
+                    owners,
+                    "duplicate cancel ACK owner"
+                );
+            }
+            assert!(completion.scope.use_mut(|scope| scope.is_some()));
+            completion.state.use_mut(|state| {
+                assert!(matches!(
+                    state,
+                    crate::CompletionState::Submitted { canceled: true, .. }
+                ))
+            });
+            assert_eq!(read.await, Err(Errno::CANCELED));
+            assert!(completion.scope.use_mut(|scope| scope.is_none()));
+        })
+        .await;
+        operations::write(&peer, b"s").await.unwrap();
+        assert_eq!(operations::read(&fd, &mut bytes).await.unwrap(), 1);
+        assert_eq!(bytes, *b"s");
+        operations::close(fd).await.unwrap();
+        operations::close(peer).await.unwrap();
+    }
+
+    #[crate::test]
+    async fn io_scope_acknowledgement_owner_prevents_reuse_in_both_settlement_orders() {
+        use crate::{Completion, task::TaskState};
+        for acknowledgement_first in [true, false] {
+            operations::io_scope(async || {
+                for _ in 0..128 {
+                    let mut original = Box::pin(operations::nop());
+                    let completion = original.handle.as_ref().unwrap();
+                    let pointer = Rc::as_ptr(completion);
+                    let acknowledgement = completion.acknowledgement_owner();
+                    assert_ne!(acknowledgement.addr() & crate::CANCEL_ACK_TAG, 0);
+                    // The test controls release of the same ownership token used
+                    // by a cancel ACK. The original result comes from a real CQE.
+                    let target =
+                        acknowledgement.map_addr(|address| address & !crate::CANCEL_ACK_TAG);
+                    // SAFETY: this consumes the one owner transferred above.
+                    let target = unsafe { Rc::from_raw(target.cast::<Completion>()) };
+                    assert!(futures::poll!(original.as_mut()).is_pending());
+                    if acknowledgement_first {
+                        assert!(target.scope.use_mut(|scope| scope.is_some()));
+                        let unpooled = TaskState::get().return_completion(target);
+                        drop(unpooled);
+                        assert!(
+                            original
+                                .handle
+                                .as_ref()
+                                .unwrap()
+                                .scope
+                                .use_mut(|scope| scope.is_some())
+                        );
+                        original.await.unwrap();
+                    } else {
+                        original.await.unwrap();
+                        assert!(target.scope.use_mut(|scope| scope.is_none()));
+                        assert_eq!(Rc::strong_count(&target), 1);
+                        assert!(
+                            !TaskState::get()
+                                .completion_pool
+                                .iter()
+                                .any(|entry| Rc::as_ptr(entry) == pointer)
+                        );
+                        let next = operations::nop();
+                        assert_ne!(Rc::as_ptr(next.handle.as_ref().unwrap()), pointer);
+                        next.await.unwrap();
+                        let unpooled = TaskState::get().return_completion(target);
+                        drop(unpooled);
+                    }
+                }
+            })
+            .await;
+        }
+    }
+
+    #[crate::test]
+    async fn io_scope_panic_settles_borrowed_storage_before_unwinding() {
+        use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
+        use std::panic::AssertUnwindSafe;
+        let (fd, peer) = crate::pipe::bipipe();
+        let mut buffer = [0; 1];
+        let mut completion = None;
+        let mut pending = FuturesUnordered::new();
+        let result = AssertUnwindSafe(operations::io_scope(async || {
+            let read = operations::read(&fd, &mut buffer);
+            completion = read.handle.clone();
+            pending.push(read);
+            assert!(futures::poll!(pending.next()).is_pending());
+            panic!("deliberate scope panic");
+        }))
+        .catch_unwind()
+        .await;
+        assert!(result.is_err());
+        completion.unwrap().state.use_mut(|state| {
+            assert!(matches!(
+                state,
+                crate::CompletionState::Completed {
+                    result: Err(Errno::CANCELED),
+                    ..
+                }
+            ))
+        });
+        assert_eq!(pending.next().await, Some(Err(Errno::CANCELED)));
+        drop(pending);
+        buffer.fill(b'x');
+        operations::write(&peer, b"p").await.unwrap();
+        assert_eq!(operations::read(&fd, &mut buffer).await.unwrap(), 1);
+        assert_eq!(buffer, *b"p");
+        operations::close(fd).await.unwrap();
+        operations::close(peer).await.unwrap();
+    }
+
+    #[crate::test]
+    async fn io_scope_owned_completion_resources_drop_outside_task_state_on_reuse() {
+        use crate::{CompletionResources, io_type::IOType, task::TaskState};
+        use std::cell::Cell;
+        struct Reenter(Rc<Cell<usize>>);
+        impl Drop for Reenter {
+            fn drop(&mut self) {
+                let task_state = TaskState::get();
+                drop(task_state);
+                drop(operations::nop());
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        let old_pool = std::mem::take(&mut TaskState::get().completion_pool);
+        drop(old_pool);
+        let drops = Rc::new(Cell::new(0));
+        operations::io_scope(async || {
+            super::UnitFuture::with_polled(
+                rustix_uring::opcode::Nop::new().build(),
+                0,
+                None,
+                IOType::Nop,
+                false,
+                CompletionResources::Box(Box::new(Reenter(drops.clone()))),
+            )
+            .await
+            .unwrap();
+            assert_eq!(drops.get(), 0, "the unique completion is pooled");
+            operations::nop().await.unwrap();
+            assert_eq!(drops.get(), 1);
+        })
+        .await;
+    }
 
     #[crate::test]
     async fn io_scope_drop_settles_borrowed_storage_with_wrapped_waker() {

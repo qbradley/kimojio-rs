@@ -20,7 +20,7 @@
 //! }
 //! ```
 
-use crate::task::{Task, TaskReadyState, TaskState};
+use crate::task::{IoScopeRegistry, Task, TaskReadyState, TaskState};
 use crate::tracing::Events;
 use crate::{CanceledError, MutInPlaceCell, TimeoutError, operations};
 use futures::future::FusedFuture;
@@ -29,7 +29,7 @@ use rustix_uring::Errno;
 use std::cell::Cell;
 use std::future::Future;
 use std::pin::Pin;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -246,15 +246,25 @@ pub struct WaitData {
     pub canceled: Cell<bool>,
     pub tag: u32,
     pub link: LinkedListLink,
+    pub(crate) scopes: MutInPlaceCell<Vec<Weak<IoScopeRegistry>>>,
 }
 
 intrusive_adapter!(pub WaitDataAdapter = Rc<WaitData>: WaitData { link => LinkedListLink });
 
 impl WaitData {
     fn set_waker(&self, cx: &mut Context<'_>) {
-        self.waker.use_mut(|waker| {
-            *waker = Some(cx.waker().clone());
-        })
+        let new = cx.waker().clone();
+        let old = self.waker.use_mut(|waker| waker.replace(new));
+        drop(old);
+    }
+
+    fn retire_from_scopes(self: &Rc<Self>) {
+        let scopes = self.scopes.use_mut(std::mem::take);
+        for scope in scopes {
+            if let Some(scope) = scope.upgrade() {
+                scope.retire_wait(Rc::as_ptr(self));
+            }
+        }
     }
 }
 
@@ -420,6 +430,15 @@ impl<Source: WaitSource> WaitFuture<Source> {
     pub fn source(&self) -> Option<&Source> {
         self.source.as_ref()
     }
+
+    fn unregister_wait(&mut self) {
+        if let Some(wait) = self.wait_data.take() {
+            wait.retire_from_scopes();
+            if let Some(source) = &self.source {
+                source.unregister(&wait);
+            }
+        }
+    }
 }
 
 impl<Source: WaitSource> Future for WaitFuture<Source> {
@@ -429,7 +448,9 @@ impl<Source: WaitSource> Future for WaitFuture<Source> {
         if let Some(wait_data) = &self.wait_data
             && wait_data.canceled.get()
         {
-            wait_data.canceled.set(false);
+            // A later retry gets a new WaitData. Old scope memberships cannot
+            // cancel the new generation of this future.
+            self.get_mut().unregister_wait();
             return Poll::Ready(Err(CanceledError {}));
         }
 
@@ -453,7 +474,9 @@ impl<Source: WaitSource> Future for WaitFuture<Source> {
 
         if let Some(source) = &self.source {
             if source.is_complete() {
-                Poll::Ready(Ok(self.get_mut().source.take().unwrap()))
+                let this = self.get_mut();
+                this.unregister_wait();
+                Poll::Ready(Ok(this.source.take().unwrap()))
             } else {
                 // Location for this future is pinned, can use source address as a tag
                 let tag = source as *const Source as u32;
@@ -475,6 +498,7 @@ impl<Source: WaitSource> Future for WaitFuture<Source> {
                         canceled: Cell::new(false),
                         tag,
                         link: LinkedListLink::new(),
+                        scopes: MutInPlaceCell::default(),
                     });
                     source.register(&new_wait_data, task_id, activity_id, tag);
                     current_task.register_wait(&new_wait_data);
@@ -496,11 +520,7 @@ impl<Source: WaitSource> FusedFuture for WaitFuture<Source> {
 
 impl<Source: WaitSource> Drop for WaitFuture<Source> {
     fn drop(&mut self) {
-        if let Some(wait_data) = &self.wait_data
-            && let Some(source) = &self.source
-        {
-            source.unregister(wait_data);
-        }
+        self.unregister_wait();
     }
 }
 

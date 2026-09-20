@@ -129,6 +129,7 @@ enum CompletionState {
 
 pub(crate) struct Completion {
     state: MutInPlaceCell<CompletionState>,
+    scope: MutInPlaceCell<Option<std::rc::Weak<task::IoScopeRegistry>>>,
     owned_resources: CompletionResources,
     // memory for timeouts
     timespec: rustix_uring::types::Timespec,
@@ -136,6 +137,11 @@ pub(crate) struct Completion {
     task_index: u16,
     iopoll: bool,
 }
+
+// Cancel ACKs own a separate strong reference until the kernel processes the
+// cancellation. Otherwise a late cancel can target a recycled completion address.
+const CANCEL_ACK_TAG: usize = 1;
+const _: () = assert!(std::mem::align_of::<Completion>() > CANCEL_ACK_TAG);
 
 #[allow(dead_code)]
 enum CompletionResources {
@@ -147,7 +153,22 @@ enum CompletionResources {
 }
 
 impl Completion {
+    fn acknowledgement_owner(self: &Rc<Self>) -> *mut libc::c_void {
+        Rc::into_raw(self.clone())
+            .cast_mut()
+            .cast::<libc::c_void>()
+            .map_addr(|address| address | CANCEL_ACK_TAG)
+    }
+
+    fn retire_from_scope(self: &Rc<Self>) {
+        let scope = self.scope.use_mut(Option::take);
+        if let Some(scope) = scope.and_then(|scope| scope.upgrade()) {
+            scope.retire_io(Rc::as_ptr(self));
+        }
+    }
+
     pub fn cancel(self: &Rc<Self>, task_state: &mut task::TaskState) {
+        let mut completed = false;
         let should_cancel = self.state.use_mut(|state| match state {
             CompletionState::Idle { .. } => {
                 // cancel immediately but skipping submission
@@ -156,6 +177,7 @@ impl Completion {
                     #[cfg(feature = "io_uring_cmd")]
                     big_cqe: [0; 2],
                 };
+                completed = true;
                 false
             }
             CompletionState::Submitted { canceled, .. } => {
@@ -169,11 +191,18 @@ impl Completion {
             CompletionState::Terminated | CompletionState::Completed { .. } => false,
         });
 
+        if completed {
+            self.retire_from_scope();
+        }
         if should_cancel {
             let user_data_ptr = Rc::as_ptr(self) as *mut libc::c_void;
             let user_data = io_uring_user_data::from_ptr(user_data_ptr);
+            let acknowledgement = self.acknowledgement_owner();
             #[allow(clippy::useless_conversion)]
-            let entry = AsyncCancel::new(user_data).build().into();
+            let entry = AsyncCancel::new(user_data)
+                .build()
+                .user_data(io_uring_user_data::from_ptr(acknowledgement))
+                .into();
             if self.iopoll {
                 task_state.submit_poll(&[entry]);
                 task_state.stats.increment_in_flight_io_poll(1);

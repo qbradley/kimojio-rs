@@ -386,6 +386,23 @@ It must preserve nested scopes, cancellation, borrowed-buffer safety, and reentr
 Removing the connection scope or increasing limits is not an acceptable repair.
 Independent review and repeated retention measurements must precede timing claims.
 
+### Runtime repair candidate
+
+Candidate `a4af94fd97c986877f1ba23188d923dbe31fae2d` replaces operation-history vectors with live-registration maps.
+Waiter registration deduplicates repeated pending polls.
+Original I/O retires on genuine completion, while a separate cancellation-target owner remains until the cancellation acknowledgment.
+That separate owner prevents premature completion-address reuse.
+Registry capacity shrinks geometrically, and callback-bearing destruction occurs outside runtime and registry borrows.
+
+The parent integration passed 183 focused runtime tests, 81 HTTP/1 wrapper tests, and 74 HTTP/2 wrapper tests plus five doctests.
+The implementation owner also ran debug/release combinations and 22 no-default-feature scope tests.
+The repair adds regressions for scope retention, active cancellation, nested ownership, reentrant wakers, and borrowed-I/O panic settlement.
+The acknowledgment-order regression controls owner release around real completions, not kernel CQE order.
+
+Independent safety review, repeated allocation-site measurements, and a rebuilt dual-transport fixture remain in progress.
+The earlier socket and retention reports describe the old runtime, not this candidate.
+The candidate does not yet establish a retained-storage plateau or a performance result.
+
 ### Initial wrapper client fixture
 
 The client fixture uses the public native wrapper, not the direct core executor.

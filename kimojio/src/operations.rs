@@ -57,11 +57,8 @@ use crate::async_event::TaskSource;
 use crate::io_type::IOType;
 use crate::ring_future::{OwnedFdFuture, UnitFuture, UsizeFuture};
 use crate::task::{IoScopeCompletions, Task, TaskReadyState, TaskState};
-use crate::task_ref::wake_task;
 use crate::tracing::Events;
-use crate::{
-    CanceledError, Completion, CompletionResources, CompletionState, Errno, TaskHandleError,
-};
+use crate::{CanceledError, CompletionResources, Errno, TaskHandleError};
 use rustix::fd::{AsFd, AsRawFd};
 use rustix_uring::{
     opcode,
@@ -1839,7 +1836,8 @@ pub fn io_scope_cancel() {
     // 1. ensure all I/O is submitted
     task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
 
-    task.cancel_io_scope_completions(task_state);
+    drop(task_state);
+    task.cancel_io_scope_completions();
 }
 
 /// If called with an io_scope callback, will cancel all the pending
@@ -1856,36 +1854,24 @@ pub fn io_scope_cancel() {
 /// I/O that do not respond quickly to cancellation then that could cause
 /// stalls.
 fn io_scope_cancel_and_wait_internal(new_io_scope_completions: Option<IoScopeCompletions>) {
-    let mut task_state = TaskState::get();
+    let task_state = TaskState::get();
     let task = task_state.get_current_task();
 
     // restore remembered completions and get the I/O gathered for this task while f was running
     let gathered_completions = task.replace_io_scope_completions(new_io_scope_completions);
+    drop(task_state);
 
     // now we have to wait until all gathered completions are done.
-    if let Some(mut gathered_completions) = gathered_completions {
-        // 1. ensure all I/O is submitted
-        task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
-
-        // 2. cancel the gathered completions
-        retain_incomplete(&mut gathered_completions.completions, &mut task_state);
-
-        for completion in &gathered_completions.completions {
-            completion.cancel(&mut task_state);
-        }
-
-        for wait in gathered_completions.waits.drain(..) {
-            wait.canceled.set(true);
-            if let Some(waker) = wait.waker.use_mut(Option::take) {
-                task_state = wake_task(task_state, waker);
-            }
-        }
-
-        // 3. wait for them to finish.
-        while !gathered_completions.completions.is_empty() {
-            task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
-
-            retain_incomplete(&mut gathered_completions.completions, &mut task_state);
+    if let Some(gathered_completions) = gathered_completions {
+        // Observe already available results before requesting cancellation.
+        let task_state = TaskState::get();
+        let task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
+        drop(task_state);
+        gathered_completions.cancel();
+        while gathered_completions.has_io() {
+            let task_state = TaskState::get();
+            let task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
+            drop(task_state);
         }
     }
 }
@@ -1894,6 +1880,16 @@ fn io_scope_cancel_and_wait_internal(new_io_scope_completions: Option<IoScopeCom
 /// initiated by the current task while calling f are
 /// complete by the time f returns. Any IO operations
 /// that are in progress when f returns will be cancelled.
+///
+/// Scope storage follows live registrations, not operation history.
+/// Repeated pending polls register the same waiter once per scope.
+/// Wait completion or drop removes that registration.
+/// An actual I/O completion removes its registration before the caller consumes the result.
+/// Hash-table capacity retains amortized allocation slack, and the separate completion pool remains bounded.
+///
+/// Cancellation acknowledgments do not settle original I/O or release borrowed buffers.
+/// Scope exit waits for original completions.
+/// Pending operations retain their ownership throughout cancellation.
 pub fn io_scope<'a, T>(f: impl AsyncFnOnce() -> T + 'a) -> impl Future<Output = T> + 'a {
     IoScopeFuture {
         inner: CatchUnwindFuture { f: f() },
@@ -1930,7 +1926,7 @@ struct IoScopeCompletionsGuard(Option<IoScopeCompletions>);
 impl Drop for IoScopeCompletionsGuard {
     fn drop(&mut self) {
         if let Some(completions) = self.0.take() {
-            if completions.completions.is_empty() && completions.waits.is_empty() {
+            if completions.is_empty() {
                 return;
             }
             // Temporarily install our completions on the task so
@@ -1999,25 +1995,6 @@ impl<F: Future> Future for IoScopeFuture<F> {
 
                 Poll::Pending
             }
-        }
-    }
-}
-
-fn retain_incomplete(vec: &mut Vec<Rc<Completion>>, task_state: &mut TaskState) {
-    let mut index = 0;
-    while index < vec.len() {
-        let completion = vec.get(index).unwrap();
-        let retain = completion.state.use_mut(|state| {
-            matches!(
-                state,
-                CompletionState::Idle { .. } | CompletionState::Submitted { .. }
-            )
-        });
-        if !retain {
-            let completion = vec.swap_remove(index);
-            task_state.return_completion(completion);
-        } else {
-            index += 1;
         }
     }
 }

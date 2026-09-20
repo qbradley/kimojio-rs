@@ -130,6 +130,17 @@ fn process_completions(
             // This is a timeout completion, we need to skip it
             continue;
         }
+        if user_data_ptr.addr() & crate::CANCEL_ACK_TAG != 0 {
+            let target = user_data_ptr.map_addr(|address| address & !crate::CANCEL_ACK_TAG);
+            // SAFETY: Completion::cancel transferred this distinct ACK owner.
+            // Releasing it does not complete or retire the original operation.
+            let target = unsafe { Rc::from_raw(target.cast::<Completion>()) };
+            let unpooled = task_state.return_completion(target);
+            let cell = task_state.into_inner();
+            drop(unpooled);
+            task_state = cell.borrow_mut();
+            continue;
+        }
         let pool_handle = unsafe { Rc::from_raw(user_data_ptr as *mut Completion) };
 
         let mut result: Result<u32, Errno> = cqe.result();
@@ -142,12 +153,11 @@ fn process_completions(
                 panic!("You can't get a completion for an entry that is not submitted")
             }
             CompletionState::Submitted {
-                waker,
                 canceled,
                 activity_id,
                 tag,
+                ..
             } => {
-                let waker = waker.clone();
                 if result == Err(Errno::CANCELED) && !*canceled {
                     result = Err(Errno::TIME);
                 }
@@ -164,12 +174,15 @@ fn process_completions(
                     },
                 );
 
-                *state = CompletionState::Completed {
+                let completed = CompletionState::Completed {
                     result,
                     #[cfg(feature = "io_uring_cmd")]
                     big_cqe: *cqe.big_cqe(),
                 };
-
+                let CompletionState::Submitted { waker, .. } = std::mem::replace(state, completed)
+                else {
+                    unreachable!()
+                };
                 waker
             }
             CompletionState::Terminated | CompletionState::Completed { .. } => {
@@ -177,11 +190,13 @@ fn process_completions(
             }
         });
 
-        task_state.return_completion(pool_handle);
+        pool_handle.retire_from_scope();
+        let unpooled = task_state.return_completion(pool_handle);
 
         // Drop and re-borrow task_state so that wake_by_ref has the option
         // to access it via thread local storage.
         let task_state_ref = task_state.into_inner();
+        drop(unpooled);
         waker.wake();
         task_state = task_state_ref.borrow_mut();
     }
