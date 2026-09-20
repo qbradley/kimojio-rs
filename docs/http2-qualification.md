@@ -202,7 +202,7 @@ That review did not independently inject kernel cancellation races or close fail
 | Concurrent native server | Implemented with focused runtime tests |
 | Generic established transports | Implemented with focused runtime tests |
 | Independent wrapper socket fixture and peers | All 65 wrapper-profile cases passed per transport on `b3789dc6` |
-| Wrapper performance and final review | Pending |
+| Wrapper performance and final review | Harness implemented; retention attribution blocks statistical runs |
 
 The current core socket results do not qualify the new wrapper.
 The wrapper needs its own fixture, peer runs, and source-specific measurements.
@@ -320,6 +320,24 @@ The earlier native-only `96e52805` report remains separate.
 
 These results do not qualify ambiguous split/I/O/close error observations or every native cancellation race.
 The lifecycle evidence matrix and performance measurements remain separate acceptance work.
+
+### Runtime benchmark preparation
+
+Benchmark checkpoint `1d48669b56facb0e58f8600e005df18cc37b795e` adds real socket workloads and a separate allocation probe.
+It uses wrapper source `d8ca94b6` through integration `c8f6014a`.
+The [benchmark report](http2-performance/wrapper/) records frozen binary hashes, workload boundaries, commands, and smoke evidence.
+
+All 64 smoke runs passed payload, retirement, overlap, and actual driver-close assertions.
+The parent integration passed seven release/all-feature harness controls and both Clippy configurations.
+These smoke durations do not establish performance.
+No timing lease or statistical measurement followed from the smoke results.
+
+Requested live storage increased during short warmed allocation windows.
+For static 1 MiB duplex bodies at concurrency eight, native storage increased from 1,691,064 to 4,549,080 bytes.
+The corresponding generic window increased from 1,296,845 to 2,892,885 bytes.
+These values describe requested bytes, not RSS, and do not establish a leak or a plateau.
+Bounded retention attribution now blocks long statistical runs.
+The investigation must distinguish harness, runtime, wrapper, and protocol ownership before any optimization or memory-bound claim.
 
 ### Initial wrapper client fixture
 

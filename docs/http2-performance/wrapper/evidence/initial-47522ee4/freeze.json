@@ -1,0 +1,24 @@
+{
+  "source_revision": "47522ee4fe7053b0ecaff2b63b924a7ab46dbbd8",
+  "integration_revision": "c8f6014aa3128279690834f38a82373d3d31e4c2",
+  "wrapper_revision": "d8ca94b6c6ba8439085609b289ff1ddbd6698357",
+  "tracked_source_manifest_sha256": "628b1ef5612d3c35a1483a91e33929cc04a68ee7a38c369c6e2deec2dc75181c",
+  "binaries": {
+    "runtime": {
+      "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/frozen-47522ee4/runtime",
+      "sha256": "665f01066616788eddd81d00440ffce379c410f4c59b5ecd9e73a5b129923b7f"
+    },
+    "allocations": {
+      "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/frozen-47522ee4/allocations",
+      "sha256": "788405e5d0ed9cb0d308e8f751191a437bdf01f63ecf9310d6673e984f2ce1a6"
+    }
+  },
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "kernel": "Linux 6.6.137.mshv2-2.azl3 x86_64 GNU/Linux",
+  "build_command": "CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance CARGO_PROFILE_RELEASE_DEBUG=2 taskset -c 8-31 cargo build --release -p kimojio-http2 --bench runtime --bench allocations",
+  "rustflags": "",
+  "timing_lease": false,
+  "smoke_cpu_affinity": "8-31",
+  "statistical_performance_claim": false
+}

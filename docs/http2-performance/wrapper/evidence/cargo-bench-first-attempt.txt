@@ -1,0 +1,7 @@
+    Finished `bench` profile [optimized + debuginfo] target(s) in 0.08s
+     Running benches/runtime.rs (/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/release/deps/runtime-30e2798bd1bdcacf)
+Error: "missing value for --bench"
+error: bench failed, to rerun pass `-p kimojio-http2 --bench runtime`
+
+Caused by:
+  process didn't exit successfully: `/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/release/deps/runtime-30e2798bd1bdcacf --case empty --concurrency 1 --bench` (exit status: 1)

@@ -1,0 +1,10 @@
+{
+  "successful_runs": 64,
+  "runtime_runs": 40,
+  "allocation_runs": 24,
+  "successful_retirements_per_endpoint": 6602,
+  "successful_driver_closes": 128,
+  "checked_payload_bytes": 5183356672,
+  "required_overlap_witnesses": 1448,
+  "statistical_performance_claim": false
+}
