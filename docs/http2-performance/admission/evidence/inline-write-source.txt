@@ -1,0 +1,9 @@
+0x65e31
+core::mem::replace::<core::option::Option<kimojio_fsm_http2::api::WriteOp<&[u8]>>>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/mem/mod.rs:967
+<core::option::Option<kimojio_fsm_http2::api::WriteOp<&[u8]>>>::take
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1901
+composition_bench::composition_bench_support::transfer::<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-admission-performance/kimojio-fsm-http2/examples/composition_bench_support/mod.rs:577
+<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-admission-performance/kimojio-fsm-http2/examples/composition_bench_support/mod.rs:638

@@ -1,0 +1,50 @@
+{
+  "source_commit": "b3c6484b1cb664dca76b5c35399d2e7d1367ce87",
+  "baseline_source": "5505efc469c7939c43d6d42a2ecb10b94ab4d9e4",
+  "baseline_binary": {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-final/frozen-5505efc4/composition_bench",
+    "sha256": "861d584ad7c355cbf89eddbb43b74f487e9ee6431ed44d3d7c8135f5f7c2d692"
+  },
+  "binaries": {
+    "composition_bench": {
+      "path": "/workspace/kimojio-rs/target/http2-program/build-http2-admission-performance/frozen-b3c6484b/composition_bench",
+      "sha256": "80d578b012ab4a5d9d165c6174e7b12fd4e776d20f53a50b0cf72201773de850"
+    },
+    "allocation_probe": {
+      "path": "/workspace/kimojio-rs/target/http2-program/build-http2-admission-performance/frozen-b3c6484b/allocation_probe",
+      "sha256": "b723d7f62743de86f954be3a131ed53f61ac4765a5349210caacfbd8f3479c7c"
+    }
+  },
+  "rust_harness_identical_to_baseline": true,
+  "source_sha256": {
+    "kimojio-fsm-http2/examples/composition_bench.rs": "3db7144d9df7f375caf87dea0da426ff97b79be4622c8599911bc7c7f1a2463b",
+    "kimojio-fsm-http2/examples/allocation_probe.rs": "dc7a8346f3d5639e7a5e9d535837e2e95d3f59a19a15aad68dfe1a1ce26d1cc3",
+    "kimojio-fsm-http2/examples/composition_bench_support/allocation.rs": "9e6cef03f5edad62805d6628c7e6507e56e81861b0a5f6b2d618723a710b2a16",
+    "kimojio-fsm-http2/examples/composition_bench_support/allocation_counter.rs": "31f91d9eb43a97c41905c5bae2882b39cd3878dafde08c95f44a589b244be6b5",
+    "kimojio-fsm-http2/examples/composition_bench_support/diagnostics.rs": "e139de023e542b5692c2d4360152ef1cab7a036b60f299c3c5c91b6f6293c3ba",
+    "kimojio-fsm-http2/examples/composition_bench_support/mod.rs": "5c3ad0fdf544005da796315142242dcc882404269b8b319755da3e4dbede5e09",
+    "kimojio-fsm-http2/examples/composition_bench_support/overlap.rs": "c5f5e230174f45b727b235bb5a5ffb78c43ee16487aaea26a9ec5d877b8508a5",
+    "kimojio-fsm-http2/examples/composition_bench_support/retention.rs": "dbb06e2b5b54c2cd7337f9330436bd1df937de686aa3f25f35fb5c1912f8f12d"
+  },
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "CARGO_TARGET_DIR": "/workspace/kimojio-rs/target/http2-program/build-http2-admission-performance",
+  "CARGO_PROFILE_RELEASE_DEBUG": "2",
+  "RUSTFLAGS": null,
+  "CARGO_ENCODED_RUSTFLAGS": null,
+  "timing_and_profile_affinity": "2",
+  "build_test_allocation_affinity": "8-31",
+  "cpu_topology": "CPU CORE SOCKET ONLINE\n  0    0      0    yes\n  1    0      0    yes\n  2    1      0    yes\n  3    1      0    yes\n  4    2      0    yes\n  5    2      0    yes\n  6    3      0    yes\n  7    3      0    yes\n  8    4      0    yes\n  9    4      0    yes\n 10    5      0    yes\n 11    5      0    yes\n 12    6      0    yes\n 13    6      0    yes\n 14    7      0    yes\n 15    7      0    yes\n 16    8      0    yes\n 17    8      0    yes\n 18    9      0    yes\n 19    9      0    yes\n 20   10      0    yes\n 21   10      0    yes\n 22   11      0    yes\n 23   11      0    yes\n 24   12      0    yes\n 25   12      0    yes\n 26   13      0    yes\n 27   13      0    yes\n 28   14      0    yes\n 29   14      0    yes\n 30   15      0    yes\n 31   15      0    yes\n",
+  "build_command": "CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http2-program/build-http2-admission-performance CARGO_PROFILE_RELEASE_DEBUG=2 taskset -c 8-31 cargo build --release -p kimojio-fsm-http2 --example composition_bench --example allocation_probe",
+  "scope": "Common path only: the normal workload never receives Blocked and does not arm admission_changed",
+  "core_or_native_harness_changed": false,
+  "cpu2_lease": "released after the full matrix, paired comparisons, and four profiles",
+  "paired_command": "taskset -c 8-31 python3 docs/http2-performance/admission/paired_regression.py ../../build-http2-final/frozen-5505efc4/composition_bench ../../build-http2-admission-performance/frozen-b3c6484b/composition_bench docs/http2-performance/final/evidence/summary.json docs/http2-performance/admission/evidence",
+  "paired_analysis_sha256": "f3b06b840d71f129738f1bf6834701db231a18b5b3b776f8e9d8e79f426fd5fd",
+  "stack_analysis_sha256": "07ff1c27c6acc4961fe3708d7295348f7e4f96893b208aeec3812a761feb9b20",
+  "profile_commands": [
+    "taskset -c 2 perf record -e cpu-clock:u -F 999 --call-graph dwarf -o /workspace/kimojio-rs/target/http2-program/build-http2-admission-performance/frozen-b3c6484b/direct-empty.data -- /workspace/kimojio-rs/target/http2-program/build-http2-admission-performance/frozen-b3c6484b/composition_bench direct empty 1 65536 2000000 steady",
+    "taskset -c 2 perf record -e cpu-clock:u -F 999 --call-graph dwarf -o /workspace/kimojio-rs/target/http2-program/build-http2-admission-performance/frozen-b3c6484b/selected-empty.data -- /workspace/kimojio-rs/target/http2-program/build-http2-admission-performance/frozen-b3c6484b/composition_bench selected empty 1 65536 2000000 steady",
+    "taskset -c 2 perf record -e cpu-clock:u -F 999 --call-graph dwarf -o /workspace/kimojio-rs/target/http2-program/build-http2-admission-performance/frozen-b3c6484b/direct-empty128.data -- /workspace/kimojio-rs/target/http2-program/build-http2-admission-performance/frozen-b3c6484b/composition_bench direct empty 128 65536 16000 steady",
+    "taskset -c 2 perf record -e cpu-clock:u -F 999 --call-graph dwarf -o /workspace/kimojio-rs/target/http2-program/build-http2-admission-performance/frozen-b3c6484b/direct-1m.data -- /workspace/kimojio-rs/target/http2-program/build-http2-admission-performance/frozen-b3c6484b/composition_bench direct 1m 1 65536 32768 steady"
+  ]
+}

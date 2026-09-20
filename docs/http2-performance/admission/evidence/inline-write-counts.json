@@ -1,0 +1,22 @@
+{
+  "address": "0x65e31",
+  "offset": "0x1261",
+  "profiles": {
+    "direct-empty": {
+      "near_samples": 2,
+      "parent_samples": 891
+    },
+    "selected-empty": {
+      "near_samples": 0,
+      "parent_samples": 0
+    },
+    "direct-empty128": {
+      "near_samples": 4,
+      "parent_samples": 826
+    },
+    "direct-1m": {
+      "near_samples": 7,
+      "parent_samples": 2035
+    }
+  }
+}

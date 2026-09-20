@@ -1,0 +1,92 @@
+{
+  "source": "b3c6484b1cb664dca76b5c35399d2e7d1367ce87",
+  "baseline_source": "5505efc469c7939c43d6d42a2ecb10b94ab4d9e4",
+  "common_path_only": true,
+  "blocked_admission_path_measured": false,
+  "matrix": {
+    "cells": 189,
+    "passed": 945,
+    "failed": 0,
+    "trials": 5
+  },
+  "paired": {
+    "cells": 27,
+    "pairs": 243,
+    "passed_runs": 486,
+    "failed": 0,
+    "all_workload_and_wire_counts_matched": true,
+    "median_changes_percent": {
+      "min": 0.5951458199681792,
+      "median": 2.0428098096740843,
+      "max": 3.8373261133206604
+    },
+    "bootstrap_intervals_entirely_above_one": 19,
+    "bootstrap_intervals_including_one": 8
+  },
+  "allocations": {
+    "cells": 108,
+    "passed": 324,
+    "failed": 0,
+    "identical_repeats": 3,
+    "events_and_relative_storage_equal_to_baseline": true,
+    "peak_requested_live_bytes": 610562,
+    "additional_pre_window_process_bytes": 16
+  },
+  "retention": {
+    "source_commit": "b3c6484b1cb664dca76b5c35399d2e7d1367ce87",
+    "passed": 12,
+    "failed": 0,
+    "total_exchanges": 6030000,
+    "same_connection_cohorts": 10000,
+    "harness_unchanged_after_cohort8": true,
+    "live_plateau_at_2000_5000_10000": true,
+    "all_teardown_deltas_zero": true
+  },
+  "tests": {
+    "default": 39,
+    "all_features": 39,
+    "extra_overlap": 1,
+    "overlap_cohorts": 10,
+    "failed": 0,
+    "ignored": 0
+  },
+  "profiles": {
+    "direct-empty": {
+      "samples": 6143,
+      "buckets": {
+        "shared": 5328,
+        "client": 392,
+        "server": 423
+      }
+    },
+    "selected-empty": {
+      "samples": 6280,
+      "buckets": {
+        "client": 397,
+        "shared": 5087,
+        "server": 796
+      }
+    },
+    "direct-empty128": {
+      "samples": 5572,
+      "buckets": {
+        "shared": 4825,
+        "server": 402,
+        "client": 345
+      }
+    },
+    "direct-1m": {
+      "samples": 5504,
+      "buckets": {
+        "shared": 4848,
+        "client": 258,
+        "server": 398
+      }
+    }
+  },
+  "formatting": "pass",
+  "clippy": "pass with -D warnings",
+  "clippy_all_targets_all_features": "pass with -D warnings",
+  "cpu2_lease": "released",
+  "optimization_or_poc": false
+}
