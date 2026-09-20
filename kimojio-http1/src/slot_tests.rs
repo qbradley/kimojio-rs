@@ -37,7 +37,7 @@ async fn direct_slots_keep_forwarded_storage_through_cancel_and_late_success() {
         let mut io = native_io(fd);
         io.write(write).unwrap();
         {
-            let mut completion = std::pin::pin!(io.completions().1);
+            let mut completion = std::pin::pin!(io.completions(true).1);
             assert!(futures::poll!(completion.as_mut()).is_pending());
         }
         operations::yield_io().await;
@@ -48,7 +48,7 @@ async fn direct_slots_keep_forwarded_storage_through_cancel_and_late_success() {
         }
         assert_not_returned(&returned);
         io.cancel_write();
-        let WriteResult::Write(completion) = io.completions().1.await else {
+        let WriteResult::Write(completion) = io.completions(false).1.await else {
             panic!("missing original completion");
         };
         assert_not_returned(&returned);
@@ -96,7 +96,7 @@ async fn dropping_a_native_read_slot_settles_before_descriptor_release() {
     let mut io = native_io(fd);
     io.read(read).unwrap();
     for _ in 0..3 {
-        let mut completion = std::pin::pin!(io.completions().0);
+        let mut completion = std::pin::pin!(io.completions(true).0);
         assert!(futures::poll!(completion.as_mut()).is_pending());
     }
     drop(io);

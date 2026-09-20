@@ -25,10 +25,28 @@ pub(crate) trait IoDriver {
     fn close(&mut self, op: CloseOp) -> Result<(), Error>;
     fn completions(
         &mut self,
+        runnable: bool,
     ) -> (
         impl Future<Output = ReadCompletion<Vec<u8>>> + '_,
         impl Future<Output = WriteResult> + '_,
     );
+}
+
+pub(crate) fn poll_receive<T>(
+    receiver: &Receiver<T>,
+    wait: Pin<&mut impl Future<Output = Result<T, kimojio::ChannelError>>>,
+    cx: &mut Context<'_>,
+    runnable: bool,
+) -> Poll<Result<T, kimojio::ChannelError>> {
+    if !runnable {
+        return wait.poll(cx);
+    }
+    // A runnable turn cannot suspend, so an empty channel needs no wake registration.
+    match receiver.try_recv() {
+        Ok(Some(value)) => Poll::Ready(Ok(value)),
+        Ok(None) => Poll::Pending,
+        Err(error) => Poll::Ready(Err(error)),
+    }
 }
 
 pub(crate) struct WorkerIo {
@@ -80,22 +98,41 @@ impl IoDriver for WorkerIo {
 
     fn completions(
         &mut self,
+        runnable: bool,
     ) -> (
         impl Future<Output = ReadCompletion<Vec<u8>>> + '_,
         impl Future<Output = WriteResult> + '_,
     ) {
-        let read = async {
-            if self.read_send.is_some()
-                && let Ok(completion) = self.read_done.recv().await
-            {
-                self.read_cancel.take();
-                return completion;
+        let Self {
+            read_send,
+            read_done,
+            write_done,
+            read_cancel,
+            write_cancel,
+            ..
+        } = self;
+        let read = async move {
+            if read_send.is_some() {
+                let mut wait = std::pin::pin!(read_done.recv());
+                let result = futures::future::poll_fn(|cx| {
+                    poll_receive(read_done, wait.as_mut(), cx, runnable)
+                })
+                .await;
+                if let Ok(completion) = result {
+                    read_cancel.take();
+                    return completion;
+                }
             }
             std::future::pending().await
         };
-        let write = async {
-            if let Ok(completion) = self.write_done.recv().await {
-                self.write_cancel.take();
+        let write = async move {
+            let mut wait = std::pin::pin!(write_done.recv());
+            let result = futures::future::poll_fn(|cx| {
+                poll_receive(write_done, wait.as_mut(), cx, runnable)
+            })
+            .await;
+            if let Ok(completion) = result {
+                write_cancel.take();
                 return completion;
             }
             std::future::pending().await
@@ -208,6 +245,7 @@ where
 
     fn completions(
         &mut self,
+        _runnable: bool,
     ) -> (
         impl Future<Output = ReadCompletion<Vec<u8>>> + '_,
         impl Future<Output = WriteResult> + '_,
@@ -271,6 +309,29 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runnable_worker_completion_probes_do_not_register_runtime_waits() {
+        let (read_send, _reads) = kimojio::async_channel();
+        let (write_send, _writes) = kimojio::async_channel();
+        let (_read_complete, read_done) = kimojio::async_channel();
+        let (_write_complete, write_done) = kimojio::async_channel();
+        let mut io = WorkerIo {
+            read_send: Some(read_send),
+            write_send,
+            read_done,
+            write_done,
+            read_cancel: None,
+            write_cancel: None,
+        };
+        let (read, write) = io.completions(true);
+        let mut read = std::pin::pin!(read);
+        let mut write = std::pin::pin!(write);
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        // Registering a native channel wait outside a runtime would panic.
+        assert!(read.as_mut().poll(&mut cx).is_pending());
+        assert!(write.as_mut().poll(&mut cx).is_pending());
+    }
 
     #[test]
     fn reusable_slot_keeps_one_pinned_allocation_for_repeated_operations() {
