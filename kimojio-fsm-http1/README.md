@@ -114,6 +114,29 @@ Its small framing prefix and suffix remain separate from the payload.
 `BodySent<W>` returns the same retained output value.
 The HTTP/1 storage contract does not impose a family-wide transport storage type.
 
+### Experimental eager full bodies
+
+`Server::send_body_eager` and `Client::send_body_eager` can attach a complete fixed-length body to queued final metadata.
+The caller first starts the request or response with the existing command.
+Before the next drive, the caller can submit `SendBody { end: true, .. }` through the eager method.
+
+The core accepts only the complete remaining fixed-length payload.
+The core rejects eager admission for suppressed bodies, chunked framing, active writes, and an unresolved client continue gate.
+For an eager client upload, the body deadline starts at admission and includes the combined metadata.
+For an eager server write, a generic write-all executor hides separate metadata completion from the existing body-deadline refresh.
+The caller must explicitly accept these completion and deadline differences.
+A rejected command retains its original storage.
+The caller can keep that storage for the normal demand path.
+No rejection changes the queued head.
+
+An accepted command ends the source before output completes.
+The write operation owns the head and body as separate allocations.
+`WriteOp::slices` exposes them without payload concatenation.
+Partial-write accounting excludes metadata from `BodySent::accepted`.
+The existing callback and cancellation contracts do not change.
+
+The [interface PoC report](../docs/http1-wrapper-lab/poc-interface.md) records the experiment and its limits.
+
 ## One progress method
 
 `next(&mut ports)` returns `Option<P::Output>`.

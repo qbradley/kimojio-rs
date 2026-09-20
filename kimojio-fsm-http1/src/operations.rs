@@ -38,6 +38,11 @@ pub(crate) enum WriteStorage<B> {
         bytes: Vec<u8>,
         kind: MetadataKind,
     },
+    HeadBody {
+        bytes: Vec<u8>,
+        command: SendBody<B>,
+        body_id: BodyId,
+    },
     Body {
         command: SendBody<B>,
         body_id: BodyId,
@@ -72,6 +77,9 @@ impl<B: AsRef<[u8]>> WriteOp<B> {
     pub fn slices(&self) -> [&[u8]; 3] {
         let slices: [&[u8]; 3] = match &self.storage {
             WriteStorage::Head { bytes, .. } => [bytes, &[], &[]],
+            WriteStorage::HeadBody { bytes, command, .. } => {
+                [bytes, &command.buffer.as_ref()[command.range.clone()], &[]]
+            }
             WriteStorage::Body {
                 command,
                 prefix,
@@ -197,5 +205,37 @@ pub struct BodyCompletion<B> {
 impl<B> BodyCompletion<B> {
     pub fn into_parts(self) -> (BodyOp<B>, usize) {
         (self.op, self.consumed)
+    }
+}
+
+#[cfg(test)]
+mod eager_layout_tests {
+    use super::*;
+
+    #[allow(dead_code)]
+    enum OriginalWriteStorage<B> {
+        Head {
+            bytes: Vec<u8>,
+            kind: MetadataKind,
+        },
+        Body {
+            command: SendBody<B>,
+            body_id: BodyId,
+            prefix: [u8; 24],
+            prefix_len: usize,
+            chunked: bool,
+        },
+    }
+
+    #[test]
+    fn eager_variant_does_not_grow_existing_write_storage() {
+        assert_eq!(
+            size_of::<WriteStorage<Vec<u8>>>(),
+            size_of::<OriginalWriteStorage<Vec<u8>>>()
+        );
+        assert_eq!(
+            size_of::<WriteStorage<&[u8]>>(),
+            size_of::<OriginalWriteStorage<&[u8]>>()
+        );
     }
 }

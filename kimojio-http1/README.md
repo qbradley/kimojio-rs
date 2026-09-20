@@ -71,7 +71,7 @@ Each native write submits one `writev` and reports its exact completed byte coun
 The protocol machine, not a transport write-all cursor, decides the next write after partial progress.
 Native cancellation targets the original operation and awaits its result.
 A late success retains its exact byte count.
-In this overhead PoC, native connections use reusable pinned operation slots instead of transport workers and channels.
+Native connections use reusable pinned operation slots instead of transport workers and channels.
 Native close waits for both original-operation slots to settle, then awaits an actual close operation.
 The generic stream backend retains its workers.
 See the [overhead PoC record](../docs/http1-wrapper-lab/poc-overhead.md) for the experiment and allocation evidence.
@@ -114,6 +114,21 @@ The application must continue to poll the server future until shutdown completes
 - `full(bytes)` owns a complete, fixed-length body.
 - `from_stream(length, stream)` polls a fallible source directly.
 - `from_incoming(body)` forwards data leases and trailers with streaming framing.
+
+`empty` and `full` retain their state directly instead of boxing a body stream.
+By default, it preserves separate metadata and payload writes through the normal demand path.
+`Config::coalesce_full_bodies` defaults to `false` for both client and server connections.
+When this option is `true`, the wrapper asks the core to attach eligible full payloads through `send_body_eager`.
+The transport borrows separate head and payload slices from one owned write operation.
+Suppression, continue gates, and unavailable capacity return the payload to the normal demand path.
+Custom streams and forwarded leases retain their existing demand-driven path.
+
+Coalescing changes completion and deadline boundaries.
+The client upload deadline starts at eager admission and includes metadata.
+A generic write-all transport also hides separate metadata progress from the server's body-deadline refresh.
+Thus, an opted-in full body can time out where separate writes succeed.
+The default preserves both client and server boundaries without restoring the boxed full-body source.
+The [interface PoC report](../docs/http1-wrapper-lab/poc-interface.md) describes the experiment and validation limits.
 
 The direct source needs no producer task or channel.
 `Some(length)` declares a fixed length.
@@ -228,6 +243,10 @@ The wrapper rejects an oversized data frame after the source returns it.
 It cannot prevent the source itself from allocating excessive memory.
 
 Input selection rotates between ready work sources.
+On runnable turns, channel and cancellation probes do not register temporary waits.
+Native slots still poll the original I/O futures directly.
+Before suspension, ordinary channel and cancellation futures register wake sources.
+
 The driver drains core notifications before it polls an outgoing source.
 This prevents stale capacity from admitting source output after the core revokes it.
 If the core rejects a late data frame after revocation, the wrapper drops its unadmitted buffer and producer.
@@ -241,7 +260,7 @@ The `virtual-clock` feature preserves the runtime's virtual time domain.
 The wrapper is not allocation-free.
 It allocates application channels, metadata, and boxed handler or body sources.
 The generic backend also allocates transport channels and per-operation cancellation tokens.
-The native PoC retains two cancellation flags and two pinned operation slots per connection instead.
+The native backend retains two cancellation flags and two pinned operation slots per connection instead.
 Connection-level boxes keep large native transport buffers out of caller future frames.
 The generic `OwnedFdStream` also copies received bytes through its own 16-KiB buffer.
 The explicit native backend omits that buffer and copy.
