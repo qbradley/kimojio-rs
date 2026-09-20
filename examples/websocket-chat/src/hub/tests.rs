@@ -572,3 +572,315 @@ fn issued_delivery_rejected_after_recipient_closes_does_not_close_hub() {
     }
     assert!(hub.next(&mut Escaping).is_none());
 }
+
+#[derive(Debug, Eq, PartialEq)]
+enum Trace {
+    Send(usize, u64),
+    Close(usize, u16),
+}
+
+struct ModelPorts {
+    yielding: bool,
+    deliveries: Vec<Delivery>,
+    trace: Vec<Trace>,
+}
+
+impl Ports for ModelPorts {
+    type Output = ();
+    fn send(&mut self, delivery: Delivery) -> Option<()> {
+        self.trace.push(Trace::Send(
+            delivery.id.client.slot(),
+            delivery.payload.order(),
+        ));
+        self.deliveries.push(delivery);
+        self.yielding.then_some(())
+    }
+    fn close(&mut self, close: Close) -> Option<()> {
+        self.trace
+            .push(Trace::Close(close.client.slot(), close.code));
+        self.yielding.then_some(())
+    }
+    fn yield_turn(&mut self) -> Option<()> {
+        self.yielding.then_some(())
+    }
+}
+
+fn drive_model(hub: &mut Hub, ports: &mut ModelPorts) {
+    for _ in 0..16 {
+        if hub.next(ports).is_none() {
+            return;
+        }
+    }
+    panic!("two-client model did not quiesce");
+}
+
+fn check_model_invariants(hub: &Hub, ports: &ModelPorts) {
+    let mut previous = None;
+    let mut cursor = hub.ready_head;
+    let mut linked = 0;
+    while let Some(slot) = cursor {
+        assert!(linked < hub.clients.len(), "ready list cycle");
+        let client = hub.clients[slot].as_ref().unwrap();
+        let ReadyLink::Linked {
+            previous: actual,
+            next,
+        } = client.ready
+        else {
+            panic!("ready list contains idle client");
+        };
+        assert_eq!(actual, previous);
+        previous = Some(slot);
+        cursor = next;
+        linked += 1;
+    }
+    assert_eq!(previous, hub.ready_tail);
+    let mut residents = 0;
+    let mut active = 0;
+    let mut memberships = 0;
+    for client in hub.clients.iter().flatten() {
+        residents += 1;
+        memberships += usize::from(matches!(client.ready, ReadyLink::Linked { .. }));
+        let is_active = matches!(client.lifecycle, Lifecycle::Active { .. });
+        active += usize::from(is_active);
+        if !is_active {
+            assert_eq!(client.queue.length, 0);
+        }
+        let outstanding = ports
+            .deliveries
+            .iter()
+            .filter(|d| d.id.client == client.id)
+            .count();
+        assert_eq!(outstanding, usize::from(client.in_flight.is_some()));
+        assert!(!client.settled(), "settled slot must be reaped");
+        let queue_capacity: usize = client
+            .queue
+            .entries
+            .iter()
+            .flatten()
+            .map(SharedPayload::capacity)
+            .sum();
+        assert_eq!(
+            client.held_bytes,
+            hub.queue_bytes
+                + queue_capacity
+                + client
+                    .in_flight
+                    .as_ref()
+                    .map_or(0, |pending| pending.capacity)
+        );
+    }
+    assert_eq!(linked, memberships);
+    assert_eq!(hub.stats().active_clients, active);
+    assert_eq!(hub.stats().resident_clients, residents);
+    assert!(hub.stats().used_bytes <= hub.config.max_total_bytes);
+}
+
+fn settlement_schedule(schedule: &[u8; 6], failed: bool, yielding: bool) -> Vec<Trace> {
+    let mut hub = Hub::new(7, config()).unwrap();
+    let baseline = hub.stats().used_bytes;
+    let target = add(&mut hub);
+    let healthy = add(&mut hub);
+    let first = publish(&mut hub, healthy, Kind::Binary, b"one").order;
+    let second = publish(&mut hub, healthy, Kind::Binary, b"two").order;
+    let mut ports = ModelPorts {
+        yielding,
+        deliveries: Vec::new(),
+        trace: Vec::new(),
+    };
+    drive_model(&mut hub, &mut ports);
+    assert_eq!(
+        ports.trace,
+        [
+            Trace::Send(target.slot(), first),
+            Trace::Send(healthy.slot(), first)
+        ]
+    );
+    for action in schedule {
+        match action {
+            0 => {
+                let result = hub.remove(target, 1008);
+                assert!(matches!(result, Ok(()) | Err(Error::UnknownClient)));
+            }
+            1 => hub.closed(target).unwrap(),
+            2 | 3 => {
+                let client = if *action == 2 { target } else { healthy };
+                let index = ports
+                    .deliveries
+                    .iter()
+                    .position(|d| d.id.client == client && d.payload.order() == first)
+                    .unwrap();
+                let delivery = ports.deliveries.remove(index);
+                hub.complete(delivery.complete(if *action == 2 && failed {
+                    DeliveryResult::Failed
+                } else {
+                    DeliveryResult::Sent
+                }))
+                .unwrap();
+            }
+            4 | 5 => drive_model(&mut hub, &mut ports),
+            _ => unreachable!(),
+        }
+        check_model_invariants(&hub, &ports);
+    }
+    drive_model(&mut hub, &mut ports);
+    // Independent temporal obligations, not the production ready selector:
+    // a second send requires a successful receipt and a drive before removal.
+    let position = |action| schedule.iter().position(|a| *a == action).unwrap();
+    let removed = position(0).min(position(1));
+    let second_sent = !failed
+        && [4, 5]
+            .into_iter()
+            .any(|drive| position(2) < position(drive) && position(drive) < removed);
+    let target_orders: Vec<_> = ports
+        .trace
+        .iter()
+        .filter_map(|event| match event {
+            Trace::Send(slot, order) if *slot == target.slot() => Some(*order),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        target_orders,
+        if second_sent {
+            vec![first, second]
+        } else {
+            vec![first]
+        }
+    );
+    let close_requested = if failed {
+        position(0).min(position(2))
+    } else {
+        position(0)
+    };
+    let close_issued = [4, 5]
+        .into_iter()
+        .any(|drive| close_requested < position(drive) && position(drive) < position(1));
+    let target_closes: Vec<_> = ports
+        .trace
+        .iter()
+        .filter_map(|event| match event {
+            Trace::Close(slot, code) if *slot == target.slot() => Some(*code),
+            _ => None,
+        })
+        .collect();
+    let code = if failed && position(2) < position(0) {
+        1011
+    } else {
+        1008
+    };
+    assert_eq!(
+        target_closes,
+        if close_issued { vec![code] } else { vec![] }
+    );
+    let healthy_trace: Vec<_> = ports
+        .trace
+        .iter()
+        .filter(|event| match event {
+            Trace::Send(slot, _) | Trace::Close(slot, _) => *slot == healthy.slot(),
+        })
+        .collect();
+    assert_eq!(
+        healthy_trace,
+        [
+            &Trace::Send(healthy.slot(), first),
+            &Trace::Send(healthy.slot(), second)
+        ]
+    );
+    hub.closed(healthy).unwrap();
+    for delivery in ports.deliveries.drain(..) {
+        hub.complete(delivery.complete(DeliveryResult::Sent))
+            .unwrap();
+    }
+    drive_model(&mut hub, &mut ports);
+    check_model_invariants(&hub, &ports);
+    assert_eq!(hub.stats().resident_clients, 0);
+    assert_eq!(hub.stats().used_bytes, baseline);
+    let replacement = hub.admit().unwrap();
+    assert_eq!(replacement.slot(), target.slot());
+    assert_ne!(replacement.generation(), target.generation());
+    assert_eq!(hub.activate(target), Err(Error::UnknownClient));
+    hub.closed(replacement).unwrap();
+    assert_eq!(hub.stats().used_bytes, baseline);
+    ports.trace
+}
+
+#[test]
+fn bounded_settlement_model_matches_yielding_and_continuing_ports() {
+    fn permute(schedule: &mut [u8; 6], index: usize, count: &mut usize) {
+        if index == schedule.len() {
+            for failed in [false, true] {
+                let continuing = settlement_schedule(schedule, failed, false);
+                let yielding = settlement_schedule(schedule, failed, true);
+                assert_eq!(
+                    continuing, yielding,
+                    "schedule {schedule:?}, failed={failed}"
+                );
+                *count += 2;
+            }
+            return;
+        }
+        for next in index..schedule.len() {
+            schedule.swap(index, next);
+            permute(schedule, index + 1, count);
+            schedule.swap(index, next);
+        }
+    }
+    let mut count = 0;
+    permute(&mut [0, 1, 2, 3, 4, 5], 0, &mut count);
+    assert_eq!(count, 2880);
+}
+
+#[test]
+fn cooperative_budget_is_not_quiescence_with_a_ready_sibling() {
+    struct BudgetPorts {
+        suspend: bool,
+        yields: usize,
+        deliveries: Vec<Delivery>,
+    }
+    impl Ports for BudgetPorts {
+        type Output = ();
+        fn send(&mut self, delivery: Delivery) -> Option<()> {
+            self.deliveries.push(delivery);
+            None
+        }
+        fn close(&mut self, _: Close) -> Option<()> {
+            panic!("empty broadcasts fit every recipient");
+        }
+        fn yield_turn(&mut self) -> Option<()> {
+            self.yields += 1;
+            self.suspend.then_some(())
+        }
+    }
+    for suspend in [false, true] {
+        let mut options = config();
+        options.max_clients = 65;
+        let mut hub = Hub::new(1, options).unwrap();
+        let baseline = hub.stats().used_bytes;
+        let clients: Vec<_> = (0..65).map(|_| add(&mut hub)).collect();
+        publish(&mut hub, clients[0], Kind::Text, b"");
+        let mut ports = BudgetPorts {
+            suspend,
+            yields: 0,
+            deliveries: Vec::new(),
+        };
+        assert_eq!(hub.next(&mut ports), suspend.then_some(()));
+        assert_eq!(ports.deliveries.len(), if suspend { 64 } else { 65 });
+        assert_eq!(ports.yields, 1);
+        assert!(hub.next(&mut ports).is_none());
+        assert_eq!(
+            ports
+                .deliveries
+                .iter()
+                .map(|delivery| delivery.id.client)
+                .collect::<Vec<_>>(),
+            clients
+        );
+        for delivery in ports.deliveries {
+            let client = delivery.id.client;
+            hub.closed(client).unwrap();
+            hub.complete(delivery.complete(DeliveryResult::Sent))
+                .unwrap();
+        }
+        assert_eq!(hub.stats().used_bytes, baseline);
+    }
+}

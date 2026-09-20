@@ -1,15 +1,13 @@
 //! Native tasks exist only at the outer executor boundary.
-use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::future::Future;
 use std::io::{IoSlice, Write};
-use std::mem::size_of;
+use std::mem::{size_of, size_of_val};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use kimojio::{AsyncEvent, CancellationToken, Errno, OwnedFd, operations};
+use kimojio::{CancellationToken, Errno, OwnedFd, SenderUnbounded, operations};
 use kimojio_fsm_http1::{IoError, IoErrorKind, Tick};
 use rustix::net::{AddressFamily, SocketType, ipproto, sockopt};
 
@@ -52,21 +50,21 @@ enum Event {
     },
     Timer(Result<(), Errno>),
 }
+#[derive(Clone)]
 struct Mailbox {
-    queue: RefCell<VecDeque<Event>>,
-    wake: AsyncEvent,
+    sender: SenderUnbounded<Event>,
+    capacity: usize,
 }
 impl Mailbox {
     fn publish(&self, event: Event) {
-        {
-            let mut queue = self.queue.borrow_mut();
-            assert!(
-                queue.len() < queue.capacity(),
-                "one completion per reserved worker slot"
-            );
-            queue.push_back(event);
-        }
-        self.wake.set();
+        assert!(
+            self.sender.len() < self.capacity,
+            "one completion per reserved worker slot"
+        );
+        assert!(
+            self.sender.send(event).is_ok(),
+            "root retains the receiver until settlement"
+        );
     }
 }
 struct Worker {
@@ -79,8 +77,33 @@ struct IoWorker {
 }
 struct Socket {
     client: ClientId,
-    fd: Option<Rc<OwnedFd>>,
+    transport: Transport,
     workers: [Option<IoWorker>; 2],
+}
+
+enum Transport {
+    Open(Rc<OwnedFd>),
+    Closing,
+}
+
+enum Lifecycle {
+    Running { stop_at: Tick },
+    Draining { abort_at: Tick },
+    Aborting,
+}
+
+impl Lifecycle {
+    fn accepting(&self) -> bool {
+        matches!(self, Self::Running { .. })
+    }
+
+    fn deadline(&self) -> Option<Tick> {
+        match self {
+            Self::Running { stop_at } => Some(*stop_at),
+            Self::Draining { abort_at } => Some(*abort_at),
+            Self::Aborting => None,
+        }
+    }
 }
 
 enum Action {
@@ -133,7 +156,7 @@ async fn execute(
     client: ClientId,
     operation: Io,
     cancellation: Rc<CancellationToken>,
-    mailbox: Rc<Mailbox>,
+    mailbox: Mailbox,
 ) {
     let identity = operation.identity();
     let completion = match operation {
@@ -185,7 +208,7 @@ async fn execute(
     });
 }
 
-async fn accept(listener: Rc<OwnedFd>, cancellation: Rc<CancellationToken>, mailbox: Rc<Mailbox>) {
+async fn accept(listener: Rc<OwnedFd>, cancellation: Rc<CancellationToken>, mailbox: Mailbox) {
     let result = if cancellation.is_cancelled() {
         Err(Errno::CANCELED)
     } else {
@@ -196,12 +219,7 @@ async fn accept(listener: Rc<OwnedFd>, cancellation: Rc<CancellationToken>, mail
     };
     mailbox.publish(Event::Accepted(result));
 }
-async fn timer(
-    origin: Instant,
-    at: Tick,
-    cancellation: Rc<CancellationToken>,
-    mailbox: Rc<Mailbox>,
-) {
+async fn timer(origin: Instant, at: Tick, cancellation: Rc<CancellationToken>, mailbox: Mailbox) {
     let result = if !cancellation.is_cancelled() {
         let original = operations::sleep_until(origin + Duration::from_nanos(at.0));
         native::settle_one(original, &cancellation, |op| Pin::new(op).cancel()).await
@@ -211,22 +229,27 @@ async fn timer(
     mailbox.publish(Event::Timer(result));
 }
 
-type Execute<F> = fn(Rc<OwnedFd>, ClientId, Io, Rc<CancellationToken>, Rc<Mailbox>) -> F;
+type Execute<F> = fn(Rc<OwnedFd>, ClientId, Io, Rc<CancellationToken>, Mailbox) -> F;
 fn io_future_bytes<F: Future<Output = ()>>(_: Execute<F>) -> usize {
     size_of::<F>()
 }
 fn accept_future_bytes<F: Future<Output = ()>>(
-    _: fn(Rc<OwnedFd>, Rc<CancellationToken>, Rc<Mailbox>) -> F,
+    _: fn(Rc<OwnedFd>, Rc<CancellationToken>, Mailbox) -> F,
 ) -> usize {
     size_of::<F>()
 }
 fn timer_future_bytes<F: Future<Output = ()>>(
-    _: fn(Instant, Tick, Rc<CancellationToken>, Rc<Mailbox>) -> F,
+    _: fn(Instant, Tick, Rc<CancellationToken>, Mailbox) -> F,
 ) -> usize {
     size_of::<F>()
 }
 fn clock(origin: Instant) -> Tick {
-    Tick(origin.elapsed().as_nanos().min(u64::MAX as u128) as u64)
+    Tick(
+        kimojio::clock_now()
+            .duration_since(origin)
+            .as_nanos()
+            .min(u64::MAX as u128) as u64,
+    )
 }
 fn add_duration(tick: Tick, duration: Duration) -> Tick {
     Tick(
@@ -248,11 +271,14 @@ pub async fn run(mut config: Config) -> Result<hub::Stats, String> {
     {
         return Err("invalid runtime or admission configuration".into());
     }
-    let queue = VecDeque::with_capacity(2 * maximum + 2);
+    let capacity = 2 * maximum + 2;
+    let (sender, receiver) = kimojio::async_channel_unbounded_with_capacity::<Event>(capacity);
     let rc_counts = 2 * size_of::<usize>();
-    config.chat.hub.external_fixed_bytes = queue.capacity() * size_of::<Event>()
+    config.chat.hub.external_fixed_bytes = sender.storage_bytes()
         + size_of::<Mailbox>()
-        + rc_counts
+        + size_of::<kimojio::ReceiverUnbounded<Event>>()
+        + size_of_val(&receiver.recv())
+        + size_of::<Option<Event>>()
         + maximum * size_of::<Option<Socket>>()
         + accept_future_bytes(accept)
         + timer_future_bytes(timer)
@@ -266,10 +292,7 @@ pub async fn run(mut config: Config) -> Result<hub::Stats, String> {
     let mut chat =
         Chat::new(config.chat.clone()).map_err(|e| format!("invalid chat configuration: {e:?}"))?;
     let mut sockets: Box<[Option<Socket>]> = hub::empty_slots(maximum);
-    let mailbox = Rc::new(Mailbox {
-        queue: RefCell::new(queue),
-        wake: AsyncEvent::new(),
-    });
+    let mailbox = Mailbox { sender, capacity };
     let listener = operations::socket(
         if config.bind.is_ipv4() {
             AddressFamily::INET
@@ -293,32 +316,38 @@ pub async fn run(mut config: Config) -> Result<hub::Stats, String> {
     std::io::stdout()
         .flush()
         .map_err(|e| format!("readiness output: {e}"))?;
-    let origin = Instant::now();
-    let stop_at = add_duration(Tick(0), config.run_for);
-    let mut stopping = false;
-    let mut abort_at = None;
-    let mut aborted = false;
+    let origin = kimojio::clock_now();
+    let mut lifecycle = Lifecycle::Running {
+        stop_at: add_duration(Tick(0), config.run_for),
+    };
     let mut accept_worker: Option<Worker> = None;
     let mut timer_worker: Option<(Tick, Worker)> = None;
+    let mut pending = None;
 
     loop {
         let now = clock(origin);
         chat.expire_due(now);
-        if !stopping && now >= stop_at {
-            stopping = true;
-            abort_at = Some(add_duration(now, config.shutdown_grace));
+        if matches!(lifecycle, Lifecycle::Running { stop_at } if now >= stop_at) {
+            lifecycle = Lifecycle::Draining {
+                abort_at: add_duration(now, config.shutdown_grace),
+            };
             chat.shutdown(false);
             if let Some(worker) = &accept_worker {
                 worker.cancellation.cancel();
             }
         }
-        if !aborted && abort_at.is_some_and(|at| now >= at) {
-            aborted = true;
+        if matches!(lifecycle, Lifecycle::Draining { abort_at } if now >= abort_at) {
+            lifecycle = Lifecycle::Aborting;
             chat.shutdown(true);
         }
         let mut work = 0;
         while work < 64 {
-            let event = mailbox.queue.borrow_mut().pop_front();
+            let event = match pending.take() {
+                Some(event) => Some(event),
+                None => receiver
+                    .try_recv()
+                    .map_err(|e| format!("root receive: {e:?}"))?,
+            };
             let Some(event) = event else { break };
             work += 1;
             match event {
@@ -330,7 +359,7 @@ pub async fn run(mut config: Config) -> Result<hub::Stats, String> {
                         .await
                         .map_err(|e| format!("accept worker: {e:?}"))?;
                     match result {
-                        Ok(fd) if !stopping => {
+                        Ok(fd) if lifecycle.accepting() => {
                             if let Err(error) =
                                 sockopt::set_socket_send_buffer_size(&fd, config.send_buffer_bytes)
                             {
@@ -343,7 +372,7 @@ pub async fn run(mut config: Config) -> Result<hub::Stats, String> {
                                     Ok(client) => {
                                         sockets[client.slot()] = Some(Socket {
                                             client,
-                                            fd: Some(Rc::new(fd)),
+                                            transport: Transport::Open(Rc::new(fd)),
                                             workers: [None, None],
                                         })
                                     }
@@ -363,8 +392,7 @@ pub async fn run(mut config: Config) -> Result<hub::Stats, String> {
                         Err(Errno::CANCELED | Errno::INTR) => {}
                         Err(error) => {
                             eprintln!("accept: {error}; stopping");
-                            stopping = true;
-                            aborted = true;
+                            lifecycle = Lifecycle::Aborting;
                             chat.shutdown(true);
                         }
                     }
@@ -381,8 +409,7 @@ pub async fn run(mut config: Config) -> Result<hub::Stats, String> {
                         && error != Errno::CANCELED
                     {
                         eprintln!("timer: {error}; stopping");
-                        stopping = true;
-                        aborted = true;
+                        lifecycle = Lifecycle::Aborting;
                         chat.shutdown(true);
                         if let Some(worker) = &accept_worker {
                             worker.cancellation.cancel();
@@ -434,9 +461,17 @@ pub async fn run(mut config: Config) -> Result<hub::Stats, String> {
                     let identity = operation.identity();
                     let fd = if operation.is_close() {
                         assert!(socket.workers.iter().all(Option::is_none));
-                        socket.fd.take().expect("exactly one transport close")
+                        let Transport::Open(fd) =
+                            std::mem::replace(&mut socket.transport, Transport::Closing)
+                        else {
+                            unreachable!("exactly one transport close")
+                        };
+                        fd
                     } else {
-                        socket.fd.as_ref().unwrap().clone()
+                        let Transport::Open(fd) = &socket.transport else {
+                            unreachable!("no I/O after transport close")
+                        };
+                        fd.clone()
                     };
                     let cancellation = Rc::new(CancellationToken::new());
                     let task = operations::spawn_task(execute(
@@ -467,7 +502,10 @@ pub async fn run(mut config: Config) -> Result<hub::Stats, String> {
                 Action::Retired(client) => {
                     let socket = sockets[client.slot()].take().expect("retired socket");
                     assert_eq!(socket.client, client);
-                    assert!(socket.fd.is_none() && socket.workers.iter().all(Option::is_none));
+                    assert!(
+                        matches!(socket.transport, Transport::Closing)
+                            && socket.workers.iter().all(Option::is_none)
+                    );
                 }
                 Action::Deadline => {}
                 Action::Yield => {
@@ -475,7 +513,7 @@ pub async fn run(mut config: Config) -> Result<hub::Stats, String> {
                 }
             }
         }
-        if !stopping && accept_worker.is_none() && chat.can_admit() {
+        if lifecycle.accepting() && accept_worker.is_none() && chat.can_admit() {
             let cancellation = Rc::new(CancellationToken::new());
             let task = operations::spawn_task(accept(
                 listener.clone(),
@@ -484,16 +522,9 @@ pub async fn run(mut config: Config) -> Result<hub::Stats, String> {
             ));
             accept_worker = Some(Worker { cancellation, task });
         }
-        let settled = stopping && chat.stats().resident_clients == 0 && accept_worker.is_none();
-        let target = if settled {
-            None
-        } else if !stopping {
-            Some(stop_at)
-        } else if !aborted {
-            abort_at
-        } else {
-            None
-        };
+        let settled =
+            !lifecycle.accepting() && chat.stats().resident_clients == 0 && accept_worker.is_none();
+        let target = if settled { None } else { lifecycle.deadline() };
         let target = target.into_iter().chain(chat.deadline()).min();
         if let Some((at, worker)) = &timer_worker {
             if Some(*at) != target {
@@ -505,7 +536,7 @@ pub async fn run(mut config: Config) -> Result<hub::Stats, String> {
                 operations::spawn_task(timer(origin, at, cancellation.clone(), mailbox.clone()));
             timer_worker = Some((at, Worker { cancellation, task }));
         }
-        if stopping && chat.stats().resident_clients == 0 && accept_worker.is_none() {
+        if settled {
             if let Some((_, worker)) = &timer_worker {
                 worker.cancellation.cancel();
             }
@@ -517,15 +548,12 @@ pub async fn run(mut config: Config) -> Result<hub::Stats, String> {
             operations::yield_io().await;
             continue;
         }
-        mailbox.wake.reset();
-        if !mailbox.queue.borrow().is_empty() {
-            continue;
-        }
-        mailbox
-            .wake
-            .wait()
-            .await
-            .map_err(|e| format!("root wake: {e:?}"))?;
+        pending = Some(
+            receiver
+                .recv()
+                .await
+                .map_err(|e| format!("root receive: {e:?}"))?,
+        );
     }
     close_owned(listener)
         .await
@@ -537,3 +565,6 @@ pub async fn run(mut config: Config) -> Result<hub::Stats, String> {
     );
     Ok(stats)
 }
+
+#[cfg(test)]
+mod tests;
