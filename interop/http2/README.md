@@ -86,6 +86,7 @@ Null wire errors do not make a failed terminal outcome successful.
 ## Diagnose an early successful response
 
 This separate probe sends status 200 and response END_STREAM before the upload ends.
+`--status 413` exercises the same behavior without an application cancellation action.
 The independent server keeps its socket open and continues to consume the upload.
 It returns stream and connection credit and never sends RST_STREAM or GOAWAY.
 
@@ -104,8 +105,9 @@ It stops the reference upload at exactly 65,535 bytes.
 
 The main protocol suite's early-413 case differs from this probe.
 That case withholds upload credit deliberately.
-The application must stop that rejected upload explicitly after it accepts the final response.
-It must not wait indefinitely for the rejected producer to finish.
+Its request includes `{"action":"cancel_upload_after_response","stream_id":1}`.
+The fixture application executes that action after normal receive END_STREAM.
+The protocol engine must not infer upload cancellation from END_STREAM or the status code alone.
 This case requires a wire RST_STREAM(CANCEL), stream outcome `reset`, and preserved receive END_STREAM.
 Its sibling must retire as `complete`, and the connection must close normally.
 Global `connection_failed` outcomes cannot satisfy this stream-local cancellation policy.
@@ -237,6 +239,9 @@ The trace retains counters and one incomplete frame, not full transcripts.
 JSON files are at most 2 MiB each.
 Process output retention is at most 128 KiB, and output overflow fails the run.
 The Go protocol peer uses a ten-second deadline, 16 MiB per direction, and 100,000 frames.
+Its client upload producer is limited to 131,087 bytes.
+It obeys both credit balances and continues after response END_STREAM unless an explicit action or peer reset stops it.
+Go tests exercise early status 200 and 413 without a cancellation action.
 Context managers close sockets and stop owned processes and threads on success or failure.
 
 ## Remaining qualification gates

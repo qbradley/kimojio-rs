@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -102,5 +103,97 @@ func TestFramerRejectsInterleavedContinuation(t *testing.T) {
 	reader.ReadMetaHeaders = hpack.NewDecoder(4096, nil)
 	if _, err := reader.ReadFrame(); err != http2.ConnectionError(http2.ErrCodeProtocol) {
 		t.Fatalf("negative control: expected PROTOCOL_ERROR, got %v", err)
+	}
+}
+
+func TestFinalResponseWithoutActionDoesNotStopUpload(t *testing.T) {
+	for _, status := range []string{"200", "413"} {
+		t.Run(status, func(t *testing.T) {
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			if err := listener.(*net.TCPListener).SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				done <- func() error {
+					conn, err := listener.Accept()
+					if err != nil {
+						return err
+					}
+					defer conn.Close()
+					p, err := newPeer(conn)
+					if err != nil {
+						return err
+					}
+					preface := make([]byte, len(http2.ClientPreface))
+					if _, err := io.ReadFull(p.conn, preface); err != nil {
+						return err
+					}
+					if string(preface) != http2.ClientPreface {
+						return fmt.Errorf("bad preface")
+					}
+					if err := p.framer.WriteSettings(); err != nil {
+						return err
+					}
+					received, refunded := 0, 0
+					for {
+						frame, err := p.read(true)
+						if err != nil {
+							return err
+						}
+						switch frame := frame.(type) {
+						case *http2.MetaHeadersFrame:
+							if err := p.headers(1, fields(status, 0), true, false); err != nil {
+								return err
+							}
+						case *http2.DataFrame:
+							received += len(frame.Data())
+							if !bytes.Equal(frame.Data(), bytes.Repeat([]byte{1}, len(frame.Data()))) {
+								return fmt.Errorf("wrong upload bytes")
+							}
+							if frame.StreamEnded() {
+								if received != 131087 {
+									return fmt.Errorf("upload stopped at %d", received)
+								}
+								return nil
+							}
+							// Surplus credit can race the client's final socket close.
+							grant := min(int(frame.Length), 131087-65535-refunded)
+							if grant > 0 {
+								if err := p.framer.WriteWindowUpdate(0, uint32(grant)); err != nil {
+									return err
+								}
+								if err := p.framer.WriteWindowUpdate(1, uint32(grant)); err != nil {
+									return err
+								}
+								refunded += grant
+							}
+						case *http2.RSTStreamFrame:
+							return fmt.Errorf("unrequested upload reset: %v", frame.ErrCode)
+						}
+					}
+				}()
+			}()
+			address := listener.Addr().(*net.TCPAddr)
+			report, clientErr := rawClient(spec{
+				Host: "127.0.0.1", Port: address.Port, RequestCount: 1,
+				Requests: []request{{Method: "POST", Path: "/early-final", BodyBytes: 131087}},
+			})
+			if clientErr != nil {
+				listener.Close()
+			}
+			serverErr := <-done
+			if clientErr != nil || serverErr != nil {
+				t.Fatalf("client=%v server=%v", clientErr, serverErr)
+			}
+			r := report["streams"].([]*result)[0]
+			if !r.Ended || r.Bytes != 0 || r.Outcome != "complete" || r.Error != nil {
+				t.Fatalf("early response changed upload retirement: %+v", r)
+			}
+		})
 	}
 }

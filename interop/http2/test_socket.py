@@ -64,6 +64,17 @@ class SocketTests(unittest.TestCase):
         self.assertFalse(report["peer"]["peer_goaway"])
         self.assertIsNotNone(report["peer"]["native_socket_close"])
 
+    def test_early_413_without_cancel_action_does_not_end_upload(self):
+        from duplex_probe import run_probe
+
+        report = run_probe(
+            self.client_adapter, self.directory / "early-413-no-action",
+            timeout_ms=3000, status=413,
+        )
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(report["result"]["streams"][0]["outcome"], "complete")
+        self.assertFalse(report["peer"]["native_resets"])
+
     def test_early_success_without_credit_is_an_explicit_negative_control(self):
         from duplex_probe import run_probe
 
@@ -324,7 +335,13 @@ class SocketTests(unittest.TestCase):
             validate_results(case, report)
 
     def test_early_rejection_requires_local_cancel_not_global_failure(self):
-        from protocol_suite import validate
+        from protocol_suite import request, validate
+
+        spec = request("early-response", ("127.0.0.1", 1))
+        self.assertEqual(
+            spec["actions"],
+            [{"action": "cancel_upload_after_response", "stream_id": 1}],
+        )
 
         report = {
             "schema": 1, "connection": {"closed": True, "error": None, "outcome": "graceful"},

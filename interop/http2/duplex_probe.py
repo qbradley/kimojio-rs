@@ -18,8 +18,9 @@ from suite import ROOT, adapter, command, read_json, write_json
 BODY = 131087
 
 
-def run_probe(client_adapter, directory, *, consume=True, timeout_ms=8000):
+def run_probe(client_adapter, directory, *, consume=True, timeout_ms=8000, status=200):
     prerequisites()
+    require(status in (200, 413), "probe status must be 200 or 413")
     directory.mkdir(parents=True)
     observations = []
 
@@ -47,7 +48,7 @@ def run_probe(client_adapter, directory, *, consume=True, timeout_ms=8000):
                         received = peer.received.get(1, Received())
                         response_sent_before_request_end = not received.ended
                         peer.connection.send_headers(
-                            1, [(b":status", b"200"), (b"content-length", b"0")], end_stream=True,
+                            1, [(b":status", str(status).encode()), (b"content-length", b"0")], end_stream=True,
                         )
                         record("response-end-queued", upload_bytes=received.payload, upload_ended=received.ended)
                     elif isinstance(event, DataReceived):
@@ -111,7 +112,7 @@ def run_probe(client_adapter, directory, *, consume=True, timeout_ms=8000):
         and result.get("connection", {}).get("closed") is True
         and result["connection"].get("error") is None
         and result["connection"].get("outcome") in SUCCESS_CONNECTION_OUTCOMES
-        and stream.get("stream_id") == 1 and stream.get("status") == 200
+        and stream.get("stream_id") == 1 and stream.get("status") == status
         and stream.get("content_length") == 0 and stream.get("bytes") == 0
         and stream.get("sha256") == digest_for(1, 0) and stream.get("ended") is True
         and stream.get("error") is None and stream.get("trailers") == []
@@ -144,6 +145,7 @@ def run_probe(client_adapter, directory, *, consume=True, timeout_ms=8000):
     report = {
         "schema": 1, "passed": passed, "classification": classification,
         "consume": consume, "expected_upload_bytes": BODY, "peer": peer,
+        "response_status": status,
         "command_failure": command_failure,
         "exit_code": completed.returncode if completed else None,
         "stdout": completed.stdout.decode(errors="replace") if completed else "",
@@ -159,6 +161,7 @@ def main():
     parser.add_argument("--client-adapter", type=Path)
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--withhold-credit", action="store_true")
+    parser.add_argument("--status", type=int, choices=(200, 413), default=200)
     parser.add_argument("--output", type=Path, default=ROOT / "target" / "http2-duplex-probe" / uuid.uuid4().hex)
     args = parser.parse_args()
     require(args.selftest != bool(args.client_adapter), "select selftest or a client adapter")
@@ -170,7 +173,7 @@ def main():
         }
     else:
         client_adapter = adapter(args.client_adapter, client_role=True)
-    report = run_probe(client_adapter, directory, consume=not args.withhold_credit)
+    report = run_probe(client_adapter, directory, consume=not args.withhold_credit, status=args.status)
     print(report["classification"], directory / "report.json")
     require(report["passed"], "duplex probe failed; inspect the bounded peer observations and fixture trace")
 
