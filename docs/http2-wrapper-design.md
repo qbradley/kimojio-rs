@@ -17,6 +17,8 @@ Both roles expose streaming bodies and trailers.
 The default native path accepts an owned descriptor.
 A generic stream path has a separate transport implementation.
 The generic path must not reduce an unknown partial write to a false exact receipt.
+The driver also needs explicit hard-abort and failed-alarm inputs.
+It must not fabricate a read failure or a future timestamp to report another integration failure.
 
 The wrapper uses the direct HTTP/2 engine.
 The protocol composite remains available to pure FSM applications and a future protocol-neutral facade.
@@ -47,6 +49,8 @@ Bounded cooperative turns preserve command, cancellation, timer, and sibling pro
 The engine's `SendPermit` is the authoritative buffer-admission signal.
 The wrapper must not reconstruct stream or connection wire credit.
 It obeys both the visible-byte limit and the retained-capacity limit.
+It must not parse SETTINGS frames to implement producer admission.
+Any required handshake signal belongs to the engine interface.
 
 Source revocation and original write settlement are separate.
 Reset or GOAWAY can revoke a permit while a producer future is pending.
@@ -120,3 +124,7 @@ Performance evidence separates protocol cost from wrapper cost.
 Repeated keep-alive workloads include small messages, large bodies, and concurrent streams.
 Profiles use frozen binaries and distinguish client, server, and shared stacks.
 Source changes require new measurements before any performance claim.
+
+If measurements identify serial header and DATA writes as a bottleneck, batching belongs in the core's owned write operation.
+The wrapper must not acknowledge queue insertion as successful transport acceptance to obtain another frame.
+Any batching change retains exact partial progress, compression order, body ownership, and documented deadline boundaries.

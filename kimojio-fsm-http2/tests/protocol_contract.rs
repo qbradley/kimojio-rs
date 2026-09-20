@@ -5,6 +5,96 @@ use kimojio_fsm_http2::*;
 use std::{collections::VecDeque, time::Duration};
 use support::*;
 
+#[test]
+fn zero_byte_permit_allows_eof_or_trailers_with_both_wire_windows_exhausted() {
+    for trailers in [false, true] {
+        let mut pair = Pair::new(Config {
+            http: HttpLimits::new().set_max_body_bytes(65_535),
+            connection_receive_window: 65_535,
+            ..Config::default()
+        });
+        let mut fields = request(b"POST");
+        fields.push(H2HeaderField::new(b"content-length", b"65535"));
+        let id = pair.client.request(&fields, false).unwrap();
+        pair.pump(32_768);
+        let permit = pair.client_ports.permits.pop_front().unwrap();
+        assert_eq!(permit.max_bytes(), 65_535);
+        pair.client.send(permit, vec![1; 65_534], false).unwrap();
+        pair.pump(32_768);
+        let permit = pair.client_ports.permits.pop_front().unwrap();
+        assert_eq!(permit.max_bytes(), 1);
+        pair.client.send(permit, vec![1], false).unwrap();
+        pair.pump(32_768);
+        assert_eq!(
+            pair.server_ports
+                .bodies
+                .iter()
+                .map(|body| body.bytes().len())
+                .sum::<usize>(),
+            65_535
+        );
+        let permit = pair.client_ports.permits.pop_front().unwrap();
+        assert_eq!(permit.max_bytes(), 0);
+        let buffer = vec![2];
+        let pointer = buffer.as_ptr();
+        let rejected = pair.client.send(permit, buffer, true).unwrap_err();
+        assert_eq!(rejected.value.1.as_ptr(), pointer);
+        let permit = rejected.value.0;
+        assert_eq!(permit.max_bytes(), 0);
+        if trailers {
+            pair.client.trailers_ref(id, &[]).unwrap();
+            assert_eq!(
+                pair.client
+                    .send(permit, Vec::new(), true)
+                    .unwrap_err()
+                    .error,
+                CommandError::InvalidState
+            );
+        } else {
+            pair.client.send(permit, Vec::new(), true).unwrap();
+        }
+        pair.client.next(&mut pair.client_ports);
+        let write = pair.client_ports.write.take().unwrap();
+        let wire: Vec<_> = write
+            .slices()
+            .iter()
+            .flat_map(|part| part.iter().copied())
+            .collect();
+        assert_eq!(
+            wire,
+            [
+                0,
+                0,
+                0,
+                u8::from(trailers),
+                if trailers { 5 } else { 1 },
+                0,
+                0,
+                0,
+                1
+            ]
+        );
+        pair.to_server.extend(&wire);
+        pair.client
+            .complete_write(write.complete(WriteOutcome::Written(wire.len())))
+            .unwrap();
+        pair.pump(32_768);
+        pair.server.respond(id, &response(b"200"), true).unwrap();
+        pair.release_all();
+        pair.pump(32_768);
+        assert_eq!(
+            pair.client_ports.retired,
+            [StreamResult {
+                stream: id,
+                outcome: StreamOutcome::Complete
+            }]
+        );
+        assert_eq!(pair.server_ports.retired, pair.client_ports.retired);
+        assert!(pair.client_ports.closed.is_empty());
+        assert!(pair.server_ports.closed.is_empty());
+    }
+}
+
 fn frame(kind: u8, flags: u8, stream: u32, payload: &[u8]) -> Vec<u8> {
     let mut result = vec![
         (payload.len() >> 16) as u8,
@@ -361,6 +451,7 @@ fn streaming_body_limit_without_content_length_preserves_both_role_buffers() {
         let buffer = vec![1, 2];
         let pointer = buffer.as_ptr();
         let permit = ports.permits.pop_front().unwrap();
+        assert_eq!(permit.max_bytes(), 1);
         let rejected = connection.send(permit, buffer, true).unwrap_err();
         assert_eq!(
             rejected.error,

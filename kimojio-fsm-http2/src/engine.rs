@@ -454,6 +454,8 @@ impl<B: SendBuffer> Client<B> {
         let mut state = Stream::new(
             if end {
                 Source::Stopped(SendStop::Finished)
+            } else if connect {
+                Source::AwaitingResponse
             } else {
                 Source::Ready
             },
@@ -467,7 +469,7 @@ impl<B: SendBuffer> Client<B> {
         self.0.collect_headers(id)?;
         if end {
             self.0.stop_notice(id, SendStop::Finished);
-        } else {
+        } else if !connect {
             self.0.mark_demand(id);
         }
         Ok(id)
@@ -791,8 +793,7 @@ impl<B: SendBuffer> Connection<B> {
             );
         let error = if !valid {
             Some(CommandError::InvalidState)
-        } else if buffer.as_ref().len() > permit.max_bytes
-            || buffer.retained_capacity() > permit.max_retained_capacity
+        } else if buffer.retained_capacity() > permit.max_retained_capacity
             || (buffer.as_ref().is_empty() && !end)
         {
             Some(CommandError::Capacity)
@@ -828,6 +829,12 @@ impl<B: SendBuffer> Connection<B> {
         {
             return Err(Rejected {
                 error: CommandError::Message(crate::ServerError::InvalidContentLength),
+                value: (permit, buffer),
+            });
+        }
+        if buffer.as_ref().len() > permit.max_bytes {
+            return Err(Rejected {
+                error: CommandError::Capacity,
                 value: (permit, buffer),
             });
         }
@@ -1485,7 +1492,11 @@ impl<B: SendBuffer> Connection<B> {
             .is_some_and(|(token, _)| token == &completion.op.token);
         if current {
             self.alarm = None;
-            if completion.now < self.now {
+            let still_scheduled = self
+                .deadlines
+                .first_key_value()
+                .is_some_and(|((at, _), _)| *at == completion.op.deadline);
+            if !still_scheduled || completion.now < self.now {
                 return Ok(());
             }
             if self.advance_time(completion.now).is_err() {
@@ -1649,13 +1660,20 @@ impl<B: SendBuffer> Connection<B> {
                         .is_some_and(|s| matches!(s.source, Source::Ready))
                     {
                         let token = self.token();
-                        self.streams.get_mut(&id).expect("ready stream").source =
-                            Source::Permitted(token.clone());
+                        let state = self.streams.get_mut(&id).expect("ready stream");
+                        let mut max_bytes = self.config.max_send_buffer_bytes;
+                        if let Some(expected) = state.expected_send {
+                            max_bytes = max_bytes.min(expected.saturating_sub(state.sent_bytes));
+                        }
+                        if let Some(limit) = state.body_limit {
+                            max_bytes = max_bytes.min(limit.saturating_sub(state.sent_bytes));
+                        }
+                        state.source = Source::Permitted(token.clone());
                         self.send_capacity += self.config.max_send_buffer_capacity;
                         ports.send_ready(SendPermit {
                             token,
                             stream: id,
-                            max_bytes: self.config.max_send_buffer_bytes,
+                            max_bytes,
                             max_retained_capacity: self.config.max_send_buffer_capacity,
                         })
                     } else {
@@ -1663,7 +1681,12 @@ impl<B: SendBuffer> Connection<B> {
                     }
                 }
                 Transition::Alarm => {
-                    if self.wake_tokens.len() >= self.config.max_outbound_items {
+                    if self
+                        .wake_tokens
+                        .len()
+                        .saturating_add(self.cancellations.len())
+                        >= self.config.max_outbound_items
+                    {
                         self.fail(ConnectionResult::ResourceExhausted);
                         continue;
                     }
@@ -2201,6 +2224,16 @@ impl<B: SendBuffer> Connection<B> {
                     {
                         send.sent.limit = None;
                     }
+                }
+                if matches!(kind, HeadKind::Response(_))
+                    && matches!(self.protocol, Protocol::Client(_))
+                    && self
+                        .streams
+                        .get(&id)
+                        .is_some_and(|state| matches!(state.source, Source::AwaitingResponse))
+                {
+                    self.streams.get_mut(&id).expect("CONNECT response").source = Source::Ready;
+                    self.mark_demand(id);
                 }
                 if end {
                     self.receive_end(id, StreamOutcome::Complete);

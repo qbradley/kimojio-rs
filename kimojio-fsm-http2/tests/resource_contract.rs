@@ -356,7 +356,7 @@ fn protocol_completion_invalidates_deadline_while_the_application_retains_a_body
 #[test]
 fn classic_connect_tunnel_bytes_are_not_an_http_message_body_limit() {
     let mut pair = Pair::new(Config {
-        http: HttpLimits::new().set_max_body_bytes(1),
+        http: HttpLimits::new().set_max_body_bytes(0),
         ..Config::default()
     });
     let id = pair
@@ -370,6 +370,7 @@ fn classic_connect_tunnel_bytes_are_not_an_http_message_body_limit() {
         )
         .unwrap();
     pair.pump(32_768);
+    assert!(pair.client_ports.permits.is_empty());
     pair.server
         .respond_ref(id, &[H2RawHeaderRef::new(b":status", b"200")], false)
         .unwrap();
@@ -395,6 +396,49 @@ fn classic_connect_tunnel_bytes_are_not_an_http_message_body_limit() {
     pair.pump(32_768);
     assert_eq!(pair.client_ports.retired.len(), 1);
     assert_eq!(pair.server_ports.retired.len(), 1);
+}
+
+#[test]
+fn rejected_connect_response_allows_request_eof_with_zero_body_allowance() {
+    let mut pair = Pair::new(Config {
+        http: HttpLimits::new().set_max_body_bytes(0),
+        ..Config::default()
+    });
+    let id = pair
+        .client
+        .request_ref(
+            &[
+                H2RawHeaderRef::new(b":method", b"CONNECT"),
+                H2RawHeaderRef::new(b":authority", b"example.test:443"),
+            ],
+            false,
+        )
+        .unwrap();
+    pair.pump(32_768);
+    assert!(pair.client_ports.permits.is_empty());
+    pair.server.respond(id, &response(b"403"), true).unwrap();
+    pair.pump(32_768);
+    let permit = pair.client_ports.permits.pop_front().unwrap();
+    assert_eq!(permit.max_bytes(), 0);
+    pair.client.send(permit, Vec::new(), true).unwrap();
+    pair.pump(32_768);
+    pair.release_all();
+    pair.pump(32_768);
+    assert_eq!(
+        pair.client_ports.ends,
+        [ReceiveEnd {
+            stream: id,
+            outcome: StreamOutcome::Complete
+        }]
+    );
+    assert_eq!(
+        pair.client_ports.retired,
+        [StreamResult {
+            stream: id,
+            outcome: StreamOutcome::Complete
+        }]
+    );
+    assert_eq!(pair.server_ports.retired, pair.client_ports.retired);
 }
 
 #[test]

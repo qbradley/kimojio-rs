@@ -118,6 +118,133 @@ fn stream_identifier_exhaustion_does_not_wrap_or_reuse() {
 }
 
 #[test]
+fn alarm_replacement_bounds_originals_and_delayed_cancel_acknowledgments() {
+    fn originals(connection: &mut Connection, ports: &mut MemoryPorts, alarms: Vec<WakeOp>) {
+        for alarm in alarms {
+            connection
+                .complete_wake(alarm.complete(Duration::from_secs(1_000_000)))
+                .unwrap();
+        }
+        let read = ports.read.take().unwrap();
+        connection
+            .complete_read(read.complete(ReadOutcome::Failed(IoFailure::Cancelled)))
+            .unwrap();
+        connection.next(ports);
+    }
+
+    for capacity in [4, Config::default().max_outbound_items] {
+        for hold_originals in [false, true] {
+            for acknowledgments_first in [false, true] {
+                let mut pair = Pair::new(Config {
+                    max_outbound_items: capacity,
+                    ..Config::default()
+                });
+                let id = pair.client.request(&request(b"GET"), true).unwrap();
+                pair.pump(32_768);
+                pair.client.request(&request(b"GET"), true).unwrap();
+                pair.client
+                    .set_deadline(id, Some(Duration::from_secs(100)))
+                    .unwrap();
+                pair.client.next(&mut pair.client_ports);
+                let original_write = pair.client_ports.write.take().unwrap();
+                let mut retained = Vec::new();
+                let mut replacements = 0;
+                for index in 0..4096 {
+                    let alarm = pair.client_ports.alarms.pop().unwrap();
+                    pair.client
+                        .set_deadline(
+                            id,
+                            Some(Duration::from_secs(if index % 2 == 0 { 200 } else { 100 })),
+                        )
+                        .unwrap();
+                    pair.client.next(&mut pair.client_ports);
+                    assert!(
+                        pair.client.wake_tokens.len() + pair.client.cancellations.len()
+                            <= capacity + 3
+                    );
+                    if hold_originals {
+                        retained.push(alarm);
+                    } else {
+                        pair.client
+                            .complete_wake(alarm.complete(Duration::ZERO))
+                            .unwrap();
+                    }
+                    replacements += 1;
+                    if matches!(
+                        pair.client.life,
+                        Life::Settling(ConnectionResult::ResourceExhausted)
+                    ) {
+                        break;
+                    }
+                }
+                assert!(
+                    replacements < capacity,
+                    "replacement debt must remain bounded"
+                );
+                assert!(matches!(
+                    pair.client.life,
+                    Life::Settling(ConnectionResult::ResourceExhausted)
+                ));
+                assert!(pair.client_ports.alarms.is_empty());
+                assert_eq!(pair.client_ports.cancels.len(), replacements + 1);
+                assert_eq!(pair.client.cancellations.len(), replacements + 1);
+                assert_eq!(pair.client.wake_tokens.len(), retained.len());
+                assert!(pair.client_ports.close.is_none());
+                let bytes = original_write.remaining();
+                pair.client
+                    .complete_write(original_write.complete(WriteOutcome::Written(bytes)))
+                    .unwrap();
+                pair.client.next(&mut pair.client_ports);
+                let goaway = pair.client_ports.write.take().unwrap();
+                let wire: Vec<_> = goaway
+                    .slices()
+                    .iter()
+                    .flat_map(|part| part.iter().copied())
+                    .collect();
+                assert_eq!(wire, [0, 0, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11]);
+                pair.client
+                    .complete_write(goaway.complete(WriteOutcome::Written(wire.len())))
+                    .unwrap();
+                pair.client.next(&mut pair.client_ports);
+                assert!(pair.client_ports.close.is_none());
+
+                let cancellations = std::mem::take(&mut pair.client_ports.cancels);
+                if acknowledgments_first {
+                    for cancel in cancellations {
+                        pair.client.complete_cancel(cancel.complete()).unwrap();
+                        pair.client.next(&mut pair.client_ports);
+                        assert!(pair.client_ports.close.is_none());
+                    }
+                    originals(&mut pair.client, &mut pair.client_ports, retained);
+                } else {
+                    originals(&mut pair.client, &mut pair.client_ports, retained);
+                    assert!(pair.client_ports.close.is_none());
+                    let total = cancellations.len();
+                    for (index, cancel) in cancellations.into_iter().enumerate() {
+                        pair.client.complete_cancel(cancel.complete()).unwrap();
+                        pair.client.next(&mut pair.client_ports);
+                        assert_eq!(pair.client_ports.close.is_some(), index + 1 == total);
+                    }
+                }
+                assert!(pair.client.wake_tokens.is_empty());
+                assert!(pair.client.cancellations.is_empty());
+                let close = pair
+                    .client_ports
+                    .close
+                    .take()
+                    .expect("all original operations and acknowledgments settled");
+                pair.client.complete_close(close.complete(Ok(()))).unwrap();
+                pair.client.next(&mut pair.client_ports);
+                assert_eq!(
+                    pair.client_ports.closed,
+                    [ConnectionResult::ResourceExhausted]
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn operation_identifier_exhaustion_uses_reserved_settlement_identities() {
     let mut client = Client::<Vec<u8>>::new(Config::default(), Duration::ZERO).unwrap();
     client.request(&request(b"GET"), true).unwrap();
@@ -136,6 +263,81 @@ fn operation_identifier_exhaustion_uses_reserved_settlement_identities() {
     assert!(client.sequence > u64::MAX - 8);
     assert!(client.sequence < u64::MAX);
     assert!(ports.read.is_none());
+}
+
+#[test]
+fn alarm_bound_reserves_three_cancellations_for_forced_shutdown() {
+    let capacity = 4;
+    let mut pair = Pair::new(Config {
+        max_outbound_items: capacity,
+        ..Config::default()
+    });
+    let id = pair.client.request(&request(b"GET"), true).unwrap();
+    pair.pump(32_768);
+    pair.client.request(&request(b"GET"), true).unwrap();
+    pair.client
+        .set_deadline(id, Some(Duration::from_secs(100)))
+        .unwrap();
+    pair.client.next(&mut pair.client_ports);
+    let write = pair.client_ports.write.take().unwrap();
+    let old = pair.client_ports.alarms.pop().unwrap();
+    pair.client
+        .set_deadline(id, Some(Duration::from_secs(200)))
+        .unwrap();
+    pair.client.next(&mut pair.client_ports);
+    pair.client
+        .complete_wake(old.complete(Duration::ZERO))
+        .unwrap();
+    let old = pair.client_ports.alarms.pop().unwrap();
+    pair.client
+        .set_deadline(id, Some(Duration::from_secs(100)))
+        .unwrap();
+    pair.client.next(&mut pair.client_ports);
+    let current = pair.client_ports.alarms.pop().unwrap();
+    assert_eq!(
+        pair.client.wake_tokens.len() + pair.client.cancellations.len(),
+        capacity
+    );
+
+    pair.client.shutdown().unwrap();
+    pair.client.advance_time(Duration::from_secs(30)).unwrap();
+    pair.client.next(&mut pair.client_ports);
+    assert_eq!(
+        pair.client.wake_tokens.len() + pair.client.cancellations.len(),
+        capacity + 3
+    );
+    assert_eq!(pair.client_ports.cancels.len(), 5);
+    assert!(pair.client_ports.write.is_none());
+    assert!(pair.client_ports.close.is_none());
+    for alarm in [old, current] {
+        pair.client
+            .complete_wake(alarm.complete(Duration::from_secs(1_000_000)))
+            .unwrap();
+    }
+    let read = pair.client_ports.read.take().unwrap();
+    pair.client
+        .complete_read(read.complete(ReadOutcome::Failed(IoFailure::Cancelled)))
+        .unwrap();
+    pair.client
+        .complete_write(write.complete(WriteOutcome::Failed {
+            progress: Progress::Exact(0),
+            error: IoFailure::Cancelled,
+        }))
+        .unwrap();
+    pair.client.next(&mut pair.client_ports);
+    assert!(pair.client_ports.close.is_none());
+    let cancellations = std::mem::take(&mut pair.client_ports.cancels);
+    for (index, cancel) in cancellations.into_iter().enumerate() {
+        pair.client.complete_cancel(cancel.complete()).unwrap();
+        pair.client.next(&mut pair.client_ports);
+        assert_eq!(pair.client_ports.close.is_some(), index == 4);
+    }
+    let close = pair.client_ports.close.take().unwrap();
+    pair.client.complete_close(close.complete(Ok(()))).unwrap();
+    pair.client.next(&mut pair.client_ports);
+    assert_eq!(pair.client_ports.closed, [ConnectionResult::Graceful]);
+    assert!(pair.client.wake_tokens.is_empty());
+    assert!(pair.client.cancellations.is_empty());
 }
 
 #[test]

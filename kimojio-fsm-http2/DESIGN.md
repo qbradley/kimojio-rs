@@ -195,6 +195,18 @@ Applications do not poll `send` or calculate window balances.
 One admitted buffer can span several DATA frames.
 
 The permit states separate maximum byte length and retained capacity.
+The byte allowance includes declared content length and the remaining message-body limit.
+Applications do not recalculate those limits.
+A zero-byte permit still accepts empty final DATA without stream or connection wire credit.
+The application can also finish with trailers.
+Zero allowance does not assert that the producer reached EOF.
+Rejected bytes leave the original permit and buffer available to the caller.
+
+Client CONNECT source demand waits for a final response.
+A successful response removes the HTTP body limit before the first source permit.
+This avoids a stale zero-byte permit when a CONNECT request becomes a tunnel.
+An unsuccessful response does not implicitly abort the request producer.
+
 `Vec<u8>` reports its allocation capacity.
 `BodyOp` reports the complete page capacity, even for a one-byte range.
 Custom buffers must report all backing allocations that their ownership retains.
@@ -208,6 +220,10 @@ Its stream outcome can still report that reset.
 A later connection failure preserves an already completed exchange and an existing reset, deadline, or retry outcome.
 An observed response prevents a later GOAWAY boundary from making that exchange retryable.
 Producer completion alone does not establish successful transport settlement of END_STREAM.
+A subsequent RST_STREAM(NO_ERROR) does not discard a complete response.
+Its metadata and body fragments remain available.
+Its `ReceiveEnd` keeps `StreamOutcome::Complete`.
+The separate source-stop and retirement outcomes can report `Reset(0)`.
 
 ## Pages and drive cost
 
@@ -273,9 +289,16 @@ The core maintains separate SETTINGS, stream, and shutdown deadlines.
 Each alarm has a distinct operation token.
 An earlier replacement deadline causes cancellation of the old alarm.
 The caller must complete both the cancellation request and the original alarm.
+New alarm admission counts outstanding alarms and all unacknowledged cancellations together.
+The normal limit is `max_outbound_items`.
+Three additional cancellation slots permit the current alarm, read, and write to settle during teardown.
+Thus, these two ledgers together retain at most `max_outbound_items + 3` identities.
+An exhausted ledger causes explicit aggregate failure without removing an issued obligation.
 
 An invalidated alarm completion releases its token without advancing protocol time.
 It cannot trigger a replacement deadline.
+This also applies after a deadline command but before the next drive dispatches cancellation.
+An unchanged shared deadline keeps its original alarm operative.
 An early current alarm completion settles that alarm but does not expire its deadline.
 The next drive requests a new alarm at the same deadline.
 The SETTINGS ACK deadline starts after the complete original SETTINGS write settles successfully.
@@ -309,8 +332,8 @@ The pure engine does not create or drive an HTTP/1 parser.
 
 ## Standalone qualification
 
-The all-feature suite contains 211 unit tests, 53 integration tests, and two doctests.
-Six unit tests cover new direct-engine bounds and defensive state transitions.
+The all-feature suite contains 213 unit tests, 58 integration tests, and two doctests.
+Eight unit tests cover new direct-engine bounds and defensive state transitions.
 The default suite omits five feature-specific component tests.
 These counts do not include the six Criterion smoke workloads.
 
@@ -320,6 +343,10 @@ The stream schedules combine 14 write cuts, six event orders, and four callback 
 The connection schedules use all 120 orders of five outstanding completions and four callback suspension policies.
 Assertions cover exact wire bytes, original buffer identity, forbidden duplicate writes, receipts, and retirement joins.
 This is bounded schedule exploration, not an exhaustive proof or a concurrency model.
+Another 48 schedules place response END_STREAM and RST_STREAM(NO_ERROR) in one read batch.
+They cover HEADERS, DATA, and trailer endings, four callback policies, two release orders, and two write cuts.
+An upload remains outstanding throughout response processing.
+Assertions preserve the complete response and require sibling completion.
 
 The sustained-credit cases send 9 MiB plus 17 bytes in each direction with the message-body limit raised.
 The advertised flow windows retain their defaults.
@@ -335,7 +362,7 @@ The inherited component tests remain useful regression coverage, not independent
 ### Frozen-baseline review regressions
 
 The independent source review used the earlier `938f631d` baseline.
-The following regressions cover its six reported defects:
+The following regressions cover its seven reported defects:
 
 | Defect | Regression evidence |
 | --- | --- |
@@ -345,6 +372,13 @@ The following regressions cover its six reported defects:
 | CONNECT uses HTTP body limits | `classic_connect_tunnel_bytes_are_not_an_http_message_body_limit` exercises both tunnel directions |
 | HEAD informational response carries END_STREAM | `head_informational_response_does_not_end_stream_or_apply_representation_body_limit` asserts the exact frame sequence |
 | Read cancellation removes queued GOAWAY | `all_connection_original_and_cancellation_ack_orders` covers 480 orders with continuing and suspended callbacks |
+| Obsolete wake completion hides unbounded cancellation debt | `alarm_replacement_bounds_originals_and_delayed_cancel_acknowledgments` covers limits of four and 512 identities |
+
+The alarm cases retain acknowledgments alone or both acknowledgments and original alarms.
+They return these obligations in either order after explicit exhaustion.
+All issued completions remain acceptable, and close waits for the complete settlement join.
+A forced-shutdown case exercises all three reserved cancellation slots.
+Separate cases cover obsolete completion before cancellation dispatch and unchanged shared deadlines.
 
 An additional fault-injection test exercises an unexpected private DATA planning error.
 The engine emits one INTERNAL_ERROR reset and removes both private and application stream state.
