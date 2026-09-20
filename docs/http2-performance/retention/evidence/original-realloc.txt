@@ -1,0 +1,53 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /workspace/kimojio-rs/target/http2-program/build-http2-allocation/frozen-9bc026a5/allocation_probe.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x80890: file kimojio-fsm-http2/examples/allocation_probe.rs, line 14.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/libthread_db.so.1".
+Warning: the current language does not match this frame.
+REALLOC requested old=32 align=4 new=64
+#0  allocation_probe::_::__rust_realloc (ptr=..., size=..., align=..., new_size=...) at kimojio-fsm-http2/examples/allocation_probe.rs:14
+#1  0x00005555555fc62f in alloc::alloc::realloc_nonnull (ptr=..., layout=..., new_size=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:155
+#2  alloc::alloc::Global::grow_impl_runtime (ptr=..., old_layout=..., new_layout=..., zeroed=..., self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:259
+#3  alloc::alloc::Global::grow_impl (ptr=..., old_layout=..., new_layout=..., self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:362
+#4  alloc::alloc::{impl#1}::grow (ptr=..., old_layout=..., new_layout=..., self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:474
+#5  alloc::raw_vec::RawVecInner<alloc::alloc::Global>::finish_grow<alloc::alloc::Global> (self=..., cap=..., elem_layout=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:557
+#6  0x00005555555fc59a in alloc::raw_vec::RawVecInner<alloc::alloc::Global>::grow_amortized<alloc::alloc::Global> (self=..., len=..., additional=..., elem_layout=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:529
+#7  alloc::raw_vec::RawVecInner<alloc::alloc::Global>::grow_one<alloc::alloc::Global> (self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:493
+#8  alloc::raw_vec::RawVec<u32, alloc::alloc::Global>::grow_one<u32, alloc::alloc::Global> (self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:188
+#9  0x00005555555f8b01 in alloc::collections::vec_deque::VecDeque<u32, alloc::alloc::Global>::grow<u32, alloc::alloc::Global> (self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/vec_deque/mod.rs:2797
+#10 0x00005555555eaf42 in alloc::collections::vec_deque::VecDeque<u32, alloc::alloc::Global>::push_back_mut<u32, alloc::alloc::Global> (self=..., value=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/vec_deque/mod.rs:2295
+#11 alloc::collections::vec_deque::VecDeque<u32, alloc::alloc::Global>::push_back<u32, alloc::alloc::Global> (self=..., value=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/vec_deque/mod.rs:2276
+#12 kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>::remember_tombstone<kimojio_fsm_http2::server::h2::client::H2ClientStream> (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:573
+#13 0x00005555555ea07b in kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::server::H2ServerStream>::forget_stream<kimojio_fsm_http2::server::h2::server::H2ServerStream> (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:553
+#14 kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::server::H2ServerStream>::retire_if_complete<kimojio_fsm_http2::server::h2::server::H2ServerStream, kimojio_fsm_http2::server::h2::server::{impl#2}::retire_if_complete::{closure_env#0}> (self=..., stream_id=..., kind=..., is_complete=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:566
+#15 0x00005555555f4280 in kimojio_fsm_http2::server::h2::server::H2Server::commit_data_frame (self=..., plan=...) at kimojio-fsm-http2/src/server/h2/server.rs:2300
+#12 kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>::remember_tombstone<kimojio_fsm_http2::server::h2::client::H2ClientStream> (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:573
+573	            self.closed_stream_order.push_back(stream_id);
+warning: could not convert 'closed_stream_order' from the host encoding (UTF-8) to UTF-32.
+This normally should not happen, please file a bug report.
+$1 = {head = {__0 = 0}, len = 8, buf = {inner = {ptr = {pointer = {pointer = 0x555555663a20 "\001"}, _marker = {<No data fields>}}, cap = {__0 = 8}, alloc = {<No data fields>}}, _marker = {<No data fields>}}}
+$2 = 1024
+REALLOC requested old=32 align=4 new=64
+#0  allocation_probe::_::__rust_realloc (ptr=..., size=..., align=..., new_size=...) at kimojio-fsm-http2/examples/allocation_probe.rs:14
+#1  0x00005555555fc62f in alloc::alloc::realloc_nonnull (ptr=..., layout=..., new_size=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:155
+#2  alloc::alloc::Global::grow_impl_runtime (ptr=..., old_layout=..., new_layout=..., zeroed=..., self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:259
+#3  alloc::alloc::Global::grow_impl (ptr=..., old_layout=..., new_layout=..., self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:362
+#4  alloc::alloc::{impl#1}::grow (ptr=..., old_layout=..., new_layout=..., self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:474
+#5  alloc::raw_vec::RawVecInner<alloc::alloc::Global>::finish_grow<alloc::alloc::Global> (self=..., cap=..., elem_layout=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:557
+#6  0x00005555555fc59a in alloc::raw_vec::RawVecInner<alloc::alloc::Global>::grow_amortized<alloc::alloc::Global> (self=..., len=..., additional=..., elem_layout=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:529
+#7  alloc::raw_vec::RawVecInner<alloc::alloc::Global>::grow_one<alloc::alloc::Global> (self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:493
+#8  alloc::raw_vec::RawVec<u32, alloc::alloc::Global>::grow_one<u32, alloc::alloc::Global> (self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:188
+#9  0x00005555555f8b01 in alloc::collections::vec_deque::VecDeque<u32, alloc::alloc::Global>::grow<u32, alloc::alloc::Global> (self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/vec_deque/mod.rs:2797
+#10 0x00005555555eaf42 in alloc::collections::vec_deque::VecDeque<u32, alloc::alloc::Global>::push_back_mut<u32, alloc::alloc::Global> (self=..., value=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/vec_deque/mod.rs:2295
+#11 alloc::collections::vec_deque::VecDeque<u32, alloc::alloc::Global>::push_back<u32, alloc::alloc::Global> (self=..., value=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/vec_deque/mod.rs:2276
+#12 kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>::remember_tombstone<kimojio_fsm_http2::server::h2::client::H2ClientStream> (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:573
+#13 0x00005555555e95b9 in kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>::forget_stream<kimojio_fsm_http2::server::h2::client::H2ClientStream> (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:553
+#14 kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>::retire_if_complete<kimojio_fsm_http2::server::h2::client::H2ClientStream, kimojio_fsm_http2::server::h2::client::{impl#2}::retire_if_complete::{closure_env#0}> (self=..., stream_id=..., kind=..., is_complete=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:566
+#15 0x00005555555ee7b6 in kimojio_fsm_http2::server::h2::client::H2Client::retire_if_complete (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/client.rs:999
+#12 kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>::remember_tombstone<kimojio_fsm_http2::server::h2::client::H2ClientStream> (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:573
+573	            self.closed_stream_order.push_back(stream_id);
+$3 = {head = {__0 = 0}, len = 8, buf = {inner = {ptr = {pointer = {pointer = 0x555555663a50 "\001"}, _marker = {<No data fields>}}, cap = {__0 = 8}, alloc = {<No data fields>}}, _marker = {<No data fields>}}}
+$4 = 1024
+{"all_payload_bytes_compared":true,"allocation_counts":{"allocations":16,"deallocations":16,"reallocations":2,"requested_live_change":64,"requested_live_end":76842,"requested_live_start":76778,"requested_peak_growth":116,"requested_peak_live":76894,"zeroed_allocations":0},"batches":4,"case":"empty","concurrency":1,"exchanges":4,"fragment":65536,"live_after_teardown":838,"live_before_setup":838,"measurement_includes_shutdown":false,"mode":"direct","payload_bytes":512,"payload_storage":"static","phase":"steady","request_bytes":0,"response_bytes":128,"schema":1,"shutdown_settled":true,"teardown_live_change":0,"transport":"direct-slices-to-read-page","warmup_batches":8,"wire_bytes":692}
+[Inferior 1 (process 385635) exited normally]

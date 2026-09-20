@@ -1,0 +1,82 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /workspace/kimojio-rs/target/http2-program/build-http2-allocation/frozen-9bc026a5/allocation_probe.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+warning: could not convert 'closed_stream_order' from the host encoding (UTF-8) to UTF-32.
+This normally should not happen, please file a bug report.
+Breakpoint 1 at 0x97011: file kimojio-fsm-http2/src/server/h2/endpoint.rs, line 576.
+Breakpoint 2 at 0x805c0: file kimojio-fsm-http2/examples/allocation_probe.rs, line 14.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/libthread_db.so.1".
+Warning: the current language does not match this frame.
+ALLOC requested bytes=18448 align=16
+#0  allocation_probe::_::__rust_alloc (size=..., align=...) at kimojio-fsm-http2/examples/allocation_probe.rs:14
+#1  0x00005555555f3326 in alloc::alloc::alloc (layout=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:101
+#2  alloc::alloc::Global::alloc_impl_runtime (layout=..., zeroed=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:210
+#3  alloc::alloc::Global::alloc_impl (layout=..., self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:332
+#4  alloc::alloc::{impl#1}::allocate (layout=..., self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:449
+#5  hashbrown::alloc::inner::do_alloc<alloc::alloc::Global> (layout=..., alloc=...) at /rust/deps/hashbrown-0.17.1/src/alloc.rs:18
+#6  hashbrown::raw::RawTableInner::new_uninitialized<alloc::alloc::Global> (table_layout=..., buckets=..., fallibility=..., alloc=...) at /rust/deps/hashbrown-0.17.1/src/raw.rs:1576
+#7  hashbrown::raw::RawTableInner::fallible_with_capacity<alloc::alloc::Global> (table_layout=..., capacity=..., fallibility=..., alloc=...) at /rust/deps/hashbrown-0.17.1/src/raw.rs:1634
+#8  hashbrown::raw::RawTableInner::prepare_resize<alloc::alloc::Global> (self=..., alloc=..., table_layout=..., capacity=..., fallibility=...) at /rust/deps/hashbrown-0.17.1/src/raw.rs:2696
+#9  hashbrown::raw::RawTableInner::resize_inner<alloc::alloc::Global> (self=..., alloc=..., capacity=..., fallibility=..., layout=..., hasher=...) at /rust/deps/hashbrown-0.17.1/src/raw.rs:2898
+#10 hashbrown::raw::RawTableInner::reserve_rehash_inner<alloc::alloc::Global> (self=..., alloc=..., additional=..., layout=..., drop=..., hasher=..., fallibility=...) at /rust/deps/hashbrown-0.17.1/src/raw.rs:2784
+#11 hashbrown::raw::RawTable<(u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone), alloc::alloc::Global>::reserve_rehash<(u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone), alloc::alloc::Global, hashbrown::map::make_hasher::{closure_env#0}<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher>> (self=..., additional=..., hasher=..., fallibility=...) at /rust/deps/hashbrown-0.17.1/src/raw.rs:962
+#12 0x00005555555eb104 in hashbrown::raw::RawTable<(u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone), alloc::alloc::Global>::reserve<(u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone), alloc::alloc::Global, hashbrown::map::make_hasher::{closure_env#0}<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher>> (self=..., additional=..., hasher=...) at /rust/deps/hashbrown-0.17.1/src/raw.rs:914
+#13 hashbrown::map::HashMap<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher, alloc::alloc::Global>::reserve<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher, alloc::alloc::Global> (self=...) at /rust/deps/hashbrown-0.17.1/src/map.rs:1083
+#14 hashbrown::map::HashMap<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher, alloc::alloc::Global>::rustc_entry<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher, alloc::alloc::Global> (self=..., key=...) at /rust/deps/hashbrown-0.17.1/src/rustc_entry.rs:46
+#15 std::collections::hash::map::HashMap<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher, alloc::alloc::Global>::entry<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher, alloc::alloc::Global> (self=..., key=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/collections/hash/map.rs:1014
+#16 kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>::remember_tombstone<kimojio_fsm_http2::server::h2::client::H2ClientStream> (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:571
+#17 0x00005555555ea07b in kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::server::H2ServerStream>::forget_stream<kimojio_fsm_http2::server::h2::server::H2ServerStream> (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:553
+#18 kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::server::H2ServerStream>::retire_if_complete<kimojio_fsm_http2::server::h2::server::H2ServerStream, kimojio_fsm_http2::server::h2::server::{impl#2}::retire_if_complete::{closure_env#0}> (self=..., stream_id=..., kind=..., is_complete=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:566
+#19 0x00005555555f4280 in kimojio_fsm_http2::server::h2::server::H2Server::commit_data_frame (self=..., plan=...) at kimojio-fsm-http2/src/server/h2/server.rs:2300
+#20 0x00005555555fbb82 in kimojio_fsm_http2::engine::Protocol::commit_data (self=..., plan=...) at kimojio-fsm-http2/src/engine.rs:134
+#21 0x00005555555a9a19 in kimojio_fsm_http2::engine::Connection<&[u8]>::issue_write<&[u8], allocation_probe::composition_bench_support::Ports> (self=..., ports=...) at kimojio-fsm-http2/src/engine.rs:1904
+#22 kimojio_fsm_http2::engine::Connection<&[u8]>::next<&[u8], allocation_probe::composition_bench_support::Ports> (self=..., ports=...) at kimojio-fsm-http2/src/engine.rs:1674
+#23 0x00005555555bc9d4 in allocation_probe::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>::tick<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>> (self=...) at kimojio-fsm-http2/examples/composition_bench_support/mod.rs:621
+ALLOC requested bytes=18448 align=16
+#0  allocation_probe::_::__rust_alloc (size=..., align=...) at kimojio-fsm-http2/examples/allocation_probe.rs:14
+#1  0x00005555555f3326 in alloc::alloc::alloc (layout=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:101
+#2  alloc::alloc::Global::alloc_impl_runtime (layout=..., zeroed=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:210
+#3  alloc::alloc::Global::alloc_impl (layout=..., self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:332
+#4  alloc::alloc::{impl#1}::allocate (layout=..., self=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:449
+#5  hashbrown::alloc::inner::do_alloc<alloc::alloc::Global> (layout=..., alloc=...) at /rust/deps/hashbrown-0.17.1/src/alloc.rs:18
+#6  hashbrown::raw::RawTableInner::new_uninitialized<alloc::alloc::Global> (table_layout=..., buckets=..., fallibility=..., alloc=...) at /rust/deps/hashbrown-0.17.1/src/raw.rs:1576
+#7  hashbrown::raw::RawTableInner::fallible_with_capacity<alloc::alloc::Global> (table_layout=..., capacity=..., fallibility=..., alloc=...) at /rust/deps/hashbrown-0.17.1/src/raw.rs:1634
+#8  hashbrown::raw::RawTableInner::prepare_resize<alloc::alloc::Global> (self=..., alloc=..., table_layout=..., capacity=..., fallibility=...) at /rust/deps/hashbrown-0.17.1/src/raw.rs:2696
+#9  hashbrown::raw::RawTableInner::resize_inner<alloc::alloc::Global> (self=..., alloc=..., capacity=..., fallibility=..., layout=..., hasher=...) at /rust/deps/hashbrown-0.17.1/src/raw.rs:2898
+#10 hashbrown::raw::RawTableInner::reserve_rehash_inner<alloc::alloc::Global> (self=..., alloc=..., additional=..., layout=..., drop=..., hasher=..., fallibility=...) at /rust/deps/hashbrown-0.17.1/src/raw.rs:2784
+#11 hashbrown::raw::RawTable<(u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone), alloc::alloc::Global>::reserve_rehash<(u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone), alloc::alloc::Global, hashbrown::map::make_hasher::{closure_env#0}<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher>> (self=..., additional=..., hasher=..., fallibility=...) at /rust/deps/hashbrown-0.17.1/src/raw.rs:962
+#12 0x00005555555eb104 in hashbrown::raw::RawTable<(u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone), alloc::alloc::Global>::reserve<(u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone), alloc::alloc::Global, hashbrown::map::make_hasher::{closure_env#0}<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher>> (self=..., additional=..., hasher=...) at /rust/deps/hashbrown-0.17.1/src/raw.rs:914
+#13 hashbrown::map::HashMap<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher, alloc::alloc::Global>::reserve<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher, alloc::alloc::Global> (self=...) at /rust/deps/hashbrown-0.17.1/src/map.rs:1083
+#14 hashbrown::map::HashMap<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher, alloc::alloc::Global>::rustc_entry<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher, alloc::alloc::Global> (self=..., key=...) at /rust/deps/hashbrown-0.17.1/src/rustc_entry.rs:46
+#15 std::collections::hash::map::HashMap<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher, alloc::alloc::Global>::entry<u32, kimojio_fsm_http2::server::h2::endpoint::H2StreamTombstone, rustc_hash::FxBuildHasher, alloc::alloc::Global> (self=..., key=...) at /workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/collections/hash/map.rs:1014
+#16 kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>::remember_tombstone<kimojio_fsm_http2::server::h2::client::H2ClientStream> (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:571
+#17 0x00005555555e95b9 in kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>::forget_stream<kimojio_fsm_http2::server::h2::client::H2ClientStream> (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:553
+#18 kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>::retire_if_complete<kimojio_fsm_http2::server::h2::client::H2ClientStream, kimojio_fsm_http2::server::h2::client::{impl#2}::retire_if_complete::{closure_env#0}> (self=..., stream_id=..., kind=..., is_complete=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:566
+#19 0x00005555555ee7b6 in kimojio_fsm_http2::server::h2::client::H2Client::retire_if_complete (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/client.rs:999
+#20 kimojio_fsm_http2::server::h2::client::H2Client::finish_client_stream (self=..., stream_id=...) at kimojio-fsm-http2/src/server/h2/client.rs:991
+#21 kimojio_fsm_http2::server::h2::client::H2Client::validate_data_frame (self=..., stream_id=..., payload_len=..., end_stream=...) at kimojio-fsm-http2/src/server/h2/client.rs:2422
+#22 0x00005555555f1675 in kimojio_fsm_http2::server::h2::client::H2Client::accept_frame_compat (self=..., frame=...) at kimojio-fsm-http2/src/server/h2/client.rs:2068
+#23 kimojio_fsm_http2::server::h2::client::H2Client::accept_frame_bytes_ref_typed (self=..., frame=...) at kimojio-fsm-http2/src/server/h2/client.rs:1914
+AFTER_EVICTION
+$1 = {head = {__0 = 1}, len = 1024, buf = {inner = {ptr = {pointer = {pointer = 0x5555556684a0 "\001"}, _marker = {<No data fields>}}, cap = {__0 = 2048}, alloc = {<No data fields>}}, _marker = {<No data fields>}}}
+$2 = 2047
+$3 = 1024
+$4 = 1024
+#0  kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>::remember_tombstone<kimojio_fsm_http2::server::h2::client::H2ClientStream> (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:576
+#1  0x00005555555ea07b in kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::server::H2ServerStream>::forget_stream<kimojio_fsm_http2::server::h2::server::H2ServerStream> (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:553
+#2  kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::server::H2ServerStream>::retire_if_complete<kimojio_fsm_http2::server::h2::server::H2ServerStream, kimojio_fsm_http2::server::h2::server::{impl#2}::retire_if_complete::{closure_env#0}> (self=..., stream_id=..., kind=..., is_complete=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:566
+#3  0x00005555555f4280 in kimojio_fsm_http2::server::h2::server::H2Server::commit_data_frame (self=..., plan=...) at kimojio-fsm-http2/src/server/h2/server.rs:2300
+#4  0x00005555555fbb82 in kimojio_fsm_http2::engine::Protocol::commit_data (self=..., plan=...) at kimojio-fsm-http2/src/engine.rs:134
+AFTER_EVICTION
+$5 = {head = {__0 = 1}, len = 1024, buf = {inner = {ptr = {pointer = {pointer = 0x555555665460 "\001"}, _marker = {<No data fields>}}, cap = {__0 = 2048}, alloc = {<No data fields>}}, _marker = {<No data fields>}}}
+$6 = 2047
+$7 = 1024
+$8 = 1024
+#0  kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>::remember_tombstone<kimojio_fsm_http2::server::h2::client::H2ClientStream> (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:576
+#1  0x00005555555e95b9 in kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>::forget_stream<kimojio_fsm_http2::server::h2::client::H2ClientStream> (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:553
+#2  kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>::retire_if_complete<kimojio_fsm_http2::server::h2::client::H2ClientStream, kimojio_fsm_http2::server::h2::client::{impl#2}::retire_if_complete::{closure_env#0}> (self=..., stream_id=..., kind=..., is_complete=...) at kimojio-fsm-http2/src/server/h2/endpoint.rs:566
+#3  0x00005555555ee7b6 in kimojio_fsm_http2::server::h2::client::H2Client::retire_if_complete (self=..., stream_id=..., kind=...) at kimojio-fsm-http2/src/server/h2/client.rs:999
+#4  kimojio_fsm_http2::server::h2::client::H2Client::finish_client_stream (self=..., stream_id=...) at kimojio-fsm-http2/src/server/h2/client.rs:991
+{"all_payload_bytes_compared":true,"allocation_counts":{"allocations":4082,"deallocations":4082,"reallocations":16,"requested_live_change":52896,"requested_live_end":129677,"requested_live_start":76781,"requested_peak_growth":53936,"requested_peak_live":130717,"zeroed_allocations":0},"batches":1017,"case":"empty","concurrency":1,"exchanges":1017,"fragment":65536,"live_after_teardown":841,"live_before_setup":841,"measurement_includes_shutdown":false,"mode":"direct","payload_bytes":130176,"payload_storage":"static","phase":"steady","request_bytes":0,"response_bytes":128,"schema":1,"shutdown_settled":true,"teardown_live_change":0,"transport":"direct-slices-to-read-page","warmup_batches":8,"wire_bytes":175941}
+[Inferior 1 (process 392222) exited normally]

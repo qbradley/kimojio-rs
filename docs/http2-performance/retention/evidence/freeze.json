@@ -1,0 +1,56 @@
+{
+  "source_commit": "974a48d2ad760455e541638592eef7b69f81af44",
+  "base_probe_report": "05c093b9e063b674945277abd23fa1e42c66c48e",
+  "execution_integration": "2c8d1d48a880c4dec70c8d5feeacbf45dfc8d359",
+  "new_api_source_compared_not_executed": "b724e43cff9dd75409afbece6ffda1f984065be0",
+  "unchanged_private_h2_tree": "460916a1e650693d280003103acf7c8624c3617b",
+  "core_edited": false,
+  "harness_vectors_grow": false,
+  "worktree": "/workspace/kimojio-rs/target/http2-program/worktrees/http2-allocation",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "debugger": "GNU gdb (GDB) 13.2",
+  "CARGO_TARGET_DIR": "/workspace/kimojio-rs/target/http2-program/build-http2-retention",
+  "CARGO_PROFILE_RELEASE_DEBUG": "2",
+  "RUSTFLAGS": null,
+  "CARGO_ENCODED_RUSTFLAGS": null,
+  "cpu_affinity": "8-31",
+  "cpu2_used": false,
+  "timing_or_profile_run": false,
+  "source_sha256": {
+    "kimojio-fsm-http2/examples/allocation_probe.rs": "dc7a8346f3d5639e7a5e9d535837e2e95d3f59a19a15aad68dfe1a1ce26d1cc3",
+    "kimojio-fsm-http2/examples/composition_bench_support/allocation.rs": "9e6cef03f5edad62805d6628c7e6507e56e81861b0a5f6b2d618723a710b2a16",
+    "kimojio-fsm-http2/examples/composition_bench_support/allocation_counter.rs": "31f91d9eb43a97c41905c5bae2882b39cd3878dafde08c95f44a589b244be6b5",
+    "kimojio-fsm-http2/examples/composition_bench_support/diagnostics.rs": "e139de023e542b5692c2d4360152ef1cab7a036b60f299c3c5c91b6f6293c3ba",
+    "kimojio-fsm-http2/examples/composition_bench_support/mod.rs": "5c3ad0fdf544005da796315142242dcc882404269b8b319755da3e4dbede5e09",
+    "kimojio-fsm-http2/examples/composition_bench_support/overlap.rs": "c5f5e230174f45b727b235bb5a5ffb78c43ee16487aaea26a9ec5d877b8508a5",
+    "kimojio-fsm-http2/examples/composition_bench_support/retention.rs": "dbb06e2b5b54c2cd7337f9330436bd1df937de686aa3f25f35fb5c1912f8f12d"
+  },
+  "core_source_sha256": {
+    "kimojio-fsm-http2/src/server/h2/endpoint.rs": "1b2fc30c6c3ce12d9d3a00a57f4f6c9fb3b3b75fdcf287565518442a8f0cab1d",
+    "kimojio-fsm-http2/src/server/h2/wire.rs": "431275f00d5a377bd9aaa6ab4fc6d8ed8b5c012f0f97d95398784b7765e95163"
+  },
+  "binary": {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-retention/frozen-974a48d2/allocation_probe",
+    "sha256": "18707e28efa492624a1fda298cede06773b52cfdace6a2522aba401cab972b41"
+  },
+  "original_debugged_binary": {
+    "source": "9bc026a56e7b9090225e61217f4524ad7082ffb6",
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-allocation/frozen-9bc026a5/allocation_probe",
+    "sha256": "a3698d6817fc2ee19a4206aff37029ea06cdbe5dc0cfdd0d4ed603cfdb2405ca"
+  },
+  "build_command": "CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http2-program/build-http2-retention CARGO_PROFILE_RELEASE_DEBUG=2 taskset -c 8-31 cargo build --release -p kimojio-fsm-http2 --example allocation_probe",
+  "debugger_commands": [
+    "taskset -c 8-31 gdb -q -nx -batch -x docs/http2-performance/retention/evidence/original-realloc.gdb --args /workspace/kimojio-rs/target/http2-program/build-http2-allocation/frozen-9bc026a5/allocation_probe direct empty 1 65536 4 steady",
+    "taskset -c 8-31 gdb -q -nx -batch -x docs/http2-performance/retention/evidence/original-bound.gdb --args /workspace/kimojio-rs/target/http2-program/build-http2-allocation/frozen-9bc026a5/allocation_probe direct empty 1 65536 1017 steady"
+  ],
+  "tests": {
+    "default_release": 27,
+    "all_features_release": 27,
+    "existing_tombstone_bounds": 5,
+    "failed": 0,
+    "ignored": 0,
+    "formatting": "pass",
+    "clippy": "pass with -D warnings",
+    "clippy_all_targets_all_features": "pass with -D warnings"
+  }
+}
