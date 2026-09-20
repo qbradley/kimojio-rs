@@ -172,7 +172,7 @@ fn completed_response_survives_no_error_reset_in_the_same_read_batch() {
 #[test]
 fn hard_abort_joins_every_original_and_cancellation_ack_order() {
     for mask in [0, u16::MAX, 0x5555, 0xaaaa] {
-        for receipt in 0..3 {
+        for receipt in 0..4 {
             for order in permutations::<6>() {
                 let mut pair = Pair::new(Config::default());
                 let id = pair.client.request(&request(b"POST"), false).unwrap();
@@ -233,6 +233,10 @@ fn hard_abort_joins_every_original_and_cancellation_ack_order() {
                                 },
                                 1 => WriteOutcome::Written(10),
                                 2 => WriteOutcome::Written(109),
+                                3 => WriteOutcome::Failed {
+                                    progress: Progress::AtLeast(12),
+                                    error: IoFailure::Failed,
+                                },
                                 _ => unreachable!(),
                             };
                             pair.client
@@ -278,8 +282,8 @@ fn hard_abort_joins_every_original_and_cancellation_ack_order() {
                 assert_eq!(sent.stream, id);
                 assert_eq!(sent.buffer.as_ptr(), pointer);
                 assert_eq!(sent.buffer, [9; 100]);
-                assert_eq!(sent.accepted, [0, 1, 100][receipt]);
-                assert!(sent.exact);
+                assert_eq!(sent.accepted, [0, 1, 100, 3][receipt]);
+                assert_eq!(sent.exact, receipt != 3);
                 assert_eq!(sent.result.is_ok(), receipt == 2);
                 assert_eq!(
                     ports.ports.retired,

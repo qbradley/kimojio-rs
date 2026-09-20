@@ -1551,22 +1551,23 @@ impl<B: SendBuffer> Connection<B> {
         if current {
             self.alarm = None;
         }
+        let still_scheduled = self
+            .deadlines
+            .first_key_value()
+            .is_some_and(|((at, _), _)| *at == completion.op.deadline);
+        if !current || !still_scheduled {
+            return Ok(());
+        }
         match completion.outcome {
-            WakeOutcome::Failed(IoFailure::Cancelled) if !current => {}
             WakeOutcome::Failed(_) => self.abort_with_cause(ConnectionResult::IoFailed),
-            WakeOutcome::Fired(now) if current => {
-                let still_scheduled = self
-                    .deadlines
-                    .first_key_value()
-                    .is_some_and(|((at, _), _)| *at == completion.op.deadline);
-                if !still_scheduled || now < self.now {
+            WakeOutcome::Fired(now) => {
+                if now < self.now {
                     return Ok(());
                 }
                 if self.advance_time(now).is_err() {
                     self.fail(ConnectionResult::ResourceExhausted);
                 }
             }
-            WakeOutcome::Fired(_) => {}
         }
         Ok(())
     }

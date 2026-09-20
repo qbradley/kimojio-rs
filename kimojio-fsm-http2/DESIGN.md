@@ -370,10 +370,11 @@ Already successful exchanges retain their outcomes.
 This is a deliberate completion-shape change for adapters.
 
 An active alarm failure hard-aborts with `IoFailed`.
-Cancellation is expected only after the core dispatched cancellation for that alarm.
-Its subsequent `Failed(Cancelled)` completion settles the original without advancing time or changing the primary result.
-Other alarm failures remain explicit I/O failures, even when the alarm is obsolete.
-Obsolete successful wakeups still settle without advancing time.
+This includes an unexpected `Failed(Cancelled)` on an active alarm.
+An alarm becomes obsolete when its deadline is no longer current, even before the core dispatches cancellation.
+All obsolete alarm completions only settle the original obligation.
+They do not advance time, change the primary result, or discard committed protocol output.
+An unchanged earliest deadline keeps the original alarm active, even if one stream changes its own deadline.
 An adapter must not substitute the requested deadline for a failed native timer.
 
 ## Executable API example
@@ -386,7 +387,7 @@ The pure engine does not create or drive an HTTP/1 parser.
 
 ## Standalone qualification
 
-The all-feature suite contains 213 unit tests, 67 integration tests, and two doctests.
+The all-feature suite contains 213 unit tests, 69 integration tests, and two doctests.
 Eight unit tests cover new direct-engine bounds and defensive state transitions.
 The default suite omits five feature-specific component tests.
 These counts do not include the six Criterion smoke workloads.
@@ -401,9 +402,9 @@ Another 48 schedules place response END_STREAM and RST_STREAM(NO_ERROR) in one r
 They cover HEADERS, DATA, and trailer endings, four callback policies, two release orders, and two write cuts.
 An upload remains outstanding throughout response processing.
 Assertions preserve the complete response and require sibling completion.
-The hard-abort model adds 8,640 schedules.
+The hard-abort model adds 11,520 schedules.
 It explores all 720 orders of three original operations and three cancellation acknowledgments.
-Four callback policies and three write outcomes cover cancellation, partial acceptance, and a fully successful race.
+Four callback policies and four write outcomes cover cancellation, partial acceptance, a fully successful race, and an uncertain write receipt.
 Close requires all six obligations, and each original send buffer returns exactly once.
 
 The sustained-credit cases send 9 MiB plus 17 bytes in each direction with the message-body limit raised.

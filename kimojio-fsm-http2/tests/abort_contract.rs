@@ -82,6 +82,59 @@ fn active_alarm_failure_is_recoverable_and_closes_without_advancing_time() {
 }
 
 #[test]
+fn abort_accepts_original_completions_before_cancellation_dispatch() {
+    for reverse in [false, true] {
+        let mut pair = Pair::new(Config::default());
+        let id = pair.client.request(&request(b"POST"), false).unwrap();
+        pair.pump(32_768);
+        pair.client
+            .set_deadline(id, Some(Duration::from_secs(5)))
+            .unwrap();
+        let buffer = vec![7; 100];
+        let pointer = buffer.as_ptr();
+        pair.client
+            .send(
+                pair.client_ports.permits.pop_front().unwrap(),
+                buffer,
+                false,
+            )
+            .unwrap();
+        pair.client.next(&mut pair.client_ports);
+        let read = pair.client_ports.read.take().unwrap();
+        let write = pair.client_ports.write.take().unwrap();
+        let alarm = pair.client_ports.alarms.pop().unwrap();
+        pair.client.abort();
+        let wake = alarm.failed(IoFailure::Failed);
+        let write = write.complete(WriteOutcome::Failed {
+            progress: Progress::AtLeast(12),
+            error: IoFailure::Cancelled,
+        });
+        if reverse {
+            pair.client.complete_write(write).unwrap();
+            pair.client.complete_wake(wake).unwrap();
+        } else {
+            pair.client.complete_wake(wake).unwrap();
+            pair.client.complete_write(write).unwrap();
+        }
+        pair.client
+            .complete_read(read.complete(ReadOutcome::Failed(IoFailure::Cancelled)))
+            .unwrap();
+        pair.client.advance_time(Duration::ZERO).unwrap();
+        pair.client.next(&mut pair.client_ports);
+        assert!(pair.client_ports.cancels.is_empty());
+        assert!(pair.client_ports.close.is_some());
+        assert_eq!(pair.client_ports.sent.len(), 1);
+        let sent = &pair.client_ports.sent[0];
+        assert_eq!(sent.buffer.as_ptr(), pointer);
+        assert_eq!(sent.accepted, 3);
+        assert!(!sent.exact);
+        assert_eq!(sent.result, Err(SendStop::ConnectionFailed));
+        settle(&mut pair.client, &mut pair.client_ports);
+        assert_eq!(pair.client_ports.closed, [ConnectionResult::Aborted]);
+    }
+}
+
+#[test]
 fn late_successful_read_and_alarm_failure_cannot_replace_abort_or_deliver_headers() {
     let mut pair = Pair::new(Config::default());
     let id = pair.client.request(&request(b"GET"), true).unwrap();
@@ -117,7 +170,7 @@ fn late_successful_read_and_alarm_failure_cannot_replace_abort_or_deliver_header
 }
 
 #[test]
-fn obsolete_expected_cancellation_is_not_an_alarm_failure_default() {
+fn obsolete_alarm_failures_only_settle_the_original() {
     for error in [IoFailure::Cancelled, IoFailure::Failed] {
         let mut pair = Pair::new(Config::default());
         let id = pair.client.request(&request(b"GET"), true).unwrap();
@@ -134,24 +187,19 @@ fn obsolete_expected_cancellation_is_not_an_alarm_failure_default() {
         assert_eq!(pair.client_ports.cancels.len(), 1);
         pair.client.complete_wake(old.failed(error)).unwrap();
         pair.client.advance_time(Duration::ZERO).unwrap();
-        if error == IoFailure::Cancelled {
-            pair.client.next(&mut pair.client_ports);
-            assert!(pair.client_ports.ends.is_empty());
-            assert!(pair.client_ports.closed.is_empty());
-            assert_eq!(pair.client_ports.alarms.len(), 1);
-            assert_eq!(
-                pair.client_ports.alarms[0].deadline(),
-                Duration::from_secs(10)
-            );
-            let cancel = pair.client_ports.cancels.pop().unwrap();
-            pair.client.complete_cancel(cancel.complete()).unwrap();
-            pair.client.abort();
-            settle(&mut pair.client, &mut pair.client_ports);
-            assert_eq!(pair.client_ports.closed, [ConnectionResult::Aborted]);
-        } else {
-            settle(&mut pair.client, &mut pair.client_ports);
-            assert_eq!(pair.client_ports.closed, [ConnectionResult::IoFailed]);
-        }
+        pair.client.next(&mut pair.client_ports);
+        assert!(pair.client_ports.ends.is_empty());
+        assert!(pair.client_ports.closed.is_empty());
+        assert_eq!(pair.client_ports.alarms.len(), 1);
+        assert_eq!(
+            pair.client_ports.alarms[0].deadline(),
+            Duration::from_secs(10)
+        );
+        let cancel = pair.client_ports.cancels.pop().unwrap();
+        pair.client.complete_cancel(cancel.complete()).unwrap();
+        pair.client.abort();
+        settle(&mut pair.client, &mut pair.client_ports);
+        assert_eq!(pair.client_ports.closed, [ConnectionResult::Aborted]);
     }
 }
 
@@ -208,4 +256,62 @@ fn hard_abort_can_escalate_graceful_close_before_its_original_completion() {
     pair.client.complete_close(close.complete(Ok(()))).unwrap();
     pair.client.next(&mut pair.client_ports);
     assert_eq!(pair.client_ports.closed, [ConnectionResult::Aborted]);
+}
+
+#[test]
+fn stale_alarm_failure_preserves_protocol_cause_and_queued_goaway() {
+    for error in [IoFailure::Failed, IoFailure::Cancelled] {
+        for dispatch_first in [false, true] {
+            for acknowledge_first in [false, true] {
+                let mut client = Client::new(Config::default(), Duration::ZERO).unwrap();
+                let mut ports = MemoryPorts::default();
+                client.next(&mut ports);
+                let settings = ports.write.take().unwrap();
+                let length = settings.remaining();
+                client
+                    .complete_write(settings.complete(WriteOutcome::Written(length)))
+                    .unwrap();
+                client.next(&mut ports);
+                let alarm = ports.alarms.pop().unwrap();
+                let deadline = alarm.deadline();
+                client.advance_time(deadline).unwrap();
+                if dispatch_first {
+                    client.next(&mut ports);
+                    if acknowledge_first {
+                        let index = ports
+                            .cancels
+                            .iter()
+                            .position(|op| op.original() == alarm.token())
+                            .unwrap();
+                        client
+                            .complete_cancel(ports.cancels.remove(index).complete())
+                            .unwrap();
+                    }
+                }
+                client.complete_wake(alarm.failed(error)).unwrap();
+                client.advance_time(deadline).unwrap();
+                let mut output = VecDeque::new();
+                for _ in 0..128 {
+                    if !step(
+                        &mut client,
+                        &mut ports,
+                        &mut VecDeque::new(),
+                        &mut output,
+                        32_768,
+                    ) {
+                        break;
+                    }
+                }
+                assert_eq!(
+                    output.into_iter().collect::<Vec<_>>(),
+                    [0, 0, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4]
+                );
+                assert!(matches!(
+                    ports.closed.as_slice(),
+                    [ConnectionResult::Protocol(cause)]
+                        if cause.code == H2ErrorCode::SettingsTimeout
+                ));
+            }
+        }
+    }
 }
