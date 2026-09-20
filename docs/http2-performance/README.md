@@ -117,6 +117,14 @@ They are explicit blocked gates, not passing tests.
 The matrix retains further affected combinations in its error rows.
 These failures are protocol/resource failures, not copy costs.
 
+After this qualification, the core owner identified an early-response upload defect in the frozen core.
+The client removed both stream halves at response END_STREAM, even while its request upload remained active.
+The owner supplied correction `0d1416641d88578e02fd0ebce9f1c67f459afa66` and separate regression evidence.
+This qualification did not import or measure that correction.
+The failing duplex cells need another run on the corrected core.
+The fixed virtual clock does not establish a control-budget defect.
+No budget increase is justified by these failures.
+
 The harness requires static payload contents and a single in-memory connection pair.
 Payload comparison, transport copy, application assertions, and cohort management contribute to its CPU time.
 The result is not socket throughput.

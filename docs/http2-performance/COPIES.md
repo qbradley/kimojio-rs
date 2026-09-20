@@ -190,6 +190,9 @@ That inversion needs a flow-control investigation before an optimization claim.
 
 The concurrent body failures block the core gate.
 The wrapper must not hide them with larger capacities or weaker assertions.
+The core owner later attributed the frozen-core failures to premature removal of the client upload half.
+The supplied correction is `0d1416641d88578e02fd0ebce9f1c67f459afa66`.
+This report does not qualify that correction or attribute the failures to a control budget.
 After a core correction, the essential timing cells and profiles need a new source freeze.
 Old addresses and samples cannot support claims about the corrected source.
 
