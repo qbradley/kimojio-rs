@@ -1,0 +1,57 @@
+{
+  "source_commit": "9bc026a56e7b9090225e61217f4524ad7082ffb6",
+  "base_commit": "2c8d1d48a880c4dec70c8d5feeacbf45dfc8d359",
+  "core_source_unchanged": true,
+  "core_src_tree": "b2363a9e8debed7e63559de2485464fa286c56a4",
+  "worktree": "/workspace/kimojio-rs/target/http2-program/worktrees/http2-allocation",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "CARGO_PROFILE_RELEASE_DEBUG": "2",
+  "RUSTFLAGS": null,
+  "CARGO_ENCODED_RUSTFLAGS": null,
+  "CARGO_TARGET_DIR": "/workspace/kimojio-rs/target/http2-program/build-http2-allocation",
+  "cpu_affinity": "8-31",
+  "cpu2_used": false,
+  "performance_timings_or_profiles": false,
+  "binary": {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-allocation/frozen-9bc026a5/allocation_probe",
+    "sha256": "a3698d6817fc2ee19a4206aff37029ea06cdbe5dc0cfdd0d4ed603cfdb2405ca"
+  },
+  "test_binary": {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-allocation/frozen-9bc026a5/allocation_probe-tests",
+    "sha256": "18bd4ca45249949a122e80e4a0c71fa77a2305ad7a783622a32064351f9a9c84"
+  },
+  "source_sha256": {
+    "kimojio-fsm-http2/examples/allocation_probe.rs": "c001bb98a5af7e942f6716cc1991fd9da0a4996910284065bd2800cada0759dd",
+    "kimojio-fsm-http2/examples/composition_bench_support/allocation.rs": "1a9d71e6f3cc59a226d09cdd3e46389cb89bad0decfb7949e83bb81872ff412d",
+    "kimojio-fsm-http2/examples/composition_bench_support/allocation_counter.rs": "31f91d9eb43a97c41905c5bae2882b39cd3878dafde08c95f44a589b244be6b5",
+    "kimojio-fsm-http2/examples/composition_bench_support/diagnostics.rs": "e139de023e542b5692c2d4360152ef1cab7a036b60f299c3c5c91b6f6293c3ba",
+    "kimojio-fsm-http2/examples/composition_bench_support/mod.rs": "5c3ad0fdf544005da796315142242dcc882404269b8b319755da3e4dbede5e09",
+    "kimojio-fsm-http2/examples/composition_bench_support/overlap.rs": "c5f5e230174f45b727b235bb5a5ffb78c43ee16487aaea26a9ec5d877b8508a5",
+    "kimojio-fsm-http2/examples/composition_bench_support/allocation_trials.py": "dd18d215a76ab370a39751aff41b3f82af88b8d2317ec4669c75a765faec3371"
+  },
+  "cargo_lock_sha256": "b0eeb8277510fc0a1d3bf56ccf61cd0a2a71c0f19a0e65bdbbf88543ad1a2170",
+  "build_command": "CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http2-program/build-http2-allocation CARGO_PROFILE_RELEASE_DEBUG=2 taskset -c 8-31 cargo build --release -p kimojio-fsm-http2 --example allocation_probe",
+  "matrix_command": "taskset -c 8-31 python3 kimojio-fsm-http2/examples/composition_bench_support/allocation_trials.py --binary ../../build-http2-allocation/frozen-9bc026a5/allocation_probe --output docs/http2-performance/allocations/evidence/trials.jsonl --summary docs/http2-performance/allocations/evidence/summary.json",
+  "qualification": {
+    "cells": 108,
+    "repetitions": 3,
+    "successful_runs": 324,
+    "failed_runs": 0,
+    "all_repetitions_identical": true,
+    "default_tests": {
+      "allocation_probe": 11,
+      "composition_bench": 11,
+      "ownership": 5
+    },
+    "all_features_tests": {
+      "allocation_probe": 11,
+      "composition_bench": 11,
+      "ownership": 5
+    },
+    "failed_tests": 0,
+    "ignored_tests": 0,
+    "formatting": "pass",
+    "clippy": "pass with -D warnings",
+    "clippy_all_targets_all_features": "pass with -D warnings"
+  }
+}

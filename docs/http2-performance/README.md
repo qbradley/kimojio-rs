@@ -3,6 +3,9 @@
 [The latest corrected baseline and isolated PoC](credit-coalescing/README.md) have separate measurements and immutable binaries.
 This page retains the earlier historical result set.
 
+[The separate allocation probe](allocations/README.md) adds cold and warmed allocation evidence on integration `2c8d1d48`.
+It does not change these historical CPU measurements.
+
 This report measures the direct HTTP/2 core and its protocol selector.
 It does not qualify a Kimojio wrapper or a socket executor.
 The source starts at `5491242b53e60051178870d7a82fb89b29cda463`.
