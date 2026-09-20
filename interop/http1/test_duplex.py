@@ -48,6 +48,28 @@ class DuplexReaderTests(unittest.TestCase):
                 b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nTransfer-Encoding: chunked\r\n\r\n"
             ])))
 
+    def test_reusable_prefix_keeps_the_next_response(self):
+        raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\none\r\n0\r\n\r\n"
+        wire = Wire(MemorySocket([raw + raw]))
+        response = ResponsePrefix(wire)
+        self.assertEqual(response.take(3), b"one")
+        response.finish(close=False)
+        response = ResponsePrefix(wire)
+        self.assertEqual(response.take(3), b"one")
+        response.finish()
+
+    def test_reuse_rejects_close_policy_and_unbounded_framing(self):
+        for headers in (
+            b"Connection: keep-alive, close\r\nContent-Length: 3\r\n",
+            b"",
+        ):
+            with self.subTest(headers=headers), self.assertRaises(ProtocolError):
+                response = ResponsePrefix(Wire(MemorySocket([
+                    b"HTTP/1.1 200 OK\r\n" + headers + b"\r\none"
+                ])))
+                response.take(3)
+                response.finish(close=False)
+
 
 if __name__ == "__main__":
     unittest.main()

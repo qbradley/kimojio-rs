@@ -4,9 +4,11 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
+use futures::FutureExt;
 use kimojio::{OwnedFdStream, socket_helpers::create_client_socket};
 use kimojio_http1::{
     Config, ConnectionId, Error, IncomingFrame, OutgoingBody, OutgoingFrame, connect,
+    connect_native,
     http::{HeaderMap, Request},
 };
 
@@ -37,11 +39,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut body_file = None;
     let mut result_file = None;
     let mut chunked = false;
+    let mut native = false;
     let mut expect_continue = false;
     let mut repeat = 1usize;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--native" => native = true,
             "--connect" => address = args.next().ok_or("missing address")?,
             "--method" => method = args.next().ok_or("missing method")?,
             "--path" => path = args.next().ok_or("missing path")?,
@@ -70,7 +74,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         slot: 1,
         generation: 1,
     });
-    let (mut client, connection) = connect(OwnedFdStream::new(socket), config);
+    let (mut client, connection) = if native {
+        let (client, connection) = connect_native(socket, config);
+        (client, connection.run().boxed_local())
+    } else {
+        let (client, connection) = connect(OwnedFdStream::new(socket), config);
+        (client, connection.run().boxed_local())
+    };
     let control = client.control();
     let application = async move {
         let result = async {
@@ -146,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         result
     };
-    let (result, driver_result) = futures::join!(application, connection.run());
+    let (result, driver_result) = futures::join!(application, connection);
     result?;
     driver_result?;
     Ok(())

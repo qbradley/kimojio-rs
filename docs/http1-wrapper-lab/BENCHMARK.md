@@ -103,6 +103,8 @@ All executions remain sequential and use one selected CPU.
 The result retains every trial, command, failure, and workload count.
 Summaries contain medians, ranges, and population standard deviations, not confidence intervals.
 Any failed row invalidates the comparison.
+The runner deletes each prior result before its next execution.
+A successful process exit without a new result cannot reuse stale evidence.
 An optional candidate field, `"arguments": ["--native"]`, selects the native backend.
 A native-only executable can instead declare `"backend": "native"`.
 Its result must also report the native backend.

@@ -4,15 +4,21 @@ use kimojio::{OwnedFd, OwnedFdStream, operations, task_pool::TaskPool};
 use kimojio_http1::{
     Config, ConnectionId, Error, IncomingBody, OutgoingBody, OutgoingFrame,
     http::{HeaderMap, Request, Response, StatusCode},
-    serve_connection,
+    serve_connection, serve_connection_native,
 };
 
 async fn handle(request: Request<IncomingBody>) -> Result<Response<OutgoingBody>, Error> {
     match request.uri().path() {
-        "/echo" => {
+        "/echo" | "/duplex" => {
+            let duplex = request.uri().path() == "/duplex";
             let mut incoming = request.into_body();
             incoming.accept().await?;
-            Ok(Response::new(OutgoingBody::from_incoming(incoming)))
+            let body = OutgoingBody::from_incoming(incoming);
+            Ok(Response::new(if duplex {
+                body.continue_request_body()
+            } else {
+                body
+            }))
         }
         "/trailers" => {
             let mut trailers = HeaderMap::new();
@@ -61,7 +67,7 @@ async fn handle(request: Request<IncomingBody>) -> Result<Response<OutgoingBody>
     }
 }
 
-async fn serve(socket: OwnedFd, slot: u64) {
+async fn serve(socket: OwnedFd, slot: u64, native: bool) {
     if let Err(error) = kimojio::socket_helpers::update_accept_socket(&socket) {
         eprintln!("connection {slot}: {error}");
         return;
@@ -70,7 +76,12 @@ async fn serve(socket: OwnedFd, slot: u64) {
         slot,
         generation: 1,
     });
-    if let Err(error) = serve_connection(OwnedFdStream::new(socket), config, handle).await {
+    let result = if native {
+        serve_connection_native(socket, config, handle).await
+    } else {
+        serve_connection(OwnedFdStream::new(socket), config, handle).await
+    };
+    if let Err(error) = result {
         eprintln!("connection {slot}: {error}");
     }
 }
@@ -80,9 +91,11 @@ async fn serve(socket: OwnedFd, slot: u64) {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut bind = "127.0.0.1:0".to_owned();
     let mut connections = None;
+    let mut native = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--native" => native = true,
             "--bind" => bind = args.next().ok_or("missing --bind value")?,
             "--connections" => {
                 connections = Some(
@@ -105,7 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let socket = operations::accept(&listener).await?;
         slot = slot.checked_add(1).ok_or("connection identity exhausted")?;
         let task = pool
-            .spawn_task(serve(socket, slot))
+            .spawn_task(serve(socket, slot, native))
             .await
             .map_err(|_| "connection admission cancelled")?;
         live.retain(|handle: &operations::TaskHandle<()>| !handle.is_complete());

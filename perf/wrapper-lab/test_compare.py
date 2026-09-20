@@ -1,12 +1,23 @@
+import contextlib
+import io
+import json
+from pathlib import Path
+import subprocess
+import tempfile
 import unittest
+from unittest.mock import patch
 
-from compare import summarize, validate_result
+from compare import main, summarize, validate_result
 
 
 class ComparisonTests(unittest.TestCase):
     def result(self):
         return {
+            "schema": 1,
             "valid": True,
+            "transport": "unix_socketpair",
+            "measurement_scope": "after_warmup_through_successful_connection_shutdown",
+            "validation": "complete_payload_equality_and_status_in_both_directions",
             "connections_created": 1,
             "reconnects": 0,
             "warmup_exchanges": 10,
@@ -33,6 +44,9 @@ class ComparisonTests(unittest.TestCase):
             ("server_exchanges", 109),
             ("validated_payload_bytes", 12799),
             ("valid", False),
+            ("measurement_scope", "before_shutdown"),
+            ("validation", "length_only"),
+            ("transport", "simulated"),
         ]:
             result = self.result()
             result[key] = value
@@ -78,6 +92,45 @@ class ComparisonTests(unittest.TestCase):
             validate_result(result, case, 10)
         result["forwarding"] = "copy"
         validate_result(result, case, 10)
+
+    def test_success_without_new_output_cannot_reuse_a_stale_result(self):
+        stale = self.result() | {
+            "warmup_exchanges": 1000,
+            "measured_exchanges": 20000,
+            "server_exchanges": 21000,
+            "validated_payload_bytes": 20000 * 128,
+            "nanoseconds_per_exchange": 500,
+        }
+        validate_result(stale, self.case() | {"iterations": 20000}, 1000)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "binary"
+            binary.write_bytes(b"frozen fixture")
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({"candidates": [{
+                "name": "fixture", "revision": "fixture", "binary": str(binary),
+                "build_command": "fixture",
+            }]}))
+            output = root / "report.json"
+            artifacts = root / "report"
+            artifacts.mkdir()
+            previous = artifacts / "fixture-small-0.json"
+            previous.write_text(json.dumps(stale))
+            arguments = [
+                "compare.py", "--manifest", str(manifest), "--output", str(output),
+                "--case", "small", "--trials", "1",
+            ]
+            with (
+                patch("sys.argv", arguments),
+                patch("compare.subprocess.run", return_value=subprocess.CompletedProcess([], 0)),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(main(), 1)
+            report = json.loads(output.read_text())
+            self.assertFalse(report["valid"])
+            self.assertFalse(report["rows"][0]["valid"])
+            self.assertEqual(report["summaries"], [])
+            self.assertFalse(previous.exists())
 
 
 if __name__ == "__main__":

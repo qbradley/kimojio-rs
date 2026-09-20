@@ -194,6 +194,24 @@ HTTP/1.0 version selection and unsupported-Expect rejection are explicit v3 case
 The `/early` fixture must return 413 without first issuing 100.
 That requirement is an explicit application policy, not a ban on every 100 followed by 413.
 
+The Rust client and server examples also accept `--native` for the exact one-shot descriptor backend.
+The `kimojio_adapter.py` command accepts the same flag and passes it to the client.
+Without that flag, the examples retain the generic stream backend.
+
+The server's `/duplex` route selects explicit reusable forwarding.
+The existing `/echo` and `/early` policies do not change.
+The duplex suite can require three gated exchanges on one socket:
+
+```sh
+python3 -B interop/http1/duplex_suite.py --path /duplex --reuse \
+  --server-command '["target/debug/examples/server","--native","--bind","{bind}"]'
+```
+
+Each exchange must return its head before the upload starts.
+Each uploaded fragment must produce matching output before the next fragment arrives.
+The suite covers fixed-length and chunked requests, with and without `Expect: 100-continue`.
+It requires exact trailers and permits EOF only after the final exchange.
+
 Each report preserves base64 request intents and received bytes.
 A send intent does not prove that the peer accepted every byte.
 A failed fragmented send records an error instead of claiming complete delivery.

@@ -64,6 +64,7 @@ def normalize(raw: bytes, returncode: int) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--client", required=True)
+    parser.add_argument("--native", action="store_true")
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--result", type=Path, required=True)
     args = parser.parse_args()
@@ -109,6 +110,8 @@ def main() -> None:
         command.append("--chunked")
     if expect:
         command.append("--expect-continue")
+    if args.native:
+        command.append("--native")
     completed = run_command(command, cwd=WORKSPACE, timeout=job["timeout_ms"] / 1000)
     require(
         native_file.is_file(),

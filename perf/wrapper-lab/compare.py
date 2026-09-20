@@ -65,7 +65,11 @@ def digest(path):
 
 def validate_result(result, case, warmup, backend="stream"):
     expected = {
+        "schema": 1,
         "valid": True,
+        "transport": "unix_socketpair",
+        "measurement_scope": "after_warmup_through_successful_connection_shutdown",
+        "validation": "complete_payload_equality_and_status_in_both_directions",
         "connections_created": 1,
         "reconnects": 0,
         "warmup_exchanges": warmup,
@@ -198,6 +202,7 @@ def main():
                 "valid": False,
             }
             try:
+                output.unlink(missing_ok=True)
                 with (artifacts / f"{stem}.stdout").open("w") as stdout:
                     with (artifacts / f"{stem}.stderr").open("w") as stderr:
                         process = subprocess.run(

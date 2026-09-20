@@ -75,6 +75,7 @@ Native close waits for the read worker to release its descriptor owner, then awa
 
 This backend supplies neither TLS nor a user-space readiness retry loop.
 Unexpected native `EAGAIN` is terminal.
+The `client` and `server` examples select this backend with `--native`.
 See the [raw transport record](../docs/http1-wrapper-lab/raw-transport.md) for ownership details, tests, and benchmark integration.
 
 ## Server
@@ -94,6 +95,7 @@ The wrapper first permits an outstanding lease to return and drains core complet
 This ordering protects a final forwarded lease after a known-length source ends.
 Client request bodies reject this response-only policy with `Error::InvalidMetadata`.
 The default response policy does not change.
+The server example retains that policy for `/echo` and selects reusable duplex forwarding for `/duplex`.
 See [explicit duplex responses](../docs/http1-wrapper-lab/duplex-wrapper.md) for API examples and lifetime rules.
 
 `serve_connection_with_shutdown` also accepts a `Shutdown` handle.

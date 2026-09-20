@@ -29,6 +29,11 @@ class ResponsePrefix:
         status = STATUS.fullmatch(lines[0])
         require(status is not None and int(status[2]) == 200, "duplex echo needs an early 200 head")
         headers = fields(lines[1:])
+        self.closing = any(
+            token.strip().lower() == b"close"
+            for key, value in headers if key == b"connection"
+            for token in value.split(b",")
+        )
         transfer = [value.lower() for key, value in headers if key == b"transfer-encoding"]
         lengths = [value for key, value in headers if key == b"content-length"]
         require(not (transfer and lengths), "ambiguous response framing")
@@ -71,7 +76,7 @@ class ResponsePrefix:
                 require(self.wire.take(2) == b"\r\n", "invalid chunk terminator")
         return bytes(result)
 
-    def finish(self, expected_trailers=()):
+    def finish(self, expected_trailers=(), *, close=True):
         if self.chunked:
             require(self.chunk_remaining == 0 and self.chunk_size() == 0, "extra response body")
             lines = []
@@ -87,31 +92,44 @@ class ResponsePrefix:
         else:
             require(self.remaining in (None, 0), "incomplete response body")
             require(not expected_trailers, "trailers require chunked response framing")
-        self.wire.expect_eof()
+        if close:
+            self.wire.expect_eof()
+        else:
+            require(not self.closing, "response forbids connection reuse")
+            require(self.chunked or self.remaining == 0, "reuse requires complete bounded framing")
 
 
-def server_case(address, *, chunked, path="/echo", expect_continue=False):
+def server_case(address, *, chunked, path="/echo", expect_continue=False, reuse=False):
     name = "server-duplex-chunked" if chunked else "server-duplex-length"
-    row = {"case": name + ("-expect" if expect_continue else "")}
+    row = {
+        "case": name + ("-expect" if expect_continue else "") + ("-reuse" if reuse else ""),
+        "exchanges": 0,
+        "connections_created": 0,
+    }
     wire = None
     try:
         with TraceWire.connect(address, timeout=4) as wire:
-            framing = b"Transfer-Encoding: chunked\r\nTrailer: X-Duplex\r\n" if chunked else b"Content-Length: 6\r\n"
-            wire.send(
-                b"POST " + path.encode("ascii") + b" HTTP/1.1\r\nHost: localhost\r\n"
-                b"Connection: close\r\n" + framing
-                + (b"Expect: 100-continue\r\n" if expect_continue else b"") + b"\r\n"
-            )
-            if expect_continue:
-                require(wire.response("POST").status == 100, "duplex Expect needs 100 before final head")
-            response = ResponsePrefix(wire)
-            row["response_head_before_request_body"] = True
-            for part in (b"one", b"two"):
-                wire.send(b"3\r\n" + part + b"\r\n" if chunked else part)
-                require(response.take(3) == part, "echo did not progress before the next request fragment")
-            if chunked:
-                wire.send(b"0\r\nX-Duplex: done\r\n\r\n")
-            response.finish(((b"x-duplex", b"done"),) if chunked else ())
+            row["connections_created"] = 1
+            payloads = [(b"one", b"two"), (b"thr", b"eee"), (b"fin", b"ish")] if reuse else [(b"one", b"two")]
+            for index, parts in enumerate(payloads):
+                final = index == len(payloads) - 1
+                framing = b"Transfer-Encoding: chunked\r\nTrailer: X-Duplex\r\n" if chunked else b"Content-Length: 6\r\n"
+                wire.send(
+                    b"POST " + path.encode("ascii") + b" HTTP/1.1\r\nHost: localhost\r\n"
+                    + (b"Connection: close\r\n" if final else b"") + framing
+                    + (b"Expect: 100-continue\r\n" if expect_continue else b"") + b"\r\n"
+                )
+                if expect_continue:
+                    require(wire.response("POST").status == 100, "duplex Expect needs 100 before final head")
+                response = ResponsePrefix(wire)
+                row["response_head_before_request_body"] = True
+                for part in parts:
+                    wire.send(b"3\r\n" + part + b"\r\n" if chunked else part)
+                    require(response.take(3) == part, "echo did not progress before the next request fragment")
+                if chunked:
+                    wire.send(b"0\r\nX-Duplex: done\r\n\r\n")
+                response.finish(((b"x-duplex", b"done"),) if chunked else (), close=final)
+                row["exchanges"] += 1
             row["passed"] = True
     except (AssertionError, OSError, ValueError) as error:
         row.update(passed=False, error=repr(error))
@@ -240,6 +258,7 @@ def main():
     parser.add_argument("--client-adapter", type=Path)
     parser.add_argument("--server-command", help="JSON argument array")
     parser.add_argument("--path", default="/echo")
+    parser.add_argument("--reuse", action="store_true", help="require three gated server exchanges on one socket")
     args = parser.parse_args()
     if not args.client_adapter and not args.server_command:
         parser.error("supply a client adapter, server command, or both")
@@ -262,6 +281,7 @@ def main():
                         report["results"].append(server_case(
                             server.address, chunked=mode, path=args.path,
                             expect_continue=expect_continue,
+                            reuse=args.reuse,
                         ))
         except (OSError, RuntimeError) as error:
             report["startup_error"] = repr(error)
