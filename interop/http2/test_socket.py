@@ -334,14 +334,11 @@ class SocketTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             validate_results(case, report)
 
-    def test_early_rejection_requires_local_cancel_not_global_failure(self):
+    def test_early_rejection_requires_peer_signal_not_global_failure(self):
         from protocol_suite import request, validate
 
         spec = request("early-response", ("127.0.0.1", 1))
-        self.assertEqual(
-            spec["actions"],
-            [{"action": "cancel_upload_after_response", "stream_id": 1}],
-        )
+        self.assertEqual(spec["actions"], [])
 
         report = {
             "schema": 1, "connection": {"closed": True, "error": None, "outcome": "graceful"},
@@ -352,12 +349,14 @@ class SocketTests(unittest.TestCase):
                 "sha256": digest_for(stream, 0 if stream == 1 else 37),
                 "trailers": [], "informational": [], "ended": True,
                 "outcome": "reset" if stream == 1 else "complete",
-                "error": {"scope": "stream", "code": 8} if stream == 1 else None,
+                "error": {"scope": "stream", "code": 0} if stream == 1 else None,
             } for stream in (1, 3)],
         }
         witness = {
             "peer_eof": True, "requests": 2, "received": {"1": 1024},
-            "window_updates": {}, "resets": {"1": 8},
+            "window_updates": {}, "resets": {}, "server_resets": {"1": 0},
+            "early_response_barrier": True,
+            "request_ended": {"1": False, "3": True},
         }
         validate("early-response", report, witness)
         broken = json.loads(json.dumps(report))
@@ -367,8 +366,12 @@ class SocketTests(unittest.TestCase):
         broken["streams"][0]["error"] = None
         with self.assertRaises(AssertionError):
             validate("early-response", broken, witness)
-        witness["resets"] = {}
-        with self.assertRaisesRegex(AssertionError, "explicit stream-local CANCEL"):
+        witness["early_response_barrier"] = False
+        with self.assertRaisesRegex(AssertionError, "barrier"):
+            validate("early-response", report, witness)
+        witness["early_response_barrier"] = True
+        witness["server_resets"] = {}
+        with self.assertRaisesRegex(AssertionError, "RST_STREAM\\(NO_ERROR\\)"):
             validate("early-response", report, witness)
 
     def test_bounded_process_output_and_timeout(self):

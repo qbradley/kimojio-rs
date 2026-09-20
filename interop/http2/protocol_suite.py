@@ -32,8 +32,6 @@ def request(scenario, address):
         actions = [{"action": "reset", "stream_id": 1, "after_bytes": 1024, "code": 8}]
     if scenario == "graceful-close":
         actions = [{"action": "graceful_close", "after_streams": 1}]
-    if scenario == "early-response":
-        actions = [{"action": "cancel_upload_after_response", "stream_id": 1}]
     return {
         "schema": 1, "host": address[0], "port": address[1],
         "timeout_ms": 8000,
@@ -79,7 +77,7 @@ def validate(scenario, report, witness):
             status, length, ended, error = 204, 0, False, {"scope": "stream", "code": 1}
         elif stream == 1 and scenario == "early-response":
             status, length = 413, 0
-            error = {"scope": "stream", "code": 8}
+            error = {"scope": "stream", "code": 0}
         if error is not None:
             outcome = "reset"
         require(result.get("status") == status, f"stream {stream}: wrong status")
@@ -106,8 +104,14 @@ def validate(scenario, report, witness):
         require(witness["goaway"] == 1, "missing wire GOAWAY(PROTOCOL_ERROR)")
     if scenario == "early-response":
         require(witness["received"].get("1") == 1024, "upload did not stop at actual advertised stream credit")
+        require(witness.get("request_ended", {}).get("1") is False, "upload ended instead of remaining blocked")
+        require(witness.get("request_ended", {}).get("3") is True, "sibling request did not end")
+        require(witness["received"].get("3", 0) == 0, "bodyless sibling sent request DATA")
         require(not witness["window_updates"].get("1"), "unexpected response receive-credit update")
-        require(witness["resets"].get("1") == 8, "rejected upload needs explicit stream-local CANCEL")
+        require(witness.get("early_response_barrier") is True, "response END_STREAM barrier was not acknowledged")
+        require(witness.get("server_resets") == {"1": 0}, "missing server RST_STREAM(NO_ERROR)")
+        require(not witness["resets"], "client reset before or in response to server NO_ERROR reset")
+        require(report["connection"]["outcome"] == "graceful", "early response did not close gracefully")
     if scenario == "reset-discard":
         require(witness["resets"].get("1") == 8, "missing client CANCEL")
         require(witness["window_updates"].get("0", 0) >= 32768, "discarded DATA stranded connection credit")

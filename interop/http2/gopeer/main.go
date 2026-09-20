@@ -205,11 +205,14 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 		return nil, err
 	}
 	requests := make(map[uint32][]hpack.HeaderField)
+	requestEnded := make(map[uint32]bool)
 	received := make(map[uint32]int)
 	sent := make(map[uint32]bool)
 	sawEOF, goaway := false, uint32(0)
 	pendingSettings := 0
 	resetUpdateBaseline := make(map[uint32]uint64)
+	serverResets := make(map[uint32]uint32)
+	earlyResponseBarrier := false
 	for {
 		frame, err := p.read(scenario != "push-before-ack")
 		if errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) &&
@@ -231,6 +234,7 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 				return nil, errors.New("request metadata limit exceeded")
 			}
 			requests[stream] = frame.Fields
+			requestEnded[stream] = requestEnded[stream] || frame.StreamEnded()
 			if scenario == "connect" {
 				values := make(map[string]string)
 				for _, field := range frame.Fields {
@@ -321,6 +325,7 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 			}
 		case *http2.DataFrame:
 			received[frame.StreamID] += len(frame.Data())
+			requestEnded[frame.StreamID] = requestEnded[frame.StreamID] || frame.StreamEnded()
 			if scenario == "connect" {
 				err = p.body(frame.StreamID, frame.Data(), frame.StreamEnded())
 				sent[frame.StreamID] = frame.StreamEnded()
@@ -330,12 +335,24 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 				}
 				err = p.headers(frame.StreamID, fields("413", 0), true, false)
 				sent[frame.StreamID] = true
+				if err == nil {
+					err = p.framer.WritePing(false, [8]byte{'e', 'a', 'r', 'l', 'y', 'e', 'n', 'd'})
+				}
 			}
 		case *http2.GoAwayFrame:
 			goaway = uint32(frame.ErrCode)
 		case *http2.PingFrame:
 			if scenario == "content-length" && frame.IsAck() && frame.Data == [8]byte{2} {
 				err = p.body(1, nil, true)
+			}
+			if scenario == "early-response" && frame.IsAck() &&
+				frame.Data == [8]byte{'e', 'a', 'r', 'l', 'y', 'e', 'n', 'd'} &&
+				sent[1] && !earlyResponseBarrier {
+				earlyResponseBarrier = true
+				err = p.framer.WriteRSTStream(1, http2.ErrCodeNo)
+				if err == nil {
+					serverResets[1] = uint32(http2.ErrCodeNo)
+				}
 			}
 		case *http2.RSTStreamFrame:
 			if scenario == "reset-discard" && frame.StreamID == 1 {
@@ -361,6 +378,8 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 		"window_updates": p.updates, "bytes_in": p.conn.read, "bytes_out": p.conn.written,
 		"push_disabled": p.pushDisabled, "goaway_count": p.goaways,
 		"stream_updates_at_reset": resetUpdateBaseline,
+		"server_resets":           serverResets, "early_response_barrier": earlyResponseBarrier,
+		"request_ended": requestEnded,
 	}, nil
 }
 
@@ -405,7 +424,7 @@ type result struct {
 func rawClient(input spec) (map[string]any, error) {
 	for _, action := range input.Actions {
 		switch action.Action {
-		case "reset", "graceful_close", "cancel_upload_after_response":
+		case "reset", "graceful_close":
 		default:
 			return nil, fmt.Errorf("unsupported Go protocol action %q", action.Action)
 		}
@@ -508,16 +527,6 @@ func rawClient(input spec) (map[string]any, error) {
 			if frame.StreamEnded() {
 				r.Ended = true
 				markDone(frame.StreamID)
-				for _, action := range input.Actions {
-					if action.Action == "cancel_upload_after_response" && action.StreamID == frame.StreamID &&
-						!requestEnded[frame.StreamID] {
-						if err := p.framer.WriteRSTStream(frame.StreamID, http2.ErrCodeCancel); err != nil {
-							return nil, err
-						}
-						r.Error = map[string]any{"scope": "stream", "code": uint32(http2.ErrCodeCancel)}
-						uploaded[frame.StreamID] = true
-					}
-				}
 			}
 		case *http2.DataFrame:
 			r := results[frame.StreamID]

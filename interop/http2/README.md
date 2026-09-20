@@ -105,12 +105,12 @@ It stops the reference upload at exactly 65,535 bytes.
 
 The main protocol suite's early-413 case differs from this probe.
 That case withholds upload credit deliberately.
-Its request includes `{"action":"cancel_upload_after_response","stream_id":1}`.
-The fixture application executes that action after normal receive END_STREAM.
+After the response END_STREAM, the peer sends a PING.
+After its acknowledgment, the peer sends RST_STREAM(NO_ERROR) without closing the socket.
 The protocol engine must not infer upload cancellation from END_STREAM or the status code alone.
-This case requires a wire RST_STREAM(CANCEL), stream outcome `reset`, and preserved receive END_STREAM.
+This case requires the observed server reset, stream outcome `reset`, actual wire code 0, and preserved receive END_STREAM.
 Its sibling must retire as `complete`, and the connection must close normally.
-Global `connection_failed` outcomes cannot satisfy this stream-local cancellation policy.
+Global `connection_failed` outcomes cannot satisfy this stream-local termination.
 
 ## Implemented flow and socket checks
 
