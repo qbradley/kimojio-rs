@@ -6,19 +6,21 @@ This ledger records bounded evidence for the scope in [the composition design](h
 It does not claim an exhaustive RFC proof.
 The core qualification gates are complete for the recorded scope and snapshots.
 The metadata-admission repair passed independent review, socket qualification, and source-specific measurements.
-Kimojio HTTP/2 wrapper implementation is in progress.
-The native client and server have focused runtime coverage.
+Kimojio HTTP/2 wrapper implementation and qualification are complete for the recorded scope.
+Native and generic clients and servers have focused runtime coverage.
 The explicit wrapper interoperability profile passed for native and generic transports.
 Lifecycle evidence is recorded with explicit limits.
 The runtime scope-retention repair passed independent review, socket qualification, and bounded retention measurements.
 The wrapper performance baseline is measured.
-The direct-read experiment was rejected for general integration. One final bounded allocation experiment remains in progress.
+The direct-read experiment was rejected for general integration.
+The inline-membership optimization passed correctness review, performance qualification, and the final socket rerun.
+The [implementation assessment](http2-wrapper-report.md) summarizes the completed scope and remaining limits.
 
-The current socket qualification covers the direct HTTP/2 engine.
+The socket suites cover the direct HTTP/2 engine and its runtime wrappers.
 Separate models cover the HTTP/1 plus HTTP/2 composite.
 Socket interoperability does not establish runtime-wrapper cost or cancellation behavior.
 
-## Qualified socket snapshot
+## Qualified core socket snapshot
 
 | Item | Identity |
 | --- | --- |
@@ -204,11 +206,11 @@ That review did not independently inject kernel cancellation races or close fail
 | Shared ownership, native I/O, concurrent client | Implemented with focused runtime tests |
 | Concurrent native server | Implemented with focused runtime tests |
 | Generic established transports | Implemented with focused runtime tests |
-| Independent wrapper socket fixture and peers | All 65 wrapper-profile cases passed per transport on `b3789dc6` |
-| Wrapper performance and final review | Baseline measured; direct-read rejected; final allocation experiment in progress |
+| Independent wrapper socket fixture and peers | All 65 wrapper-profile cases and two early-upload probes passed per transport on final `c9b9ecbc` |
+| Wrapper performance and final review | Inline membership accepted; final socket gate passed; assessment recorded |
 
-The current core socket results do not qualify the new wrapper.
-The wrapper needs its own fixture, peer runs, and source-specific measurements.
+Core-only socket results do not qualify a wrapper.
+Later checkpoints record the wrapper-specific fixtures, peer runs, and source-specific measurements.
 
 ### Native server and observation checkpoint
 
@@ -560,9 +562,36 @@ Its binary SHA-256 is `4f2b8aa2eadde6b9bc36b4ed03b0da5fbb4fc39259815c71a136bdba0
 The fixture owner passed 17 fixture tests, the paused-consumer regression, 12 socket smoke cases, and four actual-close probes.
 Local provenance is in `target/http2-program/worktrees/http2-membership-fixture/target/membership-fixture-evidence/summary.json`.
 This artifact remains separate and has not passed a complete new peer suite.
-Paired performance measurements remain in progress.
+The [paired membership report](http2-performance/wrapper/membership-cd81114e/) supports integration of exact `cd81114e`.
+Report commit `be4273812b213cebb369985fd293e1bb00ca0539` measures source `a2bbb0666c5a3adcf740569243b20efa875a9223`.
+Its normal runtime binary SHA-256 is `670dba3077c072839cf2d45a9afbb2936c86e98f9d0166cc87607b0f9eb42d84`.
+Nine paired groups show steady improvements of 2.59 percent native and 1.93 percent generic.
+The equal-weight combined improvement is 2.24 percent, with a nominal interval of 1.94 to 3.00 percent.
+Some individual intervals include no change, but none resolves a regression.
+
+The same binary passed the complete 80-cell, five-trial refresh.
+At duplex cohort 32, successful allocations fell from 767,418 to 426,303 native and from 1,010,075 to 680,661 generic.
+The reductions exactly match the removed reverse-vector allocation sites.
+Object sizes remain unchanged on the measured compiler and target.
+Long-connection storage remains bounded, and runtime cleanup releases the same retained storage.
+The general multi-scope fallback remains covered by migration and cancellation tests.
+
+The parent integrated the exact candidate without the rejected direct-read change.
+Formatting, both Clippy configurations, and the all-feature workspace suite excluding the runtime package passed.
+That suite reported 794 passed and four ignored tests.
+A separate focused runtime run passed 187 tests.
+Release HTTP/1 and HTTP/2 suites passed 160 tests and doctests, and fixture/harness controls passed 24 tests.
+The only Clippy warnings are the two existing `pipe.rs` warnings.
+Logs are in `target/http2-program/reports/final-cd-parent/`.
+
+The final full peer rerun passed on the frozen `c9b9ecbc` fixture.
+Each transport passed 48 flow cases, 17 protocol cases, and two early-200/413 complete-upload probes.
+Strict negative controls passed, and the binary hash matched before and after the runs.
+The [final socket report](http2-performance/wrapper/membership-cd81114e/final-socket-summary.json) preserves the authoritative results.
+Four synchronized cases per transport remain distinct from cold-start qualification.
+No observed blocker remains within this recorded scope.
 The new performance and fixture worktrees start from the accepted baseline, without the rejected direct-read change.
-CPU2 is leased only to the measurement owner until this experiment completes.
+CPU2 was released after the measurements.
 No broader registry rewrite or third optimization is part of this bounded follow-up.
 
 ### Initial wrapper client fixture

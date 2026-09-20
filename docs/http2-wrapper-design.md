@@ -1,10 +1,10 @@
 # Kimojio HTTP/2 wrapper requirements
 
-This document defines the wrapper boundary, not a completed implementation.
+This document defines the implemented wrapper boundary and its acceptance requirements.
 The core correctness and performance gates in [the composition design](http2-composition.md) precede implementation.
 Those core gates are complete for the snapshots in the [qualification ledger](http2-qualification.md).
 The shared runtime foundation, native transports, and generic transports are implemented for both roles.
-Complete wrapper qualification and performance measurements remain in progress.
+The [implementation assessment](http2-wrapper-report.md) records completed qualification, performance measurements, and explicit remaining limits.
 
 ## Connection-level API
 

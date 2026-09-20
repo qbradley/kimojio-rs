@@ -68,6 +68,8 @@ client and server machines with caller-owned I/O execution.
 | Component | Purpose |
 | --- | --- |
 | [Kimojio HTTP/1 wrapper](kimojio-http1/README.md) | Conventional async client, handlers, and body streams |
+| [HTTP/2 FSM](kimojio-fsm-http2/README.md) | Sans-I/O HTTP/2 and HTTP/1 plus HTTP/2 composition |
+| [Kimojio HTTP/2 wrapper](kimojio-http2/README.md) | Concurrent native and generic clients, handlers, and streaming bodies |
 | [Static-file server](examples/http1-static/README.md) | HTTP and file FSMs with a direct `rustix-uring` driver |
 | [WebSocket FSM](kimojio-fsm-websocket/README.md) | Runtime-neutral RFC 6455 server and HTTP upgrade |
 | [Broadcast chat](examples/websocket-chat/README.md) | Bounded application FSM with a Kimojio raw-I/O executor |
@@ -76,6 +78,8 @@ The [HTTP harness](interop/http1/README.md) and [WebSocket harness](interop/webs
 use independent protocol peers.
 The [composition assessment](docs/http1-fsm-report.md) records the change topology,
 correctness evidence, performance results, and remaining limitations.
+The [HTTP/2 assessment](docs/http2-wrapper-report.md) records the completed scope,
+runtime retention repair, measured wrapper costs, and qualification limits.
 
 ## Virtual Clock for Testing
 

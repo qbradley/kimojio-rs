@@ -469,8 +469,10 @@ The virtual-clock test expires a generic server's graceful deadline and observes
 
 The late-success unit test checks original-future settlement without a kernel race prerequisite.
 The suite does not inject every native cancellation race or a failed native close.
-Independent peers, broader adversarial qualification, and performance measurements remain separate phases.
-This checkpoint makes no performance claim.
+The [implementation assessment](../docs/http2-wrapper-report.md) records final-source independent peer results and measured runtime costs.
+The [qualification ledger](../docs/http2-qualification.md) preserves exact sources, binary hashes, and exclusions.
+Measurements use local UNIX socketpairs, not TLS or remote-network workloads.
+They include both endpoints, application work, and payload assertions rather than isolated wrapper overhead.
 
 A send permit reserves storage and is not a handshake barrier.
 The wrapper neither parses startup frames nor infers readiness from admission notifications.

@@ -322,6 +322,22 @@ The protocol changes its advertised allowance at its defined publication boundar
 Deferred output must preserve partial frames and compression order.
 The HTTP/2 credit repair applies this pattern to connection and stream WINDOW_UPDATE obligations.
 
+### Bounded executor registrations
+
+Protocol storage bounds do not bound the executor's cancellation and wakeup registries.
+A long-lived connection scope must retain live obligations, not the history of completed operations and obsolete waiters.
+Duplicate pending polls must not create duplicate retained registrations.
+Registry capacity can include bounded or amortized slack, with explicit growth and shrink rules.
+
+Original-operation settlement and cancellation acknowledgment remain separate ownership obligations.
+Retiring a completed registration must not permit premature reuse of an identity still referenced by cancellation.
+Callbacks and final resource destruction must occur outside mutable runtime or registry borrows.
+Weak reverse memberships must preserve migration across multiple live scopes.
+
+Allocation evidence needs connection-live, post-close, and post-runtime boundaries.
+Successful retirement and actual transport close do not prove bounded storage during a long connection.
+The [HTTP/2 wrapper assessment](http2-wrapper-report.md) records a runtime-only reproduction and a repair that preserves cancellation safety.
+
 ## Cancellation, time, and failure
 
 Cancellation follows semantic ownership, not unconditional recursive transport cancellation.
