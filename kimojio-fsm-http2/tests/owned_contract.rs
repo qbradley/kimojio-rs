@@ -749,3 +749,67 @@ fn cancellation_ack_does_not_settle_original_read_or_alarm() {
         matches!(ports.closed.as_slice(), [ConnectionResult::Protocol(error)] if error.code == H2ErrorCode::SettingsTimeout)
     );
 }
+
+#[test]
+fn borrowed_commands_match_owned_wire_and_do_not_retain_field_borrows() {
+    let mut owned = Client::<Vec<u8>>::new(Config::default(), Duration::ZERO).unwrap();
+    let mut borrowed = Client::<Vec<u8>>::new(Config::default(), Duration::ZERO).unwrap();
+    let mut owned_fields = request(b"POST");
+    owned_fields.push(H2HeaderField::new(b"x-sensitive", b"private").with_sensitive(true));
+    let owned_id = owned.request(&owned_fields, false).unwrap();
+    let borrowed_id = {
+        let mut value = b"private".to_vec();
+        let views = [
+            H2RawHeaderRef::new(b":method", b"POST"),
+            H2RawHeaderRef::new(b":scheme", b"https"),
+            H2RawHeaderRef::new(b":authority", b"example.test"),
+            H2RawHeaderRef::new(b":path", b"/"),
+            H2RawHeaderRef::new(b"x-sensitive", &value).with_sensitive(true),
+        ];
+        let id = borrowed.request_ref(&views, false).unwrap();
+        value.fill(b'x');
+        id
+    };
+    assert_eq!(owned_id.get(), borrowed_id.get());
+    let mut owned_ports = MemoryPorts::default();
+    let mut borrowed_ports = MemoryPorts::default();
+    let owned_wire = pump_one(&mut owned, &mut owned_ports, &[]);
+    let borrowed_wire = pump_one(&mut borrowed, &mut borrowed_ports, &[]);
+    assert_eq!(owned_wire, borrowed_wire);
+
+    let mut pair = Pair::new(Config::default());
+    let id = pair
+        .client
+        .request_ref(
+            &[
+                H2RawHeaderRef::new(b":method", b"GET"),
+                H2RawHeaderRef::new(b":scheme", b"https"),
+                H2RawHeaderRef::new(b":authority", b"example.test"),
+                H2RawHeaderRef::new(b":path", b"/"),
+            ],
+            true,
+        )
+        .unwrap();
+    pair.pump(5);
+    pair.server
+        .respond_ref(id, &[H2RawHeaderRef::new(b":status", b"200")], false)
+        .unwrap();
+    pair.pump(5);
+    {
+        let trailers = String::from("finished");
+        pair.server
+            .trailers_ref(id, &[H2RawHeaderRef::new(b"x-result", trailers.as_bytes())])
+            .unwrap();
+    }
+    pair.pump(5);
+    assert_eq!(
+        pair.client_ports
+            .heads
+            .iter()
+            .map(|h| h.1)
+            .collect::<Vec<_>>(),
+        [HeadKind::Response(200), HeadKind::Trailers]
+    );
+    assert_eq!(pair.client_ports.heads[1].2[0].value, b"finished");
+    assert_eq!(pair.client_ports.retired.len(), 1);
+}

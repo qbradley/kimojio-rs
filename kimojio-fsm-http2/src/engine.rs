@@ -363,30 +363,49 @@ impl<B: SendBuffer> Client<B> {
         fields: &[H2HeaderField],
         end: bool,
     ) -> Result<StreamId, CommandError> {
+        self.request_by(fields.len(), |index| fields[index].as_ref(), end)
+    }
+
+    /// Encodes borrowed field views synchronously. No field borrow survives this call.
+    pub fn request_ref(
+        &mut self,
+        fields: &[H2RawHeaderRef<'_>],
+        end: bool,
+    ) -> Result<StreamId, CommandError> {
+        self.request_by(fields.len(), |index| fields[index], end)
+    }
+
+    fn request_by<'a>(
+        &mut self,
+        count: usize,
+        field: impl Fn(usize) -> H2RawHeaderRef<'a> + Copy,
+        end: bool,
+    ) -> Result<StreamId, CommandError> {
         self.0.check_open()?;
         if self.streams.len() >= self.config.http.max_active_streams() {
             return Err(CommandError::Capacity);
         }
-        let section = validate_decoded_header_fields(fields, H2HeaderValidationRole::Request)
-            .map_err(crate::ServerError::from)?
-            .enforce_limits(self.config.http)?;
+        let section =
+            validate_decoded_header_fields_by(count, field, H2HeaderValidationRole::Request)
+                .map_err(crate::ServerError::from)?
+                .enforce_limits(self.config.http)?;
         if end && section.content_length.is_some_and(|n| n != 0) {
             return Err(CommandError::Message(
                 crate::ServerError::InvalidContentLength,
             ));
         }
-        self.0.preflight_headers(fields)?;
+        self.0.preflight_headers(count, field)?;
         let Protocol::Client(role) = &mut self.0.protocol else {
             unreachable!()
         };
         let id = StreamId(role.next_stream_for_open()?);
-        role.enqueue_outbound_header_block(id.0, fields, end, 0, |_| {})?;
+        role.enqueue_outbound_header_block_by(id.0, count, field, end, 0, |_| {})?;
         role.next_stream_id = id.0.checked_add(2).ok_or(CommandError::SequenceExhausted)?;
-        let head = fields
-            .iter()
+        let head = (0..count)
+            .map(field)
             .any(|f| f.name == b":method" && f.value == b"HEAD");
-        let connect = fields
-            .iter()
+        let connect = (0..count)
+            .map(field)
             .any(|f| f.name == b":method" && f.value == b"CONNECT");
         role.insert_client_stream(id.0, end, head);
         role.endpoint
@@ -434,14 +453,35 @@ impl<B: SendBuffer> Server<B> {
         fields: &[H2HeaderField],
         end: bool,
     ) -> Result<(), CommandError> {
+        self.respond_by(id, fields.len(), |index| fields[index].as_ref(), end)
+    }
+
+    /// Encodes borrowed field views synchronously. The caller keeps field storage.
+    pub fn respond_ref(
+        &mut self,
+        id: StreamId,
+        fields: &[H2RawHeaderRef<'_>],
+        end: bool,
+    ) -> Result<(), CommandError> {
+        self.respond_by(id, fields.len(), |index| fields[index], end)
+    }
+
+    fn respond_by<'a>(
+        &mut self,
+        id: StreamId,
+        count: usize,
+        field: impl Fn(usize) -> H2RawHeaderRef<'a> + Copy,
+        end: bool,
+    ) -> Result<(), CommandError> {
         self.0.check_live()?;
         let state = self.streams.get(&id).ok_or(CommandError::InvalidState)?;
         if !matches!(state.source, Source::AwaitingResponse) {
             return Err(CommandError::InvalidState);
         }
-        let section = validate_decoded_header_fields(fields, H2HeaderValidationRole::Response)
-            .map_err(crate::ServerError::from)?
-            .enforce_limits(self.config.http)?;
+        let section =
+            validate_decoded_header_fields_by(count, field, H2HeaderValidationRole::Response)
+                .map_err(crate::ServerError::from)?
+                .enforce_limits(self.config.http)?;
         let status = section.response_status.ok_or(CommandError::InvalidState)?;
         let informational = status < 200;
         let tunnel = state.connect && (200..300).contains(&status);
@@ -455,11 +495,11 @@ impl<B: SendBuffer> Server<B> {
         {
             return Err(CommandError::Message(crate::ServerError::InvalidResponse));
         }
-        self.0.preflight_headers(fields)?;
+        self.0.preflight_headers(count, field)?;
         let Protocol::Server(role) = &mut self.0.protocol else {
             unreachable!()
         };
-        role.enqueue_outbound_header_block(id.0, fields, end || no_body, 0, |_| {})?;
+        role.enqueue_outbound_header_block_by(id.0, count, field, end || no_body, 0, |_| {})?;
         if !informational {
             let state = self.0.streams.get_mut(&id).expect("live stream");
             state.expected_send = if no_body {
@@ -584,9 +624,13 @@ impl<B: SendBuffer> Connection<B> {
             self.deadlines.remove(&(at, Deadline::Settings));
         }
     }
-    fn preflight_headers(&self, fields: &[H2HeaderField]) -> Result<(), CommandError> {
-        let bound = fields
-            .iter()
+    fn preflight_headers<'a>(
+        &self,
+        count: usize,
+        field: impl Fn(usize) -> H2RawHeaderRef<'a>,
+    ) -> Result<(), CommandError> {
+        let bound = (0..count)
+            .map(field)
             .try_fold(64usize, |n, f| {
                 n.checked_add(f.name.len())?
                     .checked_add(f.value.len())?
@@ -703,6 +747,24 @@ impl<B: SendBuffer> Connection<B> {
     }
 
     pub fn trailers(&mut self, id: StreamId, fields: &[H2HeaderField]) -> Result<(), CommandError> {
+        self.trailers_by(id, fields.len(), |index| fields[index].as_ref())
+    }
+
+    /// Encodes a borrowed trailer section without an owned-field staging list.
+    pub fn trailers_ref(
+        &mut self,
+        id: StreamId,
+        fields: &[H2RawHeaderRef<'_>],
+    ) -> Result<(), CommandError> {
+        self.trailers_by(id, fields.len(), |index| fields[index])
+    }
+
+    fn trailers_by<'a>(
+        &mut self,
+        id: StreamId,
+        count: usize,
+        field: impl Fn(usize) -> H2RawHeaderRef<'a> + Copy,
+    ) -> Result<(), CommandError> {
         self.check_live()?;
         let state = self.streams.get(&id).ok_or(CommandError::InvalidState)?;
         if !matches!(state.source, Source::Ready | Source::Permitted(_))
@@ -711,16 +773,16 @@ impl<B: SendBuffer> Connection<B> {
         {
             return Err(CommandError::InvalidState);
         }
-        validate_decoded_header_fields(fields, H2HeaderValidationRole::Trailers)
+        validate_decoded_header_fields_by(count, field, H2HeaderValidationRole::Trailers)
             .map_err(crate::ServerError::from)?
             .enforce_limits(self.config.http)?;
-        self.preflight_headers(fields)?;
+        self.preflight_headers(count, field)?;
         match &mut self.protocol {
             Protocol::Client(role) => {
-                role.enqueue_outbound_header_block(id.0, fields, true, 0, |_| {})?;
+                role.enqueue_outbound_header_block_by(id.0, count, field, true, 0, |_| {})?;
             }
             Protocol::Server(role) => {
-                role.enqueue_outbound_header_block(id.0, fields, true, 0, |_| {})?;
+                role.enqueue_outbound_header_block_by(id.0, count, field, true, 0, |_| {})?;
             }
         }
         self.protocol.close_send(id);

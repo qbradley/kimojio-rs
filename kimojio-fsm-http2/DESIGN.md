@@ -110,9 +110,16 @@ fn set_deadline(&mut self, stream: StreamId, deadline: Option<Duration>)
 // Client:
 fn request(&mut self, fields: &[H2HeaderField], end: bool)
     -> Result<StreamId, CommandError>;
+fn request_ref(&mut self, fields: &[H2RawHeaderRef<'_>], end: bool)
+    -> Result<StreamId, CommandError>;
 
 // Server:
 fn respond(&mut self, stream: StreamId, fields: &[H2HeaderField], end: bool)
+    -> Result<(), CommandError>;
+fn respond_ref(&mut self, stream: StreamId, fields: &[H2RawHeaderRef<'_>], end: bool)
+    -> Result<(), CommandError>;
+// Both roles:
+fn trailers_ref(&mut self, stream: StreamId, fields: &[H2RawHeaderRef<'_>])
     -> Result<(), CommandError>;
 ```
 
@@ -121,6 +128,25 @@ This avoids a separate CONNECT constructor and permits sensitive regular fields.
 Header callbacks borrow a compact, validated field section for the callback duration.
 Applications can copy selected metadata if they need to retain it.
 Body callbacks transfer an owned page range instead.
+
+Borrowed command fields use the existing `H2RawHeaderRef<'a>` descriptor:
+
+```rust
+use kimojio_fsm_http2::H2RawHeaderRef;
+let field = H2RawHeaderRef {
+    name: b"authorization",
+    value: b"example-token",
+    sensitive: true,
+};
+```
+
+The descriptor contains `name: &'a [u8]`, `value: &'a [u8]`, and `sensitive: bool`.
+The `_ref` commands accept slices of these descriptors.
+They borrow field bytes through synchronous validation and encoder planning.
+They do not create an owned-field staging list.
+No field borrow survives the command.
+HPACK table entries and committed output still own their required storage.
+This API change is not a measured performance claim.
 
 `ReadOp::buffer_mut()` exposes exclusive initialized storage.
 `ReadOp::complete(outcome)` returns the original operation as a typed completion.
@@ -206,3 +232,5 @@ This arrangement avoids duplicate forwarding code without a universal operation 
 `examples/memory.rs` drives both roles with seven-byte I/O completions.
 `examples/support/mod.rs` supplies explicit callback and completion wiring.
 `examples/interop.rs` belongs to the parent integration work and is not part of this implementation.
+`src/http/**` and `tests/http_composition.rs` also belong to the parent.
+The pure engine does not create or drive an HTTP/1 parser.
