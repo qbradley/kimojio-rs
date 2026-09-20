@@ -1,0 +1,5 @@
+   Compiling httparse v1.10.1
+    Checking rustc-hash v2.1.3
+    Checking kimojio-fsm-http1 v0.17.0 (/workspace/kimojio-rs/target/http2-program/worktrees/http2-final/kimojio-fsm-http1)
+    Checking kimojio-fsm-http2 v0.17.0 (/workspace/kimojio-rs/target/http2-program/worktrees/http2-final/kimojio-fsm-http2)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.05s

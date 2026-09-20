@@ -1,0 +1,56 @@
+{
+  "source_commit": "5505efc469c7939c43d6d42a2ecb10b94ab4d9e4",
+  "worktree": "/workspace/kimojio-rs/target/http2-program/worktrees/http2-final",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "CARGO_TARGET_DIR": "/workspace/kimojio-rs/target/http2-program/build-http2-final",
+  "CARGO_PROFILE_RELEASE_DEBUG": "2",
+  "RUSTFLAGS": null,
+  "CARGO_ENCODED_RUSTFLAGS": null,
+  "build_affinity": "8-31",
+  "timing_affinity": "2",
+  "profile_affinity": "2",
+  "allocation_retention_affinity": "8-31",
+  "build_command": "CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http2-program/build-http2-final CARGO_PROFILE_RELEASE_DEBUG=2 taskset -c 8-31 cargo build --release -p kimojio-fsm-http2 --example composition_bench --example allocation_probe",
+  "binaries": {
+    "composition_bench": {
+      "path": "/workspace/kimojio-rs/target/http2-program/build-http2-final/frozen-5505efc4/composition_bench",
+      "sha256": "861d584ad7c355cbf89eddbb43b74f487e9ee6431ed44d3d7c8135f5f7c2d692"
+    },
+    "allocation_probe": {
+      "path": "/workspace/kimojio-rs/target/http2-program/build-http2-final/frozen-5505efc4/allocation_probe",
+      "sha256": "ca2c891fe504309b73f01196abede2e98a5b3482c266b128485516098c723b30"
+    }
+  },
+  "source_sha256": {
+    "kimojio-fsm-http2/examples/composition_bench.rs": "3db7144d9df7f375caf87dea0da426ff97b79be4622c8599911bc7c7f1a2463b",
+    "kimojio-fsm-http2/examples/allocation_probe.rs": "dc7a8346f3d5639e7a5e9d535837e2e95d3f59a19a15aad68dfe1a1ce26d1cc3",
+    "kimojio-fsm-http2/examples/composition_bench_support/allocation.rs": "9e6cef03f5edad62805d6628c7e6507e56e81861b0a5f6b2d618723a710b2a16",
+    "kimojio-fsm-http2/examples/composition_bench_support/allocation_counter.rs": "31f91d9eb43a97c41905c5bae2882b39cd3878dafde08c95f44a589b244be6b5",
+    "kimojio-fsm-http2/examples/composition_bench_support/diagnostics.rs": "e139de023e542b5692c2d4360152ef1cab7a036b60f299c3c5c91b6f6293c3ba",
+    "kimojio-fsm-http2/examples/composition_bench_support/mod.rs": "5c3ad0fdf544005da796315142242dcc882404269b8b319755da3e4dbede5e09",
+    "kimojio-fsm-http2/examples/composition_bench_support/overlap.rs": "c5f5e230174f45b727b235bb5a5ffb78c43ee16487aaea26a9ec5d877b8508a5",
+    "kimojio-fsm-http2/examples/composition_bench_support/retention.rs": "dbb06e2b5b54c2cd7337f9330436bd1df937de686aa3f25f35fb5c1912f8f12d",
+    "kimojio-fsm-http2/examples/composition_bench_support/allocation_trials.py": "dd18d215a76ab370a39751aff41b3f82af88b8d2317ec4669c75a765faec3371",
+    "kimojio-fsm-http2/examples/composition_bench_support/copy_sites.py": "5e19d7f5f44d4cfeb112aadcc9d117155ea32ad262a015200d2149a1585fe012",
+    "kimojio-fsm-http2/examples/composition_bench_support/paired_trials.py": "75caaa31680f05ef68e66d4f33f1cab2142bd050da8f691cbe945b8d93c8b407",
+    "kimojio-fsm-http2/examples/composition_bench_support/profile_summary.py": "6c2ec9c32acb2d0a3a4f7b24978fb3f5d3be8a6530f9c8a9db64cc0fdac57e35",
+    "kimojio-fsm-http2/examples/composition_bench_support/results.py": "f3a672534b362b4ad06d4fa4b9bbd091e69e614cca152ffe03c5ae0345d3c4fc",
+    "kimojio-fsm-http2/examples/composition_bench_support/trials.py": "e384d9308238bd068ec211388325f907c436a955ad71767747c27a00471e79f1"
+  },
+  "core_src_tree": "36258551e68ca9e48cde0d37c3f1d3c38fe2e740",
+  "cargo_lock_sha256": "b0eeb8277510fc0a1d3bf56ccf61cd0a2a71c0f19a0e65bdbbf88543ad1a2170",
+  "cpu_topology": "CPU CORE SOCKET ONLINE\n  0    0      0    yes\n  1    0      0    yes\n  2    1      0    yes\n  3    1      0    yes\n  4    2      0    yes\n  5    2      0    yes\n  6    3      0    yes\n  7    3      0    yes\n  8    4      0    yes\n  9    4      0    yes\n 10    5      0    yes\n 11    5      0    yes\n 12    6      0    yes\n 13    6      0    yes\n 14    7      0    yes\n 15    7      0    yes\n 16    8      0    yes\n 17    8      0    yes\n 18    9      0    yes\n 19    9      0    yes\n 20   10      0    yes\n 21   10      0    yes\n 22   11      0    yes\n 23   11      0    yes\n 24   12      0    yes\n 25   12      0    yes\n 26   13      0    yes\n 27   13      0    yes\n 28   14      0    yes\n 29   14      0    yes\n 30   15      0    yes\n 31   15      0    yes\n",
+  "timing_command": "taskset -c 8-31 python3 kimojio-fsm-http2/examples/composition_bench_support/trials.py ../../build-http2-final/frozen-5505efc4/composition_bench docs/http2-performance/final/evidence --stop-on-failure",
+  "cpu2_lease": "released after noninstrumented timings and four profiles; remaining work on CPUs8-31",
+  "profile_commands": [
+    "taskset -c 2 perf record -e cpu-clock:u -F 999 --call-graph dwarf -o /workspace/kimojio-rs/target/http2-program/build-http2-final/frozen-5505efc4/direct-empty.data -- /workspace/kimojio-rs/target/http2-program/build-http2-final/frozen-5505efc4/composition_bench direct empty 1 65536 2000000 steady",
+    "taskset -c 2 perf record -e cpu-clock:u -F 999 --call-graph dwarf -o /workspace/kimojio-rs/target/http2-program/build-http2-final/frozen-5505efc4/selected-empty.data -- /workspace/kimojio-rs/target/http2-program/build-http2-final/frozen-5505efc4/composition_bench selected empty 1 65536 2000000 steady",
+    "taskset -c 2 perf record -e cpu-clock:u -F 999 --call-graph dwarf -o /workspace/kimojio-rs/target/http2-program/build-http2-final/frozen-5505efc4/direct-empty128.data -- /workspace/kimojio-rs/target/http2-program/build-http2-final/frozen-5505efc4/composition_bench direct empty 128 65536 16000 steady",
+    "taskset -c 2 perf record -e cpu-clock:u -F 999 --call-graph dwarf -o /workspace/kimojio-rs/target/http2-program/build-http2-final/frozen-5505efc4/direct-1m.data -- /workspace/kimojio-rs/target/http2-program/build-http2-final/frozen-5505efc4/composition_bench direct 1m 1 65536 32768 steady"
+  ],
+  "report_analysis_script": {
+    "path": "docs/http2-performance/final/analyze_profiles.py",
+    "sha256": "07ff1c27c6acc4961fe3708d7295348f7e4f96893b208aeec3812a761feb9b20",
+    "purpose": "ignore mixed client/server address-and-size aliases as independent role evidence"
+  }
+}

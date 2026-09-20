@@ -1,0 +1,71 @@
+   Compiling kimojio-fsm-http2 v0.17.0 (/workspace/kimojio-rs/target/http2-program/worktrees/http2-final/kimojio-fsm-http2)
+    Finished `release` profile [optimized + debuginfo] target(s) in 6.43s
+     Running tests/ownership_model.rs (/workspace/kimojio-rs/target/http2-program/build-http2-final/release/deps/ownership_model-ca06e68703903cd4)
+
+running 6 tests
+test blocked_output_coalesces_released_credit_without_exhausting_control_items ... ok
+test completed_response_survives_no_error_reset_in_the_same_read_batch ... ok
+test all_connection_original_and_cancellation_ack_orders ... ok
+test all_small_stream_settlement_orders_and_selective_callbacks ... ok
+test repeated_eight_stream_megabyte_duplex_preserves_bounded_credit_progress ... ok
+test hard_abort_joins_every_original_and_cancellation_ack_order ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running unittests examples/allocation_probe.rs (/workspace/kimojio-rs/target/http2-program/build-http2-final/release/examples/allocation_probe-90e1c31636fc2d59)
+
+running 11 tests
+test allocation_counter::tests::surviving_allocations_and_reallocations_cross_windows ... ok
+test allocation_counter::tests::pre_window_free_does_not_underflow_or_hide_allocations ... ok
+test allocation_counter::tests::exact_alloc_zeroed_realloc_grow_shrink_and_free ... ok
+test allocation_counter::tests::zero_events_do_not_mean_zero_live_storage ... ok
+test composition_bench_support::diagnostics::tests::permission_and_lease_counters_distinguish_admission_from_wire_progress ... ok
+test composition_bench_support::diagnostics::tests::fragmented_preface_frames_and_goaway ... ok
+test composition_bench_support::diagnostics::tests::first_failure_snapshot_and_history_are_bounded ... ok
+test composition_bench_support::overlap::tests::counts_actual_delivery_before_transport_completion ... ok
+test composition_bench_support::overlap::tests::rejects_late_delivery_without_any_sent_or_ended_notification - should panic ... ok
+test composition_bench_support::overlap::tests::zero_payload_or_previous_cohort_cannot_mask_late_delivery - should panic ... ok
+test tests::strict_routes_and_measurement_boundaries ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests examples/composition_bench.rs (/workspace/kimojio-rs/target/http2-program/build-http2-final/release/examples/composition_bench-5281735d109e9539)
+
+running 11 tests
+test composition_bench_support::diagnostics::tests::fragmented_preface_frames_and_goaway ... ok
+test composition_bench_support::diagnostics::tests::first_failure_snapshot_and_history_are_bounded ... ok
+test composition_bench_support::diagnostics::tests::permission_and_lease_counters_distinguish_admission_from_wire_progress ... ok
+test composition_bench_support::overlap::tests::counts_actual_delivery_before_transport_completion ... ok
+test composition_bench_support::overlap::tests::rejects_late_delivery_without_any_sent_or_ended_notification - should panic ... ok
+test composition_bench_support::overlap::tests::zero_payload_or_previous_cohort_cannot_mask_late_delivery - should panic ... ok
+test tests::fragmented_duplex_regression ... ok
+test tests::duplex_payload_overlap_regression ... ok
+test tests::large_duplex_regression ... ok
+test tests::concurrency_and_construction ... ok
+test tests::routes_and_fragmentation ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+     Running unittests examples/interop.rs (/workspace/kimojio-rs/target/http2-program/build-http2-final/release/examples/interop-9ecf0120ee04d86a)
+
+running 11 tests
+test interop_support::schema::tests::exact_schema_and_empty_digest ... ok
+test interop_support::schema::tests::limits_and_reserved_actions_are_explicit ... ok
+test interop_support::schema::tests::server_json_and_absent_windows_preserve_native_defaults ... ok
+test interop_support::schema::tests::terminal_failure_stays_visible_after_receive_end ... ok
+test interop_support::tests::non_wire_failures_do_not_invent_http2_error_codes ... ok
+test interop_support::schema::tests::terminal_outcomes_have_explicit_stable_names ... ok
+test interop_support::tests::server_flags_are_strict ... ok
+test interop_support::tests::producer_bounds_do_not_depend_on_body_length_or_wire_credit ... ok
+test interop_support::transport::tests::settings_boundary_accepts_fragmentation_without_waiting_for_ack ... ok
+test interop_support::tests::zero_length_producer_submits_end_exactly_once ... ok
+test interop_support::transport::tests::error_cleanup_aborts_pending_operations_without_a_graceful_wait ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/memory.rs (/workspace/kimojio-rs/target/http2-program/build-http2-final/release/examples/memory-4f756bb3cb8aab9b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
