@@ -197,6 +197,8 @@ That requirement is an explicit application policy, not a ban on every 100 follo
 The Rust client and server examples also accept `--native` for the exact one-shot descriptor backend.
 The `kimojio_adapter.py` command accepts the same flag and passes it to the client.
 Without that flag, the examples retain the generic stream backend.
+Both examples and the Python client adapter accept `--coalesce-full-bodies`.
+This flag explicitly selects the combined-write deadline policy.
 
 The server's `/duplex` route selects explicit reusable forwarding.
 The existing `/echo` and `/early` policies do not change.

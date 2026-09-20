@@ -80,6 +80,15 @@ class ComparisonTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_result(result, self.case(), 10)
 
+    def test_coalescing_mode_must_match_the_requested_policy(self):
+        result = self.result()
+        with self.assertRaises(ValueError):
+            validate_result(result, self.case(), 10, coalesce_full_bodies=True)
+        result["coalesce_full_bodies"] = True
+        validate_result(result, self.case(), 10, coalesce_full_bodies=True)
+        with self.assertRaises(ValueError):
+            validate_result(result, self.case(), 10)
+
     def test_duplex_and_copy_modes_cannot_silently_use_the_baseline(self):
         case = self.case() | {"duplex": True}
         result = self.result()

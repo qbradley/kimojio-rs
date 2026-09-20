@@ -40,12 +40,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut result_file = None;
     let mut chunked = false;
     let mut native = false;
+    let mut coalesce_full_bodies = false;
     let mut expect_continue = false;
     let mut repeat = 1usize;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--native" => native = true,
+            "--coalesce-full-bodies" => coalesce_full_bodies = true,
             "--connect" => address = args.next().ok_or("missing address")?,
             "--method" => method = args.next().ok_or("missing method")?,
             "--path" => path = args.next().ok_or("missing path")?,
@@ -70,10 +72,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let body = Rc::new(body);
     let mut result_file = result_file.map(std::fs::File::create).transpose()?;
     let socket = create_client_socket(&address.parse()?).await?;
-    let config = Config::new(ConnectionId {
+    let mut config = Config::new(ConnectionId {
         slot: 1,
         generation: 1,
     });
+    config.coalesce_full_bodies = coalesce_full_bodies;
     let (mut client, connection) = if native {
         let (client, connection) = connect_native(socket, config);
         (client, connection.run().boxed_local())
@@ -85,17 +88,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let application = async move {
         let result = async {
             for _ in 0..repeat {
-                let length = (!chunked).then_some(body.len() as u64);
-                let source =
-                    futures::stream::unfold((body.clone(), 0), |(bytes, start)| async move {
-                        if start == bytes.len() {
-                            return None;
-                        }
-                        let end = (start + 16 * 1024).min(bytes.len());
-                        let frame = OutgoingFrame::Data(bytes[start..end].to_vec());
-                        Some((Ok(frame), (bytes, end)))
-                    });
-                let outgoing = OutgoingBody::from_stream(length, source);
+                let outgoing = if !chunked && body.len() <= 16 * 1024 {
+                    OutgoingBody::full(body.as_slice().to_vec())
+                } else {
+                    let length = (!chunked).then_some(body.len() as u64);
+                    let source =
+                        futures::stream::unfold((body.clone(), 0), |(bytes, start)| async move {
+                            if start == bytes.len() {
+                                return None;
+                            }
+                            let end = (start + 16 * 1024).min(bytes.len());
+                            let frame = OutgoingFrame::Data(bytes[start..end].to_vec());
+                            Some((Ok(frame), (bytes, end)))
+                        });
+                    OutgoingBody::from_stream(length, source)
+                };
                 let mut request = Request::builder()
                     .method(method.as_str())
                     .uri(&path)

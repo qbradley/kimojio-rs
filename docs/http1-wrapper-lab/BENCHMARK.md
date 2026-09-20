@@ -23,6 +23,11 @@ Without that flag, both endpoints use `OwnedFdStream`.
 Both modes box the connection futures once during setup, outside the measured interval.
 The `backend` result identifies the selected backend.
 
+With `--coalesce-full-bodies`, both endpoints opt into combined metadata/payload writes for eligible complete bodies.
+The default preserves separate head/body completion boundaries.
+The result records `coalesce_full_bodies` explicitly.
+This option changes timeout progress granularity, not just allocation or syscall counts.
+
 With `--duplex`, the server returns an explicit duplex response before request consumption completes.
 Its source compares each incoming chunk and forwards its receive lease.
 The request and response sizes must match.
@@ -106,6 +111,8 @@ Any failed row invalidates the comparison.
 The runner deletes each prior result before its next execution.
 A successful process exit without a new result cannot reuse stale evidence.
 An optional candidate field, `"arguments": ["--native"]`, selects the native backend.
+The arguments can also include `--coalesce-full-bodies`.
+The result must report the requested coalescing policy.
 A native-only executable can instead declare `"backend": "native"`.
 Its result must also report the native backend.
 Candidate arguments cannot override workload counts or payload sizes.

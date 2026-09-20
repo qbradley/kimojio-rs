@@ -79,6 +79,8 @@ See the [overhead PoC record](../docs/http1-wrapper-lab/poc-overhead.md) for the
 This backend supplies neither TLS nor a user-space readiness retry loop.
 Unexpected native `EAGAIN` is terminal.
 The `client` and `server` examples select this backend with `--native`.
+Both examples accept `--coalesce-full-bodies` for the explicit full-body coalescing policy.
+The client example uses ready storage for bounded known-length bodies and stream sources for larger or chunked bodies.
 See the [raw transport record](../docs/http1-wrapper-lab/raw-transport.md) for ownership details, tests, and benchmark integration.
 
 ## Server
