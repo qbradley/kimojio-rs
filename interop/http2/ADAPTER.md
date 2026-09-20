@@ -189,6 +189,7 @@ The native fixture needs each action for the corresponding case.
 * `{"action":"pause","stream_id":1,"until_stream_ended":3}` retains stream 1 body fragments until stream 3 ends.
 * `{"action":"reset","stream_id":1,"after_bytes":1024,"code":8}` cancels stream 1 after that many response bytes.
 * `{"action":"graceful_close","after_streams":2}` starts graceful shutdown after two completed streams.
+* `{"action":"cancel_upload_after_response","stream_id":1}` cancels that unfinished upload after normal receive END_STREAM.
 
 The harness must name every executed case in its report.
 Unsupported actions fail rather than produce a skip.
@@ -209,14 +210,22 @@ That outcome requires a matching RST_STREAM, no connection error, and a complete
 The report distinguishes this bounded resource rejection from full body delivery.
 The rejected stream outcome must be `reset`, while the sibling outcome must be `complete`.
 
-## Early rejected-upload policy
+## Explicit early-response application policy
 
-After a complete status-413 response, the client explicitly cancels the unfinished upload with RST_STREAM(CANCEL).
+Response END_STREAM alone never instructs the protocol engine to cancel the upload.
+This is true for status 200 and status 413.
+The withheld-credit case includes the explicit `cancel_upload_after_response` fixture action.
+After normal receive END_STREAM, the fixture application executes that action with RST_STREAM(CANCEL).
+In this case, the core must keep the transmit half available until that explicit action.
 It preserves the completed receive result and lets its sibling finish.
 The rejected stream reports `ended: true`, `outcome: "reset"`, and the actual stream error code 8.
 The independent peer must observe that CANCEL frame.
 The connection still requires a normal terminal outcome and an actual close.
 `connection_failed` is not an acceptable substitute for this stream-local cancellation.
 
-A successful early status-200 response does not authorize cancellation of the upload.
-The duplex probe requires the complete request body and request END_STREAM after that response.
+Without that action, the duplex probe requires the complete request body and request END_STREAM.
+It can send status 200 or 413 while it continues to consume the upload and return credit.
+
+RFC 9113 section 8.1 also permits a server to send RST_STREAM(NO_ERROR) after a complete response.
+The client must not discard that completed response.
+The withheld-credit case uses the explicit application action, not that alternative server signal.

@@ -403,6 +403,18 @@ type result struct {
 // rawClient supplies independent Framer/HPACK coverage for GOAWAY and CONNECT.
 // It is not a production client and is never used for large flow workloads.
 func rawClient(input spec) (map[string]any, error) {
+	for _, action := range input.Actions {
+		switch action.Action {
+		case "reset", "graceful_close", "cancel_upload_after_response":
+		default:
+			return nil, fmt.Errorf("unsupported Go protocol action %q", action.Action)
+		}
+	}
+	for _, req := range input.Requests {
+		if req.BodyBytes < 0 || req.BodyBytes > 131087 {
+			return nil, errors.New("Go protocol upload exceeds its 131087-byte probe bound")
+		}
+	}
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(input.Host, fmt.Sprint(input.Port)), 5*time.Second)
 	if err != nil {
 		return nil, err
@@ -436,11 +448,27 @@ func rawClient(input spec) (map[string]any, error) {
 		}
 	}
 	done := 0
+	receiveDone := make(map[uint32]bool)
+	markDone := func(stream uint32) {
+		if !receiveDone[stream] {
+			receiveDone[stream] = true
+			done++
+		}
+	}
 	var connectionError any
 	// Uploads start only after server SETTINGS. CONNECT waits for status 200.
 	uploaded := make(map[uint32]bool)
 	uploadProgress := make(map[uint32]int)
-	for done < len(results) {
+	pendingUpload := func() bool {
+		for index, req := range input.Requests {
+			stream := uint32(index*2 + 1)
+			if req.BodyBytes > 0 && !uploaded[stream] && results[stream].Error == nil {
+				return true
+			}
+		}
+		return false
+	}
+	for done < len(results) || pendingUpload() {
 		frame, err := p.read(true)
 		if err != nil {
 			// ReadMetaHeaders enforces uninterrupted CONTINUATION sequences.
@@ -479,13 +507,16 @@ func rawClient(input spec) (map[string]any, error) {
 			}
 			if frame.StreamEnded() {
 				r.Ended = true
-				done++
-				if r.Status != nil && *r.Status == 413 && !requestEnded[frame.StreamID] {
-					if err := p.framer.WriteRSTStream(frame.StreamID, http2.ErrCodeCancel); err != nil {
-						return nil, err
+				markDone(frame.StreamID)
+				for _, action := range input.Actions {
+					if action.Action == "cancel_upload_after_response" && action.StreamID == frame.StreamID &&
+						!requestEnded[frame.StreamID] {
+						if err := p.framer.WriteRSTStream(frame.StreamID, http2.ErrCodeCancel); err != nil {
+							return nil, err
+						}
+						r.Error = map[string]any{"scope": "stream", "code": uint32(http2.ErrCodeCancel)}
+						uploaded[frame.StreamID] = true
 					}
-					r.Error = map[string]any{"scope": "stream", "code": uint32(http2.ErrCodeCancel)}
-					uploaded[frame.StreamID] = true
 				}
 			}
 		case *http2.DataFrame:
@@ -509,7 +540,7 @@ func rawClient(input spec) (map[string]any, error) {
 				if err := p.framer.WriteWindowUpdate(0, frame.Length); err != nil {
 					return nil, err
 				}
-				done++
+				markDone(frame.StreamID)
 				continue
 			}
 			r.Bytes += len(frame.Data())
@@ -521,7 +552,7 @@ func rawClient(input spec) (map[string]any, error) {
 						return nil, err
 					}
 					r.Error = map[string]any{"scope": "stream", "code": action.Code}
-					done++
+					markDone(frame.StreamID)
 					reset = true
 				}
 			}
@@ -533,6 +564,11 @@ func rawClient(input spec) (map[string]any, error) {
 			if reset {
 				continue
 			}
+			if frame.Length > 0 && !frame.StreamEnded() {
+				if err := p.framer.WriteWindowUpdate(frame.StreamID, frame.Length); err != nil {
+					return nil, err
+				}
+			}
 			if frame.StreamEnded() {
 				if r.length >= 0 && r.length != r.Bytes {
 					r.Error = map[string]any{"scope": "stream", "code": 1}
@@ -540,12 +576,12 @@ func rawClient(input spec) (map[string]any, error) {
 				} else {
 					r.Ended = true
 				}
-				done++
+				markDone(frame.StreamID)
 			}
 		case *http2.RSTStreamFrame:
 			r := results[frame.StreamID]
 			r.Error = map[string]any{"scope": "stream", "code": uint32(frame.ErrCode)}
-			done++
+			markDone(frame.StreamID)
 		case *http2.PushPromiseFrame:
 			// Push header decoding must share history with ReadMetaHeaders.
 			if !frame.HeadersEnded() {
@@ -569,44 +605,55 @@ func rawClient(input spec) (map[string]any, error) {
 				done = len(results)
 			}
 		}
-		for index, req := range input.Requests {
-			stream := uint32(index*2 + 1)
-			r := results[stream]
-			if req.BodyBytes > 0 && !uploaded[stream] && (req.Method != "CONNECT" || r.Status != nil) {
-				if req.Method == "CONNECT" && uploadProgress[stream] > 0 && r.Bytes == 0 {
-					continue
-				}
-				// Only small protocol probes use this producer.
-				amount := min(req.BodyBytes-uploadProgress[stream], int(p.window), int(p.credit), 16384)
-				if req.Method == "CONNECT" && uploadProgress[stream] == 0 && req.BodyBytes > 1 {
-					amount = min(amount, req.BodyBytes-1, 17)
-				}
-				if amount <= 0 {
-					continue
-				}
-				final := uploadProgress[stream]+amount == req.BodyBytes
-				if err := p.body(stream, bytes.Repeat([]byte{byte(stream % 251)}, amount), final && len(req.Trailers) == 0); err != nil {
-					return nil, err
-				}
-				requestEnded[stream] = final && len(req.Trailers) == 0
-				if len(req.Trailers) > 0 {
-					if !final {
-						return nil, errors.New("reference trailers require a one-frame upload")
+		if connectionError != nil {
+			break
+		}
+		for {
+			progress := false
+			for index, req := range input.Requests {
+				stream := uint32(index*2 + 1)
+				r := results[stream]
+				if req.BodyBytes > 0 && !uploaded[stream] && r.Error == nil && (req.Method != "CONNECT" || r.Status != nil) {
+					if req.Method == "CONNECT" && uploadProgress[stream] > 0 && r.Bytes == 0 {
+						continue
 					}
-					fields := make([]hpack.HeaderField, 0, len(req.Trailers))
-					for _, trailer := range req.Trailers {
-						if len(trailer) != 2 {
-							return nil, errors.New("invalid trailer pair")
-						}
-						fields = append(fields, hpack.HeaderField{Name: trailer[0], Value: trailer[1]})
+					// Only small protocol probes use this producer.
+					available := p.window + int64(p.updates[stream]) - p.streamSent[stream]
+					amount := min(req.BodyBytes-uploadProgress[stream], int(available), int(p.credit), 16384)
+					if req.Method == "CONNECT" && uploadProgress[stream] == 0 && req.BodyBytes > 1 {
+						amount = min(amount, req.BodyBytes-1, 17)
 					}
-					if err := p.headers(stream, fields, true, false); err != nil {
+					if amount <= 0 {
+						continue
+					}
+					final := uploadProgress[stream]+amount == req.BodyBytes
+					if err := p.body(stream, bytes.Repeat([]byte{byte(stream % 251)}, amount), final && len(req.Trailers) == 0); err != nil {
 						return nil, err
 					}
-					requestEnded[stream] = true
+					requestEnded[stream] = final && len(req.Trailers) == 0
+					if len(req.Trailers) > 0 {
+						if !final {
+							return nil, errors.New("reference trailers require a one-frame upload")
+						}
+						fields := make([]hpack.HeaderField, 0, len(req.Trailers))
+						for _, trailer := range req.Trailers {
+							if len(trailer) != 2 {
+								return nil, errors.New("invalid trailer pair")
+							}
+							fields = append(fields, hpack.HeaderField{Name: trailer[0], Value: trailer[1]})
+						}
+						if err := p.headers(stream, fields, true, false); err != nil {
+							return nil, err
+						}
+						requestEnded[stream] = true
+					}
+					uploadProgress[stream] += amount
+					uploaded[stream] = final
+					progress = true
 				}
-				uploadProgress[stream] += amount
-				uploaded[stream] = final || req.Method != "CONNECT"
+			}
+			if !progress {
+				break
 			}
 		}
 	}

@@ -32,6 +32,8 @@ def request(scenario, address):
         actions = [{"action": "reset", "stream_id": 1, "after_bytes": 1024, "code": 8}]
     if scenario == "graceful-close":
         actions = [{"action": "graceful_close", "after_streams": 1}]
+    if scenario == "early-response":
+        actions = [{"action": "cancel_upload_after_response", "stream_id": 1}]
     return {
         "schema": 1, "host": address[0], "port": address[1],
         "timeout_ms": 8000,
