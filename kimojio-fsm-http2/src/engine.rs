@@ -1794,7 +1794,9 @@ impl<B: SendBuffer> Connection<B> {
                     return None;
                 }
                 Err(_) => {
-                    self.terminate_stream(id, StreamOutcome::ConnectionFailed);
+                    if self.reset(id, H2ErrorCode::InternalError).is_err() {
+                        self.fail(ConnectionResult::ResourceExhausted);
+                    }
                     return None;
                 }
             };

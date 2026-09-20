@@ -171,6 +171,9 @@ This API change is not a measured performance claim.
 `WriteOp::slices()` exposes the remaining header and payload without concatenation.
 `WriteOp::complete(outcome)` preserves the original buffer and exact partial cursor.
 Write failure distinguishes exact progress from a known lower bound.
+Read, write, wake, and close completions expose `into_parts` for recovery after rejection.
+Body releases and cancellation completions expose `into_op` because they have no separate outcome.
+These methods return the original operation without a new token or storage copy.
 
 `BodyOp::bytes()` exposes one retained fragment.
 `BodyOp::release()` consumes the fragment and creates its release receipt.
@@ -273,6 +276,8 @@ The caller must complete both the cancellation request and the original alarm.
 
 An invalidated alarm completion releases its token without advancing protocol time.
 It cannot trigger a replacement deadline.
+An early current alarm completion settles that alarm but does not expire its deadline.
+The next drive requests a new alarm at the same deadline.
 The SETTINGS ACK deadline starts after the complete original SETTINGS write settles successfully.
 The server shutdown PING wait starts after its complete original write settles successfully.
 The overall shutdown deadline still starts at the shutdown command.
@@ -304,8 +309,8 @@ The pure engine does not create or drive an HTTP/1 parser.
 
 ## Standalone qualification
 
-The all-feature suite contains 210 unit tests, 49 integration tests, and two doctests.
-Five unit tests are new direct-engine bounds tests.
+The all-feature suite contains 211 unit tests, 53 integration tests, and two doctests.
+Six unit tests cover new direct-engine bounds and defensive state transitions.
 The default suite omits five feature-specific component tests.
 These counts do not include the six Criterion smoke workloads.
 
@@ -326,6 +331,26 @@ Late-outcome cases cover batched release, failed reads, exact final writes, HEAD
 The resource cases assert exact control sequences and HPACK continuity after rejected header sections.
 They also cover supplied-time budgets, shutdown admission failure, ACK deadlines, tunnel limits, and malformed trailers.
 The inherited component tests remain useful regression coverage, not independent peer evidence.
+
+### Frozen-baseline review regressions
+
+The independent source review used the earlier `938f631d` baseline.
+The following regressions cover its six reported defects:
+
+| Defect | Regression evidence |
+| --- | --- |
+| Response end removes upload half | `response_end_closes_only_receive_while_upload_continues` covers HEADERS, DATA, and trailers |
+| Partial write reports full success after read failure | `original_final_write_receipt_decides_success_after_unrelated_read_failure` includes 10 accepted wire bytes for a 100-byte body |
+| Body admission loses state consistency | `streaming_body_limit_without_content_length_preserves_both_role_buffers` preserves both rejected buffers and permits |
+| CONNECT uses HTTP body limits | `classic_connect_tunnel_bytes_are_not_an_http_message_body_limit` exercises both tunnel directions |
+| HEAD informational response carries END_STREAM | `head_informational_response_does_not_end_stream_or_apply_representation_body_limit` asserts the exact frame sequence |
+| Read cancellation removes queued GOAWAY | `all_connection_original_and_cancellation_ack_orders` covers 480 orders with continuing and suspended callbacks |
+
+An additional fault-injection test exercises an unexpected private DATA planning error.
+The engine emits one INTERNAL_ERROR reset and removes both private and application stream state.
+Retirement waits for reset output settlement.
+Late headers produce no application callback, but still update HPACK before a sibling response.
+If reset admission fails, the engine reports aggregate resource exhaustion.
 
 ## Frozen benchmark workload
 
