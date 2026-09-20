@@ -119,6 +119,9 @@ impl h2::Ports<Buffer> for Ports {
         self.event()
     }
     fn write(&mut self, op: h2::WriteOp<Buffer>) -> Option<()> {
+        if let Some(diagnostics) = &mut self.diagnostics {
+            diagnostics.write_issued(!op.slices()[1].is_empty());
+        }
         assert!(self.write.replace(op).is_none());
         self.event()
     }
@@ -151,12 +154,22 @@ impl h2::Ports<Buffer> for Ports {
     fn body(&mut self, op: h2::BodyOp) -> Option<()> {
         // Compare all bytes, not merely the length or a sampled byte.
         assert_eq!(op.bytes(), &PAYLOAD[..op.bytes().len()]);
+        if let Some(diagnostics) = &mut self.diagnostics {
+            diagnostics.body_received(op.bytes().len());
+        }
         self.slot(op.stream()).received += op.bytes().len();
         self.bodies.push(op);
         self.event();
         Some(())
     }
     fn send_ready(&mut self, permit: h2::SendPermit) -> Option<()> {
+        if let Some(diagnostics) = &mut self.diagnostics {
+            diagnostics.permit(
+                permit.stream().get(),
+                permit.max_bytes(),
+                permit.max_retained_capacity(),
+            );
+        }
         self.permits.push(permit);
         self.event()
     }
@@ -174,6 +187,9 @@ impl h2::Ports<Buffer> for Ports {
         self.event()
     }
     fn sent(&mut self, result: h2::Sent<Buffer>) -> Option<()> {
+        if let Some(diagnostics) = &mut self.diagnostics {
+            diagnostics.sent(result.accepted, result.result.is_ok());
+        }
         if result.result.is_err()
             && let Some(diagnostics) = &mut self.diagnostics
         {
@@ -195,6 +211,9 @@ impl h2::Ports<Buffer> for Ports {
         self.event()
     }
     fn ended(&mut self, end: h2::ReceiveEnd) -> Option<()> {
+        if let Some(diagnostics) = &mut self.diagnostics {
+            diagnostics.receive_end(end.outcome == h2::StreamOutcome::Complete);
+        }
         if end.outcome != h2::StreamOutcome::Complete
             && let Some(diagnostics) = &mut self.diagnostics
         {
@@ -490,23 +509,32 @@ fn settle(endpoint: &mut impl Endpoint, ports: &mut Ports, send_bytes: usize) {
         if ports.paused && !sibling_done && slot + 1 != ports.slots.len() {
             index += 1;
         } else {
+            let bytes = ports.bodies[index].bytes().len();
             endpoint
                 .core()
                 .release_body(ports.bodies.swap_remove(index).release())
                 .unwrap();
+            if let Some(diagnostics) = &mut ports.diagnostics {
+                diagnostics.body_released(bytes);
+            }
         }
     }
     while let Some(permit) = ports.permits.pop() {
+        let stream = permit.stream();
         let slot = ports.slot(permit.stream());
         let count = (send_bytes - slot.sent)
             .min(PAYLOAD.len())
             .min(permit.max_bytes());
         assert!(count > 0);
         slot.sent += count;
+        let end = slot.sent == send_bytes;
         endpoint
             .core()
-            .send(permit, &PAYLOAD[..count], slot.sent == send_bytes)
+            .send(permit, &PAYLOAD[..count], end)
             .unwrap();
+        if let Some(diagnostics) = &mut ports.diagnostics {
+            diagnostics.admission(stream.get(), count, end);
+        }
     }
 }
 
@@ -565,6 +593,17 @@ impl<C: Client, S: Server> Pair<C, S> {
         settle(&mut self.server, &mut self.sp, self.case.response);
         while let Some(stream) = self.sp.requests.pop() {
             self.server.respond(stream, self.case.response == 0);
+            if self.sp.diagnostics.is_some() {
+                let slot = self.sp.slot(stream);
+                let incoming_ended = slot.ended;
+                let received = slot.received;
+                self.sp.diagnostics.as_mut().unwrap().head_command(
+                    stream.get(),
+                    self.case.response == 0,
+                    incoming_ended,
+                    received,
+                );
+            }
         }
         let forward = transfer(
             &mut self.client,

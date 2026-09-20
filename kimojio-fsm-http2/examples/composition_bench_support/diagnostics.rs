@@ -1,11 +1,40 @@
 use std::{collections::VecDeque, fmt};
 
+#[derive(Default, serde::Serialize)]
+struct Application {
+    head_commands: usize,
+    end_stream_head_commands: usize,
+    send_permits: usize,
+    admissions: usize,
+    admitted_bytes: usize,
+    sent_ok: usize,
+    sent_error: usize,
+    sent_accepted_bytes: usize,
+    received_body_bytes: usize,
+    released_body_bytes: usize,
+    held_leases: usize,
+    held_body_bytes: usize,
+    peak_held_leases: usize,
+    peak_held_body_bytes: usize,
+    complete_receive_ends: usize,
+    write_operations: usize,
+    data_write_operations: usize,
+    first_head_turn: Option<usize>,
+    first_permit_turn: Option<usize>,
+    first_admission_turn: Option<usize>,
+    first_body_turn: Option<usize>,
+    first_release_turn: Option<usize>,
+    first_data_write_turn: Option<usize>,
+}
+
 pub(super) struct Diagnostics {
     pub failed: bool,
     pub turn: usize,
     recent: VecDeque<String>,
     before_failure: Option<VecDeque<String>>,
     important: Vec<String>,
+    application: Application,
+    milestones: Vec<String>,
     frame_counts: [usize; 10],
     one_byte_data: usize,
     one_byte_refunds: usize,
@@ -29,6 +58,8 @@ impl Diagnostics {
             recent: VecDeque::with_capacity(256),
             before_failure: None,
             important: Vec::with_capacity(32),
+            application: Application::default(),
+            milestones: Vec::with_capacity(64),
             frame_counts: [0; 10],
             one_byte_data: 0,
             one_byte_refunds: 0,
@@ -47,6 +78,85 @@ impl Diagnostics {
         }
         self.recent
             .push_back(format!("turn={} {message}", self.turn));
+    }
+
+    fn milestone(&mut self, message: fmt::Arguments<'_>) {
+        if self.milestones.len() < 64 {
+            self.milestones
+                .push(format!("turn={} {message}", self.turn));
+        }
+    }
+
+    pub fn head_command(&mut self, stream: u32, end: bool, incoming_ended: bool, received: usize) {
+        self.application.head_commands += 1;
+        self.application.end_stream_head_commands += usize::from(end);
+        self.application.first_head_turn.get_or_insert(self.turn);
+        self.milestone(format_args!(
+            "HEAD_COMMAND accepted stream={stream} end_stream={end} incoming_ended={incoming_ended} received={received}"
+        ));
+    }
+
+    pub fn permit(&mut self, stream: u32, bytes: usize, retained_capacity: usize) {
+        self.application.send_permits += 1;
+        self.application.first_permit_turn.get_or_insert(self.turn);
+        self.milestone(format_args!(
+            "SEND_PERMIT stream={stream} max_bytes={bytes} max_retained_capacity={retained_capacity}"
+        ));
+    }
+
+    pub fn admission(&mut self, stream: u32, bytes: usize, end: bool) {
+        self.application.admissions += 1;
+        self.application.admitted_bytes += bytes;
+        self.application
+            .first_admission_turn
+            .get_or_insert(self.turn);
+        self.milestone(format_args!(
+            "ADMISSION accepted stream={stream} bytes={bytes} end_stream={end}"
+        ));
+    }
+
+    pub fn sent(&mut self, accepted: usize, success: bool) {
+        self.application.sent_ok += usize::from(success);
+        self.application.sent_error += usize::from(!success);
+        self.application.sent_accepted_bytes += accepted;
+    }
+
+    pub fn body_received(&mut self, bytes: usize) {
+        self.application.received_body_bytes += bytes;
+        self.application.held_leases += 1;
+        self.application.held_body_bytes += bytes;
+        self.application.peak_held_leases = self
+            .application
+            .peak_held_leases
+            .max(self.application.held_leases);
+        self.application.peak_held_body_bytes = self
+            .application
+            .peak_held_body_bytes
+            .max(self.application.held_body_bytes);
+        self.application.first_body_turn.get_or_insert(self.turn);
+    }
+
+    pub fn body_released(&mut self, bytes: usize) {
+        assert!(self.application.held_leases > 0);
+        assert!(self.application.held_body_bytes >= bytes);
+        self.application.held_leases -= 1;
+        self.application.held_body_bytes -= bytes;
+        self.application.released_body_bytes += bytes;
+        self.application.first_release_turn.get_or_insert(self.turn);
+    }
+
+    pub fn receive_end(&mut self, complete: bool) {
+        self.application.complete_receive_ends += usize::from(complete);
+    }
+
+    pub fn write_issued(&mut self, data: bool) {
+        self.application.write_operations += 1;
+        self.application.data_write_operations += usize::from(data);
+        if data {
+            self.application
+                .first_data_write_turn
+                .get_or_insert(self.turn);
+        }
     }
 
     pub fn failure(&mut self, message: fmt::Arguments<'_>) {
@@ -116,6 +226,14 @@ impl Diagnostics {
 
     pub fn dump(&self, endpoint: &str) {
         eprintln!(
+            "{endpoint} APPLICATION {}",
+            serde_json::to_string(&self.application).unwrap()
+        );
+        eprintln!("=== {endpoint}: first application milestones ===");
+        for line in &self.milestones {
+            eprintln!("{line}");
+        }
+        eprintln!(
             "{endpoint} frame_counts={:?} one_byte_data={} one_byte_refunds={}",
             self.frame_counts, self.one_byte_data, self.one_byte_refunds
         );
@@ -177,5 +295,35 @@ mod tests {
         assert_eq!(snapshot.len(), 256);
         assert!(snapshot.front().unwrap().ends_with("before 44"));
         assert!(snapshot.back().unwrap().ends_with("before 299"));
+    }
+
+    #[test]
+    fn permission_and_lease_counters_distinguish_admission_from_wire_progress() {
+        let mut diagnostics = Diagnostics::new(true);
+        diagnostics.turn = 3;
+        diagnostics.head_command(1, false, false, 0);
+        diagnostics.turn = 4;
+        diagnostics.permit(1, 65536, 65536);
+        diagnostics.admission(1, 32768, false);
+        diagnostics.body_received(16384);
+        diagnostics.body_released(16384);
+        diagnostics.write_issued(false);
+        diagnostics.sent(0, false);
+        let app = &diagnostics.application;
+        assert_eq!(app.head_commands, 1);
+        assert_eq!(app.end_stream_head_commands, 0);
+        assert_eq!(app.send_permits, 1);
+        assert_eq!(app.admitted_bytes, 32768);
+        assert_eq!(app.received_body_bytes, app.released_body_bytes);
+        assert_eq!(app.held_leases, 0);
+        assert_eq!(app.held_body_bytes, 0);
+        assert_eq!(app.peak_held_leases, 1);
+        assert_eq!(app.peak_held_body_bytes, 16384);
+        assert_eq!(app.first_head_turn, Some(3));
+        assert_eq!(app.first_admission_turn, Some(4));
+        assert_eq!(app.data_write_operations, 0);
+        assert_eq!(app.first_data_write_turn, None);
+        assert_eq!(app.sent_ok, 0);
+        assert_eq!(app.sent_error, 1);
     }
 }
