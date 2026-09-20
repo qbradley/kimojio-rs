@@ -61,7 +61,9 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
     fn coordinate(&mut self) {
         match std::mem::replace(&mut self.boundary, Boundary::None) {
             Boundary::OutgoingSettled => {
-                if !matches!(self.rx, Rx::Done | Rx::Paused) {
+                if !self.exchange.as_ref().unwrap().consume_request
+                    && !matches!(self.rx, Rx::Done | Rx::Paused)
+                {
                     self.rx = Rx::Paused;
                     self.credit = 0;
                     self.close_after = true;

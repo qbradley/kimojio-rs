@@ -243,7 +243,7 @@ fn informational_completion_cannot_settle_queued_final_metadata() {
                 core.respond(
                     exchange,
                     Response::new(200, "OK", &[], BodyLength::Empty),
-                    false,
+                    ResponseMode::Conservative,
                 )
                 .unwrap();
             }

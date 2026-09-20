@@ -421,7 +421,7 @@ fn fixture(input: Input, mode: Drive) -> (Core<Vec<u8>, Vec<u8>>, Observer) {
             head: ResponseHead::new(200, "OK", &[]),
             body: BodyLength::Known(2),
         },
-        false,
+        ResponseMode::Conservative,
     )
     .unwrap();
     drive(&mut core, &mut observer);
