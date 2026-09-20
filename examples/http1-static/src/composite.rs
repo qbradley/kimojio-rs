@@ -513,9 +513,15 @@ impl<P: Ports> app::Ports<http::ExchangeId> for AppConnector<'_, P> {
         None
     }
     fn source_failed(&mut self, exchange: http::ExchangeId) -> Option<Self::Output> {
-        *self.response = None;
-        if *self.lifecycle != Lifecycle::Closed {
-            let _ = self.http.fail_source(exchange, http::Failure::Application);
+        // Retirement can win before a queued file-close failure is delivered.
+        // Only an accepted failure changes the HTTP lifecycle.
+        if *self.lifecycle != Lifecycle::Closed
+            && self
+                .http
+                .fail_source(exchange, http::Failure::Application)
+                .is_ok()
+        {
+            *self.response = None;
             *self.http_ready = true;
             *self.lifecycle = Lifecycle::Terminating;
         }

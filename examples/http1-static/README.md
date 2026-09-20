@@ -147,6 +147,20 @@ A successful late open requires exactly one close, without metadata or response 
 A late read returns its allocation without body delivery.
 Close consumes ownership even on error. It never retries a possibly reused descriptor.
 
+File-close errors follow the exchange retirement boundary.
+A queued error can reach the connector after HTTP reports reusable exchange completion.
+At that point, `fail_source` rejects the retired identity with `StaleExchange`.
+The connector consumes that stale notification without changing lifecycle or reopening transport work.
+Application settlement then releases the reuse gate.
+The error does not retroactively fail the completed response or the next exchange.
+
+Before retirement, an accepted source failure still terminates the connection and cancels outstanding transport work.
+A successful original write completion does not undo that accepted failure.
+For nonempty GET, payload return gives the application a turn before exchange retirement.
+A competing file-close error can therefore still fail that live exchange.
+HEAD and empty GET have no payload-return step.
+Their final-write completion can retire the exchange before the queued file-close error reaches the connector.
+
 The composite separates serving, reuse waiting, termination, and closed lifecycles.
 Reusable exchange completion blocks HTTP request admission until application settlement.
 Termination does not block HTTP lease returns, cancellation, bounded error output, or socket close.
@@ -259,6 +273,14 @@ They include partial payload acceptance, close errors, and both callback continu
 Literal sequence assertions require response-before-close and failure-before-close.
 A buffered 256-chunk request checks cooperative yielding and retained ready work.
 Repeated shutdown after closure leaves the service settled.
+
+Persistent retirement tests batch a failed file-close completion with the successful final write, without an intervening drive.
+They cover both completion orders, continuing and yielding callbacks, and buffered or subsequent requests.
+HEAD and empty GET must serve the next request with an exact notification sequence.
+Nonempty GET must retain its pre-retirement failure behavior.
+Separate cases deliver the close error before the final write completes.
+Those cases require cancellation, original-write settlement, and closure with `Failure::Application`.
+The additional matrix contains 36 batched cases and nine live-failure cases.
 
 These are bounded checks, not a complete proof.
 They assume that original operations and submitted cancellation requests eventually complete.
