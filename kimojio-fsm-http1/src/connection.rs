@@ -755,6 +755,9 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             },
             cursor: 0,
         });
+        if !self.server {
+            self.arm_upload();
+        }
         Ok(id)
     }
 
@@ -915,16 +918,6 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             Ok(n) => {
                 op.cursor += n;
                 self.progress();
-                if !self.server
-                    && !self.lifecycle.is_closing()
-                    && !self.tx.stopped()
-                    && let WriteStorage::HeadBody { bytes, .. } = &op.storage
-                    && op.cursor >= bytes.len()
-                    && op.remaining() != 0
-                    && self.timers.upload_at.is_none()
-                {
-                    self.arm_upload();
-                }
             }
             Err(IoError {
                 kind: IoErrorKind::WouldBlock,
@@ -1810,6 +1803,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Client<B, W> {
     /// The payload remains separately owned and is not copied into the head.
     /// Admission ends the source, but storage returns only through `body_sent`.
     /// An unresolved `Expect: 100-continue` gate rejects eager admission.
+    /// The upload deadline starts at admission and includes the combined head.
     /// A rejection returns the command unchanged for the normal demand path.
     pub fn send_body_eager(
         &mut self,

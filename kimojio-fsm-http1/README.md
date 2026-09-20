@@ -122,6 +122,7 @@ Before the next drive, the caller can submit `SendBody { end: true, .. }` throug
 
 The core accepts only the complete remaining fixed-length payload.
 The core rejects eager admission for suppressed bodies, chunked framing, active writes, and an unresolved client continue gate.
+For an eager client upload, the body deadline starts at admission and includes the combined metadata.
 A rejected command retains its original storage.
 The caller can keep that storage for the normal demand path.
 No rejection changes the queued head.

@@ -10,9 +10,10 @@ Producer demand remains ineligible until that write settles.
 The wrapper boxes `OutgoingBody::full` as a one-item stream and waits for demand before it polls that stream.
 Thus, a small full body needs separate head and payload writes even when both are immediately available.
 
-This experiment starts from `90b7ff60`.
-The final comparison requires the common base that the parent supplies.
-Wrapper production changes and benchmark timings remain pending until that base and a timing slot are available.
+The independent core experiment started from `90b7ff60`.
+Its delta now sits on the frozen common base `0bd3e950f4b0aedb552fbfd8fab96139ef399bb9`.
+The wrapper adaptation preserves that base's native transport, explicit duplex selection, and lease-aware abandonment policy.
+Benchmark timing remains pending until the parent assigns a timing slot or runs the matched comparison.
 
 ## Alternatives
 
@@ -65,10 +66,12 @@ The change adds no core heap queue or executor operation.
 - No cancelled prefix is replayed.
 - Successful retirement still waits for both directions and external ownership.
 
-For a client short write that completes metadata but not the payload, the core arms the existing upload deadline.
+At eager client admission, the core arms the existing upload deadline.
 The normal progress and settlement paths refresh and clear that deadline.
 The combined operation cannot reveal kernel progress before its completion.
-The existing head deadline therefore guards an outstanding first write until the executor reports progress.
+Thus, the upload deadline includes the combined metadata instead of waiting for a separate head completion.
+This is stricter than ordinary admission, but avoids an unguarded payload write when the generic write-all transport hides partial progress.
+The existing head deadline remains independent.
 
 `source_finished` can precede the combined write.
 It permits the wrapper to discard the producer, not the operation-owned payload.
@@ -76,16 +79,30 @@ It permits the wrapper to discard the producer, not the operation-owned payload.
 This also preserves the distinction required by forwarded receive leases.
 The initial wrapper fast path is limited to owned `OutgoingBody::full` storage.
 
-## Planned wrapper path
+## Implemented wrapper path
 
-The wrapper retains full bytes as an explicit body representation instead of a boxed one-item stream.
+`OutgoingSource::Ready` retains full bytes as an explicit body representation instead of a boxed one-item stream.
+`OutgoingSource::Stream` retains the existing boxed custom stream.
+Empty bodies use `Ready(None)`.
 After successful metadata submission, it attempts eager admission for that representation.
 If admission rejects the command, the wrapper retains the returned buffer for ordinary demand.
 It does not infer HTTP suppression or continue policy.
 
+The driver checks retained allocation capacity before the eager attempt.
+An oversized allocation stays on the ordinary path.
+This preserves suppression without an early adapter error.
+If normal demand reaches that allocation, the existing frame-limit check rejects it.
+
 Custom streams remain boxed and demand-driven.
 The wrapper still accepts forwarded frames through the established source path.
 The PoC does not combine eager admission with a new forwarding or cancellation policy.
+The `continue_request_body` marker stays unchanged on the body.
+Both metadata commands and their duplex choice complete before eager admission.
+
+On successful admission, the active exchange needs no outgoing source.
+The core owns the payload in the combined write.
+The existing `source_finished` handler therefore discards no live payload.
+The existing `body_sent` handler receives the original storage.
 
 ## Expected cost change
 
@@ -103,6 +120,47 @@ The core gains one method, one storage variant, and shared body-settlement logic
 These are operation-count expectations, not measured latency claims.
 The shared `keepalive_bench` must establish the performance result without changes to its validation or fixture.
 Large, chunked, and fallible streams serve as compatibility controls rather than expected beneficiaries.
+
+## Observed wrapper effects
+
+A wrapper unit test submits `OutgoingBody::full` through the actual eager-admission helper.
+It observes exactly one write callback, zero producer-demand callbacks, and the original payload pointer in the second scatter slice.
+Source completion precedes that write, and the body receipt follows settlement.
+
+The fallback test retains the original allocation across Expect rejection and the retained-capacity check.
+It also proves that eager selection never polls a custom stream.
+The body representation test distinguishes unboxed full storage from a boxed fallible stream.
+
+The new socket integration test runs three requests on one connection for each transport backend.
+It covers an 8192-byte full request and response, HEAD suppression, and an Expect request that uses normal demand.
+The socket send buffer is 4096 bytes.
+The complete existing wrapper suite also passes, including native transport, duplex ownership, forwarding, cancellation, and settlement cases.
+
+No latency or throughput improvement is claimed yet.
+The parent owns the final matched comparison.
+The benchmark fixture and its CLI remain byte-for-byte unchanged from the common base.
+The release executable accepts the common `--native`, `--duplex`, and `--copy-forward` flags.
+
+## Added code and tradeoffs
+
+The core production files add 153 lines and remove 23 lines relative to the common base.
+These counts include a 32-line layout regression module in `operations.rs`.
+The wrapper production files add 172 lines and remove 10 lines.
+These counts include the adapter unit tests in `driver.rs` and representation assertions in `body.rs`.
+Standalone regression files and documentation are additional.
+
+The public wrapper API does not change.
+The core adds one optional command on each role rather than separate eager request, response, and duplex-response constructors.
+The two-command sequence requires submission before the next drive, but a rejection preserves normal fallback.
+This is simpler than duplicating metadata acceptance and error ownership across atomic full-message constructors.
+
+The representation enum increases the local outgoing-body representation.
+It does not increase transport operation storage.
+That local cost also applies to stream-backed bodies, so the matched streaming controls remain important.
+The extra enum branch replaces dynamic dispatch for full bodies, but does not remove dynamic dispatch from custom streams.
+
+The experiment remains a candidate, not a recommendation to merge.
+The final decision must consider small full-body gains alongside large-stream and duplex regressions.
 
 ## Core regression evidence
 
@@ -124,11 +182,32 @@ Workspace Clippy reported only the existing example `question_mark` warning and 
 Core Clippy passed for all targets and features with `-D warnings`.
 No benchmark timing ran during this independent core phase.
 
+## Final-base validation
+
+All builds and tests use CPUs 8-31 with this fresh target directory:
+
+```text
+/workspace/kimojio-rs/target/wrapper-lab/build-interface-poc-final-0bd3e950
+```
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all` | Passed |
+| `cargo test -p kimojio-http1 -p kimojio-fsm-http1 --quiet` | Passed: 106 core tests, four core doctests, 61 wrapper tests |
+| `cargo test -p kimojio-http1 -p kimojio-fsm-http1 --release --quiet` | Same tests passed |
+| `cargo test -p kimojio-http1 --all-features --quiet` | Passed: 63 wrapper tests, including virtual-clock deadlines |
+| `cargo test -p kimojio-http1 --example keepalive_bench --quiet` | Four fixture tests passed |
+| `cargo build -p kimojio-http1 --example keepalive_bench --release --quiet` | Passed |
+| `cargo clippy --quiet` | Passed with the existing example warning |
+| `cargo clippy --all-targets --all-features --quiet` | Passed with the existing example and two runtime-test warnings |
+| `cargo clippy -p kimojio-http1 -p kimojio-fsm-http1 --all-targets --all-features --quiet -- -D warnings` | Passed without warnings |
+
+The benchmark executable is `release/examples/keepalive_bench` in that target directory.
+Its SHA-256 is `906eb65d817dcc4d842336b213212044d63c9695cd0ea6e18db326a97147d032`.
+These checks did not run a timed benchmark.
+
 ## Remaining gates
 
-1. Rebase the core experiment onto the final common base.
-2. Adapt the conventional wrapper full-body representation.
-3. Run focused wrapper and core tests in debug and release.
-4. Run formatting and both required workspace Clippy commands.
-5. Run the unchanged shared benchmark during the assigned timing slot.
-6. Record observed results, code size, and the final keep-or-reject decision.
+1. Run the unchanged shared benchmark during the assigned timing slot, or use the parent's matched comparison.
+2. Record measured latency and throughput with the frozen source and executable hashes.
+3. Make the final keep-or-reject decision.

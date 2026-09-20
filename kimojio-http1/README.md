@@ -110,6 +110,13 @@ The application must continue to poll the server future until shutdown completes
 - `from_stream(length, stream)` polls a fallible source directly.
 - `from_incoming(body)` forwards data leases and trailers with streaming framing.
 
+This experimental build retains `full` bytes directly instead of boxing a one-item stream.
+It asks the core to attach eligible fixed-length payloads to the queued head through `send_body_eager`.
+The transport borrows separate head and payload slices from one owned write operation.
+Suppression, continue gates, and unavailable capacity return the payload to the normal demand path.
+Custom streams and forwarded leases retain their existing demand-driven path.
+The [interface PoC report](../docs/http1-wrapper-lab/poc-interface.md) describes the experiment and validation limits.
+
 The direct source needs no producer task or channel.
 `Some(length)` declares a fixed length.
 `None` requests streaming framing from the core.

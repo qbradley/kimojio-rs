@@ -15,7 +15,7 @@ use kimojio::{
 };
 use kimojio_fsm_http1 as core;
 
-use crate::body::{BodyDemand, OutgoingData};
+use crate::body::{BodyDemand, OutgoingData, OutgoingSource};
 use crate::{
     BodyChunk, Error, IncomingBody, OutgoingBody, OutgoingFrame,
     io::{self, Pending, WriteAction, WriteResult},
@@ -293,6 +293,45 @@ where
 enum Machine {
     Client(core::Client<Vec<u8>, OutgoingData>),
     Server(core::Server<Vec<u8>, OutgoingData>),
+}
+
+fn admit_eager(
+    machine: &mut Machine,
+    exchange: core::ExchangeId,
+    body: &mut OutgoingBody,
+    max_buffer: usize,
+) -> bool {
+    let OutgoingSource::Ready(slot) = &mut body.source else {
+        return false;
+    };
+    if slot
+        .as_ref()
+        .is_none_or(|bytes| bytes.capacity() > max_buffer)
+    {
+        return false;
+    }
+    let bytes = slot.take().unwrap();
+    let len = bytes.len();
+    let command = core::SendBody {
+        exchange,
+        buffer: OutgoingData::Owned(bytes),
+        range: 0..len,
+        end: true,
+    };
+    let result = match machine {
+        Machine::Client(client) => client.send_body_eager(command),
+        Machine::Server(server) => server.send_body_eager(command),
+    };
+    match result {
+        Ok(_) => true,
+        Err(rejected) => {
+            let OutgoingData::Owned(bytes) = rejected.value.buffer else {
+                unreachable!()
+            };
+            *slot = Some(bytes);
+            false
+        }
+    }
 }
 
 fn source_admitted(
@@ -628,7 +667,7 @@ impl State {
         if command.cancel.is_cancelled() {
             return;
         }
-        let (mut parts, body) = command.request.into_parts();
+        let (mut parts, mut body) = command.request.into_parts();
         let result = (|| {
             let Machine::Client(client) = &mut self.machine else {
                 return Err(Error::Closed);
@@ -664,7 +703,9 @@ impl State {
         match result {
             Ok(id) => {
                 let mut active = Active::new(id, command.cancel, self.demand_send.clone());
-                active.source = Some(body);
+                if !admit_eager(&mut self.machine, id, &mut body, self.max_buffer) {
+                    active.source = Some(body);
+                }
                 active.response = Some(command.response);
                 self.active = Some(active);
             }
@@ -676,7 +717,7 @@ impl State {
 
     fn respond(&mut self, response: Response<OutgoingBody>) -> Result<(), Error> {
         let active = self.active.as_mut().ok_or(Error::Closed)?;
-        let (parts, body) = response.into_parts();
+        let (parts, mut body) = response.into_parts();
         if parts.headers.len() > self.max_headers {
             return Err(Error::Limit);
         }
@@ -696,7 +737,9 @@ impl State {
         } else {
             server.respond(active.id, response)?;
         }
-        active.source = Some(body);
+        if !admit_eager(&mut self.machine, active.id, &mut body, self.max_buffer) {
+            active.source = Some(body);
+        }
         Ok(())
     }
 
@@ -1256,6 +1299,98 @@ mod forwarding_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn full_body_client(expect_continue: bool) -> (Machine, core::ExchangeId) {
+        let mut client = core::Client::with_output_type(
+            core::ConnectionId {
+                slot: 96,
+                generation: 1,
+            },
+            core::Config::default(),
+            vec![0; 1024],
+            core::Tick(0),
+        )
+        .unwrap();
+        let id = client
+            .request(core::Request {
+                head: core::RequestHead {
+                    method: "POST",
+                    target: "/",
+                    version: core::Version::Http11,
+                    headers: &[core::Header {
+                        name: "host",
+                        value: b"test",
+                    }],
+                },
+                body: core::BodyLength::Known(3),
+                expect_continue,
+            })
+            .unwrap();
+        (Machine::Client(client), id)
+    }
+
+    #[test]
+    fn full_body_eager_path_uses_one_write_and_no_producer_demand() {
+        let (mut machine, id) = full_body_client(false);
+        let bytes = b"abc".to_vec();
+        let pointer = bytes.as_ptr();
+        let mut body = OutgoingBody::full(bytes);
+        assert!(admit_eager(&mut machine, id, &mut body, 1024));
+        assert!(matches!(body.source, OutgoingSource::Ready(None)));
+        let Machine::Client(mut client) = machine else {
+            unreachable!()
+        };
+        let mut writes = 0;
+        let mut source_finished = false;
+        loop {
+            match client.next(&mut Ports) {
+                Some(Event::Deadline(_)) => {}
+                Some(Event::SourceFinished(exchange)) => {
+                    assert_eq!(exchange, id);
+                    source_finished = true;
+                }
+                Some(Event::Write(op)) => {
+                    assert!(source_finished);
+                    writes += 1;
+                    assert_eq!(op.slices()[1].as_ptr(), pointer);
+                    assert_eq!(op.slices()[1], b"abc");
+                    let len = op.slices().iter().map(|slice| slice.len()).sum();
+                    client.complete_write(op.complete(Ok(len))).unwrap();
+                }
+                Some(Event::BodySent(receipt)) => {
+                    assert_eq!(receipt.accepted, 3);
+                    assert_eq!(receipt.result, Ok(()));
+                    break;
+                }
+                _ => panic!("eager full body must not require source demand or polling"),
+            }
+        }
+        assert_eq!(writes, 1);
+    }
+
+    #[test]
+    fn eager_fallback_retains_full_storage_and_never_polls_custom_streams() {
+        for (expect, capacity) in [(true, 3), (false, 2048)] {
+            let (mut machine, id) = full_body_client(expect);
+            let mut bytes = Vec::with_capacity(capacity);
+            bytes.extend_from_slice(b"abc");
+            let pointer = bytes.as_ptr();
+            let mut body = OutgoingBody::full(bytes);
+            assert!(!admit_eager(&mut machine, id, &mut body, 1024));
+            let Some(Ok(OutgoingFrame::Data(bytes))) =
+                futures::executor::block_on(body.source.next())
+            else {
+                panic!()
+            };
+            assert_eq!(bytes.as_ptr(), pointer);
+        }
+        let (mut machine, id) = full_body_client(false);
+        let mut body = OutgoingBody::from_stream(
+            Some(3),
+            futures::stream::poll_fn(|_| panic!("custom source must remain demand-driven")),
+        );
+        assert!(!admit_eager(&mut machine, id, &mut body, 1024));
+    }
 
     #[test]
     fn revoked_admission_returns_the_payload_without_aborting_the_response() {

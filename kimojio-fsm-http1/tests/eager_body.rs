@@ -234,16 +234,58 @@ fn eager_client_preserves_expect_gate_and_upload_timeout_after_head_prefix() {
         ))
         .unwrap();
     client.send_body_eager(command(exchange)).unwrap();
+    let Some(Event::Deadline(Some(deadline))) = client.next(&mut Capture) else {
+        panic!()
+    };
+    assert_eq!(deadline.at, Tick(10));
     let Some(Event::Write(op)) = next_client(&mut client) else {
         panic!()
     };
     let head_len = op.slices()[0].len();
     client.complete_write(op.complete(Ok(head_len))).unwrap();
+    client.expire(deadline, Tick(10)).unwrap();
+    let Some(Event::Sent(receipt)) = next_client(&mut client) else {
+        panic!()
+    };
+    assert_eq!(receipt.accepted, 0);
+    assert_eq!(receipt.result, Err(Failure::Timeout));
+}
+
+#[test]
+fn eager_upload_timeout_covers_an_outstanding_combined_write_without_head_deadline() {
+    let mut client = client(Config {
+        body_timeout_ns: Some(10),
+        ..config()
+    });
+    let exchange = client
+        .request(get(
+            "POST",
+            BodyLength::Known(3),
+            false,
+            &[Header {
+                name: "host",
+                value: b"a",
+            }],
+        ))
+        .unwrap();
+    client.send_body_eager(command(exchange)).unwrap();
     let Some(Event::Deadline(Some(deadline))) = client.next(&mut Capture) else {
         panic!()
     };
     assert_eq!(deadline.at, Tick(10));
+    let Some(Event::Write(op)) = next_client(&mut client) else {
+        panic!()
+    };
     client.expire(deadline, Tick(10)).unwrap();
+    assert!(
+        matches!(next_client(&mut client), Some(Event::Cancel(cancel)) if cancel.target == op.id())
+    );
+    client
+        .complete_write(op.complete(Err(IoError {
+            kind: IoErrorKind::Cancelled,
+            code: None,
+        })))
+        .unwrap();
     let Some(Event::Sent(receipt)) = next_client(&mut client) else {
         panic!()
     };
