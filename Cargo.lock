@@ -618,6 +618,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kimojio-http2"
+version = "0.17.0"
+dependencies = [
+ "futures",
+ "http",
+ "kimojio",
+ "kimojio-fsm-http2",
+ "rustix",
+]
+
+[[package]]
 name = "kimojio-json"
 version = "0.17.0"
 dependencies = [

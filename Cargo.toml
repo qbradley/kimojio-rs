@@ -7,6 +7,7 @@ members = [
     "kimojio-fsm-http2",
     "kimojio-fsm-websocket",
     "kimojio-http1",
+    "kimojio-http2",
     "kimojio-macros",
     "kimojio-tls",
     "perf",
@@ -36,6 +37,7 @@ kimojio-fsm-http1 = { path = "kimojio-fsm-http1", version = "0.17.0" }
 kimojio-fsm-http2 = { path = "kimojio-fsm-http2", version = "0.17.0" }
 kimojio-fsm-websocket = { path = "kimojio-fsm-websocket", version = "0.17.0" }
 kimojio-http1 = { path = "kimojio-http1", version = "0.17.0" }
+kimojio-http2 = { path = "kimojio-http2", version = "0.17.0" }
 impls = "1"
 intrusive-collections = "0.10"
 kimojio = { path = "kimojio", version = "0.17.0" }

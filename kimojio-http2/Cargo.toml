@@ -1,0 +1,18 @@
+[package]
+name = "kimojio-http2"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Conventional native async HTTP/2 over the Kimojio HTTP/2 state machine"
+
+[dependencies]
+futures.workspace = true
+http = "1"
+kimojio = { path = "../kimojio", version = "0.17.0", default-features = false }
+kimojio-fsm-http2.workspace = true
+
+[features]
+virtual-clock = ["kimojio/virtual-clock"]
+
+[dev-dependencies]
+rustix.workspace = true
