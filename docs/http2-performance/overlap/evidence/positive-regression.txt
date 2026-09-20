@@ -1,0 +1,20 @@
+   Compiling kimojio-fsm-http2 v0.17.0 (/workspace/kimojio-rs/target/http2-program/worktrees/http2-performance/kimojio-fsm-http2)
+    Finished `release` profile [optimized + debuginfo] target(s) in 2.22s
+     Running unittests examples/composition_bench.rs (/workspace/kimojio-rs/target/http2-program/build-http2-performance-overlap-positive/release/examples/composition_bench-4c6023a0f7e5c5a7)
+
+running 1 test
+duplex_overlap batch=1 response_payload=16384 request_transport_accepted=49152/8388608 overlapped=true
+duplex_overlap batch=2 response_payload=16384 request_transport_accepted=65536/8388608 overlapped=true
+duplex_overlap batch=3 response_payload=16384 request_transport_accepted=65536/8388608 overlapped=true
+duplex_overlap batch=4 response_payload=16384 request_transport_accepted=65536/8388608 overlapped=true
+duplex_overlap batch=5 response_payload=16384 request_transport_accepted=65536/8388608 overlapped=true
+duplex_overlap batch=6 response_payload=16384 request_transport_accepted=65536/8388608 overlapped=true
+duplex_overlap batch=7 response_payload=16384 request_transport_accepted=65536/8388608 overlapped=true
+duplex_overlap batch=8 response_payload=16384 request_transport_accepted=65536/8388608 overlapped=true
+duplex_overlap batch=9 response_payload=16384 request_transport_accepted=65536/8388608 overlapped=true
+duplex_overlap batch=10 response_payload=16384 request_transport_accepted=65536/8388608 overlapped=true
+duplex_overlap post_shutdown complete_batches=10 request_payload_accepted=83886080 missed_batches=0
+test tests::duplex_payload_overlap_regression ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.01s
+
