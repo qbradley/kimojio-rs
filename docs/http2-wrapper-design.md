@@ -3,8 +3,8 @@
 This document defines the wrapper boundary, not a completed implementation.
 The core correctness and performance gates in [the composition design](http2-composition.md) precede implementation.
 Those core gates are complete for the snapshots in the [qualification ledger](http2-qualification.md).
-The shared runtime foundation, native client, and native server are implemented.
-Generic transports and complete wrapper qualification remain in progress.
+The shared runtime foundation, native transports, and generic transports are implemented for both roles.
+Complete wrapper qualification and performance measurements remain in progress.
 
 ## Connection-level API
 

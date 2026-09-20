@@ -3,7 +3,7 @@ name = "kimojio-http2"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Conventional native async HTTP/2 over the Kimojio HTTP/2 state machine"
+description = "Conventional async HTTP/2 over the Kimojio HTTP/2 state machine"
 
 [dependencies]
 futures.workspace = true

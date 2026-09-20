@@ -14,6 +14,9 @@ use kimojio_fsm_http2 as core;
 
 use crate::body::Data;
 
+mod stream;
+pub(crate) use stream::stream;
+
 pub(crate) enum WriteDone {
     Data(core::WriteCompletion<Data>),
     Close(core::CloseCompletion, Result<(), kimojio::Errno>),
@@ -28,6 +31,9 @@ pub(crate) trait Io {
     fn poll_read(&mut self, cx: &mut Context<'_>) -> Poll<core::ReadCompletion>;
     fn poll_write(&mut self, cx: &mut Context<'_>) -> Poll<WriteDone>;
     fn poll_wake(&mut self, cx: &mut Context<'_>) -> Poll<core::WakeCompletion>;
+    fn take_error(&mut self) -> Option<kimojio::Errno> {
+        None
+    }
 }
 
 struct Slot<F, Make> {
@@ -85,12 +91,60 @@ struct Timer {
     cancel: Rc<Cell<bool>>,
 }
 
+struct Timers {
+    pending: BTreeMap<u64, Timer>,
+    epoch: Instant,
+}
+
+impl Timers {
+    fn new(epoch: Instant) -> Self {
+        Self {
+            pending: BTreeMap::new(),
+            epoch,
+        }
+    }
+
+    fn start(&mut self, op: core::WakeOp) {
+        let token = op.token().sequence();
+        let cancel = Rc::new(Cell::new(false));
+        self.pending.insert(
+            token,
+            Timer {
+                future: alarm(op, self.epoch, cancel.clone()).boxed_local(),
+                cancel,
+            },
+        );
+    }
+
+    fn cancel(&self, token: &core::Token) {
+        if let Some(timer) = self.pending.get(&token.sequence()) {
+            timer.cancel.set(true);
+        }
+    }
+
+    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<core::WakeCompletion> {
+        let ready =
+            self.pending
+                .iter_mut()
+                .find_map(|(id, timer)| match timer.future.as_mut().poll(cx) {
+                    Poll::Ready(done) => Some((*id, done)),
+                    Poll::Pending => None,
+                });
+        match ready {
+            Some((id, done)) => {
+                self.pending.remove(&id);
+                Poll::Ready(done)
+            }
+            None => Poll::Pending,
+        }
+    }
+}
+
 struct NativeIo<R, RM, W, WM> {
     fd: Option<Rc<OwnedFd>>,
     read: Slot<R, RM>,
     write: Slot<W, WM>,
-    timers: BTreeMap<u64, Timer>,
-    epoch: Instant,
+    timers: Timers,
 }
 
 pub(crate) fn native(fd: OwnedFd, epoch: Instant) -> impl Io {
@@ -98,8 +152,7 @@ pub(crate) fn native(fd: OwnedFd, epoch: Instant) -> impl Io {
         fd: Some(Rc::new(fd)),
         read: Slot::new(read_once),
         write: Slot::new(write_once),
-        timers: BTreeMap::new(),
-        epoch,
+        timers: Timers::new(epoch),
     }
 }
 
@@ -133,23 +186,15 @@ where
         );
     }
     fn wake(&mut self, op: core::WakeOp) {
-        let token = op.token().sequence();
-        let cancel = Rc::new(Cell::new(false));
-        self.timers.insert(
-            token,
-            Timer {
-                future: alarm(op, self.epoch, cancel.clone()).boxed_local(),
-                cancel,
-            },
-        );
+        self.timers.start(op);
     }
     fn cancel(&mut self, token: &core::Token) {
         if self.read.token.as_ref() == Some(token) {
             self.read.cancel.set(true);
         } else if self.write.token.as_ref() == Some(token) {
             self.write.cancel.set(true);
-        } else if let Some(timer) = self.timers.get(&token.sequence()) {
-            timer.cancel.set(true);
+        } else {
+            self.timers.cancel(token);
         }
     }
     fn poll_read(&mut self, cx: &mut Context<'_>) -> Poll<core::ReadCompletion> {
@@ -159,20 +204,7 @@ where
         self.write.poll(cx)
     }
     fn poll_wake(&mut self, cx: &mut Context<'_>) -> Poll<core::WakeCompletion> {
-        let ready =
-            self.timers
-                .iter_mut()
-                .find_map(|(id, timer)| match timer.future.as_mut().poll(cx) {
-                    Poll::Ready(done) => Some((*id, done)),
-                    Poll::Pending => None,
-                });
-        match ready {
-            Some((id, done)) => {
-                self.timers.remove(&id);
-                Poll::Ready(done)
-            }
-            None => Poll::Pending,
-        }
+        self.timers.poll(cx)
     }
 }
 

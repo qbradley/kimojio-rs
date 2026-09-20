@@ -199,7 +199,7 @@ That review did not independently inject kernel cancellation races or close fail
 | --- | --- |
 | Shared ownership, native I/O, concurrent client | Implemented with focused runtime tests |
 | Concurrent native server | Implemented with focused runtime tests |
-| Generic established transports | In progress |
+| Generic established transports | Implemented with focused runtime tests |
 | Independent wrapper socket fixture and peers | Client/server fixture implemented, full suite and explicit startup profile in progress |
 | Wrapper performance and final review | Pending |
 
@@ -225,7 +225,28 @@ It covered server orchestration, shared-client changes, informational admission 
 The reviewer did not independently execute tests or fault-injection schedules.
 This review excludes subsequent generic-transport changes.
 The native fixture now uses these observation APIs. Full independent peer qualification remains in progress.
-Generic transports, broader fault injection, and wrapper performance remain incomplete.
+Broader fault injection and wrapper performance remain incomplete.
+
+### Generic transport checkpoint
+
+Generic checkpoint `d8ca94b6c6ba8439085609b289ff1ddbd6698357` adds established `SplittableStream` transports for both roles.
+The public APIs are `connect`, `Connection::run`, `serve_connection`, and `serve_connection_with_shutdown`.
+Native operations retain their own reusable slots and exact write receipts.
+
+A failed generic write reports a lower bound because the transport trait cannot expose its accepted prefix.
+The adapter does not replay the buffer.
+The driver preserves unexpected transport errors and combined transport/close errors.
+It drops the settled read half before full transport close.
+Held body leases remain independent of transport closure.
+
+The parent integration passed 67 all-feature tests, five doctests, and 13 native fixture tests.
+The implementation owner also passed default and release suites and both Clippy configurations.
+Independent review of this delta and generic socket fixture implementation remain in progress.
+
+Fragmented forwarding can exhaust a retained-page bound without exceeding the wire window.
+The fragmented duplex test uses a 2 MiB per-stream receive-capacity bound and unchanged receive windows.
+An arbitrary non-native future that ignores cancellation can delay closure until its original operation settles.
+Neither limit establishes a performance result or complete adversarial qualification.
 
 ### Native client/server fixture checkpoint
 

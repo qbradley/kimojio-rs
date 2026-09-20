@@ -1,11 +1,11 @@
-# Native HTTP/2 clients and servers
+# HTTP/2 clients and servers
 
-`kimojio-http2` provides concurrent async requests over an established Kimojio descriptor.
+`kimojio-http2` provides concurrent async requests over established native descriptors and `SplittableStream` transports.
 The direct `kimojio-fsm-http2` engine owns HTTP/2 framing, HPACK, flow control, and protocol policy.
 This crate does not instantiate an HTTP/1 parser.
 
-This checkpoint contains a native client, concurrent native server, and shared body, metadata, and native I/O components.
-It does not contain a generic transport, DNS resolver, connection pool, TLS adapter, or ALPN policy.
+Both transports use the same client, concurrent server, body, metadata, and connection driver.
+This crate does not supply a DNS resolver, connection pool, TLS adapter, or ALPN policy.
 The caller establishes the connection and selects HTTP/2.
 
 ## Use
@@ -40,6 +40,65 @@ async fn exchange(fd: kimojio::OwnedFd) -> Result<Vec<u8>, Error> {
 The driver owns one connection.
 The runtime uses thread-local ownership, so these handles are not `Send`.
 Dropping the last client handle requests graceful shutdown.
+
+## Established stream transports
+
+`connect(stream, configuration)` accepts any established `kimojio::SplittableStream`.
+It returns the same `Client` and a caller-polled `Connection<S>`.
+Neither constructor performs I/O.
+`Connection::run` splits the stream and drives the connection.
+`serve_connection` and `serve_connection_with_shutdown` provide the corresponding concurrent server APIs.
+
+```rust,no_run
+use kimojio::SplittableStream;
+use kimojio_http2::{
+    Client, Config, Connection, Error, OutgoingBody, Shutdown, connect,
+    serve_connection_with_shutdown, http::Response,
+};
+
+fn client<S: SplittableStream>(stream: S) -> (Client, Connection<S>) {
+    connect(stream, Config::default())
+}
+
+async fn server<S: SplittableStream>(stream: S, shutdown: Shutdown) -> Result<(), Error> {
+    serve_connection_with_shutdown(stream, Config::default(), shutdown, |request| async move {
+        Ok(Response::new(OutgoingBody::from_incoming(request.into_body())))
+    }).await
+}
+```
+
+The caller establishes the transport and completes any TLS handshake or protocol negotiation before these calls.
+The wrapper performs none of those operations.
+An `https` URI does not enable TLS.
+Generic and native connections have identical body, informational, observer, admission, and shutdown contracts.
+Handlers and producers retain separate native tasks and cancellation scopes.
+
+Generic reads use `AsyncStreamRead::try_read`.
+Transport implementations own buffering, readiness, and retry policy.
+Generic writes use `AsyncStreamWrite::writev`, which promises the entire offered range only on success.
+A started write that fails reports `Progress::AtLeast(0)` for that operation, because the trait does not expose partial acceptance.
+
+The core adds any previously confirmed progress for the same buffer to the final receipt.
+Thus, a failed DATA receipt has a lower-bound `accepted` count and `exact == false`.
+The wrapper does not replay that buffer.
+
+Cancellation before the first transport call can report exact zero.
+A late successful write still reports the entire offered range, even after a cancellation request.
+The native adapter still reports the exact count from one native `writev` completion.
+Neither adapter reports success when it queues an operation.
+
+Generic cancellation requests cancellation of native I/O within that operation's scope.
+The original future, operation, and buffers remain alive until the original settles.
+The driver also cancels write-all continuations that start after a positive late completion.
+It cannot forcibly complete an arbitrary non-native future that ignores cancellation.
+Such a transport must eventually settle its original operation before the connection can close.
+
+The driver retains the first unexpected generic read or write error as `Error::Transport`.
+It also exposes that `Errno` through `std::error::Error::source`.
+If transport I/O and close both fail, `Error::TransportAndClose` retains both errors.
+Expected cancellation during shutdown does not replace the core connection result.
+A split failure returns its original transport error.
+The consumed stream implementation owns cleanup after a failed split.
 
 ## Server use
 
@@ -314,8 +373,14 @@ Core leases bound the number and retained pages of queued incoming data.
 Source permits bound queued producer output.
 The driver explicitly closes and drains body queues during abandonment and failed receive teardown.
 
+Receive-capacity bounds count retained pages, not only visible bytes.
+Small transport reads and fragmented forwarding can retain several pages for a small amount of body data.
+Insufficient per-stream capacity causes the core's resource-limit reset, even when the peer stays within its flow-control window.
+The fragmented duplex test uses a 2 MiB per-stream receive-capacity bound and unchanged receive windows.
+Applications can choose that bound through `Config::protocol.max_stream_receive_capacity`.
+
 These bounds exclude allocator overhead, caller-owned requests before submission, and storage inside opaque user streams, handler futures, callback captures, and application errors.
-They also exclude application copies from `collect` and native runtime bookkeeping.
+They also exclude application copies from `collect`, transport-owned buffers, and native runtime bookkeeping.
 The wrapper cannot inspect memory that a user future owns.
 Completed responses and application-retained metadata are outside the active-stream bound.
 
@@ -333,6 +398,8 @@ The policies never move from abort back to graceful.
 Protocol, reset, GOAWAY, producer, and transport errors do not become success-shaped responses.
 
 The driver calls native `close` after original descriptor references settle.
+For generic streams, it drops the settled read half before it awaits `AsyncStreamWrite::close`.
+It does not replace full close with write-side `shutdown`.
 A close failure returns an error.
 Read-only body chunks can remain valid after descriptor closure.
 The driver continues to process their releases and stream retirements.
@@ -368,6 +435,13 @@ One native `writev` result supplies one exact progress receipt.
 Original futures survive cancellation requests and late successful completions.
 The shared run loop occupies one pinned box per connection to limit nested future stack size.
 
+`io/stream.rs` implements the same private interface for generic stream halves.
+Each half has one connection-lifetime box, which avoids repeated moves of large inline transport buffers.
+Each reusable slot owns its half and core operation until completion.
+Generic transport calls use static dispatch, without per-operation boxed futures.
+Native operations do not pass through the generic adapter.
+Both adapters share timers and monotonic clock handling.
+
 `driver.rs` owns both core roles, stream records, admission retries, scoped tasks, cancellation, and channel scheduling.
 Application commands execute after the core callback returns.
 Only `CommandError::Blocked` queues a response or trailer retry after `admission_changed`.
@@ -375,7 +449,7 @@ Accepted metadata never returns to that retry queue.
 `informational.rs` owns optional server controls, bounded pending commands, and their cancellation generations.
 Producer notifications identify their stream without a scan of every stream after transport completion.
 Runnable channel probes do not register an empty-channel wait.
-Client and server use the same body ownership, native I/O, event scheduling, producer scopes, and retirement code.
+Client and server use the same body ownership, transport adapters, event scheduling, producer scopes, and retirement code.
 
 ## Qualification boundary
 
@@ -385,10 +459,15 @@ It covers repeated and concurrent requests, traffic beyond actual windows, trail
 It also covers cancellation, admission pressure, bounded queues, scoped producer I/O, GOAWAY, held chunks, actual closure, and virtual time.
 Server tests cover unread requests, handler failures, scoped handler I/O, bodyless statuses, response admission, and shutdown deadlines.
 Informational tests observe actual 100 and 103 heads, metadata rejection, cancellation, final-response ordering, and admission pressure.
+Generic tests use real sockets through `OwnedFdStream` and controllable transport implementations.
+They cover mixed native/generic roles, concurrent duplex forwarding, CONNECT, trailers, observers, paused consumers, and early responses.
+They also cover scoped cancellation, partial-write failures without replay, source errors, failed close, and held chunks after close in both roles.
+Cancellation tests retain late read/write successes and cancel write-all continuations without stopping unrelated native I/O.
+The virtual-clock test expires a generic server's graceful deadline and observes actual close after handler settlement.
 
 The late-success unit test checks original-future settlement without a kernel race prerequisite.
 The suite does not inject every native cancellation race or a failed native close.
-Independent peers, generic transports, broader adversarial qualification, and performance measurements remain separate phases.
+Independent peers, broader adversarial qualification, and performance measurements remain separate phases.
 This checkpoint makes no performance claim.
 
 A send permit reserves storage and is not a handshake barrier.

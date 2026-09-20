@@ -11,8 +11,8 @@ use std::{
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use http::{Request, Response};
 use kimojio::{
-    CancellationToken, Receiver, ReceiverUnbounded, Sender, SenderOneshot, SenderUnbounded,
-    async_channel, async_channel_unbounded, oneshot, operations,
+    AsyncStreamWrite, CancellationToken, Receiver, ReceiverUnbounded, Sender, SenderOneshot,
+    SenderUnbounded, SplittableStream, async_channel, async_channel_unbounded, oneshot, operations,
 };
 use kimojio_fsm_http2 as core;
 
@@ -319,17 +319,26 @@ impl Client {
 }
 
 /// The caller must keep `run` polled through stream retirement.
-pub struct NativeConnection {
-    fd: kimojio::OwnedFd,
-    config: Config,
-    requests: Requests,
-    events: Events,
-    event_send: SenderUnbounded<Event>,
-    shutdown: Shutdown,
+pub struct Connection<S> {
+    stream: Box<S>,
+    state: State,
 }
+
+/// Caller-owned connection driver with exact native one-shot write receipts.
+pub struct NativeConnection(Connection<kimojio::OwnedFd>);
 
 /// Uses an established descriptor. The peer must speak HTTP/2 prior knowledge.
 pub fn connect_native(fd: kimojio::OwnedFd, config: Config) -> (Client, NativeConnection) {
+    let (client, connection) = connection(fd, config);
+    (client, NativeConnection(connection))
+}
+
+/// Uses an established HTTP/2 stream. No I/O occurs until `run` is polled.
+pub fn connect<S: SplittableStream>(stream: S, config: Config) -> (Client, Connection<S>) {
+    connection(stream, config)
+}
+
+fn connection<S>(stream: S, config: Config) -> (Client, Connection<S>) {
     let (requests, receive) = async_channel_unbounded();
     let (event_send, events) = async_channel_unbounded();
     let shutdown = Shutdown::default();
@@ -342,19 +351,21 @@ pub fn connect_native(fd: kimojio::OwnedFd, config: Config) -> (Client, NativeCo
     };
     (
         client,
-        NativeConnection {
-            fd,
-            config,
-            requests: Requests {
-                receive,
-                shutdown: shutdown.clone(),
-            },
-            events: Events {
-                receive: events,
-                send: event_send.clone(),
-            },
-            event_send,
-            shutdown,
+        Connection {
+            stream: Box::new(stream),
+            state: State::new(
+                config,
+                Some(Requests {
+                    receive,
+                    shutdown: shutdown.clone(),
+                }),
+                Events {
+                    receive: events,
+                    send: event_send.clone(),
+                },
+                event_send,
+                shutdown,
+            ),
         },
     )
 }
@@ -364,20 +375,56 @@ impl NativeConnection {
     ///
     /// Held body chunks remain readable after close but delay this return.
     pub async fn run(self) -> Result<(), Error> {
-        let Self {
-            fd,
-            config,
-            requests,
-            events,
-            event_send,
-            shutdown,
-        } = self;
-        Box::pin(run_native(
-            fd,
-            State::new(config, Some(requests), events, event_send, shutdown),
-            None,
-        ))
-        .await
+        Box::pin(run_native(*self.0.stream, self.0.state, None)).await
+    }
+}
+
+impl<S: SplittableStream> Connection<S> {
+    /// Returns after transport close, task settlement, and stream retirement.
+    ///
+    /// A failed write-all operation has unknown additional progress. Held body
+    /// chunks remain readable after close and delay this return.
+    pub async fn run(self) -> Result<(), Error> {
+        Box::pin(run_stream(self.stream, self.state, None)).await
+    }
+}
+
+/// Serves concurrent requests over an established HTTP/2 stream.
+pub fn serve_connection<S, H, F>(
+    stream: S,
+    config: Config,
+    handler: H,
+) -> impl Future<Output = Result<(), Error>>
+where
+    S: SplittableStream,
+    H: FnMut(Request<IncomingBody>) -> F,
+    F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
+{
+    serve_connection_with_shutdown(stream, config, Shutdown::default(), handler)
+}
+
+/// Serves concurrent requests with externally controlled graceful or hard stop.
+pub fn serve_connection_with_shutdown<S, H, F>(
+    stream: S,
+    config: Config,
+    shutdown: Shutdown,
+    mut handler: H,
+) -> impl Future<Output = Result<(), Error>>
+where
+    S: SplittableStream,
+    H: FnMut(Request<IncomingBody>) -> F,
+    F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
+{
+    let stream = Box::new(stream);
+    async move {
+        let (event_send, receive) = async_channel_unbounded();
+        let events = Events {
+            receive,
+            send: event_send.clone(),
+        };
+        let state = State::new(config, None, events, event_send, shutdown);
+        let mut handler = |request| handler(request).boxed_local();
+        Box::pin(run_stream(stream, state, Some(&mut handler))).await
     }
 }
 
@@ -450,82 +497,133 @@ impl DerefMut for Machine {
 
 async fn run_native(
     fd: kimojio::OwnedFd,
-    mut state: State,
-    mut handler: Option<&mut Handler<'_>>,
+    state: State,
+    handler: Option<&mut Handler<'_>>,
 ) -> Result<(), Error> {
     operations::io_scope(async move || {
-        if state.config.turn_budget == 0
-            || state.config.max_streams == 0
-            || state.config.max_queued_requests == 0
-            || state.config.max_queued_storage == 0
-            || state.config.max_response_storage == 0
-        {
-            operations::close(fd).await.map_err(Error::Transport)?;
-            return Err(Error::Limit);
-        }
-        let protocol = state.config.protocol.clone();
-        let machine = if state.server {
-            core::Server::new(protocol, Duration::ZERO).map(Machine::Server)
-        } else {
-            core::Client::new(protocol, Duration::ZERO).map(Machine::Client)
-        };
-        let mut machine = match machine {
+        let machine = match new_machine(&state) {
             Ok(machine) => machine,
             Err(error) => {
                 operations::close(fd).await.map_err(Error::Transport)?;
-                return Err(error.into());
+                return Err(error);
             }
         };
         let epoch = kimojio::clock_now();
-        let mut io = io::native(fd, epoch);
-        let mut turns = 0;
-        loop {
-            machine.advance_time(kimojio::clock_now().saturating_duration_since(epoch))?;
-            state.control(&mut machine);
-            state.admit(&mut machine);
-            let output = machine.next(&mut Ports {
-                state: &mut state,
-                io: &mut io,
-            });
-            let mut runnable = output.is_some();
-            if let Some(output) = output {
-                match output {
-                    Command::Request(id) => state.start_handler(
-                        id,
-                        handler.as_deref_mut().expect("server handler"),
-                        &mut machine,
-                    ),
-                    output => state.command(output, &mut machine),
-                }
-            } else {
-                // ReceiveEnd can follow the delivery that caused a body drop.
-                runnable = state.abandon(&mut machine);
-            }
-            if state.closed.is_some()
-                && state.streams.is_empty()
-                && state.producers.is_empty()
-                && state.handlers.is_empty()
-            {
-                state.reject_queued();
-                return state.close_error.take().map_or_else(
-                    || match state.closed.expect("closed") {
-                        core::ConnectionResult::Graceful => Ok(()),
-                        result => Err(Error::Connection(result)),
-                    },
-                    Err,
-                );
-            }
-            if let Some(input) = next_input(&mut state, &mut io, runnable).await {
-                state.input(input, &mut machine).await?;
-            }
-            turns += 1;
-            if turns >= state.config.turn_budget {
-                turns = 0;
-                operations::yield_cpu().await;
-            }
-        }
+        run_io(io::native(fd, epoch), machine, state, handler, epoch).await
     })
     .await
+}
+
+async fn run_stream<S: SplittableStream>(
+    stream: Box<S>,
+    state: State,
+    handler: Option<&mut Handler<'_>>,
+) -> Result<(), Error> {
+    operations::io_scope(async move || {
+        let (reader, mut writer) = (*stream).split().await.map_err(Error::Transport)?;
+        let machine = match new_machine(&state) {
+            Ok(machine) => machine,
+            Err(error) => {
+                drop(reader);
+                writer.close().await.map_err(Error::Transport)?;
+                return Err(error);
+            }
+        };
+        let epoch = kimojio::clock_now();
+        run_io(
+            io::stream(reader, writer, epoch),
+            machine,
+            state,
+            handler,
+            epoch,
+        )
+        .await
+    })
+    .await
+}
+
+fn new_machine(state: &State) -> Result<Machine, Error> {
+    if state.config.turn_budget == 0
+        || state.config.max_streams == 0
+        || state.config.max_queued_requests == 0
+        || state.config.max_queued_storage == 0
+        || state.config.max_response_storage == 0
+    {
+        return Err(Error::Limit);
+    }
+    let protocol = state.config.protocol.clone();
+    if state.server {
+        core::Server::new(protocol, Duration::ZERO).map(Machine::Server)
+    } else {
+        core::Client::new(protocol, Duration::ZERO).map(Machine::Client)
+    }
+    .map_err(Error::from)
+}
+
+async fn run_io(
+    mut io: impl Io,
+    mut machine: Machine,
+    mut state: State,
+    mut handler: Option<&mut Handler<'_>>,
+    epoch: std::time::Instant,
+) -> Result<(), Error> {
+    let mut transport_error = None;
+    let mut turns = 0;
+    loop {
+        transport_error = transport_error.or(io.take_error());
+        machine.advance_time(kimojio::clock_now().saturating_duration_since(epoch))?;
+        state.control(&mut machine);
+        state.admit(&mut machine);
+        let output = machine.next(&mut Ports {
+            state: &mut state,
+            io: &mut io,
+        });
+        let mut runnable = output.is_some();
+        if let Some(output) = output {
+            match output {
+                Command::Request(id) => state.start_handler(
+                    id,
+                    handler.as_deref_mut().expect("server handler"),
+                    &mut machine,
+                ),
+                output => state.command(output, &mut machine),
+            }
+        } else {
+            // ReceiveEnd can follow the delivery that caused a body drop.
+            runnable = state.abandon(&mut machine);
+        }
+        if state.closed.is_some()
+            && state.streams.is_empty()
+            && state.producers.is_empty()
+            && state.handlers.is_empty()
+        {
+            state.reject_queued();
+            if let Some(error) = transport_error {
+                return Err(match state.close_error.take() {
+                    Some(Error::Transport(close)) => Error::TransportAndClose {
+                        transport: error,
+                        close,
+                    },
+                    _ => Error::Transport(error),
+                });
+            }
+            return state.close_error.take().map_or_else(
+                || match state.closed.expect("closed") {
+                    core::ConnectionResult::Graceful => Ok(()),
+                    result => Err(Error::Connection(result)),
+                },
+                Err,
+            );
+        }
+        if let Some(input) = next_input(&mut state, &mut io, runnable).await {
+            state.input(input, &mut machine).await?;
+        }
+        turns += 1;
+        if turns >= state.config.turn_budget {
+            turns = 0;
+            operations::yield_cpu().await;
+        }
+    }
 }
 
 pub(crate) enum Event {
