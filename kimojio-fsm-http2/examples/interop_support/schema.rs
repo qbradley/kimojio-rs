@@ -68,9 +68,6 @@ pub enum Action {
     GracefulClose {
         after_streams: usize,
     },
-    CancelUploadAfterResponse {
-        stream_id: u32,
-    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,13 +148,6 @@ impl Input {
                         return Err("invalid graceful_close threshold".into());
                     }
                 }
-                Action::CancelUploadAfterResponse { stream_id } => {
-                    if !valid_stream(stream_id) || controlled.insert(stream_id, ()).is_some() {
-                        return Err(
-                            "invalid or duplicate cancel_upload_after_response action".into()
-                        );
-                    }
-                }
             }
         }
         Ok(())
@@ -225,6 +215,7 @@ pub struct StreamReport {
     pub trailers: Fields,
     pub informational: Vec<u16>,
     /// Records receive END_STREAM separately from upload and stream retirement.
+    /// Neither status nor END_STREAM requests upload cancellation.
     pub ended: bool,
     /// Null until retirement. A failed outcome invalidates a normal-success case.
     pub outcome: Option<StreamTerminalOutcome>,
@@ -295,24 +286,12 @@ mod tests {
         i.requests[0].body_bytes = 16 * 1024 * 1024 + 17;
         assert!(i.validate().is_ok());
         assert!(serde_json::from_str::<Action>(r#"{"action":"unknown"}"#).is_err());
-    }
-
-    #[test]
-    fn upload_cancellation_requires_an_explicit_valid_stream_action() {
-        let mut input = input();
-        input.actions.push(
-            serde_json::from_str(r#"{"action":"cancel_upload_after_response","stream_id":1}"#)
-                .unwrap(),
+        assert!(
+            serde_json::from_str::<Action>(
+                r#"{"action":"cancel_upload_after_response","stream_id":1}"#
+            )
+            .is_err()
         );
-        assert!(input.validate().is_ok());
-        input
-            .actions
-            .push(Action::CancelUploadAfterResponse { stream_id: 1 });
-        assert!(input.validate().is_err());
-        input.actions = vec![Action::CancelUploadAfterResponse { stream_id: 2 }];
-        assert!(input.validate().is_err());
-        input.actions = vec![Action::CancelUploadAfterResponse { stream_id: 3 }];
-        assert!(input.validate().is_err());
     }
 
     #[test]
