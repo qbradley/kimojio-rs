@@ -106,20 +106,47 @@ pub trait Ports<E> {
     fn settled(&mut self, exchange: E) -> Option<Self::Output>;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Kind {
+#[derive(Clone, Copy)]
+enum Lifecycle<E> {
+    Idle,
+    Producing { exchange: E, head: bool },
+    Draining { exchange: E, finished: bool },
+}
+
+enum FileState {
+    Absent,
+    Planned(Vec<u8>),
+    Opening { id: Id },
+    Opened(File),
+    Ready(File),
+    Stating { id: Id, file: File },
+    Reading { id: Id, file: File, limit: usize },
+    Closing { id: Id },
+}
+
+enum Payload {
+    Local(Buffer),
+    Ready {
+        buffer: Buffer,
+        count: usize,
+        end: bool,
+    },
+    Reading,
+    Http {
+        count: usize,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum Transition {
+    Fail,
+    Respond,
     Open,
     Stat,
     Read,
+    Body,
     Close,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Phase {
-    Idle,
-    Open,
-    Stat,
-    Serve,
+    Settle,
 }
 
 /// One application exchange and one file operation can be live at a time.
@@ -127,23 +154,14 @@ enum Phase {
 pub struct App<E> {
     owner: u64,
     generation: u64,
-    exchange: Option<E>,
-    phase: Phase,
-    pending: Option<(Id, Kind)>,
-    file: Option<File>,
-    path: Vec<u8>,
-    buffer: Option<Buffer>,
-    head: bool,
+    lifecycle: Lifecycle<E>,
+    file: FileState,
+    payload: Payload,
     response: Option<Response<E>>,
-    body: Option<(usize, bool)>,
-    body_outstanding: Option<usize>,
     demand: Option<usize>,
     offset: u64,
     remaining: u64,
-    stopping: bool,
-    exchange_done: bool,
     failed: bool,
-    read_limit: usize,
 }
 
 impl<E: Copy + Eq> App<E> {
@@ -151,28 +169,56 @@ impl<E: Copy + Eq> App<E> {
         Self {
             owner,
             generation: 0,
-            exchange: None,
-            phase: Phase::Idle,
-            pending: None,
-            file: None,
-            path: Vec::with_capacity(MAX_PATH),
-            buffer: Some(vec![0; CHUNK_SIZE].into_boxed_slice()),
-            head: false,
+            lifecycle: Lifecycle::Idle,
+            file: FileState::Absent,
+            payload: Payload::Local(vec![0; CHUNK_SIZE].into_boxed_slice()),
             response: None,
-            body: None,
-            body_outstanding: None,
             demand: None,
             offset: 0,
             remaining: 0,
-            stopping: false,
-            exchange_done: false,
             failed: false,
-            read_limit: 0,
         }
     }
 
     pub fn is_idle(&self) -> bool {
-        self.exchange.is_none()
+        matches!(self.lifecycle, Lifecycle::Idle)
+    }
+
+    fn exchange(&self) -> Option<E> {
+        match self.lifecycle {
+            Lifecycle::Idle => None,
+            Lifecycle::Producing { exchange, .. } | Lifecycle::Draining { exchange, .. } => {
+                Some(exchange)
+            }
+        }
+    }
+
+    fn producing(&self) -> bool {
+        matches!(self.lifecycle, Lifecycle::Producing { .. })
+    }
+
+    fn finished(&self) -> bool {
+        matches!(
+            self.lifecycle,
+            Lifecycle::Idle | Lifecycle::Draining { finished: true, .. }
+        )
+    }
+
+    fn check(&self) {
+        debug_assert_eq!(
+            matches!(self.file, FileState::Reading { .. }),
+            matches!(self.payload, Payload::Reading)
+        );
+        if self.is_idle() {
+            debug_assert!(matches!(self.file, FileState::Absent));
+            debug_assert!(matches!(self.payload, Payload::Local(_)));
+            debug_assert!(self.response.is_none() && !self.failed && self.demand.is_none());
+        }
+        if !self.producing() {
+            debug_assert!(!matches!(self.file, FileState::Planned(_)));
+            debug_assert!(!matches!(self.payload, Payload::Ready { .. }));
+            debug_assert!(self.demand.is_none());
+        }
     }
 
     /// The caller must wait for `settled` before handing over another request.
@@ -180,19 +226,17 @@ impl<E: Copy + Eq> App<E> {
         if !self.is_idle() {
             return false;
         }
-        self.exchange = Some(exchange);
-        self.phase = Phase::Open;
-        self.head = method == b"HEAD";
-        self.stopping = false;
-        self.exchange_done = false;
+        self.check();
+        let head = method == b"HEAD";
+        self.lifecycle = Lifecycle::Producing { exchange, head };
         self.offset = 0;
         self.remaining = 0;
         self.demand = None;
-        if method != b"GET" && !self.head {
+        if method != b"GET" && !head {
             self.error_response(405);
         } else {
             match relative_path(target) {
-                Ok(path) => self.path = path,
+                Ok(path) => self.file = FileState::Planned(path),
                 Err(status) => self.error_response(status),
             }
         }
@@ -200,7 +244,7 @@ impl<E: Copy + Eq> App<E> {
     }
 
     pub fn demand(&mut self, exchange: E, capacity: usize) -> bool {
-        if self.exchange != Some(exchange) || self.stopping {
+        if self.exchange() != Some(exchange) || !self.producing() {
             return false;
         }
         if capacity == 0 {
@@ -219,27 +263,26 @@ impl<E: Copy + Eq> App<E> {
         buffer: Buffer,
         accepted: usize,
     ) -> Result<(), Buffer> {
-        if self.exchange != Some(exchange)
-            || self.body_outstanding.is_none()
-            || self.buffer.is_some()
-            || accepted > self.body_outstanding.unwrap()
-        {
+        let Payload::Http { count: expected } = self.payload else {
+            return Err(buffer);
+        };
+        if self.exchange() != Some(exchange) || accepted > expected {
             return Err(buffer);
         }
-        let expected = self.body_outstanding.take().unwrap();
-        self.buffer = Some(buffer);
+        self.payload = Payload::Local(buffer);
         self.remaining -= accepted as u64;
         if accepted != expected {
             self.stop(true);
         } else if self.remaining == 0 {
             self.stop(false);
         }
+        self.check();
         Ok(())
     }
 
     /// Stops producing without treating outstanding HTTP writes as complete.
     pub fn source_finished(&mut self, exchange: E) -> bool {
-        if self.exchange != Some(exchange) {
+        if self.exchange() != Some(exchange) {
             return false;
         }
         self.stop(false);
@@ -247,102 +290,156 @@ impl<E: Copy + Eq> App<E> {
     }
 
     pub fn exchange_finished(&mut self, exchange: E) -> bool {
-        if self.exchange != Some(exchange) {
+        if self.exchange() != Some(exchange) {
             return false;
         }
-        self.exchange_done = true;
-        self.stop(false);
+        self.abort();
         true
     }
 
     pub fn abort(&mut self) {
-        self.exchange_done = true;
         self.stop(false);
+        if let Lifecycle::Draining { finished, .. } = &mut self.lifecycle {
+            *finished = true;
+        }
+        self.response = None;
+        self.check();
+    }
+
+    pub(crate) fn terminate(&mut self) {
+        self.stop(false);
+        self.response = None;
+        self.check();
     }
 
     fn stop(&mut self, failed: bool) {
-        self.stopping = true;
+        if let Lifecycle::Producing { exchange, .. } = self.lifecycle {
+            self.lifecycle = Lifecycle::Draining {
+                exchange,
+                finished: false,
+            };
+        }
         self.demand = None;
-        self.body = None;
-        self.failed |= failed && !self.exchange_done;
+        if matches!(self.file, FileState::Planned(_)) {
+            self.file = FileState::Absent;
+        }
+        if matches!(self.payload, Payload::Ready { .. }) {
+            let Payload::Ready { buffer, .. } =
+                std::mem::replace(&mut self.payload, Payload::Reading)
+            else {
+                unreachable!()
+            };
+            self.payload = Payload::Local(buffer);
+        }
+        self.failed |= failed && !self.finished();
     }
 
     fn error_response(&mut self, status: u16) {
+        let Lifecycle::Producing { exchange, head } = self.lifecycle else {
+            unreachable!("only production creates a response")
+        };
         self.response = Some(Response {
-            exchange: self.exchange.unwrap(),
+            exchange,
             status,
             length: 0,
-            head: self.head,
+            head,
         });
         self.stop(false);
     }
 
-    fn issue(&mut self, kind: Kind) -> Id {
+    fn issue(&mut self) -> Id {
         self.generation = self
             .generation
             .checked_add(1)
             .expect("operation id exhausted");
-        let id = Id {
+        Id {
             owner: self.owner,
             generation: self.generation,
-        };
-        self.pending = Some((id, kind));
-        id
+        }
     }
 
     /// A wrong-owner, stale, wrong-kind or invalid-count completion is returned
     /// intact; in particular successful open descriptors and buffers are not lost.
     pub fn complete(&mut self, completion: Completion) -> Result<(), Completion> {
-        let (id, kind) = match &completion {
-            Completion::Open { id, .. } => (*id, Kind::Open),
-            Completion::Stat { id, .. } => (*id, Kind::Stat),
-            Completion::Read { id, buffer, result } => {
-                if let Ok(count) = result
-                    && (*count > self.read_limit || *count > buffer.len())
-                {
-                    return Err(completion);
-                }
-                (*id, Kind::Read)
+        self.check();
+        let valid = match (&self.file, &completion) {
+            (FileState::Opening { id }, Completion::Open { id: received, .. })
+            | (FileState::Stating { id, .. }, Completion::Stat { id: received, .. })
+            | (FileState::Closing { id }, Completion::Close { id: received, .. }) => id == received,
+            (
+                FileState::Reading { id, limit, .. },
+                Completion::Read {
+                    id: received,
+                    buffer,
+                    result,
+                },
+            ) => {
+                id == received
+                    && result
+                        .as_ref()
+                        .map_or(true, |count| *count <= *limit && *count <= buffer.len())
             }
-            Completion::Close { id, .. } => (*id, Kind::Close),
+            _ => false,
         };
-        if self.pending != Some((id, kind)) {
+        if !valid {
             return Err(completion);
         }
-        self.pending = None;
+        let original = std::mem::replace(&mut self.file, FileState::Absent);
         match completion {
             Completion::Open { result, .. } => match result {
                 Ok(file) => {
-                    self.file = Some(file);
-                    self.phase = Phase::Stat;
+                    self.file = FileState::Opened(file);
                 }
-                Err(error) if !self.stopping => self.error_response(status(error)),
+                Err(error) if self.producing() => self.error_response(status(error)),
                 Err(_) => {}
             },
-            Completion::Stat { result, .. } if !self.stopping => match result {
-                Ok(metadata) if metadata.regular => {
-                    self.remaining = metadata.length;
-                    self.response = Some(Response {
-                        exchange: self.exchange.unwrap(),
-                        status: 200,
-                        length: metadata.length,
-                        head: self.head,
-                    });
-                    self.phase = Phase::Serve;
-                    if self.head || metadata.length == 0 {
-                        self.stop(false);
+            Completion::Stat { result, .. } => {
+                let FileState::Stating { file, .. } = original else {
+                    unreachable!()
+                };
+                self.file = FileState::Ready(file);
+                if self.producing() {
+                    let Lifecycle::Producing { exchange, head } = self.lifecycle else {
+                        unreachable!()
+                    };
+                    match result {
+                        Ok(metadata) if metadata.regular => {
+                            self.remaining = metadata.length;
+                            self.response = Some(Response {
+                                exchange,
+                                status: 200,
+                                length: metadata.length,
+                                head,
+                            });
+                            if head || metadata.length == 0 {
+                                self.stop(false);
+                            }
+                        }
+                        Ok(_) => self.error_response(404),
+                        Err(error) => self.error_response(status(error)),
                     }
                 }
-                Ok(_) => self.error_response(404),
-                Err(error) => self.error_response(status(error)),
-            },
+            }
             Completion::Read { buffer, result, .. } => {
-                self.buffer = Some(buffer);
-                if !self.stopping {
+                let FileState::Reading { file, .. } = original else {
+                    unreachable!()
+                };
+                self.file = FileState::Ready(file);
+                self.payload = Payload::Local(buffer);
+                if self.producing() {
                     match result {
                         Ok(count) if count > 0 => {
                             self.offset += count as u64;
-                            self.body = Some((count, count as u64 == self.remaining));
+                            let Payload::Local(buffer) =
+                                std::mem::replace(&mut self.payload, Payload::Reading)
+                            else {
+                                unreachable!()
+                            };
+                            self.payload = Payload::Ready {
+                                buffer,
+                                count,
+                                end: count as u64 == self.remaining,
+                            };
                         }
                         _ => self.stop(true),
                     }
@@ -351,86 +448,136 @@ impl<E: Copy + Eq> App<E> {
             Completion::Close { result, .. } => {
                 // Ownership was consumed by close, even when close reports an
                 // error. Retrying a Linux close can close a reused descriptor.
-                self.file = None;
-                if result.is_err() && !self.exchange_done {
+                if result.is_err() && !self.finished() {
                     self.failed = true;
                 }
             }
-            _ => {}
         }
+        self.check();
         Ok(())
     }
 
-    pub fn next<P: Ports<E>>(&mut self, ports: &mut P) -> Option<P::Output> {
-        let exchange = self.exchange?;
-        loop {
-            let output = if self.failed {
+    fn select(&self) -> Option<Transition> {
+        match self.lifecycle {
+            Lifecycle::Idle => None,
+            Lifecycle::Producing { .. } => {
+                if self.failed {
+                    return Some(Transition::Fail);
+                }
+                if self.response.is_some() {
+                    return Some(Transition::Respond);
+                }
+                match self.file {
+                    FileState::Planned(_) => Some(Transition::Open),
+                    FileState::Opened(_) => Some(Transition::Stat),
+                    FileState::Ready(_) => match self.payload {
+                        Payload::Ready { .. } => Some(Transition::Body),
+                        Payload::Local(_) if self.demand.is_some() => Some(Transition::Read),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            Lifecycle::Draining { finished, .. } => {
+                if self.failed {
+                    return Some(Transition::Fail);
+                }
+                if self.response.is_some() {
+                    return Some(Transition::Respond);
+                }
+                match self.file {
+                    FileState::Opened(_) | FileState::Ready(_) => Some(Transition::Close),
+                    FileState::Absent if finished && matches!(self.payload, Payload::Local(_)) => {
+                        Some(Transition::Settle)
+                    }
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    fn commit<P: Ports<E>>(&mut self, transition: Transition, ports: &mut P) -> Option<P::Output> {
+        let exchange = self.exchange().expect("selected live exchange");
+        match transition {
+            Transition::Fail => {
                 self.failed = false;
                 ports.source_failed(exchange)
-            } else if let Some(response) = self.response.take() {
-                if self.exchange_done {
-                    continue;
-                }
-                ports.respond(response)
-            } else if self.pending.is_some() {
-                return None;
-            } else if self.stopping {
-                if let Some(file) = self.file {
-                    let id = self.issue(Kind::Close);
-                    ports.close(Close { id, file })
-                } else if self.exchange_done && self.body_outstanding.is_none() {
-                    self.exchange = None;
-                    self.phase = Phase::Idle;
-                    return ports.settled(exchange);
-                } else {
-                    return None;
-                }
-            } else {
-                match self.phase {
-                    Phase::Open => {
-                        let id = self.issue(Kind::Open);
-                        let path = std::mem::take(&mut self.path);
-                        ports.open(Open { id, path })
-                    }
-                    Phase::Stat => {
-                        let id = self.issue(Kind::Stat);
-                        ports.stat(Stat {
-                            id,
-                            file: self.file.unwrap(),
-                        })
-                    }
-                    Phase::Serve => {
-                        if let Some((count, end)) = self.body.take() {
-                            self.body_outstanding = Some(count);
-                            ports.body(Body {
-                                exchange,
-                                buffer: self.buffer.take().unwrap(),
-                                range: 0..count,
-                                end,
-                            })
-                        } else if self.body_outstanding.is_some() {
-                            return None;
-                        } else if let Some(capacity) = self.demand.take() {
-                            let buffer = self.buffer.take().unwrap();
-                            let limit = (self.remaining.min(capacity as u64)) as usize;
-                            self.read_limit = limit;
-                            let id = self.issue(Kind::Read);
-                            ports.read(Read {
-                                id,
-                                file: self.file.unwrap(),
-                                offset: self.offset,
-                                buffer,
-                                limit,
-                            })
-                        } else {
-                            return None;
-                        }
-                    }
-                    Phase::Idle => return None,
-                }
-            };
-            if output.is_some() {
-                return output;
+            }
+            Transition::Respond => ports.respond(self.response.take().unwrap()),
+            Transition::Open => {
+                let id = self.issue();
+                let FileState::Planned(path) =
+                    std::mem::replace(&mut self.file, FileState::Opening { id })
+                else {
+                    unreachable!()
+                };
+                ports.open(Open { id, path })
+            }
+            Transition::Stat => {
+                let FileState::Opened(file) = self.file else {
+                    unreachable!()
+                };
+                let id = self.issue();
+                self.file = FileState::Stating { id, file };
+                ports.stat(Stat { id, file })
+            }
+            Transition::Read => {
+                let FileState::Ready(file) = self.file else {
+                    unreachable!()
+                };
+                let capacity = self.demand.take().unwrap();
+                let limit = self.remaining.min(capacity as u64) as usize;
+                assert!(limit > 0);
+                let id = self.issue();
+                let Payload::Local(buffer) = std::mem::replace(&mut self.payload, Payload::Reading)
+                else {
+                    unreachable!()
+                };
+                self.file = FileState::Reading { id, file, limit };
+                ports.read(Read {
+                    id,
+                    file,
+                    offset: self.offset,
+                    buffer,
+                    limit,
+                })
+            }
+            Transition::Body => {
+                let Payload::Ready { buffer, count, end } =
+                    std::mem::replace(&mut self.payload, Payload::Reading)
+                else {
+                    unreachable!()
+                };
+                self.payload = Payload::Http { count };
+                ports.body(Body {
+                    exchange,
+                    buffer,
+                    range: 0..count,
+                    end,
+                })
+            }
+            Transition::Close => {
+                let (FileState::Opened(file) | FileState::Ready(file)) = self.file else {
+                    unreachable!()
+                };
+                let id = self.issue();
+                self.file = FileState::Closing { id };
+                ports.close(Close { id, file })
+            }
+            Transition::Settle => {
+                self.lifecycle = Lifecycle::Idle;
+                ports.settled(exchange)
+            }
+        }
+    }
+
+    pub fn next<P: Ports<E>>(&mut self, ports: &mut P) -> Option<P::Output> {
+        loop {
+            self.check();
+            let transition = self.select()?;
+            if let Some(output) = self.commit(transition, ports) {
+                self.check();
+                return Some(output);
             }
         }
     }

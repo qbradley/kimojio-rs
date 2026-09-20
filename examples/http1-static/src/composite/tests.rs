@@ -333,3 +333,29 @@ fn final_response_is_admitted_once_while_continue_write_is_outstanding() {
     );
     assert!(wire.ends_with(b"data"));
 }
+
+#[test]
+fn closed_lifecycle_ignores_a_delayed_source_failure_obligation() {
+    let (mut service, mut executor, read) = file_read_pending();
+    let Incoming::Complete(exchange) = service.incoming else {
+        panic!("setup exchange")
+    };
+    service.shutdown(http::ShutdownMode::Abort);
+    complete_file_read(&mut service, read);
+    settle(&mut service, &mut executor);
+    let mut connector = AppConnector {
+        http: &mut service.http,
+        http_ready: &mut service.http_ready,
+        lifecycle: &mut service.lifecycle,
+        response: &mut service.response,
+        returned_body: &mut service.returned_body,
+        ports: &mut executor,
+    };
+    // A notification consumes its obligation without reopening transport work.
+    // The exchange has already settled at this connector boundary.
+    assert!(app::Ports::source_failed(&mut connector, exchange).is_none());
+    assert_eq!(service.lifecycle, Lifecycle::Closed);
+    assert!(!service.http_ready);
+    assert!(service.next(&mut executor).is_none());
+    assert!(service.settled());
+}
