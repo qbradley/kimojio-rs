@@ -86,6 +86,12 @@ enum Protocol {
 }
 
 impl Protocol {
+    fn stream_count(&self) -> usize {
+        match self {
+            Self::Client(role) => role.endpoint.streams.len(),
+            Self::Server(role) => role.endpoint.streams.len(),
+        }
+    }
     fn connection_send_available(&self) -> usize {
         match self {
             Self::Client(role) => role.endpoint.connection_send_available(),
@@ -181,6 +187,13 @@ enum Source {
     Permitted(Token),
     Buffered,
     Stopped(SendStop),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum AdmissionWatch {
+    Idle,
+    Armed,
+    Changed,
 }
 
 struct Stream<B> {
@@ -291,6 +304,7 @@ enum SettingsOutput {
 #[derive(Clone, Copy)]
 enum Transition {
     Notice,
+    AdmissionChanged,
     Input,
     Write,
     Read,
@@ -352,6 +366,7 @@ pub struct Connection<B: SendBuffer = Vec<u8>> {
     cancelled_read: bool,
     cancelled_write: bool,
     transport_broken: bool,
+    admission: AdmissionWatch,
 }
 
 pub struct Client<B: SendBuffer = Vec<u8>>(Connection<B>);
@@ -422,8 +437,17 @@ impl<B: SendBuffer> Client<B> {
         end: bool,
     ) -> Result<StreamId, CommandError> {
         self.0.check_open()?;
+        let Protocol::Client(role) = &self.0.protocol else {
+            unreachable!()
+        };
+        if role.next_stream_id == 0 || role.next_stream_id > 0x7fff_ffff {
+            return Err(CommandError::SequenceExhausted);
+        }
+        if role.endpoint.received_goaway_last_stream_id.is_some() {
+            return Err(CommandError::InvalidState);
+        }
         if self.streams.len() >= self.config.http.max_active_streams() {
-            return Err(CommandError::Capacity);
+            return Err(self.0.block_metadata());
         }
         let section =
             validate_decoded_header_fields_by(count, field, H2HeaderValidationRole::Request)
@@ -443,6 +467,11 @@ impl<B: SendBuffer> Client<B> {
             ));
         }
         self.0.preflight_headers(count, field)?;
+        if matches!(&self.0.protocol, Protocol::Client(role)
+            if role.endpoint.streams.len() >= role.active_stream_limit())
+        {
+            return Err(self.0.block_metadata());
+        }
         let Protocol::Client(role) = &mut self.0.protocol else {
             unreachable!()
         };
@@ -461,6 +490,9 @@ impl<B: SendBuffer> Client<B> {
             .get_mut(&id.0)
             .expect("inserted stream")
             .request_is_connect = connect;
+        if role.next_stream_id > 0x7fff_ffff {
+            self.0.admission_changed();
+        }
         let mut state = Stream::new(
             if end {
                 Source::Stopped(SendStop::Finished)
@@ -592,6 +624,7 @@ impl<B: SendBuffer> Server<B> {
         }
         self.0.collect_headers(id)?;
         if !informational {
+            self.0.admission_changed();
             if end || no_body {
                 self.0.stop_notice(id, SendStop::Finished);
             } else {
@@ -646,6 +679,7 @@ impl<B: SendBuffer> Connection<B> {
             cancelled_read: false,
             cancelled_write: false,
             transport_broken: false,
+            admission: AdmissionWatch::Idle,
         }
     }
 
@@ -667,6 +701,17 @@ impl<B: SendBuffer> Connection<B> {
             Ok(())
         } else {
             Err(CommandError::InvalidState)
+        }
+    }
+    fn block_metadata(&mut self) -> CommandError {
+        if self.admission == AdmissionWatch::Idle {
+            self.admission = AdmissionWatch::Armed;
+        }
+        CommandError::Blocked
+    }
+    fn admission_changed(&mut self) {
+        if self.admission == AdmissionWatch::Armed {
+            self.admission = AdmissionWatch::Changed;
         }
     }
     fn check_live(&self) -> Result<(), CommandError> {
@@ -712,7 +757,7 @@ impl<B: SendBuffer> Connection<B> {
         }
     }
     fn preflight_headers<'a>(
-        &self,
+        &mut self,
         count: usize,
         field: impl Fn(usize) -> H2RawHeaderRef<'a>,
     ) -> Result<(), CommandError> {
@@ -733,7 +778,13 @@ impl<B: SendBuffer> Connection<B> {
                     .ok_or(CommandError::Capacity)?,
             )
             .ok_or(CommandError::Capacity)?;
-        self.preflight_control(bound)
+        if bound > self.config.max_outbound_capacity {
+            return Err(CommandError::Capacity);
+        }
+        if self.preflight_control(bound).is_err() {
+            return Err(self.block_metadata());
+        }
+        Ok(())
     }
 
     fn preflight_control(&self, capacity: usize) -> Result<(), CommandError> {
@@ -1039,6 +1090,7 @@ impl<B: SendBuffer> Connection<B> {
         self.life = Life::Draining {
             final_goaway: false,
         };
+        self.admission_changed();
         if matches!(self.protocol, Protocol::Server(_)) {
             self.controls.back_mut().expect("shutdown output").2 = ControlPurpose::ShutdownPing;
         } else {
@@ -1098,6 +1150,7 @@ impl<B: SendBuffer> Connection<B> {
             }));
         }
         self.stop_notice(id, reason);
+        self.admission_changed();
     }
     fn receive_end(&mut self, id: StreamId, outcome: StreamOutcome) {
         if let Some(state) = self.streams.get_mut(&id)
@@ -1120,6 +1173,7 @@ impl<B: SendBuffer> Connection<B> {
         }
     }
     fn terminate_stream(&mut self, id: StreamId, outcome: StreamOutcome) {
+        self.admission_changed();
         if let Some(state) = self.streams.get_mut(&id) {
             state.outcome = outcome;
             if let Some(at) = state.deadline.take() {
@@ -1139,6 +1193,7 @@ impl<B: SendBuffer> Connection<B> {
     fn maybe_retire(&mut self, id: StreamId) {
         if self.streams.get(&id).is_some_and(Stream::can_retire) {
             let state = self.streams.remove(&id).expect("retirement join");
+            self.admission_changed();
             if let Some(key) = state.demand_key {
                 self.demand.remove(&key);
             }
@@ -1229,6 +1284,7 @@ impl<B: SendBuffer> Connection<B> {
                 .push_back((bytes, None, ControlPurpose::Ordinary));
         }
         self.life = Life::Settling(result);
+        self.admission_changed();
         self.deadlines.clear();
         self.receive_credit = 0;
         let ids: Vec<_> = self.streams.keys().copied().collect();
@@ -1434,6 +1490,7 @@ impl<B: SendBuffer> Connection<B> {
         match op.storage {
             WriteStorage::Control { bytes, purpose } => {
                 self.control_capacity -= bytes.capacity();
+                self.admission_changed();
                 if success && frame_complete {
                     match purpose {
                         ControlPurpose::LocalSettings => {
@@ -1606,6 +1663,9 @@ impl<B: SendBuffer> Connection<B> {
         if !self.notices.is_empty() {
             return Some(Transition::Notice);
         }
+        if self.admission == AdmissionWatch::Changed {
+            return Some(Transition::AdmissionChanged);
+        }
         if let Some((_, deadline)) = &self.alarm
             && self
                 .deadlines
@@ -1704,6 +1764,10 @@ impl<B: SendBuffer> Connection<B> {
                     None
                 }
                 Transition::Notice => self.notify(ports),
+                Transition::AdmissionChanged => {
+                    self.admission = AdmissionWatch::Idle;
+                    ports.admission_changed()
+                }
                 Transition::Input => self.process_input(ports),
                 Transition::Write => self.issue_write(ports),
                 Transition::Read => {
@@ -1864,6 +1928,7 @@ impl<B: SendBuffer> Connection<B> {
         {
             let (bytes, stream, purpose) =
                 self.controls.pop_front().expect("queued control output");
+            self.admission_changed();
             self.credit_barrier = self.credit_barrier.saturating_sub(1);
             let end = stream.is_some() && bytes.len() >= 9 && bytes[3] == 1 && bytes[4] & 1 != 0;
             WriteOp {
@@ -1935,9 +2000,13 @@ impl<B: SendBuffer> Connection<B> {
                     return None;
                 }
             };
+            let streams_before = self.protocol.stream_count();
             if self.protocol.commit_data(plan).is_err() {
                 self.fail(ConnectionResult::IoFailed);
                 return None;
+            }
+            if self.protocol.stream_count() < streams_before {
+                self.admission_changed();
             }
             self.data_after_credit = false;
             let state = self.streams.get_mut(&id).expect("ready stream");
@@ -2101,6 +2170,7 @@ impl<B: SendBuffer> Connection<B> {
             Reset(StreamId, u32),
             Goaway(u32, u32),
         }
+        let streams_before = self.protocol.stream_count();
         let result: Result<(Event<'_>, Vec<u8>), H2ProtocolError> = match &mut self.protocol {
             Protocol::Client(role) => role
                 .accept_driver_bytes_ref(bytes)
@@ -2253,6 +2323,9 @@ impl<B: SendBuffer> Connection<B> {
                 return None;
             }
         };
+        if self.protocol.stream_count() < streams_before || (bytes[3] == 4 && bytes[4] & 1 == 0) {
+            self.admission_changed();
+        }
         let output_owner = if output.len() >= 9 && output[3] == 3 {
             let id = StreamId(u32::from_be_bytes(
                 output[5..9].try_into().expect("RST_STREAM header"),
@@ -2407,6 +2480,7 @@ impl<B: SendBuffer> Connection<B> {
                 None
             }
             Event::Goaway(last, code) => {
+                self.admission_changed();
                 let excluded: Vec<_> = self
                     .streams
                     .keys()

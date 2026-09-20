@@ -18,6 +18,7 @@ struct Ports {
     detection_closed: Vec<http::DetectionClosed>,
     h1_trace: Vec<&'static str>,
     yielding: bool,
+    admission_changes: usize,
 }
 
 impl Ports {
@@ -120,6 +121,10 @@ impl h2::Ports<Vec<u8>> for Ports {
         h2::Ports::send_ready(&mut self.h2, permit);
         self.output()
     }
+    fn admission_changed(&mut self) -> Option<()> {
+        self.admission_changes += 1;
+        self.output()
+    }
     fn send_stopped(&mut self, id: h2::StreamId, reason: h2::SendStop) -> Option<()> {
         h2::Ports::send_stopped(&mut self.h2, id, reason);
         self.output()
@@ -210,6 +215,56 @@ fn drive_client(client: &mut http::Client, ports: &mut Ports) {
         }
     }
     panic!("bounded client drive did not suspend");
+}
+
+#[test]
+fn selected_client_forwards_metadata_readiness_before_original_write_settlement() {
+    for yielding in [false, true] {
+        let config = h2::Config {
+            max_outbound_items: 4,
+            ..h2::Config::default()
+        };
+        let mut client = http::Client::http2(h2::Client::new(config, Duration::ZERO).unwrap());
+        let mut ports = Ports {
+            yielding,
+            ..Ports::default()
+        };
+        let fields = support::request(b"GET");
+        for expected in [1, 3, 5] {
+            assert_eq!(
+                client
+                    .http2_mut()
+                    .unwrap()
+                    .request(&fields, true)
+                    .unwrap()
+                    .get(),
+                expected
+            );
+        }
+        assert_eq!(
+            client.http2_mut().unwrap().request(&fields, true),
+            Err(h2::CommandError::Blocked)
+        );
+        assert_eq!(ports.admission_changes, 0);
+        drive_client(&mut client, &mut ports);
+        assert!(ports.h2.write.is_some());
+        assert_eq!(ports.admission_changes, 1);
+        assert_eq!(
+            client
+                .http2_mut()
+                .unwrap()
+                .request(&fields, true)
+                .unwrap()
+                .get(),
+            7
+        );
+        for _ in 0..100 {
+            drive_client(&mut client, &mut ports);
+        }
+        assert_eq!(ports.admission_changes, 1);
+        assert!(ports.h2.write.is_some());
+        assert!(ports.h1_trace.is_empty());
+    }
 }
 
 fn settle_detection_cancels(server: &mut http::Server, ports: &mut Ports) {

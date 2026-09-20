@@ -20,6 +20,10 @@ They must not infer framing, credit, or stream lifecycle in that handler.
 Only the selected accessor returns `Some`.
 The caller drives the composite, not the child, while the composite owns protocol selection and prefetched input.
 HTTP/1 upgrade handoff and HTTP/2 stream control remain available through the child interfaces.
+The composite forwards HTTP/2 `admission_changed` notifications, including during prefetched-input replay.
+Only `CommandError::Blocked` requests a metadata retry after an admission change.
+The caller retains queued metadata until its command succeeds.
+The notification does not reserve capacity or replace the command's acceptance result.
 
 An explicitly selected client uses `Client::http1(child)` or `Client::http2(child)`.
 The caller supplies the protocol choice, including an external ALPN result.

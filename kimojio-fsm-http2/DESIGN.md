@@ -192,8 +192,66 @@ Every operation carries an unforgeable machine identity and a nonwrapping sequen
 Cancellation acknowledgment does not settle the original operation.
 `CancelOp::complete()` means that the driver accepted the cancellation request.
 It does not mean that the kernel released the original buffer or that the original operation stopped.
-No callback has a silent default implementation.
+Only `admission_changed` has a default implementation.
+Its default returns `None` for compatibility with adapters that do not retry metadata commands.
 `reschedule` means that the drive budget ended with runnable work.
+
+## Metadata admission
+
+`request`, `respond`, `trailers`, and their `_ref` variants return `CommandError::Blocked` for temporary admission pressure.
+This includes local stream slots, peer concurrency, queued control items, and currently retained control bytes.
+`Blocked` accepts no command, consumes no stream ID, and leaves HPACK and stream semantics unchanged.
+The adapter retains its queued fields.
+Synchronous command success remains the only acceptance event.
+
+For these metadata commands, `Capacity` indicates a fixed bound that cannot fit the command.
+An empty output queue does not change that result.
+The encoder uses a conservative field-size bound, not the compressed size of a speculative HPACK block.
+Header-count and HTTP field-size errors retain their specific `Message` results.
+Exhausted stream IDs return `SequenceExhausted`, even if all local stream slots remain occupied.
+Constructor errors and non-metadata control commands retain their existing `Capacity` contracts.
+
+State checks precede field checks.
+Requests check exhausted IDs before temporary pressure.
+The local stream-slot check still precedes request-field checks.
+Thus, `Blocked` can mask invalid fields until a later attempt.
+Field checks and the fixed output bound precede temporary output pressure.
+Peer concurrency follows those checks.
+Neither a notification nor `Blocked` certifies the fields.
+
+The optional callback has this signature:
+
+```text
+fn admission_changed(&mut self) -> Option<Self::Output> { None }
+```
+
+`Blocked` arms one connection-wide notification.
+Relevant changes move this fixed-size observer to its pending state.
+Multiple changes coalesce until the core calls `admission_changed`.
+The core disarms the observer before that callback.
+Another `Blocked` result arms the next notification.
+Repeated `next` calls without a new change do not repeat the notification.
+
+Changes include accepted peer SETTINGS, protocol-slot release, application retirement, queue-item release, and control-byte release.
+Queue items become available at write issuance.
+Control bytes remain reserved through partial writes and become available at final settlement.
+Stream invalidation, GOAWAY, shutdown, abort, and stream-ID exhaustion also produce a notification for an armed observer.
+Affected queued commands can then resolve without waiting for retained body receipts.
+The notification does not promise capacity or command validity.
+
+### Adapter retry procedure
+
+1. If a metadata command returns `Blocked`, retain its fields in the adapter.
+2. Forward `admission_changed` through each composite or callback adapter.
+3. After the notification, retry the queued command through its normal public method.
+4. If the retry returns `Blocked`, wait for the next notification.
+5. If the command succeeds, remove it from the adapter queue.
+6. If the command returns another error, resolve that command through its error contract.
+
+The adapter owns any metadata queue.
+The core retains protocol framing and concurrency calculations.
+This interface adds no request permits.
+Successful commands retain HPACK commitment order, including commands whose transport writes remain outstanding.
 
 ## Source demand and retained capacity
 
@@ -387,10 +445,12 @@ The pure engine does not create or drive an HTTP/1 parser.
 
 ## Standalone qualification
 
-The all-feature suite contains 213 unit tests, 69 integration tests, and two doctests.
+The all-feature suite contains 213 unit tests, 77 integration tests, and two doctests.
 Eight unit tests cover new direct-engine bounds and defensive state transitions.
 The default suite omits five feature-specific component tests.
 These counts do not include the six Criterion smoke workloads.
+Eight admission tests cover exact HPACK wire equivalence, partial-write budgets, peer concurrency, terminal invalidation, and held ownership joins.
+They use yielding and continuing notifications and repeated idle turns to bound notification counts.
 
 The independent ownership model uses obligation sets rather than the engine selector.
 It explores 336 stream schedules and 480 connection schedules.

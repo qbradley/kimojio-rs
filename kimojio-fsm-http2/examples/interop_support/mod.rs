@@ -295,6 +295,7 @@ fn client_loop(
     let mut reset = BTreeSet::new();
     let mut report_metadata = 0usize;
     let mut settings_processed = false;
+    let mut admission_blocked = false;
     loop {
         if transport.now() > timeout {
             let state: Vec<_> = producers
@@ -306,6 +307,7 @@ fn client_loop(
             ));
         }
         while !shutdown
+            && !admission_blocked
             && next_request < input.requests.len()
             && producers.len() < input.concurrency
         {
@@ -328,7 +330,10 @@ fn client_loop(
             let end = request.body_bytes == 0 && request.trailers.is_empty();
             let id = match core.request(&headers, end) {
                 Ok(id) => id,
-                Err(CommandError::Capacity) => break,
+                Err(CommandError::Blocked) => {
+                    admission_blocked = true;
+                    break;
+                }
                 Err(CommandError::InvalidState) => {
                     begin_shutdown(core)?;
                     shutdown = true;
@@ -488,6 +493,7 @@ fn client_loop(
                     closed: transport.physically_closed,
                 });
             }
+            Some(Event::AdmissionChanged) => admission_blocked = false,
             Some(Event::Again) => (),
             None => {
                 settings_processed |= transport.initial_settings_received();
@@ -673,7 +679,7 @@ fn server_loop(
             Some(Event::Cancel(cancel)) => transport.cancel(core, cancel)?,
             Some(Event::Close(close)) => transport.close(core, close)?,
             Some(Event::Closed(_)) => return Ok(()),
-            Some(Event::Again) => (),
+            Some(Event::AdmissionChanged | Event::Again) => (),
             None if !progress => transport.wait(timeout)?,
             None => (),
         }

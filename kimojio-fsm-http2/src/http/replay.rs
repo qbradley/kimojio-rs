@@ -116,6 +116,9 @@ impl<B: SendBuffer, P: crate::Ports<B>> crate::Ports<B> for Ports<'_, P> {
     fn send_ready(&mut self, permit: crate::SendPermit) -> Option<Self::Output> {
         self.outer.send_ready(permit).map(Step::Output)
     }
+    fn admission_changed(&mut self) -> Option<Self::Output> {
+        self.outer.admission_changed().map(Step::Output)
+    }
     fn send_stopped(
         &mut self,
         id: crate::StreamId,

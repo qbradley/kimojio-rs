@@ -57,6 +57,7 @@ pub enum Event {
     Cancel(CancelOp),
     Close(CloseOp),
     Closed(ConnectionResult),
+    AdmissionChanged,
     Again,
 }
 
@@ -349,6 +350,9 @@ impl Ports<Buffer> for Transport {
     fn send_ready(&mut self, op: SendPermit) -> Option<Event> {
         trace(("permit", op.stream()));
         Some(Event::Permit(op))
+    }
+    fn admission_changed(&mut self) -> Option<Event> {
+        Some(Event::AdmissionChanged)
     }
     fn sent(&mut self, sent: Sent<Buffer>) -> Option<Event> {
         trace((self.now(), "sent", sent.stream, sent.accepted, sent.result));
