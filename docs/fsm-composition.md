@@ -395,6 +395,10 @@ When drive-time ordering matters, a bounded pending obligation can defer that po
 Such an obligation must name its cause and define coalescing and invalidation.
 It must not become a second, contradictory copy of protocol state.
 
+A composite commits the effects of a child command only when the child accepts that command.
+A rejected failure notification for a retired exchange does not put a reusable child into termination.
+The composite must preserve that distinction when delayed cleanup notifications cross an exchange-retirement boundary.
+
 Not every pair of transitions needs a fixed order.
 Independent transitions can commute.
 Observable or safety-sensitive dependencies need explicit reasons.
@@ -434,6 +438,9 @@ A bounded executable model can explore ownership joins, cancellation races, dead
 Its expected behavior must come from independent contracts, not a copy of the production selector.
 The evidence includes exact resource returns, notification counts, forbidden effects, quiescence, and eventual settlement under stated external-completion assumptions.
 Comparisons between yielding and continuing callbacks use the same external input schedule.
+Schedules must include several external completions between drive calls, not only one completion followed by one drive.
+They must also include queued notifications that arrive after logical retirement and a subsequent exchange on the same connection.
+The static-server refactor exposed a stale source-failure transition only when file-close failure and final-write success occurred in one batch.
 Parser corpora, native integration, and independent peers complement this model.
 The report states the explored bounds and does not claim a complete proof.
 
