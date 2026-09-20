@@ -12,6 +12,7 @@ import sys
 binary = pathlib.Path(sys.argv[1]).resolve()
 assert "BENCH_DIAGNOSTICS" not in os.environ, "diagnostic instrumentation is not a timing workload"
 out = pathlib.Path(sys.argv[2])
+stop_on_failure = "--stop-on-failure" in sys.argv[3:]
 out.mkdir(parents=True, exist_ok=True)
 cases = list(itertools.product(["empty", "duplex", "32k", "1m", "paused"],
                                [1, 8, 64, 128], [17, 1024, 65536]))
@@ -45,6 +46,9 @@ with (out / "trials.jsonl").open("w") as log:
                 rows.append(row)
                 log.write(json.dumps(row) + "\n")
                 log.flush()
+                if result.returncode and stop_on_failure:
+                    print(f"STOP: strict cell failed: {command}\n{result.stderr}", file=sys.stderr)
+                    sys.exit(1)
         print(f"trial {trial + 1}: {len(rows)} rows, {len(failures)} blocked cases", flush=True)
 summary = []
 for case, c, fragment, batches, phase in work:

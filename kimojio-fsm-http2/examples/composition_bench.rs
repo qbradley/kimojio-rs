@@ -48,7 +48,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "integrated 7d19cd85/core34ee: concurrent 1MiB duplex returns ResourceExhausted and GOAWAY11; strict repro"]
     fn large_duplex_regression() {
         run("direct", Case::named("1m"), 8, 65536, 2, "steady");
     }
