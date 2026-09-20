@@ -89,6 +89,8 @@ Normal drive turns use recorded readiness rather than a scan of every stream.
 Connection-wide changes, such as SETTINGS window adjustments, can visit every affected stream.
 Such visits require explicit preflight and commit rules.
 The scheduler must preserve control work and sibling progress during a long upload.
+Persistent receive-credit work must not defer all eligible response DATA until uploads finish.
+Directional overlap is a separate requirement from eventual completion of both directions.
 
 ## Storage, credit, and transport
 
@@ -139,6 +141,12 @@ Stream IDs never wrap or silently reuse a live identity.
 Graceful shutdown preserves already committed output and outstanding storage obligations.
 The final transport close occurs after original operations settle.
 A wrapper must perform the actual close rather than report success and rely on descriptor drop.
+
+Hard abort is a separate command from graceful shutdown.
+It preserves the original-operation settlement rules without a graceful-shutdown wait.
+An alarm completion distinguishes a fired deadline from a timer failure.
+The driver must not invent input failures or advance time to report another operation's failure.
+An obsolete alarm failure settles its original obligation without a new timeout or a replacement primary failure.
 
 ## Implementation sequence
 

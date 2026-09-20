@@ -33,6 +33,9 @@ It does not duplicate frame parsing, stream state, window arithmetic, or shutdow
 Native read and write slots remain independent.
 Each slot retains its original future until completion.
 The implementation starts from the reusable-slot pattern in `kimojio-http1`, including its cancellation and late-success behavior.
+Native write futures create borrowed slices only after they occupy their pinned slot.
+Those borrows remain valid until the original operation settles, including cancellation and late success.
+This requirement includes inline frame headers and inline application buffers, not only heap-backed payloads.
 
 Transport callbacks can install operations directly into those slots.
 They do not require a large intermediate event value.
