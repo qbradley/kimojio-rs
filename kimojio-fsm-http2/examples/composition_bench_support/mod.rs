@@ -2,6 +2,9 @@ use kimojio_fsm_http1 as h1;
 use kimojio_fsm_http2::{self as h2, http};
 use std::time::{Duration, Instant};
 
+mod diagnostics;
+use diagnostics::Diagnostics;
+
 type Buffer = &'static [u8];
 static PAYLOAD: [u8; 32768] = [0x5a; 32768];
 const REQUEST: [h2::H2RawHeaderRef<'static>; 4] = [
@@ -67,6 +70,7 @@ struct Ports {
     events: usize,
     wire_bytes: usize,
     paused: bool,
+    diagnostics: Option<Box<Diagnostics>>,
 }
 
 impl Ports {
@@ -88,6 +92,7 @@ impl Ports {
             events: 0,
             wire_bytes: 0,
             paused: case.paused && !server,
+            diagnostics: Diagnostics::from_env(server),
         }
     }
     fn slot(&mut self, stream: h2::StreamId) -> &mut Slot {
@@ -155,11 +160,34 @@ impl h2::Ports<Buffer> for Ports {
         self.permits.push(permit);
         self.event()
     }
-    fn send_stopped(&mut self, _: h2::StreamId, reason: h2::SendStop) -> Option<()> {
+    fn send_stopped(&mut self, stream: h2::StreamId, reason: h2::SendStop) -> Option<()> {
+        if reason != h2::SendStop::Finished
+            && let Some(diagnostics) = &mut self.diagnostics
+        {
+            diagnostics.failure(format_args!(
+                "send_stopped stream={} reason={reason:?}",
+                stream.get()
+            ));
+            return self.event();
+        }
         assert_eq!(reason, h2::SendStop::Finished);
         self.event()
     }
     fn sent(&mut self, result: h2::Sent<Buffer>) -> Option<()> {
+        if result.result.is_err()
+            && let Some(diagnostics) = &mut self.diagnostics
+        {
+            diagnostics.failure(format_args!(
+                "sent stream={} result={:?} accepted={} exact={} buffer_len={}",
+                result.stream.get(),
+                result.result,
+                result.accepted,
+                result.exact,
+                result.buffer.len()
+            ));
+            self.slot(result.stream).returned += result.accepted;
+            return self.event();
+        }
         assert_eq!(result.result, Ok(()));
         assert!(result.exact);
         assert_eq!(result.accepted, result.buffer.len());
@@ -167,12 +195,35 @@ impl h2::Ports<Buffer> for Ports {
         self.event()
     }
     fn ended(&mut self, end: h2::ReceiveEnd) -> Option<()> {
+        if end.outcome != h2::StreamOutcome::Complete
+            && let Some(diagnostics) = &mut self.diagnostics
+        {
+            diagnostics.failure(format_args!(
+                "ended stream={} outcome={:?}",
+                end.stream.get(),
+                end.outcome
+            ));
+            self.slot(end.stream).ended = true;
+            return self.event();
+        }
         assert_eq!(end.outcome, h2::StreamOutcome::Complete);
         assert!(!self.slot(end.stream).ended);
         self.slot(end.stream).ended = true;
         self.event()
     }
     fn retired(&mut self, result: h2::StreamResult) -> Option<()> {
+        if result.outcome != h2::StreamOutcome::Complete
+            && let Some(diagnostics) = &mut self.diagnostics
+        {
+            diagnostics.failure(format_args!(
+                "retired stream={} outcome={:?}",
+                result.stream.get(),
+                result.outcome
+            ));
+            self.slot(result.stream).retired = true;
+            self.retired += 1;
+            return self.event();
+        }
         assert_eq!(result.outcome, h2::StreamOutcome::Complete);
         let receive_bytes = self.receive_bytes;
         let slot = self.slot(result.stream);
@@ -197,6 +248,17 @@ impl h2::Ports<Buffer> for Ports {
         self.event()
     }
     fn closed(&mut self, result: h2::ConnectionResult) -> Option<()> {
+        if let Some(diagnostics) = &mut self.diagnostics {
+            diagnostics.record(format_args!("closed result={result:?}"));
+            if !matches!(
+                result,
+                h2::ConnectionResult::Graceful | h2::ConnectionResult::PeerClosed
+            ) {
+                diagnostics.failure(format_args!("closed result={result:?}"));
+                self.closed = true;
+                return self.event();
+            }
+        }
         assert!(
             matches!(
                 result,
@@ -466,6 +528,9 @@ fn transfer(
     for slice in write.slices() {
         let count = slice.len().min(length - cursor);
         read.buffer_mut()[cursor..cursor + count].copy_from_slice(&slice[..count]);
+        if let Some(diagnostics) = &mut outgoing.diagnostics {
+            diagnostics.wire(&slice[..count]);
+        }
         cursor += count;
     }
     assert_eq!(cursor, length);
@@ -487,6 +552,12 @@ struct Pair<C, S> {
 }
 impl<C: Client, S: Server> Pair<C, S> {
     fn tick(&mut self) -> bool {
+        for diagnostics in [&mut self.cp.diagnostics, &mut self.sp.diagnostics]
+            .into_iter()
+            .flatten()
+        {
+            diagnostics.turn += 1;
+        }
         let before = self.cp.events + self.sp.events;
         self.client.drive(&mut self.cp);
         self.server.drive(&mut self.sp);
@@ -521,6 +592,11 @@ impl<C: Client, S: Server> Pair<C, S> {
         }
         for _ in 0..20_000_000 {
             let progress = self.tick();
+            if self.cp.diagnostics.as_ref().is_some_and(|d| d.failed)
+                || self.sp.diagnostics.as_ref().is_some_and(|d| d.failed)
+            {
+                self.diagnostic_failure();
+            }
             if self.cp.retired == goal && self.sp.retired == goal {
                 return;
             }
@@ -538,6 +614,46 @@ impl<C: Client, S: Server> Pair<C, S> {
             );
         }
         panic!("bounded executor exhausted");
+    }
+    fn diagnostic_failure(&mut self) -> ! {
+        for _ in 0..10000 {
+            if !self.tick() {
+                break;
+            }
+        }
+        for (name, ports) in [("client", &self.cp), ("server", &self.sp)] {
+            if let Some(diagnostics) = &ports.diagnostics {
+                diagnostics.dump(name);
+            }
+            eprintln!(
+                "{name} closed={} read={} write={} alarms={} cancels={} bodies={} permits={}",
+                ports.closed,
+                ports.read.is_some(),
+                ports.write.is_some(),
+                ports.alarms.len(),
+                ports.cancels.len(),
+                ports.bodies.len(),
+                ports.permits.len()
+            );
+            for slot in &ports.slots {
+                eprintln!(
+                    "{name} stream={:?} sent={} returned={} received={} ended={} retired={}",
+                    slot.stream, slot.sent, slot.returned, slot.received, slot.ended, slot.retired
+                );
+            }
+            assert!(
+                ports.closed
+                    && ports.read.is_none()
+                    && ports.write.is_none()
+                    && ports.close.is_none()
+                    && ports.alarms.is_empty()
+                    && ports.cancels.is_empty()
+                    && ports.bodies.is_empty()
+                    && ports.permits.is_empty(),
+                "diagnostic endpoint did not settle all owned operations"
+            );
+        }
+        panic!("strict diagnostic failure after bounded original-operation settlement");
     }
     fn finish(&mut self) {
         for _ in 0..10000 {

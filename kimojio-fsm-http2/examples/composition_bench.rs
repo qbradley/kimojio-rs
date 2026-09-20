@@ -43,13 +43,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "frozen 5491242b: fragmented concurrent duplex returns ConnectionFailed; strict repro"]
     fn fragmented_duplex_regression() {
         run("direct", Case::named("duplex"), 8, 1024, 2, "steady");
     }
 
     #[test]
-    #[ignore = "frozen 5491242b: concurrent 1MiB duplex returns ConnectionFailed; strict repro"]
+    #[ignore = "integrated 7d19cd85/core34ee: concurrent 1MiB duplex returns ResourceExhausted and GOAWAY11; strict repro"]
     fn large_duplex_regression() {
         run("direct", Case::named("1m"), 8, 65536, 2, "steady");
     }
