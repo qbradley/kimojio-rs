@@ -399,7 +399,12 @@ The implementation owner also ran debug/release combinations and 22 no-default-f
 The repair adds regressions for scope retention, active cancellation, nested ownership, reentrant wakers, and borrowed-I/O panic settlement.
 The acknowledgment-order regression controls owner release around real completions, not kernel CQE order.
 
-Independent safety review and repeated allocation-site measurements remain in progress.
+Independent safety review found no significant issues in `59d32b77` through `a4af94fd`.
+The reviewer built a clean detached checkout of `a4af94fd` with a private target.
+All 22 scope/ownership tests passed in three configurations: debug with no default features plus virtual clock, debug all-features, and release all-features.
+Nine event/waiter tests and the cross-task future-completion migration test also passed.
+These runs do not force both kernel cancellation-acknowledgment orders or establish exhaustive race and unwind safety.
+Repeated allocation-site measurements remain in progress.
 The earlier socket and retention reports describe the old runtime, not this candidate.
 The candidate does not yet establish a retained-storage plateau or a performance result.
 
