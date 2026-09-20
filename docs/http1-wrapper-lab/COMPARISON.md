@@ -123,6 +123,49 @@ Common native empty exchanges range from 28.275 to 39.321 microseconds.
 The preceding 240-run comparison supports the same broad mechanisms, but individual rankings vary.
 These medians support candidate selection, not precise causal percentages.
 
+## Duplex and allocation results
+
+All 120 duplex executions passed.
+The matrix excludes the original and buffered APIs because they do not support this reusable duplex contract.
+The table gives median microseconds per complete exchange.
+
+| Configuration | Fixed request, lease echo | Chunked request, lease echo | Chunked request, copy echo |
+| --- | ---: | ---: | ---: |
+| Common stream | 159.231 | 2652.382 | 2503.805 |
+| Common native | 148.849 | 2684.886 | 2345.217 |
+| Profile stream | 140.144 | 2314.567 | 2279.254 |
+| Profile native | 130.318 | 2128.625 | 2038.900 |
+| Direct-slot native | 124.435 | 2061.415 | 2032.462 |
+
+Lease forwarding does not guarantee better elapsed time.
+The copy control is faster in these median comparisons.
+A copy can return the receive lease before the outgoing write completes.
+That permits earlier receive progress, at the cost of a payload copy and allocation.
+The timings alone do not isolate the contribution of that overlap.
+The API therefore exposes both ownership choices rather than promising that fewer copies always mean lower latency.
+
+Allocation runs use 1,000 and 3,000 measured small exchanges, each with 100 warmup exchanges.
+The slope counts `alloc`, `alloc_zeroed`, and `realloc` calls across both endpoints and the fixture.
+All three repetitions produced the same slope for each configuration.
+
+| Configuration | Allocator calls per exchange |
+| --- | ---: |
+| Original stream | 329.7575 |
+| Common stream | 329.7575 |
+| Common native | 317.7055 |
+| Minimum-code native | 65.0000 |
+| Interface stream | 264.2500 |
+| Interface native | 256.2500 |
+| Profile stream | 152.9345 |
+| Profile native | 140.8825 |
+| Direct-slot stream | 329.7575 |
+| Direct-slot native | 229.1730 |
+
+These are empirical slopes of whole-process counters, not allocations isolated inside the timed interval.
+The allocation executables are separately frozen and hashed.
+Their instrumented elapsed times do not support throughput claims.
+The complete records are `duplex-pocs-comparison.json` and `poc-allocation-slopes.json` in the evidence directory.
+
 ## Selected design and implementation plan
 
 The production candidate combines reusable native slots, runnable probes, and unboxed ready bodies.
