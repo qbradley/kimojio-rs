@@ -160,6 +160,18 @@ Both clippy commands succeeded.
 The pre-existing warnings are `question_mark` at `examples/http1-static/src/app.rs:413` and two `byte_char_slices` warnings at `kimojio/src/pipe.rs:64-65`.
 The candidate introduced no clippy warning.
 
+Additional commands passed:
+
+```sh
+taskset -c 8-31 cargo test --offline -p kimojio-http1 -p kimojio-fsm-http1 --all-features
+taskset -c 8-31 cargo test --offline -p kimojio cancellation_token
+taskset -c 8-31 cargo test --offline -p kimojio --lib io_scope
+```
+
+These commands passed 146, two, and 12 tests respectively.
+The I/O-scope suite includes wrapped-waker settlement and sibling cancellation isolation.
+Local logs and allocator output reside in `target/profile-artifacts/` inside this worktree.
+
 ### Allocation experiment
 
 The existing `alloc-http1-keepalive` binary includes the unchanged benchmark application.
@@ -186,7 +198,21 @@ The corrected commands use standard output and completed all benchmark assertion
 The slope is 152.9345 allocator calls per exchange.
 The frozen original slope is approximately 329.76.
 That comparison spans prerequisite changes, so it does not isolate this scheduler delta.
-A same-base allocation control and final-common-base timing remain necessary.
+
+The same commands also ran against exact prerequisite `90b7ff60`.
+Only this worktree changed revisions for the control run.
+
+| Iterations | Control allocations | Control zeroed allocations | Control reallocations |
+| --- | ---: | ---: | ---: |
+| 1,000 | 357,373 | 2 | 5,564 |
+| 3,000 | 1,006,784 | 2 | 15,668 |
+
+The same-base control slope is 329.7575 calls per exchange.
+The candidate removes 176.823 calls per exchange, approximately 53.62%.
+Requested allocation bytes decrease from 22,837.204 to 10,105.948 per exchange.
+These figures include both endpoints and runtime work.
+They are not payload-copy counts.
+Final-common-base timing and profiling remain necessary.
 
 ### Review and next decision
 
@@ -198,3 +224,9 @@ No await occurs between that channel probe and its registration.
 This candidate deliberately does not retain completed receive futures across inputs.
 It avoids the lifetime and terminal-state complexity of persistent waits.
 The next profile will determine whether remaining registration costs justify that additional state.
+
+The prepared candidate benchmark uses the required debug-enabled release build.
+Its source is candidate commit `781d5808`, before this results-only documentation update.
+Binary: `/workspace/kimojio-rs/target/wrapper-lab/build-profile-poc/release/examples/keepalive_bench`.
+SHA-256: `1de1bd29352289abf197365cae10d9e739664d9e25d57e9ff78b56a0d5efff53`.
+The final common base will require a new build and new binary identity.
