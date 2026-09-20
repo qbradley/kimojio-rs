@@ -23,6 +23,9 @@ This report does not measure that correction.
 Its baseline timings remain valid only for the recorded completion workload.
 The final wrapper gate also needs the overlap assertion and fresh measurements after integration.
 
+The later [actual-payload regression](../overlap/README.md) now rejects this c08 baseline and passes on the integrated scheduling correction.
+That report contains separate correctness evidence, not new timings or profiles.
+
 At concurrency 128, empty/full-fragment medians are 2.693µs direct, 2.753µs selected, and 2.693µs auto.
 The selected median is 2.2% above direct.
 This does not establish a universal small-overhead bound.

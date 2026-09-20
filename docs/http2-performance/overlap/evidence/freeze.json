@@ -1,0 +1,130 @@
+{
+  "scope": "Correctness-only duplex payload overlap; no performance timings or profiles",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "cpu_affinity": "8-31",
+  "cpu2_used": false,
+  "profile": "release",
+  "CARGO_PROFILE_RELEASE_DEBUG": "2",
+  "RUSTFLAGS": null,
+  "CARGO_ENCODED_RUSTFLAGS": null,
+  "exact_regression_command": "CARGO_TARGET_DIR=<per-source private build directory> CARGO_PROFILE_RELEASE_DEBUG=2 taskset -c 8-31 cargo test --release -p kimojio-fsm-http2 --example composition_bench duplex_payload_overlap_regression -- --nocapture",
+  "identical_rust_harness_sha256": {
+    "kimojio-fsm-http2/examples/composition_bench.rs": "3db7144d9df7f375caf87dea0da426ff97b79be4622c8599911bc7c7f1a2463b",
+    "kimojio-fsm-http2/examples/composition_bench_support/diagnostics.rs": "e139de023e542b5692c2d4360152ef1cab7a036b60f299c3c5c91b6f6293c3ba",
+    "kimojio-fsm-http2/examples/composition_bench_support/mod.rs": "1df534cb85334cd8d19e05ed36ed7646ec0e3bfce6cd72d7b011d63887acd265",
+    "kimojio-fsm-http2/examples/composition_bench_support/overlap.rs": "c5f5e230174f45b727b235bb5a5ffb78c43ee16487aaea26a9ec5d877b8508a5"
+  },
+  "core_files_differing": [
+    "kimojio-fsm-http2/src/engine.rs"
+  ],
+  "snapshots": {
+    "positive": {
+      "source_commit": "15a1d065ec922369b9660d8875f088a31c4a80ab",
+      "base_commit": "2a27281d6d7080572cad36ab73d3b02b435543eb",
+      "core_commit": "18a8f39258a7db0f6edec9182573146039c9e37c",
+      "core_src_tree": "b2363a9e8debed7e63559de2485464fa286c56a4",
+      "worktree": "/workspace/kimojio-rs/target/http2-program/worktrees/http2-performance",
+      "binary": "/workspace/kimojio-rs/target/http2-program/build-http2-performance-overlap-positive/frozen-15a1d065/composition_bench-tests",
+      "binary_sha256": "f98d88232b61fae9558509b0a9535f6eb0188c59500a942a789e36ffac55379a",
+      "cargo_lock_sha256": "b0eeb8277510fc0a1d3bf56ccf61cd0a2a71c0f19a0e65bdbbf88543ad1a2170",
+      "CARGO_TARGET_DIR": "/workspace/kimojio-rs/target/http2-program/build-http2-performance-overlap-positive",
+      "regression_command": "CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http2-program/build-http2-performance-overlap-positive CARGO_PROFILE_RELEASE_DEBUG=2 taskset -c 8-31 cargo test --release -p kimojio-fsm-http2 --example composition_bench duplex_payload_overlap_regression -- --nocapture"
+    },
+    "negative": {
+      "source_commit": "27838c58208004d1f8800e8e854b5cf5b29672ba",
+      "base_commit": "eaac15fa2c52ba9ff86f193784485a7d5e48e035",
+      "core_commit": "c08b733358317351dc4338f951fee239f1a1135a",
+      "core_src_tree": "55c07fec951fdacfb0a197086c98332ebc1eba41",
+      "worktree": "/workspace/kimojio-rs/target/http2-program/worktrees/http2-overlap-c08-negative",
+      "binary": "/workspace/kimojio-rs/target/http2-program/build-http2-performance-overlap-negative/frozen-27838c58/composition_bench-tests",
+      "binary_sha256": "a0c5b8632ec78a4c7ff5d484641d67e37b22229d923b4193b496e1c5d197465d",
+      "cargo_lock_sha256": "b0eeb8277510fc0a1d3bf56ccf61cd0a2a71c0f19a0e65bdbbf88543ad1a2170",
+      "CARGO_TARGET_DIR": "/workspace/kimojio-rs/target/http2-program/build-http2-performance-overlap-negative",
+      "regression_command": "CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http2-program/build-http2-performance-overlap-negative CARGO_PROFILE_RELEASE_DEBUG=2 taskset -c 8-31 cargo test --release -p kimojio-fsm-http2 --example composition_bench duplex_payload_overlap_regression -- --nocapture"
+    }
+  },
+  "positive_all_features_binary": {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-performance-overlap-positive/frozen-15a1d065/composition_bench-tests-all-features",
+    "sha256": "e133d15ab6658a507b9b885b094d429857e3bbbf0cfa5eabe27b7c317b7cb5c2"
+  },
+  "results": {
+    "positive_regression": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "cohorts": 10,
+      "overlapping_cohorts": 10,
+      "first_response_bytes": 16384,
+      "request_bytes_accepted_at_first_delivery": [
+        49152,
+        65536,
+        65536,
+        65536,
+        65536,
+        65536,
+        65536,
+        65536,
+        65536,
+        65536
+      ]
+    },
+    "negative_regression": {
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0,
+      "cargo_exit_code": 101,
+      "cohorts": 10,
+      "overlapping_cohorts": 0,
+      "first_response_bytes": 16384,
+      "request_bytes_accepted_at_first_delivery": [
+        8388608,
+        8388608,
+        8388608,
+        8388608,
+        8388608,
+        8388608,
+        8388608,
+        8388608,
+        8388608,
+        8388608
+      ]
+    },
+    "cohort_request_payload_bytes": 8388608,
+    "request_payload_bytes_each_run": 83886080,
+    "response_payload_bytes_each_run": 83886080,
+    "default_harness": {
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0
+    },
+    "default_ownership": {
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    "all_features_harness": {
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0
+    },
+    "all_features_ownership": {
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    "formatting": "pass",
+    "clippy": "pass with -D warnings",
+    "clippy_all_targets_all_features": "pass with -D warnings"
+  },
+  "case": {
+    "mode": "direct",
+    "scenario": "steady",
+    "concurrency": 8,
+    "request_bytes_per_stream": 1048576,
+    "response_bytes_per_stream": 1048576,
+    "transport_fragment_bytes": 65536,
+    "warmup_cohorts": 8,
+    "further_cohorts": 2,
+    "simulated_clock": "Duration::ZERO"
+  }
+}

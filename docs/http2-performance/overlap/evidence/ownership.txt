@@ -1,0 +1,13 @@
+   Compiling kimojio-fsm-http2 v0.17.0 (/workspace/kimojio-rs/target/http2-program/worktrees/http2-performance/kimojio-fsm-http2)
+    Finished `release` profile [optimized + debuginfo] target(s) in 2.07s
+     Running tests/ownership_model.rs (/workspace/kimojio-rs/target/http2-program/build-http2-performance-overlap-positive/release/deps/ownership_model-974d7f7c1aff990c)
+
+running 5 tests
+test blocked_output_coalesces_released_credit_without_exhausting_control_items ... ok
+test completed_response_survives_no_error_reset_in_the_same_read_batch ... ok
+test all_connection_original_and_cancellation_ack_orders ... ok
+test all_small_stream_settlement_orders_and_selective_callbacks ... ok
+test repeated_eight_stream_megabyte_duplex_preserves_bounded_credit_progress ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

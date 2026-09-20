@@ -1,0 +1,18 @@
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running unittests examples/composition_bench.rs (/workspace/kimojio-rs/target/http2-program/build-http2-performance-overlap-positive/release/examples/composition_bench-4c6023a0f7e5c5a7)
+
+running 11 tests
+test composition_bench_support::diagnostics::tests::fragmented_preface_frames_and_goaway ... ok
+test composition_bench_support::diagnostics::tests::first_failure_snapshot_and_history_are_bounded ... ok
+test composition_bench_support::overlap::tests::rejects_late_delivery_without_any_sent_or_ended_notification - should panic ... ok
+test composition_bench_support::diagnostics::tests::permission_and_lease_counters_distinguish_admission_from_wire_progress ... ok
+test composition_bench_support::overlap::tests::counts_actual_delivery_before_transport_completion ... ok
+test composition_bench_support::overlap::tests::zero_payload_or_previous_cohort_cannot_mask_late_delivery - should panic ... ok
+test tests::fragmented_duplex_regression ... ok
+test tests::large_duplex_regression ... ok
+test tests::duplex_payload_overlap_regression ... ok
+test tests::concurrency_and_construction ... ok
+test tests::routes_and_fragmentation ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
