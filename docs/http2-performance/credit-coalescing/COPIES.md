@@ -15,6 +15,8 @@ The classifier uses concrete client/server ancestors and typed protocol endpoint
 Generic pair frames that name both endpoints do not establish one endpoint as the owner.
 Missing ancestry remains shared.
 The bucket totals are not estimates of the complete CPU cost of either endpoint.
+These profiles cover completion on `c08b7333`, not the later response-overlap scheduling correction `18a8f392`.
+The harness did not assert response DATA before every upload completed.
 
 The hottest direct-empty client stack is `H2Client::accept_driver_bytes_ref`, with 16 samples.
 The hottest server stack has 28 samples in an unresolved libc leaf under `Result::branch` and `H2Server::accept_driver_event_bytes_ref`.
