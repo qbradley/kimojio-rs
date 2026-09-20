@@ -413,7 +413,17 @@ Its release binary SHA-256 is `8e8550c0d771ea20a2a6b7c4eab24fb9e64f3f918a21e0c06
 It includes only the runtime repair beyond `b3789dc6`, with unchanged wrapper and fixture logic.
 The fixture owner passed 17 fixture tests, 12 socket smoke cases, and four server-close probes.
 Local provenance is in `target/http2-program/worktrees/http2-wrapper-fixture/target/wrapper-runtime-candidate/summary.json`.
-The independent peer owner is now repeating the complete wrapper profile for both transports on this candidate.
+The independent peer owner repeated the complete wrapper profile for both transports on this candidate.
+Native and generic modes each passed 48 flow cases, 17 protocol cases, and two complete early-200/413 upload probes.
+Strict negative controls also passed, including the 65,535-byte upload stop without credit refunds.
+The synchronized reset-zero case preserved the 413 response, actual reset retirement, sibling completion, and graceful close.
+Four cases per mode remain synchronized rather than cold-start coverage.
+
+The peer owner checked the same binary hash before and after both modes.
+The authoritative report is `target/http2-program/reports/runtime-86da3f3f-summary.json`, with peer source `1df3ea1e`.
+No exercised socket case had a failure or unresolved observation.
+Ambiguous split/I/O/close error observations remain outside this qualification.
+Safety review and socket qualification are complete for their recorded scope, but retention acceptance still awaits fresh measurements.
 
 ### Initial wrapper client fixture
 
