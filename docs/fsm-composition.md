@@ -306,6 +306,22 @@ Per-stream backpressure must preserve sibling progress within the connection bud
 No design can promise unlimited progress after the aggregate budget is exhausted.
 Limits must include retained data, pending operations, and framing storage.
 
+### Bounded deferred control work
+
+A resource release can create a protocol obligation before the transport can accept its output.
+One queued frame per release can exhaust a control budget even when the consumer promptly releases every body lease.
+Bounded body storage alone does not prevent this failure.
+
+Equivalent obligations can accumulate in bounded counters with at most one pending entry per live resource.
+The machine creates wire output only when the output slot and framing budget permit it.
+Counter bounds, resource retirement, and reset rules remain explicit.
+Obligations that require distinct ordering or acknowledgments cannot use this combination without a separate correctness argument.
+
+Consumer release, pending credit, and published credit remain distinct milestones.
+The protocol changes its advertised allowance at its defined publication boundary, not at consumer release alone.
+Deferred output must preserve partial frames and compression order.
+The HTTP/2 credit repair applies this pattern to connection and stream WINDOW_UPDATE obligations.
+
 ## Cancellation, time, and failure
 
 Cancellation follows semantic ownership, not unconditional recursive transport cancellation.
@@ -441,6 +457,8 @@ Comparisons between yielding and continuing callbacks use the same external inpu
 Schedules must include several external completions between drive calls, not only one completion followed by one drive.
 They must also include queued notifications that arrive after logical retirement and a subsequent exchange on the same connection.
 The static-server refactor exposed a stale source-failure transition only when file-close failure and final-write success occurred in one batch.
+Resource models must include repeated consumer releases while an original write remains outstanding.
+The HTTP/2 credit repair exposed control-queue exhaustion under this schedule, despite bounded retained body storage.
 Parser corpora, native integration, and independent peers complement this model.
 The report states the explored bounds and does not claim a complete proof.
 
