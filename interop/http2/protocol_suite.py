@@ -71,6 +71,12 @@ def validate(scenario, report, witness):
         elif stream == 1 and scenario == "early-response":
             status, length = 413, 0
         require(result.get("status") == status, f"stream {stream}: wrong status")
+        declared = None if status is None or status == 204 or scenario == "connect" else length
+        if stream == 1 and scenario == "content-length":
+            declared = 38
+        if stream == 1 and scenario == "reset-discard":
+            declared = 65535
+        require("content_length" in result and result["content_length"] == declared, "wrong declared content length")
         require(result.get("bytes") == length, f"stream {stream}: wrong body length")
         require(result.get("sha256") == digest_for(stream, length), f"stream {stream}: wrong body hash")
         require(result.get("ended") is ended, f"stream {stream}: wrong END_STREAM result")
@@ -136,7 +142,7 @@ def server_case(binary, server_adapter, scenario, directory):
         server_command = command(server_adapter, server_request)
     with PeerProcess(server_command, cwd=ROOT) as server:
         count = 2 if scenario == "request-hpack-reuse" else 1
-        case = Case(scenario, 37, count, count)
+        case = Case(scenario, 37, count, count, method="CONNECT" if scenario == "connect" else "GET")
         spec = case.spec(server.address, upload=scenario == "request-trailers")
         spec["wire_scenario"] = scenario
         if scenario == "connect":
@@ -150,7 +156,7 @@ def server_case(binary, server_adapter, scenario, directory):
             cwd=ROOT, timeout=12,
         )
         require(completed.returncode == 0, f"Go client failed: {completed.stderr!r}")
-        validate_results(case, read_json(result_file))
+        validate_results(case, read_json(result_file), echo=scenario == "request-trailers")
         require(server.output_bytes <= 128 * 1024, "server output exceeds bound")
     return {"name": scenario, "role": "server", "passed": True}
 

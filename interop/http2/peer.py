@@ -107,6 +107,15 @@ class Peer:
 
 
 @dataclass
+class Fragment:
+    stream_id: int
+    data: bytes
+    flow: int
+    offset: int = 0
+    settled: bool = False
+
+
+@dataclass
 class Send:
     stream_id: int
     length: int
@@ -115,6 +124,8 @@ class Send:
     sent: int = 0
     flow_sent: int = 0
     frames: int = 0
+    fragments: deque[Fragment] | None = None
+    source_ended: bool = False
 
 
 class CreditSender:
@@ -128,6 +139,13 @@ class CreditSender:
         self.initial_stream_credit: dict[int, int] = {}
         self.total_payload = 0
         self.total_flow = 0
+        self.streaming: dict[int, Send] = {}
+        self.releases: list[Fragment] = []
+        self.owned_bytes = 0
+        self.owned_items = 0
+        self.peak_owned_bytes = 0
+        self.peak_owned_items = 0
+        self.storage_limit = peer.connection.inbound_flow_control_window
 
     def response(
         self,
@@ -156,7 +174,7 @@ class CreditSender:
 
     def start(
         self, stream_id: int, length: int, *,
-        padding: int | None = None, trailers: bool = False,
+        padding: int | None = None, trailers: bool = False, streaming: bool = False,
     ) -> None:
         """Queue an already opened response or request body."""
         if length < 0 or padding is not None and not 0 <= padding <= 255:
@@ -171,10 +189,47 @@ class CreditSender:
         if self.initial_connection_credit is None:
             self.initial_connection_credit = connection.outbound_flow_control_window
         send = Send(stream_id, length, padding, trailers)
-        if length == 0:
+        if streaming:
+            send.fragments = deque()
+            self.streaming[stream_id] = send
+            self.pending.append(send)
+        elif length == 0:
             self._finish(send)
         else:
             self.pending.append(send)
+
+    def echo_response(self, stream_id: int, content_length: int | None) -> None:
+        headers = [(b":status", b"200")]
+        if content_length is not None:
+            headers.append((b"content-length", str(content_length).encode()))
+        self.peer.connection.send_headers(stream_id, headers)
+        self.start(stream_id, 0, streaming=True)
+
+    def feed(self, stream_id: int, data: bytes, flow: int) -> None:
+        send = self.streaming[stream_id]
+        if send.source_ended or flow < len(data):
+            raise ValueError("invalid streaming fragment")
+        if self.owned_bytes + flow > self.storage_limit or self.owned_items == 4096:
+            raise ValueError("streaming echo retained-storage limit exceeded")
+        send.fragments.append(Fragment(stream_id, data, flow))
+        send.length += len(data)
+        self.owned_bytes += flow
+        self.owned_items += 1
+        self.peak_owned_bytes = max(self.peak_owned_bytes, self.owned_bytes)
+        self.peak_owned_items = max(self.peak_owned_items, self.owned_items)
+
+    def end(self, stream_id: int) -> None:
+        self.streaming[stream_id].source_ended = True
+
+    def settle(self, fragment: Fragment, *, consume: bool = True) -> None:
+        """Return ownership and input credit only after the echo write settles."""
+        if fragment.settled or fragment.offset != len(fragment.data):
+            raise ValueError("fragment was already released or not fully sent")
+        if consume:
+            self.peer.consume(fragment.stream_id, fragment.flow)
+        fragment.settled = True
+        self.owned_bytes -= fragment.flow
+        self.owned_items -= 1
 
     def _finish(self, send: Send) -> None:
         if send.trailers:
@@ -183,26 +238,40 @@ class CreditSender:
             )
         self.completed[send.stream_id] = send
 
-    def drive(self, frame_budget: int = 64) -> int:
+    def drive(self, frame_budget: int = 64, *, blocked_streams=()) -> int:
         if frame_budget <= 0:
             raise ValueError("frame budget must be positive")
         connection = self.peer.connection
         sent = 0
         for _ in range(min(len(self.pending), frame_budget)):
             send = self.pending.popleft()
+            if send.stream_id in blocked_streams:
+                self.pending.append(send)
+                continue
             padding_cost = 0 if send.padding is None else send.padding + 1
             available = min(
                 connection.local_flow_control_window(send.stream_id),
                 connection.max_outbound_frame_size,
             ) - padding_cost
-            amount = min(send.length - send.sent, max(0, available))
-            if amount == 0:
+            fragment = send.fragments[0] if send.fragments else None
+            remaining = (
+                len(fragment.data) - fragment.offset if fragment is not None
+                else send.length - send.sent
+            )
+            amount = min(remaining, max(0, available))
+            empty_frame = send.fragments is not None and remaining == 0 and (
+                fragment is not None or send.source_ended
+            )
+            if amount == 0 and not empty_frame:
                 self.pending.append(send)
                 continue
-            final = send.sent + amount == send.length
+            final = send.sent + amount == send.length and (
+                send.fragments is None or send.source_ended and len(send.fragments) <= 1
+            )
             connection.send_data(
                 send.stream_id,
-                bytes([send.stream_id % 251]) * amount,
+                fragment.data[fragment.offset:fragment.offset + amount]
+                if fragment is not None else bytes([send.stream_id % 251]) * amount,
                 end_stream=final and not send.trailers,
                 pad_length=send.padding,
             )
@@ -212,6 +281,11 @@ class CreditSender:
             self.total_payload += amount
             self.total_flow += amount + padding_cost
             sent += 1
+            if fragment is not None:
+                fragment.offset += amount
+                if fragment.offset == len(fragment.data):
+                    send.fragments.popleft()
+                    self.releases.append(fragment)
             if final:
                 self._finish(send)
             else:

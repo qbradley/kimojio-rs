@@ -9,7 +9,7 @@ import socket
 
 from h2.events import DataReceived, RequestReceived, StreamEnded
 
-from peer import CreditSender, digest_for
+from peer import CreditSender
 from socket_peer import Channel, configured_peer, credit_report, prerequisites, receive_credit_report, require
 
 
@@ -56,7 +56,16 @@ def client(spec):
                 )
                 sender.start(stream, length, trailers=bool(request["trailers"]))
                 issued += 1
-            sender.drive(frame_budget=8)
+            blocked = {
+                send.stream_id for send in sender.pending
+                if spec["requests"][(send.stream_id - 1) // 2]["path"] == "/echo"
+                and send.sent > 0
+                and (
+                    send.stream_id not in peer.received
+                    or peer.received[send.stream_id].payload == 0
+                )
+            }
+            sender.drive(frame_budget=8, blocked_streams=blocked)
             if ended == len(spec["requests"]) and not sender.pending:
                 channel.flush()
                 break
@@ -88,7 +97,7 @@ def client(spec):
 
 def serve(sock, *, config, timeout=60, case=None, refund=True):
     peer = configured_peer(client=False, config=config)
-    channel = Channel(sock, peer, timeout=timeout, consume=refund)
+    channel = Channel(sock, peer, timeout=timeout, consume=False)
     sender = CreditSender(peer)
     requests = {}
     responded = set()
@@ -100,6 +109,16 @@ def serve(sock, *, config, timeout=60, case=None, refund=True):
         baseline = channel.inbound.updates[0]
         for _ in range(1_000_000):
             sender.drive(frame_budget=8)
+            channel.queue()
+            if sender.releases:
+                fragments, sender.releases = sender.releases, []
+
+                def settled(fragments=fragments):
+                    for fragment in fragments:
+                        sender.settle(fragment, consume=refund)
+                    fragments.clear()
+
+                channel.after_write(settled)
             if case and case.actions and 3 in sender.completed and not sibling_progress:
                 pending = {send.stream_id: send for send in sender.pending}
                 require(1 in pending, "paused stream completed before its sibling")
@@ -110,21 +129,17 @@ def serve(sock, *, config, timeout=60, case=None, refund=True):
                 if isinstance(event, RequestReceived):
                     require(len(requests) < 1024, "request count limit exceeded")
                     requests[event.stream_id] = dict(event.headers)
-                if isinstance(event, (RequestReceived, StreamEnded)):
+                if isinstance(event, RequestReceived):
                     stream = event.stream_id
                     if stream in responded:
                         continue
                     headers = requests[stream]
                     path = headers[b":path"].decode()
                     if path == "/echo":
-                        received = peer.received.get(stream)
-                        if not received or not received.ended:
-                            continue
-                        length = received.payload
-                        require(
-                            received.digest.hexdigest() == digest_for(stream, length),
-                            "upload hash mismatch",
-                        )
+                        declared = headers.get(b"content-length")
+                        sender.echo_response(stream, int(declared) if declared is not None else None)
+                        responded.add(stream)
+                        continue
                     elif path == "/no-content":
                         peer.connection.send_headers(stream, [(b":status", b"204")], end_stream=True)
                         sender.start(stream, 0)
@@ -150,8 +165,23 @@ def serve(sock, *, config, timeout=60, case=None, refund=True):
                             for _ in range(4096):
                                 peer.connection.send_data(stream, b"")
                     responded.add(stream)
+                if isinstance(event, DataReceived):
+                    if event.stream_id in sender.streaming:
+                        require(
+                            event.data == bytes([event.stream_id % 251]) * len(event.data),
+                            "upload fragment mismatch",
+                        )
+                        sender.feed(event.stream_id, event.data, event.flow_controlled_length)
+                    elif refund:
+                        peer.consume(event.stream_id, event.flow_controlled_length)
+                if isinstance(event, StreamEnded) and event.stream_id in sender.streaming:
+                    sender.end(event.stream_id)
+            # The receive batch must not retain fragments after write settlement.
+            events.clear()
+            event = None
             if channel.eof:
                 require(not sender.pending, "client closed with incomplete responses")
+                require(sender.owned_items == 0, "client closed before echo writes settled")
                 require(len(responded) == len(requests), "client abandoned request")
                 break
         else:
@@ -170,6 +200,10 @@ def serve(sock, *, config, timeout=60, case=None, refund=True):
             "peer_eof": channel.eof,
             "sibling_progress": sibling_progress,
             "empty_data_frames": channel.outbound.types[0] - sum(send.frames for send in sender.completed.values()),
+            "echo_retention": {
+                "bytes": sender.peak_owned_bytes, "items": sender.peak_owned_items,
+                "byte_limit": sender.storage_limit, "item_limit": 4096,
+            },
             "received": {
                 str(stream): {"bytes": received.payload, "sha256": received.digest.hexdigest(), "ended": received.ended}
                 for stream, received in peer.received.items()

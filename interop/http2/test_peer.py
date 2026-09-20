@@ -139,6 +139,45 @@ class CreditTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             sender.drive(0)
 
+    def test_streaming_echo_waits_for_write_settlement_to_refund(self):
+        client, server = Peer(client=True), Peer(client=False, stream_window=1024)
+        handshake(client, server)
+        client.connection.send_headers(1, [
+            (b":method", b"POST"), (b":scheme", b"http"),
+            (b":authority", b"localhost"), (b":path", b"/echo"),
+        ])
+        exchange(client, server, consume=False)
+        sender = CreditSender(server)
+        sender.echo_response(1, None)
+        exchange(client, server, consume=False)
+        self.assertNotIn(1, client.received)
+        client.connection.send_data(1, b"\x01" * 512)
+        exchange(client, server, consume=False)
+        sender.feed(1, b"\x01" * 512, 512)
+        self.assertEqual(sender.drive(), 1)
+        self.assertEqual(server.received[1].unconsumed, 512)
+        self.assertEqual(sender.owned_bytes, 512)
+        exchange(client, server, consume=False)
+        self.assertEqual(client.received[1].payload, 512)
+        self.assertFalse(client.received[1].ended)
+        released = sender.releases.pop()
+        sender.settle(released)
+        with self.assertRaises(ValueError):
+            sender.settle(released)
+        self.assertEqual(server.received[1].unconsumed, 0)
+        self.assertEqual(sender.owned_bytes, 0)
+        exchange(client, server, consume=False)
+        self.assertEqual(client.window_updates[1], 512)
+        client.connection.send_data(1, b"", end_stream=True)
+        exchange(client, server, consume=False)
+        sender.feed(1, b"", 0)
+        sender.end(1)
+        self.assertEqual(sender.drive(), 1)
+        exchange(client, server, consume=False)
+        self.assertTrue(client.received[1].ended)
+        sender.settle(sender.releases.pop())
+        self.assertEqual(sender.owned_items, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

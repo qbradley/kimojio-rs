@@ -56,6 +56,42 @@ class SocketTests(unittest.TestCase):
             validate_results(Case("early-headers", 37), channel.report())
         self.assertEqual(observations[0]["requests"], 1)
 
+    def test_echo_headers_and_data_precede_request_end(self):
+        import socket
+
+        observations = []
+
+        def handler(wire, _index):
+            observations.append(serve(wire.sock, config={"stream_window": 1024}, timeout=3))
+
+        with ScriptedPeer(handler, timeout=3) as server:
+            peer = Peer(client=True, stream_window=1024)
+            channel = Channel(socket.create_connection(server.address), peer, timeout=3)
+            try:
+                channel.handshake()
+                peer.connection.send_headers(1, [
+                    (b":method", b"POST"), (b":scheme", b"http"),
+                    (b":authority", b"localhost"), (b":path", b"/echo"),
+                    (b"content-length", b"37"),
+                ])
+                while channel.results.get(1, {}).get("status") is None:
+                    channel.step()
+                self.assertEqual(channel.results[1]["status"], 200)
+                self.assertNotIn(1, peer.received)
+                peer.connection.send_data(1, b"\x01" * 17)
+                while 1 not in peer.received or peer.received[1].payload < 17:
+                    channel.step()
+                self.assertFalse(peer.received[1].ended)
+                peer.connection.send_data(1, b"\x01" * 20, end_stream=True)
+                while not peer.received[1].ended:
+                    channel.step()
+                channel.flush()
+            finally:
+                channel.close()
+            validate_results(Case("echo", 37), channel.report(), echo=True)
+        self.assertEqual(observations[0]["echo_retention"]["bytes"], 20)
+        self.assertEqual(observations[0]["echo_retention"]["items"], 1)
+
     def test_actual_eight_megabyte_windows(self):
         case = Case(
             "8mib", 16 * 1024 * 1024 + 17,
@@ -112,6 +148,27 @@ class SocketTests(unittest.TestCase):
         observed = self.no_credit_server(stream_window=65535, length=32768, count=8)
         self.assertEqual(observed["bytes"], 65535)
 
+    def test_buffered_echo_server_is_rejected_by_duplex_probe(self):
+        observed = []
+
+        def handler(wire, _index):
+            peer = Peer(client=False)
+            channel = Channel(wire.sock, peer, timeout=3)
+            try:
+                channel.handshake()
+                while not channel.eof:
+                    channel.step()
+                observed.append((peer.received[1].payload, peer.received[1].ended))
+            finally:
+                channel.close()
+
+        with ScriptedPeer(handler, timeout=3) as server:
+            spec = Case("buffered-echo", 131087).spec(server.address, upload=True)
+            spec["timeout_ms"] = 300
+            with self.assertRaises(TimeoutError):
+                client(spec)
+        self.assertEqual(observed, [(16384, False)])
+
     def test_small_workload_cannot_qualify_large_windows(self):
         credit = {
             "initial_connection": 8 * 1024 * 1024, "connection_window_update": 1,
@@ -136,6 +193,7 @@ class SocketTests(unittest.TestCase):
             "schema": 1, "connection": {"closed": True, "error": None},
             "streams": [{
                 "stream_id": 1, "status": 200, "bytes": 3,
+                "content_length": 3,
                 "sha256": digest_for(1, 3), "trailers": [], "informational": [],
                 "ended": True, "error": None,
             }],
@@ -148,6 +206,21 @@ class SocketTests(unittest.TestCase):
                 validate_results(case, broken)
         result["connection"]["closed"] = False
         with self.assertRaisesRegex(AssertionError, "explicitly close"):
+            validate_results(case, result)
+
+    def test_head_requires_declared_length_despite_empty_body(self):
+        case = Case("head", 999, method="HEAD")
+        result = {
+            "schema": 1, "connection": {"closed": True, "error": None},
+            "streams": [{
+                "stream_id": 1, "status": 200, "content_length": 999,
+                "bytes": 0, "sha256": digest_for(1, 0), "trailers": [],
+                "informational": [], "ended": True, "error": None,
+            }],
+        }
+        validate_results(case, result)
+        result["streams"][0]["content_length"] = 0
+        with self.assertRaisesRegex(AssertionError, "declared content length"):
             validate_results(case, result)
 
     def test_bounded_process_output_and_timeout(self):

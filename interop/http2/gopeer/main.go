@@ -388,6 +388,7 @@ type spec struct {
 type result struct {
 	StreamID      uint32     `json:"stream_id"`
 	Status        *int       `json:"status"`
+	ContentLength *int       `json:"content_length"`
 	Bytes         int        `json:"bytes"`
 	SHA256        string     `json:"sha256"`
 	Trailers      [][]string `json:"trailers"`
@@ -435,6 +436,7 @@ func rawClient(input spec) (map[string]any, error) {
 	var connectionError any
 	// Uploads start only after server SETTINGS. CONNECT waits for status 200.
 	uploaded := make(map[uint32]bool)
+	uploadProgress := make(map[uint32]int)
 	for done < len(results) {
 		frame, err := p.read(true)
 		if err != nil {
@@ -468,6 +470,8 @@ func rawClient(input spec) (map[string]any, error) {
 					if _, err := fmt.Sscan(field.Value, &r.length); err != nil {
 						return nil, err
 					}
+					length := r.length
+					r.ContentLength = &length
 				}
 			}
 			if frame.StreamEnded() {
@@ -559,16 +563,23 @@ func rawClient(input spec) (map[string]any, error) {
 			stream := uint32(index*2 + 1)
 			r := results[stream]
 			if req.BodyBytes > 0 && !uploaded[stream] && (req.Method != "CONNECT" || r.Status != nil) {
-				// This reference only needs one bounded frame, including a blocked upload prefix.
-				amount := min(req.BodyBytes, int(p.window), int(p.credit), 16384)
+				if req.Method == "CONNECT" && uploadProgress[stream] > 0 && r.Bytes == 0 {
+					continue
+				}
+				// Only small protocol probes use this producer.
+				amount := min(req.BodyBytes-uploadProgress[stream], int(p.window), int(p.credit), 16384)
+				if req.Method == "CONNECT" && uploadProgress[stream] == 0 && req.BodyBytes > 1 {
+					amount = min(amount, req.BodyBytes-1, 17)
+				}
 				if amount <= 0 {
 					continue
 				}
-				if err := p.body(stream, bytes.Repeat([]byte{byte(stream % 251)}, amount), amount == req.BodyBytes && len(req.Trailers) == 0); err != nil {
+				final := uploadProgress[stream]+amount == req.BodyBytes
+				if err := p.body(stream, bytes.Repeat([]byte{byte(stream % 251)}, amount), final && len(req.Trailers) == 0); err != nil {
 					return nil, err
 				}
 				if len(req.Trailers) > 0 {
-					if amount != req.BodyBytes {
+					if !final {
 						return nil, errors.New("reference trailers require a one-frame upload")
 					}
 					fields := make([]hpack.HeaderField, 0, len(req.Trailers))
@@ -582,7 +593,8 @@ func rawClient(input spec) (map[string]any, error) {
 						return nil, err
 					}
 				}
-				uploaded[stream] = true
+				uploadProgress[stream] += amount
+				uploaded[stream] = final || req.Method != "CONNECT"
 			}
 		}
 	}

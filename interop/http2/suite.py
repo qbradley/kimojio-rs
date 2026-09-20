@@ -65,7 +65,7 @@ def client_case(spec, case, directory, *, upload=False):
         )
         require(completed.returncode == 0, f"client command failed: {completed.stderr!r}")
         result = read_json(result_file)
-        validate_results(case, result)
+        validate_results(case, result, echo=upload)
     require(len(observations) == 1, "independent server did not finish")
     observation = observations[0]
     require(observation["requests"] == case.count, "wrong request count on wire")
@@ -97,7 +97,7 @@ def server_case(spec, case, directory, *, upload):
     })
     with PeerProcess(command(spec, request_file), cwd=ROOT) as process:
         result = client(case.spec(process.address, upload=upload))
-        validate_results(case, result)
+        validate_results(case, result, echo=upload)
         require(process.output_bytes <= 128 * 1024, "server output exceeds limit")
         if upload:
             qualify(case, result["credit"])

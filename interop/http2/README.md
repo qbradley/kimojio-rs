@@ -78,9 +78,9 @@ Reports contain only cases that the command actually ran.
 The complete flow command runs 48 cases across these roles:
 
 * Independent server against the command-driven client.
-* Independent server receives client uploads, then returns each complete body.
+* Independent server echoes accepted client-upload fragments before request END_STREAM.
 * Independent client downloads from the command-driven server.
-* Independent client uploads to the command-driven server, which echoes the body.
+* Independent client uploads to the command-driven server, which echoes each accepted fragment.
 
 Nine workloads exercise receive credit in each role:
 
@@ -104,11 +104,22 @@ The report records initial credit, increments, DATA flow bytes, and final credit
 The connection equation must match the independent library's actual balance.
 Closed streams can receive late updates that python-h2 ignores in its retired stream object.
 The wire equation still includes those increments.
+Queued refunds after peer EOF appear as `pending_connection_window_update`.
+They do not count as transmitted WINDOW_UPDATE increments.
 
-Every successful stream needs an exact byte count, SHA-256, status, trailers, informational sequence, and END_STREAM.
+Every successful stream needs an exact byte count, SHA-256, status, declared content length, trailers, informational sequence, and END_STREAM.
+HEAD must report its declared content length despite its empty body.
 Bodies use the repeated byte `stream_id % 251`.
 The peers calculate hashes incrementally without retaining complete bodies.
 Serial aggregates exercise connection-credit refunds after END_STREAM.
+
+The echo server sends response headers when request headers arrive.
+It retains accepted body fragments only until the corresponding socket writes complete.
+It then returns receive credit.
+Its retained fragments cannot exceed its initial connection window or 4,096 items.
+Independent-server reports contain fragment high-water counts.
+The upload client stops after its first fragment until echo DATA arrives.
+Thus, a server that waits for request END_STREAM cannot pass through a whole-body buffer.
 
 Additional cases exercise:
 
@@ -156,6 +167,7 @@ Against a command-driven server, the Go client exercises:
 
 The request-trailer case proves acceptance and complete body echo.
 The echo route does not expose request-trailer values to the test.
+The independent CONNECT client requires echo DATA for a non-final prefix before it sends the remaining tunnel DATA.
 
 ## Fault controls and bounds
 
@@ -163,6 +175,10 @@ The Python tests include no-consumption and no-credit server controls.
 One socket control stops at exactly 1,024 payload bytes.
 Another stops at exactly 65,535 bytes across eight small uploads.
 Both controls fail by deadline before a response completes.
+Another control rejects a server that waits for the complete upload before it sends echo DATA.
+A socket test requires response headers before the first request DATA.
+It then requires echo DATA before request END_STREAM.
+An ownership test withholds input credit until the echo write settles.
 The tests also reject workloads that are too small for 8 MiB windows.
 Separate socket runs qualify both 8 MiB balances with large bodies and serial/concurrent aggregates.
 

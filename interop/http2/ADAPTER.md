@@ -27,7 +27,7 @@ The request file contains:
   "request_count":2,
   "concurrency":2,
   "requests":[
-    {"method":"GET","path":"/bytes/131071","body_bytes":0,"trailers":[]},
+    {"method":"GET","path":"/bytes/131087","body_bytes":0,"trailers":[]},
     {"method":"GET","path":"/trailers/37","body_bytes":0,"trailers":[]}
   ],
   "actions":[]
@@ -57,9 +57,21 @@ The result file contains:
     {
       "stream_id":1,
       "status":200,
-      "bytes":131071,
+      "content_length":131087,
+      "bytes":131087,
       "sha256":"lowercase hexadecimal SHA-256",
       "trailers":[],
+      "informational":[],
+      "ended":true,
+      "error":null
+    },
+    {
+      "stream_id":3,
+      "status":200,
+      "content_length":37,
+      "bytes":37,
+      "sha256":"lowercase hexadecimal SHA-256",
+      "trailers":[["x-end","done"]],
       "informational":[],
       "ended":true,
       "error":null
@@ -70,6 +82,8 @@ The result file contains:
 ```
 
 Every issued stream needs exactly one result.
+`content_length` is the declared response length, or null when the response has no Content-Length field.
+HEAD reports the declared length even though `bytes` is zero.
 `trailers` contains ordered string pairs, such as `[["x-end","done"]]`.
 `informational` contains status integers, such as `[103]`.
 `error` is null or `{"scope":"stream","code":1}`.
@@ -100,7 +114,7 @@ Routes are:
 | Route | Response |
 |---|---|
 | `/bytes/N` | Status 200, N copies of byte `stream_id % 251`, exact content length |
-| `/echo` | Status 200, the exact request body, after request END_STREAM |
+| `/echo` | Status 200 at request headers, then the exact accepted request fragments as streaming DATA |
 | `/trailers/N` | The same body as `/bytes/N`, followed by `x-end: done` |
 | `/informational/N` | Status 103, then the same final response as `/bytes/N` |
 | `/no-content` | Status 204 and no DATA payload |
@@ -109,7 +123,13 @@ Routes are:
 HEAD returns the route's content length but no DATA payload.
 Classic CONNECT uses `:method` and `:authority`, without `:scheme` or `:path`.
 The fixture accepts CONNECT with status 200 and echoes tunnel DATA until END_STREAM.
-The fixture consumes ordinary uploads as it receives them.
+CONNECT is bidirectional and does not wait for the complete request body.
+The `/echo` response ends only after request END_STREAM and all accepted fragments reach their output write completions.
+The fixture retains each accepted fragment until its echo write completes.
+Only then does it release that fragment and return its receive credit.
+It does not collect the complete upload before it starts the response.
+The client fixture must process responses while its upload producer remains active.
+Echo responses can omit Content-Length, especially for requests without a declared length.
 
 ## Initial concrete cases
 
@@ -128,6 +148,8 @@ Their total exceeds twice the actual initial connection window.
 Every body needs exact byte counts, SHA-256, END_STREAM, and expected trailers.
 The peer records all WINDOW_UPDATE increments and final send balances.
 Those values must satisfy the stream and connection credit equations.
+Independent upload clients stop after their first fragment until echo DATA arrives.
+This explicit duplex probe rejects a server that waits for the complete request body.
 
 The initial semantic cases cover trailers, informational responses, HEAD, and status 204.
 Fault controls include a receiver that withholds consumption and a server that never returns upload credit.

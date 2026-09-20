@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 import importlib.metadata
 from pathlib import Path
 import select
@@ -120,6 +120,7 @@ class Channel:
         self.results = {}
         self.closed = False
         self.deferred = []
+        self.settlements = deque()
 
     def queue(self, raw=None):
         data = self.peer.take_wire() if raw is None else raw
@@ -130,8 +131,13 @@ class Channel:
     def result(self, stream):
         return self.results.setdefault(stream, {
             "stream_id": stream, "status": None, "bytes": 0, "sha256": "",
+            "content_length": None,
             "trailers": [], "informational": [], "ended": False, "error": None,
         })
+
+    def after_write(self, callback):
+        boundary = self.outbound.bytes + len(self.out)
+        self.settlements.append((boundary, callback))
 
     def step(self):
         self.queue()
@@ -151,6 +157,9 @@ class Channel:
             require(count > 0, "socket write made no progress")
             self.outbound.feed(self.out[:count])
             del self.out[:count]
+            while self.settlements and self.settlements[0][0] <= self.outbound.bytes:
+                _boundary, settle = self.settlements.popleft()
+                settle()
         events = []
         if readable:
             allowance = MAX_WIRE - self.inbound.bytes
@@ -169,6 +178,8 @@ class Channel:
                             self.result(stream)["informational"].append(status)
                         else:
                             self.result(stream)["status"] = status
+                            length = dict(event.headers).get(b"content-length")
+                            self.result(stream)["content_length"] = int(length) if length is not None else None
                     elif isinstance(event, TrailersReceived):
                         self.result(stream)["trailers"] = [
                             [name.decode("ascii"), value.decode("ascii")]
@@ -264,10 +275,16 @@ def credit_report(channel, sender, update_baseline):
 
 
 def receive_credit_report(channel, initial_connection, update_baseline):
+    channel.queue()
+    pending = Trace()
+    pending.feed(bytes(channel.outbound.buffer) + bytes(channel.out))
     total_flow = sum(channel.inbound.flow.values())
     updates = channel.outbound.updates[0] - update_baseline
     final = initial_connection + updates - total_flow
-    require(final == channel.peer.connection.inbound_flow_control_window, "receive connection credit mismatch")
+    require(
+        final + pending.updates[0] == channel.peer.connection.inbound_flow_control_window,
+        "receive connection credit mismatch",
+    )
     streams = []
     for stream in channel.results:
         received = channel.peer.received.get(stream, Received())
@@ -283,6 +300,7 @@ def receive_credit_report(channel, initial_connection, update_baseline):
         })
     return {
         "initial_connection": initial_connection, "connection_window_update": updates,
+        "pending_connection_window_update": pending.updates[0],
         "flow": total_flow, "final_connection": final, "streams": streams,
     }
 

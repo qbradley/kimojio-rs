@@ -97,7 +97,7 @@ def qualify(case, credit):
         )
 
 
-def validate_results(case, report):
+def validate_results(case, report, *, echo=False):
     require(report.get("schema") == 1, "result schema must be 1")
     connection = report.get("connection", {})
     require(connection.get("closed") is True, "client did not explicitly close its socket")
@@ -109,6 +109,13 @@ def validate_results(case, report):
     for stream, result in indexed.items():
         length = 0 if case.method == "HEAD" or case.route == "no-content" else case.length
         require(result.get("status") == (204 if case.route == "no-content" else 200), "wrong status")
+        require("content_length" in result, "missing declared content length")
+        declared = result["content_length"]
+        if echo:
+            require(declared is None or declared == length, "echo declared length mismatch")
+        else:
+            expected_length = None if case.route == "no-content" or case.method == "CONNECT" else case.length
+            require(declared == expected_length, f"stream {stream}: declared content length mismatch")
         require(result.get("bytes") == length, f"stream {stream}: body length mismatch")
         require(result.get("sha256") == digest_for(stream, length), f"stream {stream}: body hash mismatch")
         require(result.get("ended") is True, f"stream {stream}: missing END_STREAM")
