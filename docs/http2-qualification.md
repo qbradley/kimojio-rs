@@ -11,7 +11,8 @@ The native client and server have focused runtime coverage.
 The explicit wrapper interoperability profile passed for native and generic transports.
 Lifecycle evidence is recorded with explicit limits.
 The runtime scope-retention repair passed independent review, socket qualification, and bounded retention measurements.
-The wrapper performance baseline is measured. A profile-directed copy-reduction experiment is in progress.
+The wrapper performance baseline is measured.
+The direct-read experiment was rejected for general integration. One final bounded allocation experiment remains in progress.
 
 The current socket qualification covers the direct HTTP/2 engine.
 Separate models cover the HTTP/1 plus HTTP/2 composite.
@@ -204,7 +205,7 @@ That review did not independently inject kernel cancellation races or close fail
 | Concurrent native server | Implemented with focused runtime tests |
 | Generic established transports | Implemented with focused runtime tests |
 | Independent wrapper socket fixture and peers | All 65 wrapper-profile cases passed per transport on `b3789dc6` |
-| Wrapper performance and final review | Measured baseline complete; first profile-directed experiment in progress |
+| Wrapper performance and final review | Baseline measured; direct-read rejected; final allocation experiment in progress |
 
 The current core socket results do not qualify the new wrapper.
 The wrapper needs its own fixture, peer runs, and source-specific measurements.
@@ -514,9 +515,32 @@ Its binary SHA-256 is `c4e542b048082003cf2899e0ccc9c021e922558a38ceb9635f4b13699
 The fixture owner passed 17 fixture tests, the paused-consumer regression, 12 socket smoke cases, and four actual-close probes.
 Local provenance is in `target/http2-program/worktrees/http2-wrapper-fixture/target/wrapper-direct-read-candidate/summary.json`.
 This artifact has not passed a new complete peer suite.
-Paired performance measurements remain in progress.
-CPU2 is leased only to the measurement owner for this experiment.
-Acceptance requires a supported benefit without weaker ownership or resource behavior.
+The [paired report](http2-performance/wrapper/direct-read-458b2bcd/) records nine trial groups and matching allocation controls.
+Its commit is `2a65d8e4a690975564104f3a78c697448eaee8e0`.
+All workload assertions passed, and buffered-copy samples fell from 350/8,791 to zero/8,574.
+Connection-live and cleanup allocation counters and plateaus matched the baseline.
+
+The generic large-body group improved by 1.52 percent.
+The broader generic interval included no change, while cold generic C128 empty exchanges regressed by 2.93 percent.
+Some unchanged native-path controls also showed nominal regressions, without an established cause.
+The candidate is therefore rejected for general integration at this checkpoint.
+The accepted source retains the measured baseline, and the candidate and its evidence remain available separately.
+CPU2 was released after the experiment.
+
+This result distinguishes removing a sampled copy from establishing a useful overall improvement.
+It does not justify weaker workload assertions, larger resource budgets, or extra trials selected to obtain a favorable result.
+
+### Final bounded allocation experiment
+
+The next experiment targets the common single reverse scope membership, with a general multi-scope fallback.
+The measured ledger attributes 341,115 native and 329,414 generic allocations to the current reverse-membership vectors at duplex cohort 32.
+Growth and deallocation account for about 2.0 percent native and 1.6 percent generic user samples.
+Those costs are smaller than the complete waiter path and do not include all registry hashing.
+
+The experiment starts from accepted runtime repair `a4af94fd`, without the rejected direct-read change.
+It must preserve weak ownership, cancellation generations, deduplication, migration, and destruction outside runtime borrows.
+Object-size and fallback behavior need explicit evidence before paired performance acceptance.
+No broader registry rewrite or third optimization is part of this bounded follow-up.
 
 ### Initial wrapper client fixture
 

@@ -1,0 +1,32 @@
+{
+  "source": "72758bb8342c609ecc72cb3ec73ff7308a883b2c",
+  "candidate": "458b2bcd2f371b234087f04d2e96e19b61837390",
+  "baseline_source": "6e00374698d40dedebd33b87d3fd183ebb0e2682",
+  "baseline_binaries": {
+    "runtime": {
+      "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/runtime",
+      "sha256": "0a362f7029ead27d25b1046df1ae0cdd4838b87f5cfc275c8f042096b7ec00ad"
+    },
+    "allocations": {
+      "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/measured-6e003746/allocations",
+      "sha256": "c62c7f0d2755f40824aa45850e5ffc00e9f1fc21e1ff841def21f400e16602c8"
+    }
+  },
+  "binaries": {
+    "allocations": {
+      "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/candidate-72758bb8/allocations",
+      "sha256": "7c6bc302860867eed7da3633adef13b0daa825c56a9a20cb1c2af40e359e0b9d"
+    },
+    "runtime": {
+      "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/candidate-72758bb8/runtime",
+      "sha256": "7e2b52b61504ed32694ebdbe253aed7c2e1e082aea01f48c5b90e1126db0556d"
+    }
+  },
+  "source_manifest_sha256": "7980c72754383fc84001fffac8be558d6b05c9810f0db39103ed0bd12a0110f6",
+  "build_command": "CARGO_PROFILE_RELEASE_DEBUG=2 CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance taskset -c 8-31 cargo build --release -p kimojio-http2 --bench runtime --bench allocations --message-format=json",
+  "rustflags": "",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "cpu_timing": 2,
+  "cpu_build_allocation": "8-31",
+  "offered_read_bytes": 16384
+}

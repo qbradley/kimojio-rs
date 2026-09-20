@@ -1,0 +1,52 @@
+[
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/candidate-72758bb8/profiles/baseline/generic-duplex.data",
+    "bytes": 290282472,
+    "sha256": "597480b683a4e58d6d1e8acae6aa72c854ad41727fc89b3d23a1687c97c096ca"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/candidate-72758bb8/profiles/baseline/runtime-nm.txt",
+    "bytes": 720116,
+    "sha256": "02fd07747ddac388e9b27554825b80432e0d343a7d7ba9dc44bd4d95d349de29"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/candidate-72758bb8/profiles/baseline/runtime-objdump.txt",
+    "bytes": 21663252,
+    "sha256": "fcbef4689a38f996eb5869e8b4f6bbf8dc7900eb01f3030d5bf65b67e029a160"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/candidate-72758bb8/profiles/baseline/samples.txt",
+    "bytes": 4038651,
+    "sha256": "72f85c003fb158dd8c6fefc623e245c59b42d8d149ed8e5724439638ee7ba3c3"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/candidate-72758bb8/profiles/baseline/script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/candidate-72758bb8/profiles/candidate/generic-duplex.data",
+    "bytes": 283117680,
+    "sha256": "bf17ed1e487a971bc00f632fe451e99aaa3c14a3380056fa2070e9e0c37fdfc0"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/candidate-72758bb8/profiles/candidate/runtime-nm.txt",
+    "bytes": 719553,
+    "sha256": "80070adb0c54232a87e02dbeab08dd7d87a74b30495ffea6bf252784f9b7370a"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/candidate-72758bb8/profiles/candidate/runtime-objdump.txt",
+    "bytes": 21671082,
+    "sha256": "d3fb56288efb13de27e037e1d4979efbf82043443c0536df9fa73b6f01e9d555"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/candidate-72758bb8/profiles/candidate/samples.txt",
+    "bytes": 3991309,
+    "sha256": "5e5184a574bcb46e67edaea32653428048779ba60cd5747737160ce2e7e796bd"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/candidate-72758bb8/profiles/candidate/script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

@@ -1,0 +1,290 @@
+[
+  {
+    "case": "generic-empty-4096",
+    "label": "pre_runtime",
+    "cohort": 0,
+    "all_origin_counters_equal": false
+  },
+  {
+    "case": "generic-empty-4096",
+    "label": "connection_live",
+    "cohort": 1,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-empty-4096",
+    "label": "connection_live",
+    "cohort": 2,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-empty-4096",
+    "label": "connection_live",
+    "cohort": 8,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-empty-4096",
+    "label": "connection_live",
+    "cohort": 32,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-empty-4096",
+    "label": "connection_live",
+    "cohort": 128,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-empty-4096",
+    "label": "connection_live",
+    "cohort": 256,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-empty-4096",
+    "label": "connection_live",
+    "cohort": 1024,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-empty-4096",
+    "label": "connection_live",
+    "cohort": 4096,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-empty-4096",
+    "label": "post_driver_close",
+    "cohort": 32768,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-empty-4096",
+    "label": "post_runtime_cleanup",
+    "cohort": 0,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-owned-8",
+    "label": "pre_runtime",
+    "cohort": 0,
+    "all_origin_counters_equal": false
+  },
+  {
+    "case": "generic-owned-8",
+    "label": "connection_live",
+    "cohort": 1,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-owned-8",
+    "label": "connection_live",
+    "cohort": 2,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-owned-8",
+    "label": "connection_live",
+    "cohort": 8,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-owned-8",
+    "label": "post_driver_close",
+    "cohort": 64,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-owned-8",
+    "label": "post_runtime_cleanup",
+    "cohort": 0,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-static-32",
+    "label": "pre_runtime",
+    "cohort": 0,
+    "all_origin_counters_equal": false
+  },
+  {
+    "case": "generic-static-32",
+    "label": "connection_live",
+    "cohort": 1,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-static-32",
+    "label": "connection_live",
+    "cohort": 2,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-static-32",
+    "label": "connection_live",
+    "cohort": 8,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-static-32",
+    "label": "connection_live",
+    "cohort": 32,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-static-32",
+    "label": "post_driver_close",
+    "cohort": 256,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "generic-static-32",
+    "label": "post_runtime_cleanup",
+    "cohort": 0,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-empty-4096",
+    "label": "pre_runtime",
+    "cohort": 0,
+    "all_origin_counters_equal": false
+  },
+  {
+    "case": "native-empty-4096",
+    "label": "connection_live",
+    "cohort": 1,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-empty-4096",
+    "label": "connection_live",
+    "cohort": 2,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-empty-4096",
+    "label": "connection_live",
+    "cohort": 8,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-empty-4096",
+    "label": "connection_live",
+    "cohort": 32,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-empty-4096",
+    "label": "connection_live",
+    "cohort": 128,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-empty-4096",
+    "label": "connection_live",
+    "cohort": 256,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-empty-4096",
+    "label": "connection_live",
+    "cohort": 1024,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-empty-4096",
+    "label": "connection_live",
+    "cohort": 4096,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-empty-4096",
+    "label": "post_driver_close",
+    "cohort": 32768,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-empty-4096",
+    "label": "post_runtime_cleanup",
+    "cohort": 0,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-owned-8",
+    "label": "pre_runtime",
+    "cohort": 0,
+    "all_origin_counters_equal": false
+  },
+  {
+    "case": "native-owned-8",
+    "label": "connection_live",
+    "cohort": 1,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-owned-8",
+    "label": "connection_live",
+    "cohort": 2,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-owned-8",
+    "label": "connection_live",
+    "cohort": 8,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-owned-8",
+    "label": "post_driver_close",
+    "cohort": 64,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-owned-8",
+    "label": "post_runtime_cleanup",
+    "cohort": 0,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-static-32",
+    "label": "pre_runtime",
+    "cohort": 0,
+    "all_origin_counters_equal": false
+  },
+  {
+    "case": "native-static-32",
+    "label": "connection_live",
+    "cohort": 1,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-static-32",
+    "label": "connection_live",
+    "cohort": 2,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-static-32",
+    "label": "connection_live",
+    "cohort": 8,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-static-32",
+    "label": "connection_live",
+    "cohort": 32,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-static-32",
+    "label": "post_driver_close",
+    "cohort": 256,
+    "all_origin_counters_equal": true
+  },
+  {
+    "case": "native-static-32",
+    "label": "post_runtime_cleanup",
+    "cohort": 0,
+    "all_origin_counters_equal": true
+  }
+]

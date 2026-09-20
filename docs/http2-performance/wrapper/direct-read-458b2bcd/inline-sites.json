@@ -1,0 +1,132 @@
+[
+  {
+    "version": "baseline",
+    "sites": [
+      {
+        "address": 1030102,
+        "instruction": "movups xmm1,XMMWORD PTR [rbx+0x10]",
+        "self_samples": 62
+      },
+      {
+        "address": 1031321,
+        "instruction": "movups xmm3,XMMWORD PTR [rsp+0x340]",
+        "self_samples": 51
+      },
+      {
+        "address": 1053614,
+        "instruction": "movups XMMWORD PTR [rsp+0x18],xmm0",
+        "self_samples": 33
+      },
+      {
+        "address": 906413,
+        "instruction": "movups XMMWORD PTR [rsp+0x3a],xmm0",
+        "self_samples": 27
+      },
+      {
+        "address": 773543,
+        "instruction": "movdqu XMMWORD PTR [r12],xmm0",
+        "self_samples": 16
+      },
+      {
+        "address": 1625930,
+        "instruction": "movups XMMWORD PTR [rax+0x60],xmm0",
+        "self_samples": 16
+      },
+      {
+        "address": 1621167,
+        "instruction": "movdqa xmm3,xmm2",
+        "self_samples": 15
+      },
+      {
+        "address": 638978,
+        "instruction": "movaps XMMWORD PTR [rsp+0x1b0],xmm0",
+        "self_samples": 14
+      },
+      {
+        "address": 936187,
+        "instruction": "movups xmm1,XMMWORD PTR [rsp+0x20]",
+        "self_samples": 13
+      },
+      {
+        "address": 1556322,
+        "instruction": "movups XMMWORD PTR [r13+0x98],xmm0",
+        "self_samples": 13
+      },
+      {
+        "address": 1624363,
+        "instruction": "movdqa XMMWORD PTR [rsp+0x10],xmm0",
+        "self_samples": 13
+      },
+      {
+        "address": 1629493,
+        "instruction": "movdqa XMMWORD PTR [rsp],xmm1",
+        "self_samples": 13
+      }
+    ]
+  },
+  {
+    "version": "candidate",
+    "sites": [
+      {
+        "address": 966102,
+        "instruction": "movups xmm1,XMMWORD PTR [rbx+0x10]",
+        "self_samples": 73
+      },
+      {
+        "address": 967321,
+        "instruction": "movups xmm3,XMMWORD PTR [rsp+0x340]",
+        "self_samples": 40
+      },
+      {
+        "address": 1078942,
+        "instruction": "movups XMMWORD PTR [rsp+0x18],xmm0",
+        "self_samples": 37
+      },
+      {
+        "address": 1627508,
+        "instruction": "movups XMMWORD PTR [rax+0x50],xmm0",
+        "self_samples": 18
+      },
+      {
+        "address": 1624625,
+        "instruction": "movdqu XMMWORD PTR [rsp+0x28],xmm1",
+        "self_samples": 17
+      },
+      {
+        "address": 1629751,
+        "instruction": "movdqa XMMWORD PTR [rsp+0x10],xmm1",
+        "self_samples": 17
+      },
+      {
+        "address": 905933,
+        "instruction": "movups XMMWORD PTR [rsp+0x3a],xmm0",
+        "self_samples": 16
+      },
+      {
+        "address": 1621407,
+        "instruction": "movdqa xmm3,xmm2",
+        "self_samples": 16
+      },
+      {
+        "address": 1622419,
+        "instruction": "movdqa xmm3,xmm2",
+        "self_samples": 16
+      },
+      {
+        "address": 1624603,
+        "instruction": "movdqa XMMWORD PTR [rsp+0x10],xmm0",
+        "self_samples": 14
+      },
+      {
+        "address": 1621920,
+        "instruction": "movdqa xmm3,xmm2",
+        "self_samples": 13
+      },
+      {
+        "address": 935707,
+        "instruction": "movups xmm1,XMMWORD PTR [rsp+0x20]",
+        "self_samples": 12
+      }
+    ]
+  }
+]
