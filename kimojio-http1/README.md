@@ -200,6 +200,17 @@ Informational responses do not reach the application API.
 
 ## Transport and cancellation
 
+The connection driver has explicit running, draining, and aborting states.
+Shutdown can advance from running to draining or aborting, and from draining to aborting.
+Repeated signals do not repeat a core command.
+A later graceful signal cannot reverse an abort.
+Only the running state accepts a new client request.
+
+Exchange cancellation and duplex-input abandonment remain independent obligations.
+A new delivery can prove abandonment before the driver processes the cancellation notification.
+The outstanding body lease remains a separate ownership fact.
+These facts do not form one exclusive lifecycle and must not collapse into a single shutdown state.
+
 One reader and one writer operate concurrently.
 Each generic worker owns its half and its current operation.
 Neither transport future borrows the HTTP machine.

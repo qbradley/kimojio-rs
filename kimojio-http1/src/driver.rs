@@ -566,6 +566,29 @@ enum Input {
     Wake,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShutdownProgress {
+    Running,
+    Draining,
+    Aborting,
+}
+
+impl ShutdownProgress {
+    fn advance(&mut self, abort: bool, graceful: bool) -> Option<core::ShutdownMode> {
+        match (*self, abort, graceful) {
+            (Self::Running | Self::Draining, true, _) => {
+                *self = Self::Aborting;
+                Some(core::ShutdownMode::Abort)
+            }
+            (Self::Running, false, true) => {
+                *self = Self::Draining;
+                Some(core::ShutdownMode::Graceful)
+            }
+            _ => None,
+        }
+    }
+}
+
 struct State {
     machine: Machine,
     active: Option<Active>,
@@ -580,8 +603,7 @@ struct State {
     timer: Option<Pin<Box<operations::SleepFuture<'static>>>>,
     epoch: Instant,
     shutdown: Shutdown,
-    graceful_applied: bool,
-    abort_applied: bool,
+    shutdown_progress: ShutdownProgress,
     server: bool,
     max_buffer: usize,
     receive_capacity: usize,
@@ -627,8 +649,7 @@ impl State {
             timer: None,
             epoch: kimojio::clock_now(),
             shutdown,
-            graceful_applied: false,
-            abort_applied: false,
+            shutdown_progress: ShutdownProgress::Running,
             server,
             max_buffer,
             receive_capacity,
@@ -666,17 +687,13 @@ impl State {
                 Err(error) => return Err(error.into()),
             }
         }
-        if self.shutdown.abort.is_cancelled() && !self.abort_applied {
-            self.abort_applied = true;
+        if let Some(mode) = self.shutdown_progress.advance(
+            self.shutdown.abort.is_cancelled(),
+            self.shutdown.graceful.is_cancelled(),
+        ) {
             match &mut self.machine {
-                Machine::Client(inner) => inner.shutdown(core::ShutdownMode::Abort),
-                Machine::Server(inner) => inner.shutdown(core::ShutdownMode::Abort),
-            }
-        } else if self.shutdown.graceful.is_cancelled() && !self.graceful_applied {
-            self.graceful_applied = true;
-            match &mut self.machine {
-                Machine::Client(inner) => inner.shutdown(core::ShutdownMode::Graceful),
-                Machine::Server(inner) => inner.shutdown(core::ShutdownMode::Graceful),
+                Machine::Client(inner) => inner.shutdown(mode),
+                Machine::Server(inner) => inner.shutdown(mode),
             }
         }
         if let Some(active) = self.active.as_mut()
@@ -1277,8 +1294,7 @@ async fn next_input(
                     .map(|r| r.ok().map(Input::Release)),
                 3 if !state.server
                     && state.active.is_none()
-                    && !state.graceful_applied
-                    && !state.abort_applied =>
+                    && state.shutdown_progress == ShutdownProgress::Running =>
                 {
                     poll_receive(requests, request.as_mut(), cx, runnable)
                         .map(|r| Some(Input::Request(r)))
@@ -1286,12 +1302,14 @@ async fn next_input(
                 // Drain notifications that can revoke previously advertised capacity.
                 4 if !runnable => poll_source(&mut state.active, cx),
                 5 => poll_handler(&mut state.active, cx),
-                6 if !state.graceful_applied
+                6 if state.shutdown_progress == ShutdownProgress::Running
                     && (!runnable || state.shutdown.graceful.is_cancelled()) =>
                 {
                     graceful.as_mut().poll(cx).map(|_| Some(Input::Wake))
                 }
-                7 if !state.abort_applied && (!runnable || state.shutdown.abort.is_cancelled()) => {
+                7 if state.shutdown_progress != ShutdownProgress::Aborting
+                    && (!runnable || state.shutdown.abort.is_cancelled()) =>
+                {
                     abort.as_mut().poll(cx).map(|_| Some(Input::Wake))
                 }
                 8 => match state.timer.as_mut().map(|timer| timer.as_mut().poll(cx)) {
@@ -1365,6 +1383,45 @@ mod combined_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdown_progress_is_monotonic_for_all_five_turn_histories() {
+        for history in 0..1024 {
+            let mut progress = ShutdownProgress::Running;
+            let mut rank = 0;
+            for turn in 0..5 {
+                let signals = (history >> (turn * 2)) & 3;
+                let abort = signals & 1 != 0;
+                let graceful = signals & 2 != 0;
+                let requested = if abort {
+                    2
+                } else if graceful {
+                    1
+                } else {
+                    0
+                };
+                let expected = if requested > rank {
+                    Some(if abort {
+                        core::ShutdownMode::Abort
+                    } else {
+                        core::ShutdownMode::Graceful
+                    })
+                } else {
+                    None
+                };
+                rank = rank.max(requested);
+                assert_eq!(progress.advance(abort, graceful), expected);
+                assert_eq!(
+                    progress,
+                    [
+                        ShutdownProgress::Running,
+                        ShutdownProgress::Draining,
+                        ShutdownProgress::Aborting,
+                    ][rank]
+                );
+            }
+        }
+    }
 
     fn full_body_client(expect_continue: bool) -> (Machine, core::ExchangeId) {
         let mut client = core::Client::with_output_type(
