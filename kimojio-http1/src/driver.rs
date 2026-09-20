@@ -1170,64 +1170,68 @@ async fn next_input(
         read, write, release, demand, request, graceful, abort, cancelled
     );
     futures::future::poll_fn(|cx| {
-        for offset in 0..10 {
-            let index = (state.rotation + offset) % 10;
-            let ready = match index {
-                0 if state.read_send.is_some() => {
-                    poll_receive(&state.read_done, read.as_mut(), cx, runnable)
-                        .map(|r| r.ok().map(Input::Read))
-                }
-                1 => poll_receive(&state.write_done, write.as_mut(), cx, runnable)
-                    .map(|r| r.ok().map(Input::Write)),
-                2 => poll_receive(&state.released, release.as_mut(), cx, runnable)
-                    .map(|r| r.ok().map(Input::Release)),
-                3 if !state.server
-                    && state.active.is_none()
-                    && !state.graceful_applied
-                    && !state.abort_applied =>
-                {
-                    poll_receive(requests, request.as_mut(), cx, runnable)
-                        .map(|r| Some(Input::Request(r)))
-                }
-                // Drain notifications that can revoke previously advertised capacity.
-                4 if !runnable => poll_source(&mut state.active, cx),
-                5 => poll_handler(&mut state.active, cx),
-                6 if !state.graceful_applied
-                    && (!runnable || state.shutdown.graceful.is_cancelled()) =>
-                {
-                    graceful.as_mut().poll(cx).map(|_| Some(Input::Wake))
-                }
-                7 if !state.abort_applied && (!runnable || state.shutdown.abort.is_cancelled()) => {
-                    abort.as_mut().poll(cx).map(|_| Some(Input::Wake))
-                }
-                8 => match state.timer.as_mut().map(|timer| timer.as_mut().poll(cx)) {
-                    Some(Poll::Ready(result)) => {
-                        state.timer.take();
-                        Poll::Ready(Some(Input::Timer(result)))
+        // Probe every input before registering waits on channels that might stay idle.
+        for probe in [true, false] {
+            for offset in 0..10 {
+                let index = (state.rotation + offset) % 10;
+                let ready = match index {
+                    0 if state.read_send.is_some() => {
+                        poll_receive(&state.read_done, read.as_mut(), cx, probe)
+                            .map(|r| r.ok().map(Input::Read))
                     }
+                    1 => poll_receive(&state.write_done, write.as_mut(), cx, probe)
+                        .map(|r| r.ok().map(Input::Write)),
+                    2 => poll_receive(&state.released, release.as_mut(), cx, probe)
+                        .map(|r| r.ok().map(Input::Release)),
+                    3 if !state.server
+                        && state.active.is_none()
+                        && !state.graceful_applied
+                        && !state.abort_applied =>
+                    {
+                        poll_receive(requests, request.as_mut(), cx, probe)
+                            .map(|r| Some(Input::Request(r)))
+                    }
+                    // Drain notifications that can revoke previously advertised capacity.
+                    4 if !runnable && probe => poll_source(&mut state.active, cx),
+                    5 if probe => poll_handler(&mut state.active, cx),
+                    6 if !state.graceful_applied
+                        && (!probe || state.shutdown.graceful.is_cancelled()) =>
+                    {
+                        graceful.as_mut().poll(cx).map(|_| Some(Input::Wake))
+                    }
+                    7 if !state.abort_applied
+                        && (!probe || state.shutdown.abort.is_cancelled()) =>
+                    {
+                        abort.as_mut().poll(cx).map(|_| Some(Input::Wake))
+                    }
+                    8 if probe => match state.timer.as_mut().map(|timer| timer.as_mut().poll(cx)) {
+                        Some(Poll::Ready(result)) => {
+                            state.timer.take();
+                            Poll::Ready(Some(Input::Timer(result)))
+                        }
+                        _ => Poll::Pending,
+                    },
+                    9 => poll_receive(&state.demands.0, demand.as_mut(), cx, probe)
+                        .map(|r| r.ok().map(Input::Demand)),
                     _ => Poll::Pending,
-                },
-                9 => poll_receive(&state.demands.0, demand.as_mut(), cx, runnable)
-                    .map(|r| r.ok().map(Input::Demand)),
-                _ => Poll::Pending,
-            };
-            if let Poll::Ready(Some(input)) = ready {
-                state.rotation = (index + 1) % 10;
-                return Poll::Ready(Some(input));
+                };
+                if let Poll::Ready(Some(input)) = ready {
+                    state.rotation = (index + 1) % 10;
+                    return Poll::Ready(Some(input));
+                }
+            }
+            if let Some(active) = &state.active
+                && !active.cancellation_applied
+                && (!probe || active.cancel.is_cancelled())
+                && cancelled.as_mut().poll(cx).is_ready()
+            {
+                return Poll::Ready(Some(Input::Wake));
+            }
+            if runnable {
+                return Poll::Ready(None);
             }
         }
-        if let Some(active) = &state.active
-            && !active.cancellation_applied
-            && (!runnable || active.cancel.is_cancelled())
-            && cancelled.as_mut().poll(cx).is_ready()
-        {
-            return Poll::Ready(Some(Input::Wake));
-        }
-        if runnable {
-            Poll::Ready(None)
-        } else {
-            Poll::Pending
-        }
+        Poll::Pending
     })
     .await
 }
@@ -1236,12 +1240,11 @@ fn poll_receive<T>(
     receiver: &Receiver<T>,
     wait: Pin<&mut impl Future<Output = Result<T, kimojio::ChannelError>>>,
     cx: &mut Context<'_>,
-    runnable: bool,
+    probe: bool,
 ) -> Poll<Result<T, kimojio::ChannelError>> {
-    if !runnable {
+    if !probe {
         return wait.poll(cx);
     }
-    // A runnable turn cannot suspend, so an empty channel needs no wake registration.
     match receiver.try_recv() {
         Ok(Some(value)) => Poll::Ready(Ok(value)),
         Ok(None) => Poll::Pending,
@@ -1320,6 +1323,26 @@ mod tests {
             },
         );
         assert_eq!(received.unwrap(), 29);
+    }
+
+    #[kimojio::test]
+    async fn ready_probe_can_consume_after_a_registered_wait() {
+        let (sender, receiver) = async_channel();
+        {
+            let mut wait = std::pin::pin!(receiver.recv());
+            futures::future::poll_fn(|cx| {
+                assert!(poll_receive(&receiver, wait.as_mut(), cx, false).is_pending());
+                sender.try_send(31).unwrap();
+                assert!(matches!(
+                    poll_receive(&receiver, wait.as_mut(), cx, true),
+                    Poll::Ready(Ok(31))
+                ));
+                Poll::Ready(())
+            })
+            .await;
+        }
+        sender.try_send(37).unwrap();
+        assert_eq!(receiver.recv().await.unwrap(), 37);
     }
 
     #[test]
