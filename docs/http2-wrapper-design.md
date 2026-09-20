@@ -142,3 +142,26 @@ Source changes require new measurements before any performance claim.
 If measurements identify serial header and DATA writes as a bottleneck, batching belongs in the core's owned write operation.
 The wrapper must not acknowledge queue insertion as successful transport acceptance to obtain another frame.
 Any batching change retains exact partial progress, compression order, body ownership, and documented deadline boundaries.
+
+## Implementation sequence
+
+Each implementation phase has a separate change.
+The core qualification gates precede the first phase.
+
+1. Implement shared body ownership, metadata conversion, native I/O slots, and the native client in `kimojio-http2`.
+2. Add concurrent server handlers over the shared driver and body types.
+3. Add established generic streams without weakening exact native receipts or unknown generic progress.
+4. Exercise cancellation, virtual time, admission pressure, late completions, retained chunks, and simultaneous upload/download at the wrapper boundary.
+5. Run independent peers against the wrapper, not the existing synchronous core fixture.
+6. Measure repeated native exchanges, concurrent streams, streaming bodies, allocation, and source-specific profiles before accepting optimizations.
+
+The public connection functions retain the established HTTP/1 wrapper naming where the semantics agree.
+They include `connect_native`, a caller-polled `NativeConnection::run`, and `serve_connection_native`.
+HTTP/2 client handles support concurrent submissions rather than the HTTP/1 single-exchange restriction.
+Ready empty/full bodies avoid producer tasks solely for immediate data.
+Custom producers and handlers must preserve Kimojio I/O-scope and cancellation behavior.
+
+Common runtime mechanics have one implementation owner.
+Client and server changes use a fixed shared-interface checkpoint before parallel edits.
+Protocol fixes remain in the core change rather than duplicated adapter workarounds.
+The wrapper report distinguishes completed phases from unsupported or unmeasured behavior.

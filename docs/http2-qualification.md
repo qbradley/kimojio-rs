@@ -5,8 +5,8 @@
 This ledger records bounded evidence for the scope in [the composition design](http2-composition.md).
 It does not claim an exhaustive RFC proof.
 The Kimojio HTTP/2 wrappers are not implemented.
-A metadata-admission interface repair remains in progress.
-That changed source will need its own measurements.
+The metadata-admission repair passed independent review and socket qualification.
+Measurements of that changed source remain in progress.
 
 The current socket qualification covers the direct HTTP/2 engine.
 Separate models cover the HTTP/1 plus HTTP/2 composite.
@@ -16,15 +16,14 @@ Socket interoperability does not establish runtime-wrapper cost or cancellation 
 
 | Item | Identity |
 | --- | --- |
-| Integrated source | `2829297806a6d7326ff5d5bc2e5b4b8a71264ae5` |
-| Core | `64a884e6a95c9b2937b463d1861fd3a526eb8cdb` |
-| Composite and fixture adaptation | `b724e43cff9dd75409afbece6ffda1f984065be0` |
-| Independent peers | `82c24b76043d3cc38addc4acd312f132bf115d01` |
-| Fixture SHA-256 | `16faaf7f1cb1bacbfc217a86a2e79be4b2f42e2fde4f3bcb72da0f10a269be63` |
-| Local evidence | `target/http2-program/reports/native-28292978-summary.json`, revision 1 |
+| Integrated source, composite, and fixture | `b3c6484b1cb664dca76b5c35399d2e7d1367ce87` |
+| Core | `451c38e00d7e8e589668324c6af82dbc9e7a5a2c` |
+| Independent peers | `f55c762813709598f8a1ad3844f7b9805ddb507f` |
+| Fixture SHA-256 | `fda53641d06f2d4af76885e11ca3197d08614010777f00c4bb3a056815e3fac4` |
+| Local evidence | `target/http2-program/reports/native-b3c6484b-summary.json`, revision 1 |
 
 The peer suite checked the fixture hash before and after execution.
-Both roles passed all 48 flow cases and 16 protocol cases.
+Both roles passed all 48 flow cases and 17 protocol cases.
 The [peer documentation](../interop/http2/README.md) describes the scenarios and commands.
 The local summary names each detailed report.
 
@@ -38,7 +37,7 @@ The peer sent a complete 413 response, waited for a PING acknowledgment, and sen
 The fixture preserved the response, reported reset code zero, completed the sibling, and closed gracefully.
 The client sent no reset in this case.
 
-The reset-discard case observed 33,829 connection-credit bytes and zero reset-stream credit.
+The earlier `28292978` reset-discard run recorded 33,829 connection-credit bytes and zero reset-stream credit.
 Queued refunds that the peer discarded on GOAWAY did not count as transmitted credit.
 The suite rejects missing terminal outcomes and rejects `aborted` as normal success.
 This socket suite did not execute an explicit connection-abort scenario.
@@ -65,7 +64,7 @@ They cover original completions, cancellation acknowledgments, primary causes, p
 An active alarm failure reports `IoFailed` without an invented timestamp.
 An obsolete alarm failure only settles its original obligation.
 The composite also exercises these rules before and after cancellation dispatch.
-Its 15 tests include protocol selection, hard abort, wrong-owner recovery, and late completions.
+Its 16 tests include protocol selection, hard abort, wrong-owner recovery, late completions, and metadata-admission notification forwarding.
 
 Transport close does not settle a held application body lease.
 The independent probe retained readable body data after `closed`.
@@ -127,7 +126,32 @@ These are in-memory costs, not socket throughput or runtime-wrapper measurements
 The maximum reported requested-live storage was 610,546 bytes, not process RSS.
 The [source-specific report](http2-performance/final/) records distributions, measurement boundaries, hashes, and allocation exclusions.
 Its evidence remains unchanged.
-The pending metadata-admission repair is not part of this measured source.
+The metadata-admission repair is not part of this measured source.
+
+## Metadata admission
+
+Research found an interface defect in the earlier socket snapshot.
+`Capacity` covered both temporary pressure and a command that exceeded the entire control-byte limit.
+Peer concurrency zero instead produced `Message(InvalidFrame)`, despite its temporary nature.
+No semantic callback reported when metadata admission changed.
+The original socket cases did not establish correct wrapper retry behavior for these conditions.
+
+The repair separates `Blocked` from permanent rejection and adds one coalesced admission-change notification.
+Independent review passed 68 targeted tests and 14 additional schedules.
+Repeated blocked attempts preserved exact wire output and HPACK state.
+Partial writes retained their byte-capacity charge.
+Terminal invalidation notified callers before held writes or body leases settled.
+The observer retains no metadata and remains quiet without further changes.
+
+The new socket case makes request admission stop at a zero peer-concurrency limit.
+Two PING barriers separate the zero limit, the first response, and the later positive limit.
+The peer observes the positive SETTINGS acknowledgment before the second request HEADERS.
+Both requests retire successfully.
+Four independent fault controls reject premature HEADERS or a lost request.
+
+The [composition design](http2-composition.md#metadata-command-admission) records the retry contract.
+The fixture retries only after the semantic notification.
+The composite forwards that notification without protocol-state reconstruction.
 
 ## Lessons
 
@@ -141,13 +165,5 @@ Repeated messages and mutable build paths caused redundant runs and confusion ab
 Later qualification used immutable paths, exact hashes, explicit source revisions, and one designated candidate.
 Old failures remain negative controls rather than evidence against repaired code.
 
-Command-admission research found another interface defect in the qualified socket snapshot.
-`Capacity` covers both temporary pressure and a command that exceeds the entire control-byte limit.
-Peer concurrency zero instead produces `Message(InvalidFrame)`, despite its temporary nature.
-No semantic callback reports when metadata admission changes.
-The normal socket cases do not establish correct wrapper retry behavior for these conditions.
-
-The [composition design](http2-composition.md#metadata-command-admission) separates `Blocked` from permanent rejection and adds one coalesced admission-change notification.
-That repair remains in progress.
-The next implementation gate requires its evidence and measurements of the changed source.
+The next implementation gate requires measurements of the admission-aware source.
 Runtime wrappers then need their own ownership, cancellation, interoperability, and performance evidence.
