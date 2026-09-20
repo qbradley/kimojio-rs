@@ -505,7 +505,11 @@ The candidate does not change protocol budgets or test expectations to hide that
 The narrower experiment targets only the buffered copy, not the proposed frame-assembly reduction.
 
 The implementation owner passed focused runtime and HTTP/1/HTTP/2 suites in debug/release and default/all-feature configurations.
-Independent review, a rebuilt fixture, and paired measurements remain in progress.
+Independent review found no significant issues in `a4af94fd` through `458b2bcd`.
+From a clean detached checkout, 26 stream tests passed in both debug and release with no default features plus virtual clock.
+The review covered buffered tails, refill transitions, partial reads, EOF, deadlines, cancellation, panic cleanup, and late successful completion.
+It did not force kernel acknowledgment ordering or establish a speedup.
+A rebuilt fixture and paired measurements remain in progress.
 CPU2 is leased only to the measurement owner for this experiment.
 Acceptance requires a supported benefit without weaker ownership or resource behavior.
 
