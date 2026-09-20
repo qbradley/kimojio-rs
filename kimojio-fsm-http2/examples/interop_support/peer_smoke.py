@@ -234,10 +234,13 @@ def python_server(requests, concurrency, window, finish_response_early=False):
     assert run.returncode == 0, (run.stderr, errors)
     assert not errors, (errors, run.stderr)
     report = json.loads(result.read_text())
-    assert report["connection"] == {"error": None, "closed": True}, report
+    assert report["connection"] == {
+        "error": None, "outcome": "graceful", "closed": True
+    }, report
     assert len(report["streams"]) == len(requests)
     for stream, request in zip(report["streams"], requests):
         assert stream["ended"] and stream["error"] is None, stream
+        assert stream["outcome"] == "complete", stream
         assert stream["bytes"] == request["expected"], stream
         assert stream["sha256"] == digest(stream["stream_id"] % 251, request["expected"])
     source.unlink()

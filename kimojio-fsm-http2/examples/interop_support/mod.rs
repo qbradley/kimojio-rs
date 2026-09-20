@@ -153,27 +153,19 @@ fn release_sent(core: &mut Connection<Buffer>, sent: Sent<Buffer>) -> Result<(),
 }
 
 fn connection_error(result: ConnectionResult) -> Option<Error> {
-    let code = match result {
-        ConnectionResult::Graceful | ConnectionResult::PeerClosed => return None,
-        ConnectionResult::Protocol(error) => {
-            eprintln!("peer protocol error: {error:?}");
-            error.code.as_u32()
-        }
-        ConnectionResult::IoFailed => 2,
-        ConnectionResult::ResourceExhausted => 11,
+    let ConnectionResult::Protocol(error) = result else {
+        return None;
     };
+    eprintln!("peer protocol error: {error:?}");
     Some(Error {
         scope: "connection",
-        code,
+        code: error.code.as_u32(),
     })
 }
 
 fn stream_error(outcome: StreamOutcome) -> Option<Error> {
-    let code = match outcome {
-        StreamOutcome::Complete | StreamOutcome::ConnectionFailed => return None,
-        StreamOutcome::Reset(code) => code,
-        StreamOutcome::Unprocessed => 7,
-        StreamOutcome::Deadline => 8,
+    let StreamOutcome::Reset(code) = outcome else {
+        return None;
     };
     Some(Error {
         scope: "stream",
@@ -442,8 +434,10 @@ fn client_loop(
             }
             Some(Event::End(end)) => {
                 let report = &mut reports[(end.stream.get() / 2) as usize];
-                report.ended = end.outcome == StreamOutcome::Complete;
-                report.error = stream_error(end.outcome);
+                report.ended |= end.outcome == StreamOutcome::Complete;
+                if let Some(error) = stream_error(end.outcome) {
+                    report.error = Some(error);
+                }
                 ended.insert(end.stream.get());
                 let mut index = 0;
                 while index < held.len() {
@@ -479,9 +473,10 @@ fn client_loop(
                     begin_shutdown(core)?;
                     shutdown = true;
                 }
-                if result.outcome != StreamOutcome::Complete {
-                    reports[(result.stream.get() / 2) as usize].error =
-                        stream_error(result.outcome);
+                let report = &mut reports[(result.stream.get() / 2) as usize];
+                report.outcome = Some(result.outcome.into());
+                if let Some(error) = stream_error(result.outcome) {
+                    report.error = Some(error);
                 }
             }
             Some(Event::Cancel(cancel)) => transport.cancel(core, cancel)?,
@@ -489,6 +484,7 @@ fn client_loop(
             Some(Event::Closed(result)) => {
                 return Ok(ConnectionReport {
                     error: connection_error(result),
+                    outcome: result.into(),
                     closed: transport.physically_closed,
                 });
             }
@@ -738,5 +734,15 @@ mod tests {
         assert!(server_args(&args(&["--stream-window"])).is_err());
         assert!(server_args(&args(&["--unknown", "1"])).is_err());
         assert!(server_args(&args(&["--stream-window", "1", "--stream-window", "2"])).is_err());
+    }
+
+    #[test]
+    fn non_wire_failures_do_not_invent_http2_error_codes() {
+        assert!(connection_error(ConnectionResult::IoFailed).is_none());
+        assert!(connection_error(ConnectionResult::ResourceExhausted).is_none());
+        assert!(stream_error(StreamOutcome::ConnectionFailed).is_none());
+        assert!(stream_error(StreamOutcome::Unprocessed).is_none());
+        assert!(stream_error(StreamOutcome::Deadline).is_none());
+        assert_eq!(stream_error(StreamOutcome::Reset(8)).unwrap().code, 8);
     }
 }

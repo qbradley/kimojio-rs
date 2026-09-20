@@ -1,4 +1,4 @@
-use kimojio_fsm_http2::Config;
+use kimojio_fsm_http2::{Config, ConnectionResult, StreamOutcome};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, time::Duration};
@@ -160,6 +160,51 @@ pub struct Error {
     pub code: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamTerminalOutcome {
+    Complete,
+    Reset,
+    Unprocessed,
+    ConnectionFailed,
+    Deadline,
+}
+
+impl From<StreamOutcome> for StreamTerminalOutcome {
+    fn from(outcome: StreamOutcome) -> Self {
+        match outcome {
+            StreamOutcome::Complete => Self::Complete,
+            StreamOutcome::Reset(_) => Self::Reset,
+            StreamOutcome::Unprocessed => Self::Unprocessed,
+            StreamOutcome::ConnectionFailed => Self::ConnectionFailed,
+            StreamOutcome::Deadline => Self::Deadline,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionTerminalOutcome {
+    Graceful,
+    PeerClosed,
+    IoFailed,
+    Protocol,
+    ResourceExhausted,
+}
+
+impl From<ConnectionResult> for ConnectionTerminalOutcome {
+    fn from(outcome: ConnectionResult) -> Self {
+        match outcome {
+            ConnectionResult::Graceful => Self::Graceful,
+            ConnectionResult::PeerClosed => Self::PeerClosed,
+            ConnectionResult::IoFailed => Self::IoFailed,
+            ConnectionResult::Protocol(_) => Self::Protocol,
+            ConnectionResult::ResourceExhausted => Self::ResourceExhausted,
+        }
+    }
+}
+
+/// A normal success requires `outcome == complete`, not only `ended` and a null error.
 #[derive(Serialize)]
 pub struct StreamReport {
     pub stream_id: u32,
@@ -169,7 +214,11 @@ pub struct StreamReport {
     pub sha256: String,
     pub trailers: Fields,
     pub informational: Vec<u16>,
+    /// Records receive END_STREAM separately from upload and stream retirement.
     pub ended: bool,
+    /// Null until retirement. A failed outcome invalidates a normal-success case.
+    pub outcome: Option<StreamTerminalOutcome>,
+    /// An actual HTTP/2 error code, not an invented code for a transport failure.
     pub error: Option<Error>,
     #[serde(skip)]
     pub digest: Sha256,
@@ -186,6 +235,7 @@ impl StreamReport {
             trailers: Vec::new(),
             informational: Vec::new(),
             ended: false,
+            outcome: None,
             error: None,
             digest: Sha256::new(),
         }
@@ -195,9 +245,10 @@ impl StreamReport {
     }
 }
 
-#[derive(Default, Serialize)]
+#[derive(Serialize)]
 pub struct ConnectionReport {
     pub error: Option<Error>,
+    pub outcome: ConnectionTerminalOutcome,
     pub closed: bool,
 }
 
@@ -244,13 +295,52 @@ mod tests {
         assert_eq!(v["status"], serde_json::Value::Null);
         assert_eq!(v["error"], serde_json::Value::Null);
         assert_eq!(v["ended"], false);
+        assert_eq!(v["outcome"], serde_json::Value::Null);
         assert_eq!(v["content_length"], serde_json::Value::Null);
         assert!(v.get("content_length").is_some());
         assert_eq!(
             v["sha256"],
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
-        assert!(!ConnectionReport::default().closed);
+    }
+
+    #[test]
+    fn terminal_failure_stays_visible_after_receive_end() {
+        let mut report = StreamReport::new(1);
+        report.ended = true;
+        report.outcome = Some(StreamOutcome::ConnectionFailed.into());
+        let value = serde_json::to_value(&report).unwrap();
+        assert_eq!(value["ended"], true);
+        assert_eq!(value["error"], serde_json::Value::Null);
+        assert_eq!(value["outcome"], "connection_failed");
+        assert_ne!(report.outcome, Some(StreamTerminalOutcome::Complete));
+    }
+
+    #[test]
+    fn terminal_outcomes_have_explicit_stable_names() {
+        for (outcome, expected) in [
+            (StreamOutcome::Complete, "complete"),
+            (StreamOutcome::Reset(8), "reset"),
+            (StreamOutcome::Unprocessed, "unprocessed"),
+            (StreamOutcome::ConnectionFailed, "connection_failed"),
+            (StreamOutcome::Deadline, "deadline"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(StreamTerminalOutcome::from(outcome)).unwrap(),
+                expected
+            );
+        }
+        for (outcome, expected) in [
+            (ConnectionResult::Graceful, "graceful"),
+            (ConnectionResult::PeerClosed, "peer_closed"),
+            (ConnectionResult::IoFailed, "io_failed"),
+            (ConnectionResult::ResourceExhausted, "resource_exhausted"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(ConnectionTerminalOutcome::from(outcome)).unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]
