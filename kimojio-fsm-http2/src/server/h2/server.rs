@@ -1045,6 +1045,10 @@ impl H2Server {
         else {
             return Ok((None, Vec::new()));
         };
+        if self.is_reset_tolerant(block.stream_id) {
+            self.discard_hpack_block(&block.block)?;
+            return Ok((None, Vec::new()));
+        }
         let event = self.event_from_complete_headers_driver(block)?;
         Ok((Some(event), Vec::new()))
     }
@@ -2295,6 +2299,7 @@ impl H2Server {
         if plan.end_stream {
             self.finish_response_stream(plan.stream_id);
         }
+        self.endpoint.record_progress_frame();
         Ok(())
     }
 

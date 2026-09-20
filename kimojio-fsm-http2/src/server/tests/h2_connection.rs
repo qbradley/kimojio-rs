@@ -1606,10 +1606,8 @@ fn h2_client_allows_informational_response_before_final_headers() {
 
 #[test]
 fn h2_client_enforces_stream_id_and_concurrency_limits() {
-    let mut client = H2Client {
-        next_stream_id: 0x8000_0001,
-        ..H2Client::default()
-    };
+    let mut client = H2Client::default();
+    client.next_stream_id = 0x8000_0001;
     assert_eq!(
         open_stream_bytes(&mut client, "GET", "https", "example.com", "/", &[], true,),
         Err(ServerError::InvalidFrame)
@@ -2953,7 +2951,7 @@ fn h2_settings_send_window_overflow_is_a_connection_flow_control_error() {
 
 #[cfg(feature = "hpack-test-support")]
 #[test]
-fn h2_mixed_settings_overflow_preserves_split_state_for_both_roles() {
+fn h2_mixed_settings_overflow_preserves_all_state_for_both_roles() {
     const TABLE_SIZE: u32 = 1024;
     let mixed_settings_payload = || {
         let mut payload = Vec::new();
@@ -3014,7 +3012,7 @@ fn h2_mixed_settings_overflow_preserves_split_state_for_both_roles() {
             .unwrap()
             .outbound
             .test_configured_max_size(),
-        TABLE_SIZE as usize
+        client_settings.header_table_size as usize
     );
 
     let mut peer = H2Client::with_local_flow_control(5, 65_535).unwrap();
@@ -3061,7 +3059,7 @@ fn h2_mixed_settings_overflow_preserves_split_state_for_both_roles() {
             .unwrap()
             .outbound
             .test_configured_max_size(),
-        TABLE_SIZE as usize
+        server_settings.header_table_size as usize
     );
 }
 

@@ -20,6 +20,7 @@ pub(crate) struct H2ClientStream {
     pub(crate) send: Option<H2OutboundHalf>,
     pub(crate) receive: Option<H2ClientReceiveHalf>,
     pub(crate) request_is_head: bool,
+    pub(crate) request_is_connect: bool,
     pub(crate) response_body_limit: Option<usize>,
 }
 
@@ -27,6 +28,16 @@ pub struct H2Client {
     pub(crate) endpoint: H2Endpoint<H2ClientStream>,
     pub(crate) next_stream_id: u32,
     pub(crate) preface_sent: bool,
+    push_disabled_ack: bool,
+    highest_promised: u32,
+    pending_push: Option<PendingPush>,
+}
+
+struct PendingPush {
+    associated: u32,
+    promised: u32,
+    block: Vec<u8>,
+    continuations: usize,
 }
 
 impl Default for H2Client {
@@ -36,11 +47,15 @@ impl Default for H2Client {
 }
 
 impl H2Client {
-    fn from_endpoint(endpoint: H2Endpoint<H2ClientStream>) -> Self {
+    fn from_endpoint(mut endpoint: H2Endpoint<H2ClientStream>) -> Self {
+        endpoint.local_enable_push = Some(false);
         Self {
             endpoint,
             next_stream_id: 1,
             preface_sent: false,
+            push_disabled_ack: false,
+            highest_promised: 0,
+            pending_push: None,
         }
     }
 }
@@ -956,6 +971,7 @@ impl H2Client {
                 }),
                 receive: Some(H2ClientReceiveHalf::AwaitingHead),
                 request_is_head,
+                request_is_connect: false,
                 response_body_limit: Some(self.endpoint.http_limits.max_body_bytes()),
             },
         );
@@ -1432,6 +1448,7 @@ impl H2Client {
         if plan.end_stream {
             self.close_send(plan.stream_id);
         }
+        self.endpoint.record_progress_frame();
         Ok(())
     }
 
@@ -1484,6 +1501,10 @@ impl H2Client {
             Err(ServerError::NeedMore) => return Ok((None, 0, output)),
             Err(error) => return Err(error),
         };
+        if self.pending_push.is_some() || frame.frame_type == H2FrameType::PushPromise {
+            let output = self.accept_disabled_push(frame)?;
+            return Ok((None, consumed, output));
+        }
         match self.accept_frame_bytes_ref_typed(frame) {
             (H2FrameOutcome::Event(event), mut event_output) => {
                 output.append(&mut event_output);
@@ -1515,6 +1536,10 @@ impl H2Client {
             Err(ServerError::NeedMore) => return Ok((None, 0, Vec::new())),
             Err(error) => return Err(error),
         };
+        if self.pending_push.is_some() || frame.frame_type == H2FrameType::PushPromise {
+            let output = self.accept_disabled_push(frame)?;
+            return Ok((None, consumed, output));
+        }
         if !matches!(
             frame.frame_type,
             H2FrameType::Headers | H2FrameType::Continuation
@@ -1527,10 +1552,13 @@ impl H2Client {
                     output,
                 )),
                 H2FrameOutcome::Ignored => Ok((None, consumed, output)),
-                H2FrameOutcome::Error(error) => Err(compatibility_error(
-                    self.endpoint.last_compat_error.take(),
-                    error,
-                )),
+                H2FrameOutcome::Error(error) => {
+                    self.endpoint.last_protocol_error = Some(error);
+                    Err(compatibility_error(
+                        self.endpoint.last_compat_error.take(),
+                        error,
+                    ))
+                }
             };
         }
         self.endpoint.last_compat_error = None;
@@ -1550,6 +1578,7 @@ impl H2Client {
             Err(error) => {
                 self.endpoint.last_compat_error = Some(error.clone());
                 let typed = self.h2_error_from_server_error(error, Some(head));
+                self.endpoint.last_protocol_error = Some(typed);
                 Err(compatibility_error(
                     self.endpoint.last_compat_error.take(),
                     typed,
@@ -1558,6 +1587,86 @@ impl H2Client {
         }
     }
 
+    fn accept_disabled_push(&mut self, frame: H2FrameRef<'_>) -> Result<Vec<u8>, ServerError> {
+        let invalid = || {
+            H2ProtocolError::connection(
+                H2ErrorCode::ProtocolError,
+                "invalid PUSH_PROMISE or push after SETTINGS acknowledgment",
+            )
+        };
+        if !self.endpoint.settings_seen || self.endpoint.header_block.pending.is_some() {
+            self.endpoint.last_protocol_error = Some(invalid());
+            return Err(ServerError::InvalidFrame);
+        }
+        let (promised, block) = if let Some(mut pending) = self.pending_push.take() {
+            if frame.frame_type != H2FrameType::Continuation
+                || frame.stream_id != pending.associated
+            {
+                self.endpoint.last_protocol_error = Some(invalid());
+                return Err(ServerError::InvalidFrame);
+            }
+            pending.continuations += 1;
+            if pending.continuations > self.endpoint.limits.max_continuation_frames
+                || frame.payload.len()
+                    > self
+                        .endpoint
+                        .limits
+                        .max_encoded_header_block_size
+                        .saturating_sub(pending.block.len())
+            {
+                self.endpoint.last_protocol_error = Some(invalid());
+                return Err(ServerError::InvalidFrame);
+            }
+            pending.block.extend_from_slice(frame.payload);
+            if frame.flags & 4 == 0 {
+                self.pending_push = Some(pending);
+                return Ok(Vec::new());
+            }
+            (pending.promised, std::borrow::Cow::Owned(pending.block))
+        } else {
+            if self.push_disabled_ack
+                || frame.stream_id == 0
+                || !self.endpoint.streams.contains_key(&frame.stream_id)
+            {
+                self.endpoint.last_protocol_error = Some(invalid());
+                return Err(ServerError::InvalidFrame);
+            }
+            let payload = strip_padding(frame.flags, frame.payload)?;
+            if payload.len() < 4 {
+                self.endpoint.last_protocol_error = Some(H2ProtocolError::connection(
+                    H2ErrorCode::FrameSizeError,
+                    "PUSH_PROMISE lacks promised stream identifier",
+                ));
+                return Err(ServerError::InvalidFrame);
+            }
+            let promised =
+                u32::from_be_bytes(payload[..4].try_into().expect("four bytes")) & 0x7fff_ffff;
+            if promised == 0 || !promised.is_multiple_of(2) || promised <= self.highest_promised {
+                self.endpoint.last_protocol_error = Some(invalid());
+                return Err(ServerError::InvalidFrame);
+            }
+            self.highest_promised = promised;
+            let block = &payload[4..];
+            if block.len() > self.endpoint.limits.max_encoded_header_block_size {
+                self.endpoint.last_protocol_error = Some(invalid());
+                return Err(ServerError::InvalidFrame);
+            }
+            if frame.flags & 4 == 0 {
+                self.pending_push = Some(PendingPush {
+                    associated: frame.stream_id,
+                    promised,
+                    block: block.to_vec(),
+                    continuations: 0,
+                });
+                return Ok(Vec::new());
+            }
+            (promised, std::borrow::Cow::Borrowed(block))
+        };
+        self.discard_hpack_block(&block)?;
+        self.endpoint
+            .remember_tombstone(promised, H2StreamTombstone::ResetTolerant);
+        self.reset_stream(promised, H2ErrorCode::Cancel)
+    }
     fn accept_driver_header_frame<'a>(
         &mut self,
         frame: H2FrameRef<'_>,
@@ -1572,6 +1681,10 @@ impl H2Client {
         else {
             return Ok(None);
         };
+        if self.is_reset_tolerant(block.stream_id) {
+            self.discard_hpack_block(&block.block)?;
+            return Ok(None);
+        }
         self.event_from_complete_headers_driver(block).map(Some)
     }
 
@@ -1641,12 +1754,19 @@ impl H2Client {
                     .get(&stream_id)
                     .map(|stream| (stream.request_is_head, stream.response_body_limit))
                     .ok_or(ServerError::InvalidFrame)?;
+                let mut response_section = section;
+                let tunnel = self.endpoint.streams.get(&stream_id).is_some_and(|stream| {
+                    stream.request_is_connect && (200..300).contains(&status)
+                });
+                if tunnel {
+                    response_section.content_length = None;
+                }
                 let state = H2StreamState::new_response_raw(
-                    section,
+                    response_section,
                     request_is_head,
                     status,
                     self.endpoint.http_limits,
-                    body_limit,
+                    if tunnel { None } else { body_limit },
                 )?;
                 if flags & 0x1 == 0 {
                     if let Some(stream) = self.endpoint.streams.get_mut(&stream_id) {
@@ -1863,6 +1983,7 @@ impl H2Client {
                         return Err(ServerError::InvalidFrame);
                     }
                     self.endpoint.local_settings_ack_debt.note_ack()?;
+                    self.push_disabled_ack = true;
                     self.endpoint.control_diagnostics.settings_acks = self
                         .endpoint
                         .control_diagnostics
@@ -2045,6 +2166,18 @@ impl H2Client {
         &mut self,
         payload: &[u8],
     ) -> Result<Option<H2InitialWindowSizeChange>, ServerError> {
+        if payload
+            .as_chunks::<6>()
+            .0
+            .iter()
+            .any(|setting| setting[..2] == [0, 2])
+        {
+            self.endpoint.last_protocol_error = Some(H2ProtocolError::connection(
+                H2ErrorCode::ProtocolError,
+                "a server sent SETTINGS_ENABLE_PUSH",
+            ));
+            return Err(ServerError::InvalidFrame);
+        }
         self.endpoint.apply_settings(payload, |stream| {
             stream.send.as_mut().map(|send| &mut send.window)
         })
@@ -2164,12 +2297,19 @@ impl H2Client {
                     .get(&stream_id)
                     .map(|stream| (stream.request_is_head, stream.response_body_limit))
                     .ok_or(ServerError::InvalidFrame)?;
+                let mut response_section = section;
+                let tunnel = self.endpoint.streams.get(&stream_id).is_some_and(|stream| {
+                    stream.request_is_connect && (200..300).contains(&status)
+                });
+                if tunnel {
+                    response_section.content_length = None;
+                }
                 let state = H2StreamState::new_response_raw(
-                    section,
+                    response_section,
                     request_is_head,
                     status,
                     self.endpoint.http_limits,
-                    body_limit,
+                    if tunnel { None } else { body_limit },
                 )?;
                 if flags & 0x1 == 0 {
                     if let Some(stream) = self.endpoint.streams.get_mut(&stream_id) {

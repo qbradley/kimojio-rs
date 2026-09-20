@@ -742,7 +742,7 @@ pub(crate) struct ValidatedRequestFacts {
     pub(crate) method_index: usize,
     pub(crate) scheme_index: Option<usize>,
     pub(crate) authority_index: Option<usize>,
-    pub(crate) path_index: usize,
+    pub(crate) path_index: Option<usize>,
     pub(crate) has_host: bool,
 }
 
@@ -822,6 +822,7 @@ pub(crate) struct H2HeaderValidator {
     pub(crate) invalid_content_length: bool,
     pub(crate) saw_regular: bool,
     pub(crate) saw_method: bool,
+    pub(crate) method_is_connect: bool,
     pub(crate) saw_scheme: bool,
     pub(crate) saw_authority: bool,
     pub(crate) saw_path: bool,
@@ -859,6 +860,7 @@ impl H2HeaderValidator {
             invalid_content_length: false,
             saw_regular: false,
             saw_method: false,
+            method_is_connect: true,
             saw_scheme: false,
             saw_authority: false,
             saw_path: false,
@@ -892,7 +894,12 @@ impl H2HeaderValidator {
     pub(crate) fn finish(mut self) -> Result<ValidatedSection, H2HeaderValidationError> {
         match self.role {
             H2HeaderValidationRole::Request => {
-                self.invalid |= !self.saw_method || !self.saw_scheme || !self.saw_path;
+                self.invalid |= !self.saw_method;
+                if self.method_is_connect {
+                    self.invalid |= !self.saw_authority || self.saw_scheme || self.saw_path;
+                } else {
+                    self.invalid |= !self.saw_scheme || !self.saw_path;
+                }
             }
             H2HeaderValidationRole::Response => self.invalid |= !self.saw_status,
             H2HeaderValidationRole::Trailers => {}
@@ -905,13 +912,13 @@ impl H2HeaderValidator {
             let synthesized_host = matches!(self.role, H2HeaderValidationRole::Request)
                 && self.authority_index.is_some()
                 && !self.has_host;
-            let request = match (self.role, self.method_index, self.path_index) {
-                (H2HeaderValidationRole::Request, Some(method_index), Some(path_index)) => {
+            let request = match (self.role, self.method_index) {
+                (H2HeaderValidationRole::Request, Some(method_index)) => {
                     Some(ValidatedRequestFacts {
                         method_index,
                         scheme_index: self.scheme_index,
                         authority_index: self.authority_index,
-                        path_index,
+                        path_index: self.path_index,
                         has_host: self.has_host,
                     })
                 }
@@ -1136,6 +1143,9 @@ impl crate::hpack::HeaderFieldVisitor for H2HeaderValidator {
     }
 
     fn value_byte(&mut self, byte: u8) {
+        if self.current_name == H2ValidatedName::Method {
+            self.method_is_connect &= b"CONNECT".get(self.value_len) == Some(&byte);
+        }
         if self.current_name == H2ValidatedName::ContentLength {
             self.content_length_value_byte(byte);
         }
@@ -1160,6 +1170,9 @@ impl crate::hpack::HeaderFieldVisitor for H2HeaderValidator {
     }
 
     fn value_bytes(&mut self, bytes: &[u8]) {
+        if self.current_name == H2ValidatedName::Method {
+            self.method_is_connect = bytes == b"CONNECT";
+        }
         self.value_len = bytes.len();
         self.value_ends_with_whitespace = matches!(bytes.last(), Some(b' ' | b'\t'));
         if bytes.iter().any(|&byte| matches!(byte, 0 | b'\r' | b'\n'))
@@ -1197,6 +1210,13 @@ impl crate::hpack::HeaderFieldVisitor for H2HeaderValidator {
             self.invalid = true;
         }
         match self.current_name {
+            H2ValidatedName::Method => {
+                self.method_is_connect &= self.value_len == 7;
+                self.invalid |= self.value_len == 0;
+            }
+            H2ValidatedName::Scheme | H2ValidatedName::Authority | H2ValidatedName::Path => {
+                self.invalid |= self.value_len == 0;
+            }
             H2ValidatedName::Te => {
                 if !self.te_trailers || self.value_len != b"trailers".len() {
                     self.invalid = true;

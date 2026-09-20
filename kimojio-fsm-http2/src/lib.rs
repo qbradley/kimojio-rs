@@ -1,6 +1,10 @@
 //! Synchronous HTTP/2 protocol components.
 
+mod api;
+mod engine;
 mod error;
+pub use api::*;
+pub use engine::{Client, Config, Connection, Server};
 #[allow(dead_code)]
 mod head;
 #[allow(dead_code)]
