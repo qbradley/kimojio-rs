@@ -16,7 +16,7 @@ from h2.events import (
     StreamReset,
     WindowUpdated,
 )
-from h2.settings import SettingCodes
+from h2.settings import SettingCodes, Settings
 
 
 @dataclass
@@ -42,11 +42,16 @@ class Peer:
         self.connection = H2Connection(
             config=H2Configuration(client_side=client, header_encoding=None)
         )
-        self.connection.initiate_connection()
-        settings = {SettingCodes.INITIAL_WINDOW_SIZE: stream_window}
+        initial = dict(self.connection.local_settings)
+        initial[SettingCodes.INITIAL_WINDOW_SIZE] = stream_window
         if client:
-            settings[SettingCodes.ENABLE_PUSH] = 0
-        self.connection.update_settings(settings)
+            initial[SettingCodes.ENABLE_PUSH] = 0
+        self.connection.local_settings = Settings(client=client, initial_values=initial)
+        if not client:
+            # python-h2's default server settings retain the RFC 7540 value.
+            # RFC 9113 prohibits servers from sending ENABLE_PUSH, even zero.
+            del self.connection.local_settings[SettingCodes.ENABLE_PUSH]
+        self.connection.initiate_connection()
         if connection_window > 65535:
             self.connection.increment_flow_control_window(connection_window - 65535)
         self.received: dict[int, Received] = {}
@@ -135,6 +140,7 @@ class CreditSender:
         self.peer = peer
         self.pending: deque[Send] = deque()
         self.completed: dict[int, Send] = {}
+        self.cancelled: dict[int, Send] = {}
         self.initial_connection_credit: int | None = None
         self.initial_stream_credit: dict[int, int] = {}
         self.total_payload = 0
@@ -220,6 +226,16 @@ class CreditSender:
 
     def end(self, stream_id: int) -> None:
         self.streaming[stream_id].source_ended = True
+
+    def cancel(self, stream_id: int) -> None:
+        if stream_id in self.streaming:
+            raise ValueError("streaming echo cancellation requires fragment settlement")
+        for send in self.pending:
+            if send.stream_id == stream_id:
+                self.pending.remove(send)
+                self.cancelled[stream_id] = send
+                return
+        self.cancelled[stream_id] = self.completed.pop(stream_id)
 
     def settle(self, fragment: Fragment, *, consume: bool = True) -> None:
         """Return ownership and input credit only after the echo write settles."""

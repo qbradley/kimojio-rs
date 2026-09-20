@@ -107,7 +107,11 @@ def validate_results(case, report, *, echo=False):
     indexed = {entry["stream_id"]: entry for entry in streams}
     require(set(indexed) == set(range(1, 2 * case.count, 2)), "missing or duplicate stream ID")
     for stream, result in indexed.items():
-        length = 0 if case.method == "HEAD" or case.route == "no-content" else case.length
+        limited = (
+            case.name == "empty-data-sibling" and stream == 1
+            and result.get("error") == {"scope": "stream", "code": 11}
+        )
+        length = 0 if case.method == "HEAD" or case.route == "no-content" or limited else case.length
         require(result.get("status") == (204 if case.route == "no-content" else 200), "wrong status")
         require("content_length" in result, "missing declared content length")
         declared = result["content_length"]
@@ -118,7 +122,10 @@ def validate_results(case, report, *, echo=False):
             require(declared == expected_length, f"stream {stream}: declared content length mismatch")
         require(result.get("bytes") == length, f"stream {stream}: body length mismatch")
         require(result.get("sha256") == digest_for(stream, length), f"stream {stream}: body hash mismatch")
-        require(result.get("ended") is True, f"stream {stream}: missing END_STREAM")
-        require(result.get("error") is None, f"stream {stream}: unexpected error")
+        require(result.get("ended") is (not limited), f"stream {stream}: wrong END_STREAM result")
+        require(
+            result.get("error") == ({"scope": "stream", "code": 11} if limited else None),
+            f"stream {stream}: unexpected error",
+        )
         require(result.get("trailers") == ([["x-end", "done"]] if case.route == "trailers" else []), "wrong trailers")
         require(result.get("informational") == ([103] if case.route == "informational" else []), "wrong informational sequence")

@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import socket
 
-from h2.events import DataReceived, RequestReceived, StreamEnded
+from h2.events import DataReceived, RequestReceived, StreamEnded, StreamReset
 
 from peer import CreditSender
 from socket_peer import Channel, configured_peer, credit_report, prerequisites, receive_credit_report, require
@@ -121,11 +121,19 @@ def serve(sock, *, config, timeout=60, case=None, refund=True):
                 channel.after_write(settled)
             if case and case.actions and 3 in sender.completed and not sibling_progress:
                 pending = {send.stream_id: send for send in sender.pending}
-                require(1 in pending, "paused stream completed before its sibling")
-                require(pending[1].sent == 1024, "paused consumer returned premature stream credit")
+                if 1 not in sender.cancelled:
+                    require(1 in pending, "paused stream completed before its sibling")
+                    require(pending[1].sent == 1024, "paused consumer returned premature stream credit")
                 sibling_progress = True
             events = channel.step()
             for event in events:
+                if isinstance(event, StreamReset):
+                    require(
+                        case is not None and case.name == "empty-data-sibling"
+                        and event.stream_id == 1 and int(event.error_code) == 11,
+                        "unexpected stream reset",
+                    )
+                    sender.cancel(1)
                 if isinstance(event, RequestReceived):
                     require(len(requests) < 1024, "request count limit exceeded")
                     requests[event.stream_id] = dict(event.headers)
@@ -188,7 +196,10 @@ def serve(sock, *, config, timeout=60, case=None, refund=True):
             raise AssertionError("server turn limit exceeded")
         credit = credit_report(channel, sender, baseline)
         receive_credit = receive_credit_report(channel, receive_initial, receive_baseline)
-        require(not peer.resets, "unexpected stream reset")
+        require(
+            not peer.resets or case is not None and case.name == "empty-data-sibling" and peer.resets == {1: 11},
+            "unexpected stream reset",
+        )
         require(
             peer.termination is None or peer.termination.error_code == 0,
             "unexpected connection error",
@@ -199,7 +210,10 @@ def serve(sock, *, config, timeout=60, case=None, refund=True):
             "credit": credit, "receive_credit": receive_credit, "requests": len(requests),
             "peer_eof": channel.eof,
             "sibling_progress": sibling_progress,
-            "empty_data_frames": channel.outbound.types[0] - sum(send.frames for send in sender.completed.values()),
+            "empty_data_frames": channel.outbound.types[0] - sum(
+                send.frames for send in (*sender.completed.values(), *sender.cancelled.values())
+            ),
+            "resets": peer.resets,
             "echo_retention": {
                 "bytes": sender.peak_owned_bytes, "items": sender.peak_owned_items,
                 "byte_limit": sender.storage_limit, "item_limit": 4096,

@@ -106,6 +106,17 @@ The server adapter file contains:
 
 The process binds an ephemeral loopback port.
 Its request file contains `schema`, `config`, and `timeout_ms`, with the same meanings as the client file.
+A server with a flag interface can instead use:
+
+```json
+{"schema":1,"command":["/absolute/fixture","server","--stream-window","{stream_window}","--connection-window","{connection_window}"]}
+```
+
+Both window placeholders are mandatory for this form.
+An absent configuration field becomes the literal argument `default`.
+The fixture must preserve its default for that argument.
+The harness still records the requested configuration in its report directory.
+
 It prints and flushes `LISTEN 127.0.0.1:PORT`.
 The harness owns process termination after each case.
 Each connection supports multiple requests.
@@ -176,3 +187,7 @@ The graceful-close case requires GOAWAY(NO_ERROR) on the wire before actual sock
 The content-length error case sends 37 bytes, then an empty END_STREAM after a PING barrier.
 Its declared content length is 38.
 It requires stream PROTOCOL_ERROR without a connection error.
+
+The empty-DATA pressure case permits stream 1 to fail with code 11 and zero delivered bytes.
+That outcome requires a matching RST_STREAM, no connection error, and a complete response on sibling stream 3.
+The report distinguishes this bounded resource rejection from full body delivery.

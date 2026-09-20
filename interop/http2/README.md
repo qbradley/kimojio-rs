@@ -3,6 +3,10 @@
 These suites use python-h2 4.3.0 and Go `x/net/http2` Framer with HPACK.
 They do not import the Rust engine.
 The [adapter contract](ADAPTER.md) defines the native fixture interface.
+The Python server omits its library's default ENABLE_PUSH setting.
+RFC 9113 prohibits servers from sending that setting, including a zero value.
+Each peer advertises its requested stream window in its first SETTINGS frame.
+It does not shrink that window during the handshake while DATA can be in flight.
 
 **Peer self-tests are not evidence that the Rust engine passes.**
 Every report identifies its command-adapter run or its peer-only run.
@@ -133,6 +137,9 @@ Padding and empty-frame injection run only from the independent server.
 The native server routes do not promise those exact frame layouts.
 The empty-frame case proves bounded peer traffic and sibling progress.
 It does **not** measure native fragment-descriptor capacity.
+It permits full delivery or stream-local ENHANCE_YOUR_CALM on stream 1 with zero delivered body bytes.
+The latter outcome requires the matching wire RST_STREAM, successful sibling 3, and no connection error.
+Reports distinguish `bounded-stream-rejection` from complete delivery.
 
 ## Implemented protocol checks
 
@@ -199,7 +206,7 @@ Context managers close sockets and stop owned processes and threads on success o
 
 ## Remaining qualification gates
 
-Native-core and wrapper runs still need the parent-owned fixture binary.
+Native-core and wrapper qualification require the parent-owned fixture binary and actual adapter runs.
 No peer-only result substitutes for those runs.
 The current cases do not prove internal descriptor bounds, operation ownership, ID exhaustion, or retry classification after GOAWAY.
 Malformed-request error scope and late reset DATA at the server boundary need additional cases.

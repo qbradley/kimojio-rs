@@ -8,6 +8,26 @@ from peer import CreditSender, Peer, digest_for, exchange, handshake
 
 
 class CreditTests(unittest.TestCase):
+    def test_server_never_advertises_enable_push(self):
+        from socket_peer import Trace
+
+        trace = Trace()
+        trace.feed(Peer(client=False).take_wire())
+        self.assertTrue(trace.settings)
+        self.assertTrue(all(2 not in settings for settings in trace.settings))
+
+    def test_receive_window_is_in_first_settings_without_inflight_resize(self):
+        from socket_peer import Trace
+
+        for client in (True, False):
+            peer = Peer(client=client, stream_window=1024, connection_window=8 * 1024 * 1024)
+            trace = Trace(preface=client)
+            trace.feed(peer.take_wire())
+            self.assertEqual(len(trace.settings), 1)
+            self.assertEqual(trace.settings[0][4], 1024)
+            self.assertEqual(trace.updates[0], 8 * 1024 * 1024 - 65535)
+            self.assertEqual(peer.connection.inbound_flow_control_window, 8 * 1024 * 1024)
+
     def pair(self, window=65535):
         client, server = Peer(client=True, stream_window=window), Peer(client=False)
         handshake(client, server)

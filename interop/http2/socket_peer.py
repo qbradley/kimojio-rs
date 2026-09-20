@@ -248,11 +248,12 @@ def credit_report(channel, sender, update_baseline):
     )
     streams = []
     for stream, initial in sender.initial_stream_credit.items():
+        send = sender.completed.get(stream) or sender.cancelled[stream]
         updates = channel.inbound.updates[stream]
         flow = channel.outbound.flow[stream]
-        require(flow == sender.completed[stream].flow_sent, "DATA flow accounting mismatch")
+        require(flow == send.flow_sent, "DATA flow accounting mismatch")
         require(
-            channel.outbound.payload[stream] == sender.completed[stream].sent,
+            channel.outbound.payload[stream] == send.sent,
             "DATA payload accounting mismatch",
         )
         final = initial + updates - flow
@@ -264,7 +265,8 @@ def credit_report(channel, sender, update_baseline):
             require(final == live.outbound_flow_control_window, "stream credit mismatch")
         streams.append({
             "stream_id": stream, "initial": initial, "window_update": updates,
-            "flow": flow, "final": final, "frames": sender.completed[stream].frames,
+            "flow": flow, "final": final, "frames": send.frames,
+            "cancelled": stream in sender.cancelled,
         })
     return {
         "initial_connection": connection_initial,

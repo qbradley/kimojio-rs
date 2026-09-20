@@ -10,7 +10,7 @@ from cases import Case, qualify, validate_results
 from peer import Peer, digest_for
 from reference import client, serve
 from socket_peer import Channel, ScriptedPeer, Trace, require, run_command
-from suite import ROOT, client_case, server_case
+from suite import ROOT, adapter, client_case, command, server_case
 
 
 class SocketTests(unittest.TestCase):
@@ -33,6 +33,26 @@ class SocketTests(unittest.TestCase):
         )
         client_case(self.client_adapter, case, self.directory / "client")
         server_case(self.server_adapter, case, self.directory / "server", upload=True)
+
+    def test_server_flags_preserve_default_omission(self):
+        path = self.directory / "flags.json"
+        spec = {
+            "schema": 1, "command": [
+                "fixture", "server", "--stream-window", "{stream_window}",
+                "--connection-window", "{connection_window}",
+            ],
+        }
+        path.write_text(json.dumps(spec))
+        parsed = adapter(path, client_role=False)
+        self.assertEqual(command(parsed, path)[3::2], ["default", "default"])
+        self.assertEqual(
+            command(parsed, path, config={"stream_window": 1024, "connection_window": 65535})[3::2],
+            ["1024", "65535"],
+        )
+        spec["command"] = spec["command"][:4]
+        path.write_text(json.dumps(spec))
+        with self.assertRaisesRegex(AssertionError, "connection_window"):
+            adapter(path, client_role=False)
 
     def test_requests_before_handshake_barrier_are_not_lost(self):
         import socket
@@ -222,6 +242,28 @@ class SocketTests(unittest.TestCase):
         result["streams"][0]["content_length"] = 0
         with self.assertRaisesRegex(AssertionError, "declared content length"):
             validate_results(case, result)
+
+    def test_empty_frame_resource_limit_requires_successful_sibling(self):
+        case = Case("empty-data-sibling", 4096, 2, 2)
+        report = {
+            "schema": 1, "connection": {"closed": True, "error": None},
+            "streams": [{
+                "stream_id": stream, "status": 200, "content_length": 4096,
+                "bytes": 0 if stream == 1 else 4096,
+                "sha256": digest_for(stream, 0 if stream == 1 else 4096),
+                "trailers": [], "informational": [], "ended": stream == 3,
+                "error": {"scope": "stream", "code": 11} if stream == 1 else None,
+            } for stream in (1, 3)],
+        }
+        validate_results(case, report)
+        for stream_index in (0, 1):
+            broken = json.loads(json.dumps(report))
+            broken["streams"][stream_index]["error"] = {"scope": "stream", "code": 8}
+            with self.assertRaises(AssertionError):
+                validate_results(case, broken)
+        report["connection"]["error"] = {"scope": "connection", "code": 11}
+        with self.assertRaises(AssertionError):
+            validate_results(case, report)
 
     def test_bounded_process_output_and_timeout(self):
         with self.assertRaisesRegex(AssertionError, "output exceeds"):

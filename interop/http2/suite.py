@@ -37,14 +37,23 @@ def adapter(path, *, client_role):
         and all(isinstance(arg, str) and len(arg) <= 8192 for arg in command),
         "adapter command must be a bounded nonempty string array",
     )
-    for placeholder in (["{request_file}", "{result_file}"] if client_role else ["{request_file}"]):
+    if client_role:
+        required = ["{request_file}", "{result_file}"]
+    elif any("{request_file}" in arg for arg in command):
+        required = ["{request_file}"]
+    else:
+        required = ["{stream_window}", "{connection_window}"]
+    for placeholder in required:
         require(any(placeholder in arg for arg in command), f"missing {placeholder}")
     return spec
 
 
-def command(spec, request_file, result_file=None):
+def command(spec, request_file, result_file=None, *, config=None):
+    config = config or {}
     return [
         arg.replace("{request_file}", str(request_file)).replace("{result_file}", str(result_file))
+        .replace("{stream_window}", str(config.get("stream_window", "default")))
+        .replace("{connection_window}", str(config.get("connection_window", "default")))
         for arg in spec["command"]
     ]
 
@@ -81,9 +90,17 @@ def client_case(spec, case, directory, *, upload=False):
             )
     if case.name == "empty-data-sibling":
         require(observation["empty_data_frames"] == 4096, "wrong empty DATA frame count")
+        limited = any(stream["error"] == {"scope": "stream", "code": 11} for stream in result["streams"])
+        require(
+            observation["resets"] == ({1: 11} if limited else {}),
+            "reported resource limit does not match wire RST_STREAM",
+        )
+    else:
+        limited = False
     write_json(directory / "peer.json", observation)
     return {
         "name": case.name, "passed": True, "credit": observation["credit"],
+        "outcome": "bounded-stream-rejection" if limited else "complete",
         **({"upload_credit": observation["receive_credit"]} if upload else {}),
     }
 
@@ -95,7 +112,7 @@ def server_case(spec, case, directory, *, upload):
     write_json(request_file, {
         "schema": 1, "config": case.config, "timeout_ms": 60000,
     })
-    with PeerProcess(command(spec, request_file), cwd=ROOT) as process:
+    with PeerProcess(command(spec, request_file, config=case.config), cwd=ROOT) as process:
         result = client(case.spec(process.address, upload=upload))
         validate_results(case, result, echo=upload)
         require(process.output_bytes <= 128 * 1024, "server output exceeds limit")
