@@ -1,0 +1,12 @@
+{
+  "source_commit": "5505efc469c7939c43d6d42a2ecb10b94ab4d9e4",
+  "binary_sha256": "ca2c891fe504309b73f01196abede2e98a5b3482c266b128485516098c723b30",
+  "successful_runs": 12,
+  "failed_runs": 0,
+  "cohorts_per_connection": 10000,
+  "total_exchanges": 6030000,
+  "total_payload_bytes": 771840000,
+  "harness_unchanged_after_cohort8": true,
+  "live_plateau_at_2000_5000_10000": true,
+  "all_teardown_deltas_zero": true
+}

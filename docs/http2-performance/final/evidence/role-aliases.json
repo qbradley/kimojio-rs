@@ -1,0 +1,61 @@
+{
+  "binary_sha256": "861d584ad7c355cbf89eddbb43b74f487e9ee6431ed44d3d7c8135f5f7c2d692",
+  "mixed_groups": [
+    {
+      "address": "0000000000098c60",
+      "size": "000000000000035c",
+      "symbols": [
+        "<kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>>::remember_tombstone",
+        "<kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::server::H2ServerStream>>::remember_tombstone"
+      ]
+    },
+    {
+      "address": "0000000000098fc0",
+      "size": "0000000000000325",
+      "symbols": [
+        "<kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>>::discard_hpack_block",
+        "<kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::server::H2ServerStream>>::discard_hpack_block"
+      ]
+    },
+    {
+      "address": "00000000000992f0",
+      "size": "0000000000000416",
+      "symbols": [
+        "<kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>>::encode_local_settings",
+        "<kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::server::H2ServerStream>>::encode_local_settings"
+      ]
+    },
+    {
+      "address": "00000000000999d0",
+      "size": "000000000000007c",
+      "symbols": [
+        "<kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>>::encode_local_connection_window_update",
+        "<kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::server::H2ServerStream>>::encode_local_connection_window_update"
+      ]
+    },
+    {
+      "address": "00000000000acb60",
+      "size": "0000000000000154",
+      "symbols": [
+        "<alloc::vec::Vec<usize> as alloc::vec::spec_from_iter::SpecFromIter<usize, core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<core::slice::iter::Iter<kimojio_fsm_http2::server::h2::wire::H2Setting>, <kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>>::prepare_settings::{closure#1}>, <kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream>>::prepare_settings::{closure#2}>>>::from_iter",
+        "<alloc::vec::Vec<usize> as alloc::vec::spec_from_iter::SpecFromIter<usize, core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<core::slice::iter::Iter<kimojio_fsm_http2::server::h2::wire::H2Setting>, <kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::server::H2ServerStream>>::prepare_settings::{closure#1}>, <kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::server::H2ServerStream>>::prepare_settings::{closure#2}>>>::from_iter"
+      ]
+    },
+    {
+      "address": "000000000009b000",
+      "size": "000000000000065b",
+      "symbols": [
+        "<kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::client::H2ClientStream> as core::default::Default>::default",
+        "<kimojio_fsm_http2::server::h2::endpoint::H2Endpoint<kimojio_fsm_http2::server::h2::server::H2ServerStream> as core::default::Default>::default"
+      ]
+    },
+    {
+      "address": "000000000005d350",
+      "size": "0000000000000005",
+      "symbols": [
+        "<kimojio_fsm_http2::engine::Client<&[u8]> as composition_bench::composition_bench_support::Endpoint>::drive",
+        "<kimojio_fsm_http2::engine::Server<&[u8]> as composition_bench::composition_bench_support::Endpoint>::drive"
+      ]
+    }
+  ]
+}

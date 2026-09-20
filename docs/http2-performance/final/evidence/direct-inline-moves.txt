@@ -1,0 +1,25 @@
+   65e30:	8b 8e e4 1d 00 00    	mov    0x1de4(%rsi),%ecx
+   65e36:	89 8c 24 34 01 00 00 	mov    %ecx,0x134(%rsp)
+   65e3d:	0f 10 86 d4 1d 00 00 	movups 0x1dd4(%rsi),%xmm0
+   65e44:	0f 11 84 24 24 01 00 	movups %xmm0,0x124(%rsp)
+   65e4b:	00 
+   65e4c:	0f 10 86 94 1d 00 00 	movups 0x1d94(%rsi),%xmm0
+   65e53:	0f 10 8e a4 1d 00 00 	movups 0x1da4(%rsi),%xmm1
+   65e5a:	0f 10 96 b4 1d 00 00 	movups 0x1db4(%rsi),%xmm2
+   65e61:	0f 10 9e c4 1d 00 00 	movups 0x1dc4(%rsi),%xmm3
+   65e68:	0f 11 9c 24 14 01 00 	movups %xmm3,0x114(%rsp)
+   65e6f:	00 
+   65e70:	0f 11 94 24 04 01 00 	movups %xmm2,0x104(%rsp)
+   65e77:	00 
+   65e78:	0f 11 8c 24 f4 00 00 	movups %xmm1,0xf4(%rsp)
+   65e7f:	00 
+   65e80:	0f 11 84 24 e4 00 00 	movups %xmm0,0xe4(%rsp)
+   65e87:	00 
+   65e88:	c7 86 90 1d 00 00 02 	movl   $0x2,0x1d90(%rsi)
+   65e8f:	00 00 00 
+   65e92:	89 84 24 e0 00 00 00 	mov    %eax,0xe0(%rsp)
+   65e99:	0f 10 86 b8 1c 00 00 	movups 0x1cb8(%rsi),%xmm0
+   65ea0:	0f 11 84 24 48 01 00 	movups %xmm0,0x148(%rsp)
+   65ea7:	00 
+   65ea8:	48 c7 86 b0 1c 00 00 	movq   $0x0,0x1cb0(%rsi)
+   65eaf:	00 00 00 00 

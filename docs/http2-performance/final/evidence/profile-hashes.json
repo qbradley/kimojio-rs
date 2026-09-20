@@ -1,0 +1,11 @@
+{
+  "frozen_directory": "/workspace/kimojio-rs/target/http2-program/build-http2-final/frozen-5505efc4",
+  "sha256": {
+    "composition_bench": "861d584ad7c355cbf89eddbb43b74f487e9ee6431ed44d3d7c8135f5f7c2d692",
+    "allocation_probe": "ca2c891fe504309b73f01196abede2e98a5b3482c266b128485516098c723b30",
+    "direct-empty.data": "3ece01143f3539a9a66090d9337ded6f913e07884a03537ee7103eb096722c72",
+    "selected-empty.data": "2cd0661176dc26e6276e6da4d92eb55e85bb23a38414d18e95ceba987521a966",
+    "direct-empty128.data": "9a990f398bdb4dc7ed0029d72bd368d155d549506f6a79322632d1dfeed524d9",
+    "direct-1m.data": "2c5c6e26aa24a9cd18f3928b08088ffe53276fef0d4318f3b22ea634dea4920b"
+  }
+}

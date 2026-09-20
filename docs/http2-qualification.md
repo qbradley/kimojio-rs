@@ -5,7 +5,8 @@
 This ledger records bounded evidence for the scope in [the composition design](http2-composition.md).
 It does not claim an exhaustive RFC proof.
 The Kimojio HTTP/2 wrappers are not implemented.
-Final performance measurements and a metadata-admission interface repair remain in progress.
+A metadata-admission interface repair remains in progress.
+That changed source will need its own measurements.
 
 The current socket qualification covers the direct HTTP/2 engine.
 Separate models cover the HTTP/1 plus HTTP/2 composite.
@@ -116,9 +117,17 @@ The isolated forwarding experiment replaced a 144-byte move with a hot 232-byte 
 All six paired timing intervals included equal performance, so the experiment remains unmerged.
 The [experiment report](http2-performance/credit-coalescing/) records the rejected change.
 
-The final timing and profile run uses frozen integration `5505efc4`.
-Its results are pending.
-Earlier timings must not be presented as measurements of that later source.
+The later run used frozen integration `5505efc4`.
+All 945 timing trials, 324 allocation runs, and 12 retention runs passed.
+Four fresh profiles separate client, server, and shared work.
+For 128 concurrent empty-body exchanges without fragmentation, medians were 2.662 microseconds direct and 2.679 microseconds explicitly selected.
+Some fragmented workloads showed approximately 14 percent composition overhead.
+These are in-memory costs, not socket throughput or runtime-wrapper measurements.
+
+The maximum reported requested-live storage was 610,546 bytes, not process RSS.
+The [source-specific report](http2-performance/final/) records distributions, measurement boundaries, hashes, and allocation exclusions.
+Its evidence remains unchanged.
+The pending metadata-admission repair is not part of this measured source.
 
 ## Lessons
 

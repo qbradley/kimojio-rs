@@ -1,0 +1,6 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /workspace/kimojio-rs/target/http2-program/build-http2-final/frozen-5505efc4/composition_bench.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+warning: could not convert 'kimojio_fsm_http2::api::WriteOp<&[u8]>' from the host encoding (UTF-8) to UTF-32.
+This normally should not happen, please file a bug report.
+$1 = 88

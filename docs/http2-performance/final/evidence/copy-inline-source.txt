@@ -1,0 +1,28 @@
+<core::result::Result<kimojio_fsm_http2::server::h2::server::H2ServerDriverProgress, kimojio_fsm_http2::server::error::ServerError> as core::ops::try_trait::Try>::branch
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:2177
+<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-final/kimojio-fsm-http2/src/server/h2/server.rs:941
+<core::option::Option<kimojio_fsm_http2::engine::Stream<&[u8]>>>::expect
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:968
+<kimojio_fsm_http2::engine::Connection<&[u8]>>::maybe_retire
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-final/kimojio-fsm-http2/src/engine.rs:1141
+core::ptr::write::<(kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>)>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:1939
+<*mut (kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>)>::write
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mut_ptr.rs:1400
+<hashbrown::raw::Bucket<(kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>)>>::write
+/rust/deps/hashbrown-0.17.1/src/raw.rs:524
+<hashbrown::raw::RawTable<(kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>)>>::insert_tagged_at_index
+/rust/deps/hashbrown-0.17.1/src/raw.rs:1185
+<hashbrown::raw::RawTable<(kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>)>>::insert_at_index
+/rust/deps/hashbrown-0.17.1/src/raw.rs:1162
+<hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::insert
+/rust/deps/hashbrown-0.17.1/src/map.rs:1817
+core::mem::replace::<core::option::Option<kimojio_fsm_http2::api::WriteOp<&[u8]>>>
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/mem/mod.rs:967
+<core::option::Option<kimojio_fsm_http2::api::WriteOp<&[u8]>>>::take
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1901
+composition_bench::composition_bench_support::transfer::<kimojio_fsm_http2::engine::Server<&[u8]>, kimojio_fsm_http2::engine::Client<&[u8]>>
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-final/kimojio-fsm-http2/examples/composition_bench_support/mod.rs:577
+<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-final/kimojio-fsm-http2/examples/composition_bench_support/mod.rs:645

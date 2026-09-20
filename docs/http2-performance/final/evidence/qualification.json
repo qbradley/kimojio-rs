@@ -1,0 +1,89 @@
+{
+  "source_commit": "5505efc469c7939c43d6d42a2ecb10b94ab4d9e4",
+  "strict_timing": {
+    "cells": 189,
+    "trials_per_cell": 5,
+    "passed": 945,
+    "failed": 0,
+    "skipped": 0
+  },
+  "release_tests": {
+    "tests-default.txt": {
+      "passed": 39,
+      "failed": 0,
+      "ignored": 0
+    },
+    "tests-all-features.txt": {
+      "passed": 39,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "explicit_overlap": {
+    "passed": 1,
+    "failed": 0,
+    "overlapping_cohorts": 10,
+    "total_cohorts": 10
+  },
+  "allocations": {
+    "cells": 108,
+    "passed": 324,
+    "failed": 0,
+    "repetitions": 3,
+    "all_repetitions_identical": true,
+    "peak_requested_live_bytes": 610546
+  },
+  "retention": {
+    "source_commit": "5505efc469c7939c43d6d42a2ecb10b94ab4d9e4",
+    "binary_sha256": "ca2c891fe504309b73f01196abede2e98a5b3482c266b128485516098c723b30",
+    "successful_runs": 12,
+    "failed_runs": 0,
+    "cohorts_per_connection": 10000,
+    "total_exchanges": 6030000,
+    "total_payload_bytes": 771840000,
+    "harness_unchanged_after_cohort8": true,
+    "live_plateau_at_2000_5000_10000": true,
+    "all_teardown_deltas_zero": true
+  },
+  "profiles": {
+    "direct-empty": {
+      "samples": 5972,
+      "buckets": {
+        "shared": 5223,
+        "client": 353,
+        "server": 396
+      }
+    },
+    "selected-empty": {
+      "samples": 6306,
+      "buckets": {
+        "shared": 5163,
+        "client": 404,
+        "server": 739
+      }
+    },
+    "direct-empty128": {
+      "samples": 6134,
+      "buckets": {
+        "shared": 5294,
+        "client": 427,
+        "server": 413
+      }
+    },
+    "direct-1m": {
+      "samples": 5472,
+      "buckets": {
+        "client": 294,
+        "shared": 4817,
+        "server": 361
+      }
+    }
+  },
+  "formatting": "pass",
+  "clippy": "pass with -D warnings",
+  "clippy_all_targets_all_features": "pass with -D warnings",
+  "cpu2_lease": "released",
+  "core_or_harness_changes": false,
+  "optimization_or_poc_repeated": false,
+  "scope": "Specified in-memory core/composition workloads; not socket or Kimojio wrapper qualification"
+}
