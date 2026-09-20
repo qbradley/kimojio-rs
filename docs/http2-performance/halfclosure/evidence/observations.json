@@ -1,0 +1,61 @@
+{
+  "integration": "7d19cd8551191be92af945a452dd472fdf7d8440",
+  "core": "34ee4b71604520f9ae0d1de2c2500b6d268b5cce",
+  "diagnostic_source": "8172604f7e5bb90d747e9a75e8176f79f4b43e8d",
+  "mode": "direct",
+  "case": "1m",
+  "concurrency": 8,
+  "fragment": 65536,
+  "strict_exit": 101,
+  "diagnostic_exit": 101,
+  "timing_trials": 0,
+  "profiles": 0,
+  "harness_tests": {
+    "passed": 5,
+    "failed": 0,
+    "ignored": 1
+  },
+  "endpoints": {
+    "client": {
+      "frame_counts": [
+        2206,
+        8,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      "one_byte_data": 1697,
+      "one_byte_refunds": 0,
+      "all_originals_settled": true
+    },
+    "server": {
+      "frame_counts": [
+        0,
+        8,
+        0,
+        0,
+        2,
+        0,
+        0,
+        1,
+        4412,
+        0
+      ],
+      "one_byte_data": 0,
+      "one_byte_refunds": 3393,
+      "all_originals_settled": true
+    }
+  },
+  "server_terminal": "ResourceExhausted",
+  "client_terminal": "PeerClosed",
+  "server_goaway": {
+    "last_stream": 15,
+    "error_code": 11,
+    "turn": 6629
+  }
+}

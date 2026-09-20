@@ -5,8 +5,9 @@ It does not qualify a Kimojio wrapper or a socket executor.
 The source starts at `5491242b53e60051178870d7a82fb89b29cda463`.
 The final Rust harness commit is `d4bc8694c24225be5c0a6a7ddbdf3baaa387a8fd`.
 The final binary SHA256 is `205f19afeaa93d7d6161a3f32dd3359098bf2805d2b0bca08c5cd8a7c077c527`.
-Later commits add analysis scripts and reports only.
-The Rust sources still match the final frozen binary.
+The source hashes identify this historical binary, not later corrected-core work.
+[The corrected-core follow-up](halfclosure/README.md) has separate source identity and evidence.
+The historical results and profiles below remain unchanged.
 
 ## Decision
 
