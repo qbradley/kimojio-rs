@@ -399,9 +399,16 @@ The implementation owner also ran debug/release combinations and 22 no-default-f
 The repair adds regressions for scope retention, active cancellation, nested ownership, reentrant wakers, and borrowed-I/O panic settlement.
 The acknowledgment-order regression controls owner release around real completions, not kernel CQE order.
 
-Independent safety review, repeated allocation-site measurements, and a rebuilt dual-transport fixture remain in progress.
+Independent safety review and repeated allocation-site measurements remain in progress.
 The earlier socket and retention reports describe the old runtime, not this candidate.
 The candidate does not yet establish a retained-storage plateau or a performance result.
+
+The rebuilt fixture source is `86da3f3f90c59a5895c116c689c991ae59887a08`.
+Its release binary SHA-256 is `8e8550c0d771ea20a2a6b7c4eab24fb9e64f3f918a21e0c06df1bf44e2d9b80e`.
+It includes only the runtime repair beyond `b3789dc6`, with unchanged wrapper and fixture logic.
+The fixture owner passed 17 fixture tests, 12 socket smoke cases, and four server-close probes.
+Local provenance is in `target/http2-program/worktrees/http2-wrapper-fixture/target/wrapper-runtime-candidate/summary.json`.
+The independent peer owner is now repeating the complete wrapper profile for both transports on this candidate.
 
 ### Initial wrapper client fixture
 
