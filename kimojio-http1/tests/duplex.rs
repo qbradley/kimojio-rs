@@ -4,15 +4,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt, future::Either};
 use kimojio::{
     AsyncStreamRead, AsyncStreamWrite, Errno, OwnedFdStream, OwnedFdStreamRead, OwnedFdStreamWrite,
     ReceiverOneshot, SenderOneshot, SplittableStream, operations,
 };
 use kimojio_http1::{
     Config, ConnectionId, Error, IncomingBody, IncomingFrame, OutgoingBody, OutgoingFrame, connect,
+    connect_native,
     http::{Request, Response},
-    serve_connection,
+    serve_connection, serve_connection_native,
 };
 
 fn pair() -> (OwnedFdStream, OwnedFdStream) {
@@ -28,20 +29,58 @@ fn pair() -> (OwnedFdStream, OwnedFdStream) {
 
 #[kimojio::test]
 async fn explicit_forwarding_reuses_one_socket_for_fixed_and_chunked_gated_uploads() {
+    for native in [false, true] {
+        explicit_forwarding_case(native).await;
+    }
+}
+
+fn test_server<H, F>(
+    stream: OwnedFdStream,
+    config: Config,
+    handler: H,
+    native: bool,
+) -> impl Future<Output = Result<(), Error>>
+where
+    H: FnMut(Request<IncomingBody>) -> F,
+    F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
+{
+    if native {
+        Either::Left(serve_connection_native(
+            stream.into_inner().unwrap(),
+            config,
+            handler,
+        ))
+    } else {
+        Either::Right(serve_connection(stream, config, handler))
+    }
+}
+
+async fn explicit_forwarding_case(native: bool) {
     let (stream, peer) = pair();
-    let (mut client, driver) = connect(stream, config(209));
+    let (mut client, driver) = if native {
+        let (client, driver) = connect_native(stream.into_inner().unwrap(), config(209));
+        (client, driver.run().boxed_local())
+    } else {
+        let (client, driver) = connect(stream, config(209));
+        (client, driver.run().boxed_local())
+    };
     let calls = Rc::new(Cell::new(0));
     let handler_calls = calls.clone();
-    let server = serve_connection(peer, config(210), move |request: Request<IncomingBody>| {
-        handler_calls.set(handler_calls.get() + 1);
-        async move {
-            let mut incoming = request.into_body();
-            incoming.accept().await?;
-            Ok(Response::new(
-                OutgoingBody::from_incoming(incoming).continue_request_body(),
-            ))
-        }
-    });
+    let server = test_server(
+        peer,
+        config(210),
+        move |request: Request<IncomingBody>| {
+            handler_calls.set(handler_calls.get() + 1);
+            async move {
+                let mut incoming = request.into_body();
+                incoming.accept().await?;
+                Ok(Response::new(
+                    OutgoingBody::from_incoming(incoming).continue_request_body(),
+                ))
+            }
+        },
+        native,
+    );
     let app = async {
         for fixed in [false, true] {
             for expect in [false, true] {
@@ -101,7 +140,7 @@ async fn explicit_forwarding_reuses_one_socket_for_fixed_and_chunked_gated_uploa
         assert_eq!(calls.get(), 4);
     };
     operations::timeout_at(kimojio::clock_now() + Duration::from_secs(5), async {
-        let ((), driver, server) = futures::join!(app, driver.run(), server);
+        let ((), driver, server) = futures::join!(app, driver, server);
         driver.unwrap();
         server.unwrap();
     })
@@ -377,11 +416,11 @@ async fn response_first_and_input_first_exchange_completion_reuse_with_expect_co
 
 #[kimojio::test]
 async fn abandoned_prefix_never_turns_into_successful_discard_or_reuse() {
-    for buffered in [false, true] {
+    for (buffered, native) in [(false, false), (true, false), (false, true), (true, true)] {
         let (mut peer, stream) = pair();
         let calls = Rc::new(Cell::new(0));
         let handler_calls = calls.clone();
-        let server = serve_connection(
+        let server = test_server(
             stream,
             config(203),
             move |request: Request<IncomingBody>| {
@@ -401,6 +440,7 @@ async fn abandoned_prefix_never_turns_into_successful_discard_or_reuse() {
                     ))
                 }
             },
+            native,
         );
         let raw = async {
             let mut request = b"POST /prefix HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n7\r\npayload\r\n".to_vec();
@@ -429,18 +469,29 @@ async fn abandoned_prefix_never_turns_into_successful_discard_or_reuse() {
 
 #[kimojio::test]
 async fn dropped_duplex_consumer_after_final_output_cancels_without_a_lease() {
+    for native in [false, true] {
+        dropped_consumer_case(native).await;
+    }
+}
+
+async fn dropped_consumer_case(native: bool) {
     let (mut peer, stream) = pair();
     let (incoming_send, incoming_recv) = kimojio::oneshot();
     let mut incoming_send = Some(incoming_send);
-    let server = serve_connection(stream, config(204), move |request| {
-        incoming_send
-            .take()
-            .unwrap()
-            .send(request.into_body())
-            .ok()
-            .unwrap();
-        async { Ok(Response::new(OutgoingBody::empty().continue_request_body())) }
-    });
+    let server = test_server(
+        stream,
+        config(204),
+        move |request| {
+            incoming_send
+                .take()
+                .unwrap()
+                .send(request.into_body())
+                .ok()
+                .unwrap();
+            async { Ok(Response::new(OutgoingBody::empty().continue_request_body())) }
+        },
+        native,
+    );
     let raw = async {
         peer.write(
             b"POST /drop HTTP/1.1\r\nHost: test\r\nContent-Length: 5\r\n\r\n",
@@ -465,20 +516,31 @@ async fn dropped_duplex_consumer_after_final_output_cancels_without_a_lease() {
 
 #[kimojio::test]
 async fn body_deadline_survives_final_output_and_a_held_last_lease() {
+    for native in [false, true] {
+        deadline_case(native).await;
+    }
+}
+
+async fn deadline_case(native: bool) {
     let (mut peer, stream) = pair();
     let (incoming_send, incoming_recv) = kimojio::oneshot();
     let mut incoming_send = Some(incoming_send);
     let mut config = config(205);
     config.protocol.body_timeout_ns = Some(20_000_000);
-    let server = serve_connection(stream, config, move |request| {
-        incoming_send
-            .take()
-            .unwrap()
-            .send(request.into_body())
-            .ok()
-            .unwrap();
-        async { Ok(Response::new(OutgoingBody::empty().continue_request_body())) }
-    });
+    let server = test_server(
+        stream,
+        config,
+        move |request| {
+            incoming_send
+                .take()
+                .unwrap()
+                .send(request.into_body())
+                .ok()
+                .unwrap();
+            async { Ok(Response::new(OutgoingBody::empty().continue_request_body())) }
+        },
+        native,
+    );
     let consumer = async {
         let mut incoming = incoming_recv.recv().await.unwrap();
         let Some(IncomingFrame::Data(chunk)) = incoming.frame().await.unwrap() else {

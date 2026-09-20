@@ -71,7 +71,10 @@ Each native write submits one `writev` and reports its exact completed byte coun
 The protocol machine, not a transport write-all cursor, decides the next write after partial progress.
 Native cancellation targets the original operation and awaits its result.
 A late success retains its exact byte count.
-Native close waits for the read worker to release its descriptor owner, then awaits an actual close operation.
+In this overhead PoC, native connections use reusable pinned operation slots instead of transport workers and channels.
+Native close waits for both original-operation slots to settle, then awaits an actual close operation.
+The generic stream backend retains its workers.
+See the [overhead PoC record](../docs/http1-wrapper-lab/poc-overhead.md) for the experiment and allocation evidence.
 
 This backend supplies neither TLS nor a user-space readiness retry loop.
 Unexpected native `EAGAIN` is terminal.
@@ -181,9 +184,10 @@ Informational responses do not reach the application API.
 ## Transport and cancellation
 
 One reader and one writer operate concurrently.
-Each worker owns its half and its current operation.
+Each generic worker owns its half and its current operation.
 Neither transport future borrows the HTTP machine.
-Native single-slot channels connect workers to the driver.
+Single-slot channels connect generic workers to the driver.
+Native slots retain the original futures directly and reuse their pinned allocations.
 The wrapper creates no transport task for each frame.
 
 In the generic stream backend, a write-all success reports the complete offered length.
@@ -201,9 +205,9 @@ This covers write-all continuations after a positive partial completion.
 A concurrent success remains a success.
 Exchange completion does not imply complete input.
 If the core retires an exchange without `incoming_finished`, its input body returns cancellation.
-The driver settles reads and stops the read worker before it requests writer close.
+The generic driver settles reads and stops the read worker before it requests writer close.
 The read worker drops its half, because `AsyncStreamRead` has no close method.
-Native close also waits for that destructor before it consumes the shared descriptor.
+Native close requires empty read and write slots before it consumes the shared descriptor.
 
 Custom transports must cooperate with Kimojio cancellation.
 A transport future that waits forever outside native cancellation cannot promise bounded shutdown.
@@ -235,7 +239,9 @@ It records current time before each command or completion.
 The `virtual-clock` feature preserves the runtime's virtual time domain.
 
 The wrapper is not allocation-free.
-It allocates channels, metadata, per-operation cancellation tokens, and boxed handler or body sources.
+It allocates application channels, metadata, and boxed handler or body sources.
+The generic backend also allocates transport channels and per-operation cancellation tokens.
+The native PoC retains two cancellation flags and two pinned operation slots per connection instead.
 Connection-level boxes keep large native transport buffers out of caller future frames.
 The generic `OwnedFdStream` also copies received bytes through its own 16-KiB buffer.
 The explicit native backend omits that buffer and copy.

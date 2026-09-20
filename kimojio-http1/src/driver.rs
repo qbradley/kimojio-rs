@@ -18,10 +18,14 @@ use kimojio_fsm_http1 as core;
 use crate::body::{BodyDemand, OutgoingData};
 use crate::{
     BodyChunk, Error, IncomingBody, OutgoingBody, OutgoingFrame,
-    io::{self, Pending, WriteAction, WriteResult},
+    io::{self, WriteResult},
+    io_driver::{IoDriver, WorkerIo, native_io},
     metadata,
     transport::{NativeTransport, StreamTransport, Transport},
 };
+
+#[cfg(test)]
+use crate::io::{Pending, WriteAction};
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -197,7 +201,18 @@ impl<S: SplittableStream> Connection<S> {
 impl NativeConnection {
     /// Poll this driver concurrently with the client and through shutdown.
     pub async fn run(self) -> Result<(), Error> {
-        self.0.run_transport(|stream| *stream).await
+        let connection = self.0;
+        let result = Box::pin(run_native(
+            connection.stream.0,
+            connection.config,
+            false,
+            &connection.requests.0,
+            connection.shutdown,
+            |_| std::future::ready(Err(Error::Application("client handler".into()))),
+        ))
+        .await;
+        let _ = connection.done.send(result.clone());
+        result
     }
 }
 
@@ -262,17 +277,18 @@ where
 }
 
 /// Serves a native socket and settles its operations before explicit close.
-pub fn serve_connection_native_with_shutdown<H, F>(
+pub async fn serve_connection_native_with_shutdown<H, F>(
     fd: kimojio::OwnedFd,
     config: Config,
     shutdown: Shutdown,
     handler: H,
-) -> impl Future<Output = Result<(), Error>>
+) -> Result<(), Error>
 where
     H: FnMut(Request<IncomingBody>) -> F,
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
-    serve_transport(NativeTransport(fd), config, shutdown, handler)
+    let (_keep_open, requests) = async_channel();
+    Box::pin(run_native(fd, config, true, &requests, shutdown, handler)).await
 }
 
 async fn serve_transport<T, H, F>(
@@ -503,16 +519,12 @@ enum Input {
 struct State {
     machine: Machine,
     active: Option<Active>,
-    read_send: Option<Sender<Pending<core::ReadOp<Vec<u8>>>>>,
-    write_send: Sender<WriteAction>,
-    read_done: Receiver<core::ReadCompletion<Vec<u8>>>,
-    write_done: Receiver<WriteResult>,
     release_send: Sender<core::BodyCompletion<Vec<u8>>>,
     released: Receiver<core::BodyCompletion<Vec<u8>>>,
     demand_send: Sender<BodyDemand>,
     demands: DemandQueue,
-    pending_read: Option<(core::OperationId, Rc<CancellationToken>)>,
-    pending_write: Option<(core::OperationId, Rc<CancellationToken>)>,
+    pending_read: Option<core::OperationId>,
+    pending_write: Option<core::OperationId>,
     pending_close: Option<core::CloseOp>,
     deadline: Option<core::Deadline>,
     timer: Option<Pin<Box<operations::SleepFuture<'static>>>>,
@@ -528,6 +540,52 @@ struct State {
 }
 
 impl State {
+    fn new(config: Config, server: bool, shutdown: Shutdown) -> Result<Self, Error> {
+        let buffer = vec![0; config.protocol.max_buffer_bytes];
+        let receive_capacity = buffer.capacity();
+        let max_buffer = config.protocol.max_buffer_bytes;
+        let max_headers = config.protocol.max_headers;
+        let machine = if server {
+            Machine::Server(core::Server::with_output_type(
+                config.connection_id,
+                config.protocol,
+                buffer,
+                core::Tick(0),
+            )?)
+        } else {
+            Machine::Client(core::Client::with_output_type(
+                config.connection_id,
+                config.protocol,
+                buffer,
+                core::Tick(0),
+            )?)
+        };
+        let (release_send, released) = async_channel();
+        let (demand_send, demands) = async_channel();
+        Ok(Self {
+            machine,
+            active: None,
+            release_send,
+            released,
+            demand_send,
+            demands: DemandQueue(demands),
+            pending_read: None,
+            pending_write: None,
+            pending_close: None,
+            deadline: None,
+            timer: None,
+            epoch: kimojio::clock_now(),
+            shutdown,
+            graceful_applied: false,
+            abort_applied: false,
+            server,
+            max_buffer,
+            receive_capacity,
+            max_headers,
+            rotation: 0,
+        })
+    }
+
     fn observe_time(&mut self) -> Result<core::Tick, Error> {
         let nanos = kimojio::clock_now()
             .saturating_duration_since(self.epoch)
@@ -756,7 +814,7 @@ impl State {
         Ok(())
     }
 
-    fn input(&mut self, input: Input) -> Result<(), Error> {
+    fn input(&mut self, input: Input, io: &mut impl IoDriver) -> Result<(), Error> {
         match input {
             Input::Read(completion) => {
                 self.pending_read.take();
@@ -844,10 +902,7 @@ impl State {
             && self.pending_write.is_none()
             && let Some(close) = self.pending_close.take()
         {
-            self.read_send.take();
-            self.write_send
-                .try_send(WriteAction::Close(close))
-                .map_err(|_| Error::Closed)?;
+            io.close(close)?;
         }
         Ok(())
     }
@@ -856,6 +911,7 @@ impl State {
         &mut self,
         event: Event,
         handler: &mut H,
+        io: &mut impl IoDriver,
     ) -> Result<Option<Result<(), Error>>, Error>
     where
         H: FnMut(Request<IncomingBody>) -> F,
@@ -863,20 +919,12 @@ impl State {
     {
         match event {
             Event::Read(op) => {
-                let cancel = Rc::new(CancellationToken::new());
-                self.pending_read = Some((op.id(), cancel.clone()));
-                self.read_send
-                    .as_ref()
-                    .ok_or(Error::Closed)?
-                    .try_send(Pending { op, cancel })
-                    .map_err(|_| Error::Closed)?;
+                self.pending_read = Some(op.id());
+                io.read(op)?;
             }
             Event::Write(op) => {
-                let cancel = Rc::new(CancellationToken::new());
-                self.pending_write = Some((op.id(), cancel.clone()));
-                self.write_send
-                    .try_send(WriteAction::Write(Pending { op, cancel }))
-                    .map_err(|_| Error::Closed)?;
+                self.pending_write = Some(op.id());
+                io.write(op)?;
             }
             Event::Readiness(op) => {
                 let completion = op.complete(Err(core::IoError {
@@ -890,18 +938,16 @@ impl State {
                 .map_err(|_| Error::Closed)?;
             }
             Event::Cancel(op) => {
-                for (id, token) in [&self.pending_read, &self.pending_write]
-                    .into_iter()
-                    .flatten()
-                {
-                    if *id == op.target {
-                        token.cancel();
-                    }
+                if self.pending_read == Some(op.target) {
+                    io.cancel_read();
+                }
+                if self.pending_write == Some(op.target) {
+                    io.cancel_write();
                 }
             }
             Event::Close(op) => {
                 self.pending_close = Some(op);
-                self.input(Input::Wake)?;
+                self.input(Input::Wake, io)?;
             }
             Event::Body(op) => {
                 let active = self.active.as_mut().ok_or(Error::Closed)?;
@@ -1037,70 +1083,54 @@ where
     H: FnMut(Request<IncomingBody>) -> F,
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
-    let buffer = vec![0; config.protocol.max_buffer_bytes];
-    let receive_capacity = buffer.capacity();
-    let max_buffer = config.protocol.max_buffer_bytes;
-    let max_headers = config.protocol.max_headers;
-    let machine = if server {
-        Machine::Server(core::Server::with_output_type(
-            config.connection_id,
-            config.protocol,
-            buffer,
-            core::Tick(0),
-        )?)
-    } else {
-        Machine::Client(core::Client::with_output_type(
-            config.connection_id,
-            config.protocol,
-            buffer,
-            core::Tick(0),
-        )?)
-    };
+    let budget = config.turn_budget.max(1);
+    let mut state = State::new(config, server, shutdown)?;
     let (reader, writer) = Box::pin(transport.split())
         .await
         .map_err(Error::Transport)?;
+    state.epoch = kimojio::clock_now();
     let (read_send, reads) = async_channel();
     let (read_complete, read_done) = async_channel();
     let (write_send, writes) = async_channel();
     let (write_complete, write_done) = async_channel();
-    let (release_send, released) = async_channel();
-    let (demand_send, demands) = async_channel();
-    let state = State {
-        machine,
-        active: None,
+    let io = WorkerIo {
         read_send: Some(read_send),
         write_send,
         read_done,
         write_done,
-        release_send,
-        released,
-        demand_send,
-        demands: DemandQueue(demands),
-        pending_read: None,
-        pending_write: None,
-        pending_close: None,
-        deadline: None,
-        timer: None,
-        epoch: kimojio::clock_now(),
-        shutdown,
-        graceful_applied: false,
-        abort_applied: false,
-        server,
-        max_buffer,
-        receive_capacity,
-        max_headers,
-        rotation: 0,
+        read_cancel: None,
+        write_cancel: None,
     };
     let (result, (), ()) = futures::join!(
-        drive(state, requests, &mut handler, config.turn_budget.max(1)),
+        drive(state, io, requests, &mut handler, budget),
         Box::pin(io::read_worker(Box::new(reader), reads, read_complete)),
         Box::pin(io::write_worker(Box::new(writer), writes, write_complete)),
     );
     result
 }
 
-async fn drive<H, F>(
+async fn run_native<H, F>(
+    fd: kimojio::OwnedFd,
+    config: Config,
+    server: bool,
+    requests: &Receiver<SendRequest>,
+    shutdown: Shutdown,
+    mut handler: H,
+) -> Result<(), Error>
+where
+    H: FnMut(Request<IncomingBody>) -> F,
+    F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
+{
+    let budget = config.turn_budget.max(1);
+    let mut state = State::new(config, server, shutdown)?;
+    let io = native_io(fd);
+    state.epoch = kimojio::clock_now();
+    drive(state, io, requests, &mut handler, budget).await
+}
+
+async fn drive<H, F, I: IoDriver>(
     mut state: State,
+    mut io: I,
     requests: &Receiver<SendRequest>,
     handler: &mut H,
     budget: usize,
@@ -1120,7 +1150,7 @@ where
         };
         let mut runnable = event.is_some();
         if let Some(event) = event {
-            match state.event(event, handler) {
+            match state.event(event, handler, &mut io) {
                 Ok(Some(result)) => return result,
                 Ok(None) => {}
                 Err(error) => state.fail(error),
@@ -1135,11 +1165,11 @@ where
             turns = 0;
             operations::yield_cpu().await;
         }
-        if let Some(input) = next_input(&mut state, requests, runnable).await {
+        if let Some(input) = next_input(&mut state, &mut io, requests, runnable).await {
             if let Err(error) = state.observe_time() {
                 state.fail(error);
             }
-            if let Err(error) = state.input(input) {
+            if let Err(error) = state.input(input, &mut io) {
                 state.fail(error);
             }
         }
@@ -1148,11 +1178,11 @@ where
 
 async fn next_input(
     state: &mut State,
+    io: &mut impl IoDriver,
     requests: &Receiver<SendRequest>,
     runnable: bool,
 ) -> Option<Input> {
-    let read = state.read_done.recv();
-    let write = state.write_done.recv();
+    let (read, write) = io.completions();
     let release = state.released.recv();
     let demand = state.demands.0.recv();
     let request = requests.recv();
@@ -1173,10 +1203,8 @@ async fn next_input(
         for offset in 0..10 {
             let index = (state.rotation + offset) % 10;
             let ready = match index {
-                0 if state.read_send.is_some() => {
-                    read.as_mut().poll(cx).map(|r| r.ok().map(Input::Read))
-                }
-                1 => write.as_mut().poll(cx).map(|r| r.ok().map(Input::Write)),
+                0 => read.as_mut().poll(cx).map(|r| Some(Input::Read(r))),
+                1 => write.as_mut().poll(cx).map(|r| Some(Input::Write(r))),
                 2 => release
                     .as_mut()
                     .poll(cx)

@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "slot_tests.rs"]
+mod slot_tests;
+
 type ReceiveMachine = core::Server<Vec<u8>, OutgoingData>;
 
 fn lease() -> (
