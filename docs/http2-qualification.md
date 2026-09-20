@@ -509,7 +509,12 @@ Independent review found no significant issues in `a4af94fd` through `458b2bcd`.
 From a clean detached checkout, 26 stream tests passed in both debug and release with no default features plus virtual clock.
 The review covered buffered tails, refill transitions, partial reads, EOF, deadlines, cancellation, panic cleanup, and late successful completion.
 It did not force kernel acknowledgment ordering or establish a speedup.
-A rebuilt fixture and paired measurements remain in progress.
+The rebuilt fixture source is `7e362b6e77d5ebab405f3f9f60f1aadc809ccfe3`.
+Its binary SHA-256 is `c4e542b048082003cf2899e0ccc9c021e922558a38ceb9635f4b13699dd62625`.
+The fixture owner passed 17 fixture tests, the paused-consumer regression, 12 socket smoke cases, and four actual-close probes.
+Local provenance is in `target/http2-program/worktrees/http2-wrapper-fixture/target/wrapper-direct-read-candidate/summary.json`.
+This artifact has not passed a new complete peer suite.
+Paired performance measurements remain in progress.
 CPU2 is leased only to the measurement owner for this experiment.
 Acceptance requires a supported benefit without weaker ownership or resource behavior.
 
