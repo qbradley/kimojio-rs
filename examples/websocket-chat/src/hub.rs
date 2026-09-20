@@ -298,21 +298,62 @@ struct InFlight {
     capacity: usize,
 }
 
+enum Lifecycle {
+    Handshake,
+    Active { assembly: Option<Assembly> },
+    ClosePending { code: u16 },
+    AwaitingExternal,
+    ExternalSettled,
+}
+
+#[derive(Clone, Copy)]
+enum ReadyLink {
+    Idle,
+    Linked {
+        previous: Option<usize>,
+        next: Option<usize>,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum Transition {
+    Send,
+    Close,
+}
+
 struct Client {
     id: ClientId,
-    activated: bool,
+    lifecycle: Lifecycle,
     queue: Queue,
-    assembly: Option<Assembly>,
     in_flight: Option<InFlight>,
     held_bytes: usize,
-    close: Option<u16>,
-    close_issued: bool,
-    closed: bool,
-    queued: bool,
-    previous: Option<usize>,
-    next: Option<usize>,
+    ready: ReadyLink,
     _queue_storage: Reservation,
     _external_storage: Reservation,
+}
+
+impl Client {
+    fn select(&self) -> Option<Transition> {
+        match self.lifecycle {
+            Lifecycle::Active { .. } if self.in_flight.is_none() && self.queue.length != 0 => {
+                Some(Transition::Send)
+            }
+            Lifecycle::ClosePending { .. } => Some(Transition::Close),
+            _ => None,
+        }
+    }
+
+    fn active_assembly(&mut self) -> Result<&mut Option<Assembly>, Error> {
+        match &mut self.lifecycle {
+            Lifecycle::Active { assembly } => Ok(assembly),
+            Lifecycle::Handshake => Err(Error::InvalidState),
+            _ => Err(Error::Closing),
+        }
+    }
+
+    fn settled(&self) -> bool {
+        matches!(self.lifecycle, Lifecycle::ExternalSettled) && self.in_flight.is_none()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -441,21 +482,15 @@ impl Hub {
         self.next_client = next;
         self.clients[slot] = Some(Client {
             id,
-            activated: false,
+            lifecycle: Lifecycle::Handshake,
             queue: Queue {
                 entries: empty_slots(self.config.max_messages_per_client),
                 head: 0,
                 length: 0,
             },
-            assembly: None,
             in_flight: None,
             held_bytes: self.queue_bytes,
-            close: None,
-            close_issued: false,
-            closed: false,
-            queued: false,
-            previous: None,
-            next: None,
+            ready: ReadyLink::Idle,
             _queue_storage: queue_storage,
             _external_storage: external_storage,
         });
@@ -467,13 +502,12 @@ impl Hub {
     /// upgrade. Pending handshakes are never broadcast recipients.
     pub fn activate(&mut self, id: ClientId) -> Result<(), Error> {
         let client = self.client_mut(id)?;
-        if client.close.is_some() {
-            return Err(Error::Closing);
+        match client.lifecycle {
+            Lifecycle::Handshake => {}
+            Lifecycle::Active { .. } => return Err(Error::InvalidState),
+            _ => return Err(Error::Closing),
         }
-        if client.activated {
-            return Err(Error::InvalidState);
-        }
-        client.activated = true;
+        client.lifecycle = Lifecycle::Active { assembly: None };
         self.active += 1;
         Ok(())
     }
@@ -494,22 +528,20 @@ impl Hub {
     }
     fn open(&self, id: ClientId) -> Result<(), Error> {
         let client = self.client(id)?;
-        if client.close.is_some() {
-            Err(Error::Closing)
-        } else if !client.activated {
-            Err(Error::InvalidState)
-        } else {
-            Ok(())
+        match client.lifecycle {
+            Lifecycle::Active { .. } => Ok(()),
+            Lifecycle::Handshake => Err(Error::InvalidState),
+            _ => Err(Error::Closing),
         }
     }
 
     pub fn begin(&mut self, id: ClientId, kind: Kind) -> Result<(), Error> {
         self.open(id)?;
-        if self.client(id)?.assembly.is_some() {
+        if self.client_mut(id)?.active_assembly()?.is_some() {
             return Err(Error::InvalidState);
         }
         let charge = self.budget.reserve(0)?;
-        self.client_mut(id)?.assembly = Some(Assembly {
+        *self.client_mut(id)?.active_assembly()? = Some(Assembly {
             kind,
             storage: Box::new([]),
             length: 0,
@@ -523,7 +555,7 @@ impl Hub {
         let maximum = self.config.max_message_bytes;
         let result = self
             .client_mut(id)?
-            .assembly
+            .active_assembly()?
             .as_mut()
             .ok_or(Error::InvalidState)?
             .append(bytes, maximum);
@@ -537,7 +569,7 @@ impl Hub {
         self.open(id)?;
         let assembly = self
             .client_mut(id)?
-            .assembly
+            .active_assembly()?
             .take()
             .ok_or(Error::InvalidState)?;
         if assembly.kind == Kind::Text
@@ -583,7 +615,7 @@ impl Hub {
         for slot in 0..self.clients.len() {
             let Some(client) = self.clients[slot]
                 .as_ref()
-                .filter(|client| client.activated && client.close.is_none())
+                .filter(|client| matches!(client.lifecycle, Lifecycle::Active { .. }))
             else {
                 continue;
             };
@@ -611,15 +643,16 @@ impl Hub {
     /// Logical removal does not release an in-flight recipient reservation.
     pub fn remove(&mut self, id: ClientId, code: u16) -> Result<(), Error> {
         let client = self.client_mut(id)?;
-        if client.close.is_some() {
-            return Ok(());
-        }
-        client.close = Some(code);
-        client.assembly = None;
+        let was_active = match client.lifecycle {
+            Lifecycle::Active { .. } => true,
+            Lifecycle::Handshake => false,
+            _ => return Ok(()),
+        };
+        client.lifecycle = Lifecycle::ClosePending { code };
         while let Some(payload) = client.queue.pop() {
             client.held_bytes -= payload.capacity();
         }
-        if client.activated {
+        if was_active {
             self.active -= 1;
         }
         self.mark_ready(id.slot);
@@ -631,8 +664,7 @@ impl Hub {
     pub fn closed(&mut self, id: ClientId) -> Result<(), Error> {
         self.remove(id, 1000)?;
         let client = self.client_mut(id)?;
-        client.closed = true;
-        client.close_issued = true;
+        client.lifecycle = Lifecycle::ExternalSettled;
         self.reap(id);
         Ok(())
     }
@@ -666,14 +698,19 @@ impl Hub {
 
     fn mark_ready(&mut self, slot: usize) {
         let client = self.clients[slot].as_mut().unwrap();
-        if client.queued {
+        if matches!(client.ready, ReadyLink::Linked { .. }) {
             return;
         }
-        client.queued = true;
-        client.previous = self.ready_tail;
-        client.next = None;
+        client.ready = ReadyLink::Linked {
+            previous: self.ready_tail,
+            next: None,
+        };
         if let Some(tail) = self.ready_tail {
-            self.clients[tail].as_mut().unwrap().next = Some(slot);
+            let ReadyLink::Linked { next, .. } = &mut self.clients[tail].as_mut().unwrap().ready
+            else {
+                unreachable!("ready tail is linked")
+            };
+            *next = Some(slot);
         } else {
             self.ready_head = Some(slot);
         }
@@ -682,29 +719,34 @@ impl Hub {
 
     fn unlink(&mut self, slot: usize) {
         let client = self.clients[slot].as_mut().unwrap();
-        if !client.queued {
+        let ReadyLink::Linked { previous, next } = client.ready else {
             return;
-        }
-        let previous = client.previous.take();
-        let next = client.next.take();
-        client.queued = false;
+        };
+        client.ready = ReadyLink::Idle;
         if let Some(previous) = previous {
-            self.clients[previous].as_mut().unwrap().next = next;
+            let ReadyLink::Linked { next: link, .. } =
+                &mut self.clients[previous].as_mut().unwrap().ready
+            else {
+                unreachable!("ready predecessor is linked")
+            };
+            *link = next;
         } else {
             self.ready_head = next;
         }
         if let Some(next) = next {
-            self.clients[next].as_mut().unwrap().previous = previous;
+            let ReadyLink::Linked { previous: link, .. } =
+                &mut self.clients[next].as_mut().unwrap().ready
+            else {
+                unreachable!("ready successor is linked")
+            };
+            *link = previous;
         } else {
             self.ready_tail = previous;
         }
     }
 
     fn reap(&mut self, id: ClientId) {
-        if self
-            .client(id)
-            .is_ok_and(|client| client.closed && client.in_flight.is_none())
-        {
+        if self.client(id).is_ok_and(Client::settled) {
             self.unlink(id.slot);
             self.clients[id.slot] = None;
             self.resident -= 1;
@@ -715,32 +757,33 @@ impl Hub {
         loop {
             for _ in 0..64 {
                 let slot = self.ready_head?;
+                let transition = self.clients[slot].as_ref().unwrap().select();
                 self.unlink(slot);
                 let client = self.clients[slot].as_mut().unwrap();
-                let output = if let Some(code) = client.close {
-                    if client.close_issued {
-                        continue;
+                let output = match transition {
+                    Some(Transition::Close) => {
+                        let Lifecycle::ClosePending { code } = client.lifecycle else {
+                            unreachable!("selected close obligation")
+                        };
+                        client.lifecycle = Lifecycle::AwaitingExternal;
+                        ports.close(Close {
+                            client: client.id,
+                            code,
+                        })
                     }
-                    client.close_issued = true;
-                    ports.close(Close {
-                        client: client.id,
-                        code,
-                    })
-                } else if client.in_flight.is_none() {
-                    let Some(payload) = client.queue.pop() else {
-                        continue;
-                    };
-                    let id = DeliveryId {
-                        client: client.id,
-                        order: payload.order(),
-                    };
-                    client.in_flight = Some(InFlight {
-                        id,
-                        capacity: payload.capacity(),
-                    });
-                    ports.send(Delivery { id, payload })
-                } else {
-                    continue;
+                    Some(Transition::Send) => {
+                        let payload = client.queue.pop().expect("selected queued delivery");
+                        let id = DeliveryId {
+                            client: client.id,
+                            order: payload.order(),
+                        };
+                        client.in_flight = Some(InFlight {
+                            id,
+                            capacity: payload.capacity(),
+                        });
+                        ports.send(Delivery { id, payload })
+                    }
+                    None => continue,
                 };
                 if output.is_some() {
                     return output;

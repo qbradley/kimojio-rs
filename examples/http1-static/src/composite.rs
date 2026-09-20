@@ -28,19 +28,43 @@ enum Step<O> {
     Wake,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Lifecycle {
+    Serving,
+    WaitingForApp,
+    Terminating,
+    Closed,
+}
+
+#[derive(Clone, Copy)]
+enum Transition {
+    ReturnRejected,
+    ReleaseIncoming,
+    Credit,
+    Http,
+    Respond,
+    App,
+}
+
+#[derive(Clone, Copy)]
+enum Incoming {
+    None,
+    Receiving(http::ExchangeId),
+    Complete(http::ExchangeId),
+}
+
 pub struct Service {
     http: http::Server<Buffer>,
     app: app::App<http::ExchangeId>,
     http_ready: bool,
     http_first: bool,
     app_ready: bool,
-    pause_http: bool,
+    lifecycle: Lifecycle,
     release: Option<http::BodyCompletion<Buffer>>,
     credit: Option<(http::ExchangeId, usize)>,
     response: Option<app::Response<http::ExchangeId>>,
-    incoming_done: bool,
+    incoming: Incoming,
     returned_body: Option<(http::ExchangeId, Buffer)>,
-    closed: bool,
 }
 
 impl Service {
@@ -60,18 +84,36 @@ impl Service {
             http_ready: true,
             http_first: true,
             app_ready: false,
-            pause_http: false,
+            lifecycle: Lifecycle::Serving,
             release: None,
             credit: None,
             response: None,
-            incoming_done: false,
+            incoming: Incoming::None,
             returned_body: None,
-            closed: false,
         })
     }
 
     pub fn settled(&self) -> bool {
-        self.closed && self.app.is_idle()
+        self.check();
+        self.lifecycle == Lifecycle::Closed && self.app.is_idle()
+    }
+
+    fn check(&self) {
+        match self.lifecycle {
+            Lifecycle::Serving => {}
+            Lifecycle::WaitingForApp => {
+                debug_assert!(!self.app.is_idle());
+                debug_assert!(self.response.is_none());
+                debug_assert!(matches!(self.incoming, Incoming::None));
+            }
+            Lifecycle::Terminating => debug_assert!(self.response.is_none()),
+            Lifecycle::Closed => {
+                debug_assert!(self.response.is_none());
+                debug_assert!(matches!(self.incoming, Incoming::None));
+                debug_assert!(self.release.is_none() && self.credit.is_none());
+                debug_assert!(self.returned_body.is_none());
+            }
+        }
     }
 
     pub fn complete_read(&mut self, completion: http::ReadCompletion<Buffer>) {
@@ -122,7 +164,7 @@ impl Service {
             Ok(()) => {
                 self.http_ready = true;
                 self.http_first = true;
-                self.pause_http = false;
+                self.terminate();
             }
             Err(http::CommandError::StaleDeadline) => {}
             Err(error) => panic!("invalid deadline routing: {error}"),
@@ -130,14 +172,25 @@ impl Service {
     }
 
     pub fn shutdown(&mut self, mode: http::ShutdownMode) {
+        if self.lifecycle == Lifecycle::Closed {
+            return;
+        }
         self.http.shutdown(mode);
         self.http_ready = true;
         self.http_first = true;
         if mode == http::ShutdownMode::Abort {
             self.app.abort();
             self.app_ready = true;
-            self.pause_http = false;
+            self.lifecycle = Lifecycle::Terminating;
+            self.response = None;
         }
+    }
+
+    fn terminate(&mut self) {
+        self.lifecycle = Lifecycle::Terminating;
+        self.response = None;
+        self.app.terminate();
+        self.app_ready = true;
     }
 
     fn drive_http<P: Ports>(&mut self, ports: &mut P) -> Option<P::Output> {
@@ -146,94 +199,139 @@ impl Service {
         let mut connector = HttpConnector {
             app: &mut self.app,
             app_ready: &mut self.app_ready,
-            pause_http: &mut self.pause_http,
+            lifecycle: &mut self.lifecycle,
             release: &mut self.release,
             credit: &mut self.credit,
-            closed: &mut self.closed,
             response: &mut self.response,
-            incoming_done: &mut self.incoming_done,
+            incoming: &mut self.incoming,
             ports,
         };
         match self.http.next(&mut connector) {
             Some(Step::External(output)) => {
-                self.http_ready = true;
+                self.http_ready = self.lifecycle != Lifecycle::Closed;
                 Some(output)
             }
             Some(Step::Wake) => {
-                self.http_ready = true;
+                self.http_ready = self.lifecycle != Lifecycle::Closed;
                 None
             }
             None => None,
         }
     }
 
+    fn select(&self) -> Option<Transition> {
+        if self.returned_body.is_some() {
+            return Some(Transition::ReturnRejected);
+        }
+        if self.release.is_some() {
+            return Some(Transition::ReleaseIncoming);
+        }
+        if self.credit.is_some() {
+            return Some(Transition::Credit);
+        }
+        match self.lifecycle {
+            Lifecycle::Closed => self.app_ready.then_some(Transition::App),
+            Lifecycle::WaitingForApp => self.app_ready.then_some(Transition::App),
+            Lifecycle::Terminating => {
+                if self.http_first && self.http_ready {
+                    Some(Transition::Http)
+                } else if self.app_ready {
+                    Some(Transition::App)
+                } else {
+                    self.http_ready.then_some(Transition::Http)
+                }
+            }
+            Lifecycle::Serving => {
+                if self.http_first && self.http_ready {
+                    Some(Transition::Http)
+                } else if self.response.is_some() && matches!(self.incoming, Incoming::Complete(_))
+                {
+                    Some(Transition::Respond)
+                } else if self.app_ready {
+                    Some(Transition::App)
+                } else {
+                    self.http_ready.then_some(Transition::Http)
+                }
+            }
+        }
+    }
+
+    fn commit<P: Ports>(&mut self, transition: Transition, ports: &mut P) -> Option<P::Output> {
+        match transition {
+            Transition::ReturnRejected => {
+                let (exchange, buffer) = self.returned_body.take().unwrap();
+                self.app
+                    .body_sent(exchange, buffer, 0)
+                    .expect("return rejected application lease");
+                self.app_ready = true;
+            }
+            Transition::ReleaseIncoming => {
+                let completion = self.release.take().unwrap();
+                self.http
+                    .release_body(completion)
+                    .expect("return incoming lease");
+                self.http_ready = true;
+            }
+            Transition::Credit => {
+                let (exchange, count) = self.credit.take().unwrap();
+                // A terminal observation can retire the exchange before
+                // the connector returns its unused delivery credit.
+                if self.lifecycle == Lifecycle::Serving
+                    && self.http.grant_body_credit(exchange, count).is_err()
+                {
+                    let _ = self.http.fail_source(exchange, http::Failure::Application);
+                }
+                self.http_ready = true;
+            }
+            Transition::Http => return self.drive_http(ports),
+            Transition::Respond => {
+                let response = self.response.take().unwrap();
+                let Incoming::Complete(exchange) = self.incoming else {
+                    unreachable!()
+                };
+                assert_eq!(exchange, response.exchange);
+                match respond(&mut self.http, response) {
+                    Ok(()) => self.http_ready = true,
+                    Err(_) => {
+                        if self
+                            .http
+                            .fail_source(response.exchange, http::Failure::Application)
+                            .is_err()
+                        {
+                            self.app.exchange_finished(response.exchange);
+                            self.app_ready = true;
+                        }
+                        self.http_ready = true;
+                    }
+                }
+            }
+            Transition::App => {
+                self.app_ready = false;
+                let mut connector = AppConnector {
+                    http: &mut self.http,
+                    http_ready: &mut self.http_ready,
+                    lifecycle: &mut self.lifecycle,
+                    response: &mut self.response,
+                    returned_body: &mut self.returned_body,
+                    ports,
+                };
+                if let Some(output) = self.app.next(&mut connector) {
+                    self.app_ready = true;
+                    return Some(output);
+                }
+            }
+        }
+        None
+    }
+
     pub fn next<P: Ports>(&mut self, ports: &mut P) -> Option<P::Output> {
         loop {
             for _ in 0..64 {
-                if let Some((exchange, buffer)) = self.returned_body.take() {
-                    self.app
-                        .body_sent(exchange, buffer, 0)
-                        .expect("return rejected application lease");
-                    self.app_ready = true;
-                }
-                if let Some(completion) = self.release.take() {
-                    self.http
-                        .release_body(completion)
-                        .expect("return incoming lease");
-                    self.http_ready = true;
-                }
-                if let Some((exchange, count)) = self.credit.take() {
-                    // A terminal observation can retire the exchange before
-                    // the connector returns its unused delivery credit.
-                    if self.http.grant_body_credit(exchange, count).is_err() {
-                        let _ = self.http.fail_source(exchange, http::Failure::Application);
-                    }
-                    self.http_ready = true;
-                }
-                if self.http_first && self.http_ready && !self.pause_http {
-                    if let Some(output) = self.drive_http(ports) {
-                        return Some(output);
-                    }
-                    continue;
-                }
-                if self.incoming_done
-                    && let Some(response) = self.response.take()
-                {
-                    match respond(&mut self.http, response) {
-                        Ok(()) => self.http_ready = true,
-                        Err(_) => {
-                            if self
-                                .http
-                                .fail_source(response.exchange, http::Failure::Application)
-                                .is_err()
-                            {
-                                self.app.exchange_finished(response.exchange);
-                                self.app_ready = true;
-                            }
-                            self.http_ready = true;
-                        }
-                    }
-                }
-                if self.app_ready {
-                    self.app_ready = false;
-                    let mut connector = AppConnector {
-                        http: &mut self.http,
-                        http_ready: &mut self.http_ready,
-                        pause_http: &mut self.pause_http,
-                        response: &mut self.response,
-                        returned_body: &mut self.returned_body,
-                        ports,
-                    };
-                    if let Some(output) = self.app.next(&mut connector) {
-                        self.app_ready = true;
-                        return Some(output);
-                    }
-                } else if self.http_ready && !self.pause_http {
-                    if let Some(output) = self.drive_http(ports) {
-                        return Some(output);
-                    }
-                } else {
-                    return None;
+                self.check();
+                let transition = self.select()?;
+                if let Some(output) = self.commit(transition, ports) {
+                    self.check();
+                    return Some(output);
                 }
             }
             if let Some(output) = ports.yield_turn() {
@@ -246,12 +344,11 @@ impl Service {
 struct HttpConnector<'a, P> {
     app: &'a mut app::App<http::ExchangeId>,
     app_ready: &'a mut bool,
-    pause_http: &'a mut bool,
+    lifecycle: &'a mut Lifecycle,
     release: &'a mut Option<http::BodyCompletion<Buffer>>,
     credit: &'a mut Option<(http::ExchangeId, usize)>,
-    closed: &'a mut bool,
     response: &'a mut Option<app::Response<http::ExchangeId>>,
-    incoming_done: &'a mut bool,
+    incoming: &'a mut Incoming,
     ports: &'a mut P,
 }
 
@@ -270,19 +367,24 @@ impl<P: Ports> http::Ports<Buffer> for HttpConnector<'_, P> {
         self.ports.cancel(op).map(Step::External)
     }
     fn close(&mut self, op: http::CloseOp) -> Option<Self::Output> {
+        *self.lifecycle = Lifecycle::Terminating;
+        *self.response = None;
+        self.app.terminate();
+        *self.app_ready = true;
         self.ports.close(op).map(Step::External)
     }
     fn body(&mut self, op: http::BodyOp<Buffer>) -> Option<Self::Output> {
         let count = op.bytes().len();
-        *self.credit = Some((op.exchange(), count));
-        *self.release = Some(op.release(count));
+        assert!(self.credit.replace((op.exchange(), count)).is_none());
+        assert!(self.release.replace(op.release(count)).is_none());
         Some(Step::Wake)
     }
     fn trailers(&mut self, _: http::ExchangeId, _: http::Headers<'_>) -> Option<Self::Output> {
         None
     }
-    fn incoming_finished(&mut self, _: http::ExchangeId) -> Option<Self::Output> {
-        *self.incoming_done = true;
+    fn incoming_finished(&mut self, exchange: http::ExchangeId) -> Option<Self::Output> {
+        assert!(matches!(*self.incoming, Incoming::Receiving(id) if id == exchange));
+        *self.incoming = Incoming::Complete(exchange);
         Some(Step::Wake)
     }
     fn send_ready(&mut self, exchange: http::ExchangeId, capacity: usize) -> Option<Self::Output> {
@@ -304,11 +406,20 @@ impl<P: Ports> http::Ports<Buffer> for HttpConnector<'_, P> {
     }
     fn exchange_finished(&mut self, result: http::ExchangeFinished) -> Option<Self::Output> {
         *self.response = None;
+        *self.incoming = Incoming::None;
         self.app.exchange_finished(result.exchange);
         *self.app_ready = true;
         // A failed exchange can still return its outstanding write lease.
         // Only a reusable exchange needs a gate before the next request.
-        *self.pause_http = result.reusable && !self.app.is_idle();
+        *self.lifecycle = if result.reusable {
+            if self.app.is_idle() {
+                Lifecycle::Serving
+            } else {
+                Lifecycle::WaitingForApp
+            }
+        } else {
+            Lifecycle::Terminating
+        };
         Some(
             self.ports
                 .exchange_finished()
@@ -322,7 +433,9 @@ impl<P: Ports> http::Ports<Buffer> for HttpConnector<'_, P> {
         unreachable!("static service never accepts an upgrade")
     }
     fn closed(&mut self, result: http::ConnectionResult) -> Option<Self::Output> {
-        *self.closed = true;
+        *self.lifecycle = Lifecycle::Closed;
+        *self.response = None;
+        *self.incoming = Incoming::None;
         self.app.abort();
         *self.app_ready = true;
         Some(self.ports.closed(result).map_or(Step::Wake, Step::External))
@@ -335,12 +448,13 @@ impl<P: Ports> http::ServerPorts<Buffer> for HttpConnector<'_, P> {
         exchange: http::ExchangeId,
         head: http::RequestHead<'_>,
     ) -> Option<Self::Output> {
-        *self.incoming_done = false;
+        assert_eq!(*self.lifecycle, Lifecycle::Serving);
+        *self.incoming = Incoming::Receiving(exchange);
         assert!(
             self.app
                 .request(exchange, head.method.as_bytes(), head.target.as_bytes())
         );
-        *self.credit = Some((exchange, app::CHUNK_SIZE));
+        assert!(self.credit.replace((exchange, app::CHUNK_SIZE)).is_none());
         *self.app_ready = true;
         Some(Step::Wake)
     }
@@ -349,7 +463,7 @@ impl<P: Ports> http::ServerPorts<Buffer> for HttpConnector<'_, P> {
 struct AppConnector<'a, P> {
     http: &'a mut http::Server<Buffer>,
     http_ready: &'a mut bool,
-    pause_http: &'a mut bool,
+    lifecycle: &'a mut Lifecycle,
     response: &'a mut Option<app::Response<http::ExchangeId>>,
     returned_body: &'a mut Option<(http::ExchangeId, Buffer)>,
     ports: &'a mut P,
@@ -373,7 +487,9 @@ impl<P: Ports> app::Ports<http::ExchangeId> for AppConnector<'_, P> {
         // This service drains incoming bodies before its final response.
         // Otherwise the HTTP core correctly treats it as an early response
         // and closes the connection rather than reusing unread input.
-        assert!(self.response.replace(response).is_none());
+        if *self.lifecycle == Lifecycle::Serving {
+            assert!(self.response.replace(response).is_none());
+        }
         None
     }
 
@@ -398,14 +514,18 @@ impl<P: Ports> app::Ports<http::ExchangeId> for AppConnector<'_, P> {
     }
     fn source_failed(&mut self, exchange: http::ExchangeId) -> Option<Self::Output> {
         *self.response = None;
-        let _ = self.http.fail_source(exchange, http::Failure::Application);
-        *self.http_ready = true;
-        *self.pause_http = false;
+        if *self.lifecycle != Lifecycle::Closed {
+            let _ = self.http.fail_source(exchange, http::Failure::Application);
+            *self.http_ready = true;
+            *self.lifecycle = Lifecycle::Terminating;
+        }
         None
     }
     fn settled(&mut self, _: http::ExchangeId) -> Option<Self::Output> {
-        *self.pause_http = false;
-        *self.http_ready = true;
+        if *self.lifecycle == Lifecycle::WaitingForApp {
+            *self.lifecycle = Lifecycle::Serving;
+            *self.http_ready = true;
+        }
         None
     }
 }

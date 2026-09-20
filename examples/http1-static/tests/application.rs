@@ -366,3 +366,245 @@ fn missing_and_nonregular_files_and_method_rejection() {
     };
     assert_eq!(response.status, 405);
 }
+
+#[derive(Default)]
+struct Record {
+    yield_callbacks: bool,
+    actions: Vec<Action>,
+}
+
+impl Record {
+    fn accept(&mut self, action: Action) -> Option<()> {
+        self.actions.push(action);
+        self.yield_callbacks.then_some(())
+    }
+}
+
+impl Ports<u64> for Record {
+    type Output = ();
+    fn open(&mut self, op: Open) -> Option<()> {
+        self.accept(Action::Open(op))
+    }
+    fn stat(&mut self, op: Stat) -> Option<()> {
+        self.accept(Action::Stat(op))
+    }
+    fn read(&mut self, op: Read) -> Option<()> {
+        self.accept(Action::Read(op))
+    }
+    fn close(&mut self, op: Close) -> Option<()> {
+        self.accept(Action::Close(op))
+    }
+    fn respond(&mut self, response: Response<u64>) -> Option<()> {
+        self.accept(Action::Respond(response))
+    }
+    fn body(&mut self, body: Body<u64>) -> Option<()> {
+        self.accept(Action::Body(body))
+    }
+    fn source_failed(&mut self, _: u64) -> Option<()> {
+        self.accept(Action::Failed)
+    }
+    fn settled(&mut self, _: u64) -> Option<()> {
+        self.accept(Action::Settled)
+    }
+}
+
+fn drain(app: &mut App<u64>, ports: &mut Record) {
+    for _ in 0..8 {
+        if app.next(ports).is_none() {
+            return;
+        }
+    }
+    panic!("application did not block");
+}
+
+#[test]
+fn exact_sequences_join_exchange_file_close_and_http_lease_in_every_order() {
+    // 0 = exchange completion, 1 = HTTP lease return, 2 = file close CQE.
+    for order in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        for accepted in [0, 2, 4] {
+            for close_fails in [false, true] {
+                for yield_callbacks in [false, true] {
+                    let mut app = opened(b"GET", 4);
+                    app.demand(10, 4);
+                    let Action::Read(read) = app.next(&mut Yield).unwrap() else {
+                        panic!()
+                    };
+                    let pointer = read.buffer.as_ptr();
+                    app.complete(Completion::Read {
+                        id: read.id,
+                        buffer: read.buffer,
+                        result: Ok(4),
+                    })
+                    .unwrap();
+                    let Action::Body(body) = app.next(&mut Yield).unwrap() else {
+                        panic!()
+                    };
+                    let mut buffer = Some(body.buffer);
+                    assert_eq!(buffer.as_ref().unwrap().as_ptr(), pointer);
+                    app.source_finished(10);
+                    let mut ports = Record {
+                        yield_callbacks,
+                        ..Record::default()
+                    };
+                    drain(&mut app, &mut ports);
+                    assert_eq!(ports.actions.len(), 1);
+                    let Action::Close(close) = ports.actions.pop().unwrap() else {
+                        panic!()
+                    };
+                    let mut exchange_done = false;
+                    for (index, event) in order.into_iter().enumerate() {
+                        match event {
+                            0 => {
+                                app.exchange_finished(10);
+                                exchange_done = true;
+                            }
+                            1 => app.body_sent(10, buffer.take().unwrap(), accepted).unwrap(),
+                            2 => app
+                                .complete(Completion::Close {
+                                    id: close.id,
+                                    result: if close_fails {
+                                        Err(FileError::Other)
+                                    } else {
+                                        Ok(())
+                                    },
+                                })
+                                .unwrap(),
+                            _ => unreachable!(),
+                        }
+                        drain(&mut app, &mut ports);
+                        // Independent contract: errors notify only a live
+                        // exchange; settlement requires all three returns.
+                        let failure = !exchange_done
+                            && ((event == 1 && accepted != 4) || (event == 2 && close_fails));
+                        let settled = index == 2;
+                        assert_eq!(
+                            ports.actions.len(),
+                            usize::from(failure) + usize::from(settled)
+                        );
+                        if failure {
+                            assert!(matches!(ports.actions.remove(0), Action::Failed));
+                        }
+                        if settled {
+                            assert!(matches!(ports.actions.remove(0), Action::Settled));
+                        }
+                        assert_eq!(app.is_idle(), settled);
+                    }
+                    assert!(app.request(11, b"GET", b"/next"));
+                    let Action::Open(open) = app.next(&mut Yield).unwrap() else {
+                        panic!()
+                    };
+                    assert_ne!(
+                        open.id, close.id,
+                        "operation identities cannot reuse live generations"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn continuing_callbacks_preserve_response_before_close_and_failure_before_close() {
+    for yield_callbacks in [false, true] {
+        let mut app = opened(b"GET", 4);
+        app.demand(10, 4);
+        let Action::Read(read) = app.next(&mut Yield).unwrap() else {
+            panic!()
+        };
+        app.complete(Completion::Read {
+            id: read.id,
+            buffer: read.buffer,
+            result: Ok(0),
+        })
+        .unwrap();
+        let mut ports = Record {
+            yield_callbacks,
+            ..Record::default()
+        };
+        drain(&mut app, &mut ports);
+        assert!(matches!(
+            ports.actions.as_slice(),
+            [Action::Failed, Action::Close(_)]
+        ));
+
+        let mut app = App::new(1);
+        app.request(10, b"HEAD", b"/file");
+        let Action::Open(open) = app.next(&mut Yield).unwrap() else {
+            panic!()
+        };
+        app.complete(Completion::Open {
+            id: open.id,
+            result: Ok(File(3)),
+        })
+        .unwrap();
+        let Action::Stat(stat) = app.next(&mut Yield).unwrap() else {
+            panic!()
+        };
+        app.complete(Completion::Stat {
+            id: stat.id,
+            result: Ok(Metadata {
+                length: 9,
+                regular: true,
+            }),
+        })
+        .unwrap();
+        ports.actions.clear();
+        drain(&mut app, &mut ports);
+        assert!(matches!(
+            ports.actions.as_slice(),
+            [
+                Action::Respond(Response {
+                    length: 9,
+                    head: true,
+                    ..
+                }),
+                Action::Close(_)
+            ]
+        ));
+    }
+}
+
+#[test]
+fn invalid_read_count_and_body_return_preserve_the_original_lease() {
+    let mut app = opened(b"GET", 4);
+    app.demand(10, 4);
+    let Action::Read(read) = app.next(&mut Yield).unwrap() else {
+        panic!()
+    };
+    let pointer = read.buffer.as_ptr();
+    let rejected = app
+        .complete(Completion::Read {
+            id: read.id,
+            buffer: read.buffer,
+            result: Ok(5),
+        })
+        .unwrap_err();
+    assert!(app.next(&mut Yield).is_none());
+    let Completion::Read { id, buffer, .. } = rejected else {
+        panic!()
+    };
+    assert_eq!(buffer.as_ptr(), pointer);
+    app.complete(Completion::Read {
+        id,
+        buffer,
+        result: Ok(4),
+    })
+    .unwrap();
+    let Action::Body(body) = app.next(&mut Yield).unwrap() else {
+        panic!()
+    };
+    let buffer = app.body_sent(10, body.buffer, 5).unwrap_err();
+    assert_eq!(buffer.as_ptr(), pointer);
+    assert!(app.next(&mut Yield).is_none());
+    app.body_sent(10, buffer, 4).unwrap();
+    close(&mut app);
+    app.exchange_finished(10);
+    assert!(matches!(app.next(&mut Yield), Some(Action::Settled)));
+}

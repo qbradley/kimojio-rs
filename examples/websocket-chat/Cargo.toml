@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+virtual-clock = ["kimojio/virtual-clock"]
+
 [dependencies]
 futures.workspace = true
 kimojio.workspace = true

@@ -108,13 +108,15 @@ pub trait Ports {
 
 enum Phase {
     Http(Box<Http>),
-    WebSocket(Box<WebSocket>),
+    WebSocket {
+        server: Box<WebSocket>,
+        delivery: Option<(ws::MessageId, hub::DeliveryId)>,
+    },
 }
 struct Connection {
     id: ClientId,
     phase: Phase,
     ready: bool,
-    delivery: Option<(ws::MessageId, hub::DeliveryId)>,
 }
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Ready {
@@ -256,7 +258,6 @@ impl Chat {
             id,
             phase: Phase::Http(Box::new(server)),
             ready: false,
-            delivery: None,
         });
         self.mark_client(id);
         Ok(id)
@@ -314,7 +315,7 @@ impl Chat {
                     (Phase::Http(server), Deadline::Http(deadline)) => {
                         let _ = server.expire(deadline, now);
                     }
-                    (Phase::WebSocket(server), Deadline::WebSocket(deadline)) => {
+                    (Phase::WebSocket { server, .. }, Deadline::WebSocket(deadline)) => {
                         let _ = server.expire(deadline, now);
                     }
                     _ => {}
@@ -334,8 +335,10 @@ impl Chat {
                     } else {
                         http::ShutdownMode::Graceful
                     }),
-                    Phase::WebSocket(server) if abort => server.abort(ws::Failure::Cancelled),
-                    Phase::WebSocket(server) => {
+                    Phase::WebSocket { server, .. } if abort => {
+                        server.abort(ws::Failure::Cancelled)
+                    }
+                    Phase::WebSocket { server, .. } => {
                         let _ = server.close(ws::CloseReason::new(1001, "").unwrap());
                     }
                 }
@@ -373,22 +376,22 @@ impl Chat {
             (Phase::Http(server), Completion::HttpClose(c)) => server
                 .complete_close(c)
                 .map_err(|e| Completion::HttpClose(e.value)),
-            (Phase::WebSocket(server), Completion::WsRead(c)) => {
+            (Phase::WebSocket { server, .. }, Completion::WsRead(c)) => {
                 let _ = server.observe_time(now);
                 server
                     .complete_read(c)
                     .map_err(|e| Completion::WsRead(e.value))
             }
-            (Phase::WebSocket(server), Completion::WsWrite(c)) => {
+            (Phase::WebSocket { server, .. }, Completion::WsWrite(c)) => {
                 let _ = server.observe_time(now);
                 server
                     .complete_write(c)
                     .map_err(|e| Completion::WsWrite(e.value))
             }
-            (Phase::WebSocket(server), Completion::WsReadiness(c)) => server
+            (Phase::WebSocket { server, .. }, Completion::WsReadiness(c)) => server
                 .complete_readiness(c)
                 .map_err(|e| Completion::WsReadiness(e.value)),
-            (Phase::WebSocket(server), Completion::WsClose(c)) => server
+            (Phase::WebSocket { server, .. }, Completion::WsClose(c)) => server
                 .complete_close(c)
                 .map_err(|e| Completion::WsClose(e.value)),
             (_, completion) => Err(completion),
@@ -408,9 +411,13 @@ impl Chat {
             buffer: delivery.payload,
         };
         let rejected = match self.client_mut(id).map(|client| &mut client.phase) {
-            Some(Phase::WebSocket(server)) => match server.send_message(command) {
+            Some(Phase::WebSocket {
+                server,
+                delivery: pending,
+            }) => match server.send_message(command) {
                 Ok(message) => {
-                    self.client_mut(id).unwrap().delivery = Some((message, delivery.id));
+                    assert!(pending.is_none(), "one hub delivery per recipient");
+                    *pending = Some((message, delivery.id));
                     None
                 }
                 Err(rejected) => Some(rejected.value.buffer),
@@ -435,7 +442,7 @@ impl Chat {
         if let Some(client) = self.client_mut(close.client) {
             match &mut client.phase {
                 Phase::Http(server) => server.shutdown(http::ShutdownMode::Abort),
-                Phase::WebSocket(server) if !server.is_closing() => {
+                Phase::WebSocket { server, .. } if !server.is_closing() => {
                     if server
                         .close(ws::CloseReason::new(close.code, "").unwrap())
                         .is_err()
@@ -443,7 +450,7 @@ impl Chat {
                         server.abort(ws::Failure::Application);
                     }
                 }
-                Phase::WebSocket(_) => {}
+                Phase::WebSocket { .. } => {}
             }
         }
         self.mark_client(close.client);
@@ -493,12 +500,12 @@ impl Chat {
                         let _ = server.observe_time(now);
                         server.next(&mut HttpPorts)
                     }
-                    Phase::WebSocket(server) => {
+                    Phase::WebSocket { server, .. } => {
                         let _ = server.observe_time(now);
                         server.next(&mut WsPorts)
                     }
                 };
-                if matches!(&client.phase, Phase::WebSocket(server) if server.is_closing()) {
+                if matches!(&client.phase, Phase::WebSocket { server, .. } if server.is_closing()) {
                     let _ = self.hub.remove(id, 1000);
                     self.mark_hub();
                 }
@@ -545,7 +552,10 @@ impl Chat {
                                     .expect(
                                         "configuration and receive length checked before admission",
                                     );
-                                    client.phase = Phase::WebSocket(Box::new(websocket));
+                                    client.phase = Phase::WebSocket {
+                                        server: Box::new(websocket),
+                                        delivery: None,
+                                    };
                                     self.schedule(id, None);
                                     self.hub.activate(id).unwrap();
                                 }
@@ -569,7 +579,9 @@ impl Chat {
                     }
                     Event::Chunk(chunk) => {
                         let _ = self.hub.append(id, chunk.bytes());
-                        if let Phase::WebSocket(server) = &mut self.client_mut(id).unwrap().phase {
+                        if let Phase::WebSocket { server, .. } =
+                            &mut self.client_mut(id).unwrap().phase
+                        {
                             server.release_chunk(chunk.release()).unwrap();
                         }
                         self.mark_hub();
@@ -581,12 +593,13 @@ impl Chat {
                         None
                     }
                     Event::Sent(receipt) => {
-                        let (message, delivery) = self
-                            .client_mut(id)
-                            .unwrap()
-                            .delivery
-                            .take()
-                            .expect("one owned hub delivery per WS send");
+                        let Phase::WebSocket { delivery, .. } =
+                            &mut self.client_mut(id).unwrap().phase
+                        else {
+                            unreachable!("WebSocket receipt belongs to WebSocket phase")
+                        };
+                        let (message, delivery) =
+                            delivery.take().expect("one owned hub delivery per WS send");
                         assert_eq!(message, receipt.id);
                         let result = if receipt.result.is_ok()
                             && receipt.accepted == receipt.buffer.as_ref().len()
@@ -619,6 +632,16 @@ impl Chat {
                         None
                     }
                     Event::Closed => {
+                        assert!(
+                            !matches!(
+                                &self.client_mut(id).unwrap().phase,
+                                Phase::WebSocket {
+                                    delivery: Some(_),
+                                    ..
+                                }
+                            ),
+                            "protocol close follows every delivery receipt"
+                        );
                         self.schedule(id, None);
                         self.ready.retain(|ready| *ready != Ready::Client(id));
                         self.connections[id.slot()] = None;

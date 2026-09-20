@@ -156,13 +156,92 @@ unsafe impl Operation for Io {
 
 struct Connection {
     service: Service,
-    socket: Option<Rc<OwnedFd>>,
-    file: Option<OwnedFd>,
-    file_key: u64,
-    file_operation: Option<u64>,
+    socket: Socket,
+    file: FileSlot,
     operations: HashMap<http::OperationId, u64>,
     deadline: Option<http::Deadline>,
     queued: bool,
+}
+
+enum Socket {
+    Open(Rc<OwnedFd>),
+    Closing(http::OperationId),
+    Closed,
+}
+
+impl Socket {
+    fn borrow(&self) -> Rc<OwnedFd> {
+        let Self::Open(descriptor) = self else {
+            panic!("network work after socket close")
+        };
+        descriptor.clone()
+    }
+
+    fn close(&mut self, original: http::OperationId) -> OwnedFd {
+        let Self::Open(descriptor) = std::mem::replace(self, Self::Closing(original)) else {
+            panic!("socket close requires ownership")
+        };
+        Rc::try_unwrap(descriptor).expect("original socket operations settled")
+    }
+
+    fn complete_close(&mut self, original: http::OperationId) {
+        assert!(matches!(self, Self::Closing(id) if *id == original));
+        *self = Self::Closed;
+    }
+}
+
+enum FileSlot {
+    Empty,
+    Held { key: app::File, descriptor: OwnedFd },
+    Original { token: u64, key: Option<app::File> },
+}
+
+impl FileSlot {
+    fn take(&mut self, expected: app::File) -> OwnedFd {
+        let Self::Held { key, .. } = self else {
+            panic!("exclusive file operation")
+        };
+        assert_eq!(*key, expected);
+        let Self::Held { descriptor, .. } = std::mem::replace(self, Self::Empty) else {
+            unreachable!()
+        };
+        descriptor
+    }
+
+    fn complete(&mut self, token: u64, finished: &mut crate::file::Finished) {
+        let Self::Original {
+            token: original,
+            key,
+        } = self
+        else {
+            panic!("file completion without original")
+        };
+        assert_eq!(*original, token);
+        let key = match finished.completion {
+            app::Completion::Open {
+                result: Ok(key), ..
+            } => Some(key),
+            app::Completion::Open { result: Err(_), .. } | app::Completion::Close { .. } => None,
+            _ => *key,
+        };
+        *self = match (key, finished.descriptor.take()) {
+            (Some(key), Some(descriptor)) => Self::Held { key, descriptor },
+            (None, None) => Self::Empty,
+            _ => panic!("file descriptor/key ownership mismatch"),
+        };
+    }
+}
+
+impl Connection {
+    fn settled(&self) -> bool {
+        if !self.service.settled() {
+            return false;
+        }
+        assert!(matches!(self.file, FileSlot::Empty));
+        assert!(matches!(self.socket, Socket::Closed));
+        assert!(self.operations.is_empty());
+        true
+    }
 }
 
 fn submit(ring: &mut Ring<Io>, operation: Io) -> u64 {
@@ -273,8 +352,6 @@ pub fn run(options: Options) -> io::Result<()> {
                     root: &root,
                     socket: &mut connection.socket,
                     file: &mut connection.file,
-                    file_key: connection.file_key,
-                    file_operation: &mut connection.file_operation,
                     operations: &mut connection.operations,
                     deadline: &mut connection.deadline,
                     deadlines: &mut deadlines,
@@ -282,9 +359,7 @@ pub fn run(options: Options) -> io::Result<()> {
                 };
                 connection.service.next(&mut ports).is_some()
             };
-            if connection.service.settled() {
-                assert!(connection.file.is_none() && connection.socket.is_none());
-                assert!(connection.operations.is_empty());
+            if connection.settled() {
                 if let Some(deadline) = connection.deadline.take() {
                     deadlines.remove(&(deadline.at, id));
                 }
@@ -363,10 +438,8 @@ pub fn run(options: Options) -> io::Result<()> {
                             id,
                             Connection {
                                 service,
-                                socket: Some(Rc::new(socket)),
-                                file: None,
-                                file_key: 0,
-                                file_operation: None,
+                                socket: Socket::Open(Rc::new(socket)),
+                                file: FileSlot::Empty,
                                 operations: HashMap::new(),
                                 deadline: None,
                                 queued: false,
@@ -379,7 +452,7 @@ pub fn run(options: Options) -> io::Result<()> {
                 }
                 Io::Read { owner, op, .. } => {
                     let connection = connections.get_mut(&owner).unwrap();
-                    connection.operations.remove(&op.id());
+                    assert_eq!(connection.operations.remove(&op.id()), Some(token));
                     connection
                         .service
                         .complete_read(op.complete(io_count(result)));
@@ -387,7 +460,7 @@ pub fn run(options: Options) -> io::Result<()> {
                 }
                 Io::Write { owner, op, .. } => {
                     let connection = connections.get_mut(&owner).unwrap();
-                    connection.operations.remove(&op.id());
+                    assert_eq!(connection.operations.remove(&op.id()), Some(token));
                     connection
                         .service
                         .complete_write(op.complete(io_count(result)));
@@ -395,7 +468,7 @@ pub fn run(options: Options) -> io::Result<()> {
                 }
                 Io::Ready { owner, op, .. } => {
                     let connection = connections.get_mut(&owner).unwrap();
-                    connection.operations.remove(&op.id());
+                    assert_eq!(connection.operations.remove(&op.id()), Some(token));
                     connection
                         .service
                         .complete_readiness(op.complete(io_count(result).map(|_| ())));
@@ -403,24 +476,18 @@ pub fn run(options: Options) -> io::Result<()> {
                 }
                 Io::Close { owner, op, .. } => {
                     let connection = connections.get_mut(&owner).unwrap();
-                    connection.operations.remove(&op.id());
+                    assert_eq!(connection.operations.remove(&op.id()), Some(token));
+                    connection.socket.complete_close(op.id());
                     connection
                         .service
                         .complete_close(op.complete(io_count(result).map(|_| ())));
                     enqueue(&mut connections, &mut ready, owner);
                 }
                 Io::File(operation) => {
-                    let finished = operation.finish(token);
+                    let mut finished = operation.finish(token);
                     let owner = finished.owner;
                     let connection = connections.get_mut(&owner).unwrap();
-                    assert_eq!(connection.file_operation.take(), Some(token));
-                    if let app::Completion::Open {
-                        result: Ok(file), ..
-                    } = &finished.completion
-                    {
-                        connection.file_key = file.0;
-                    }
-                    connection.file = finished.descriptor;
+                    connection.file.complete(token, &mut finished);
                     connection.service.complete_file(finished.completion);
                     enqueue(&mut connections, &mut ready, owner);
                 }
@@ -457,10 +524,8 @@ struct RootPorts<'a> {
     id: u64,
     ring: &'a mut Ring<Io>,
     root: &'a Rc<OwnedFd>,
-    socket: &'a mut Option<Rc<OwnedFd>>,
-    file: &'a mut Option<OwnedFd>,
-    file_key: u64,
-    file_operation: &'a mut Option<u64>,
+    socket: &'a mut Socket,
+    file: &'a mut FileSlot,
     operations: &'a mut HashMap<http::OperationId, u64>,
     deadline: &'a mut Option<http::Deadline>,
     deadlines: &'a mut BTreeMap<(http::Tick, u64), http::Deadline>,
@@ -473,13 +538,13 @@ impl RootPorts<'_> {
         assert!(self.operations.insert(id, token).is_none());
     }
     fn take_file(&mut self, key: app::File) -> OwnedFd {
-        assert_eq!(key.0, self.file_key);
-        self.file.take().expect("exclusive file operation")
+        self.file.take(key)
     }
 
-    fn file(&mut self, operation: FileOperation) {
+    fn file(&mut self, operation: FileOperation, key: Option<app::File>) {
+        assert!(matches!(self.file, FileSlot::Empty));
         let token = submit(self.ring, Io::File(operation));
-        assert!(self.file_operation.replace(token).is_none());
+        *self.file = FileSlot::Original { token, key };
     }
 }
 
@@ -490,7 +555,7 @@ impl composite::Ports for RootPorts<'_> {
             op.id(),
             Io::Read {
                 owner: self.id,
-                socket: self.socket.as_ref().unwrap().clone(),
+                socket: self.socket.borrow(),
                 op,
             },
         );
@@ -501,7 +566,7 @@ impl composite::Ports for RootPorts<'_> {
             op.id(),
             Io::Write {
                 owner: self.id,
-                socket: self.socket.as_ref().unwrap().clone(),
+                socket: self.socket.borrow(),
                 op,
             },
         );
@@ -512,7 +577,7 @@ impl composite::Ports for RootPorts<'_> {
             op.id(),
             Io::Ready {
                 owner: self.id,
-                socket: self.socket.as_ref().unwrap().clone(),
+                socket: self.socket.borrow(),
                 op,
             },
         );
@@ -525,8 +590,11 @@ impl composite::Ports for RootPorts<'_> {
         None
     }
     fn close(&mut self, op: http::CloseOp) -> Option<()> {
-        let descriptor = Rc::try_unwrap(self.socket.take().unwrap())
-            .expect("original socket operations settled");
+        assert!(
+            self.operations.is_empty(),
+            "socket close joins original operations"
+        );
+        let descriptor = self.socket.close(op.id());
         self.network(
             op.id(),
             Io::Close {
@@ -538,22 +606,24 @@ impl composite::Ports for RootPorts<'_> {
         None
     }
     fn open(&mut self, op: app::Open) -> Option<()> {
-        self.file(FileOperation::open(self.id, op, self.root.clone()));
+        self.file(FileOperation::open(self.id, op, self.root.clone()), None);
         None
     }
     fn stat(&mut self, op: app::Stat) -> Option<()> {
         let descriptor = self.take_file(op.file);
-        self.file(FileOperation::stat(self.id, op, descriptor));
+        let key = op.file;
+        self.file(FileOperation::stat(self.id, op, descriptor), Some(key));
         None
     }
     fn file_read(&mut self, op: app::Read) -> Option<()> {
         let descriptor = self.take_file(op.file);
-        self.file(FileOperation::read(self.id, op, descriptor));
+        let key = op.file;
+        self.file(FileOperation::read(self.id, op, descriptor), Some(key));
         None
     }
     fn file_close(&mut self, op: app::Close) -> Option<()> {
         let descriptor = self.take_file(op.file);
-        self.file(FileOperation::close(self.id, op, descriptor));
+        self.file(FileOperation::close(self.id, op, descriptor), None);
         None
     }
     fn deadline_changed(&mut self, deadline: Option<http::Deadline>) -> Option<()> {
@@ -574,7 +644,7 @@ impl composite::Ports for RootPorts<'_> {
         if let Err(error) = result {
             eprintln!("connection {}: {error:?}", self.id);
         }
-        if let Some(token) = *self.file_operation {
+        if let FileSlot::Original { token, .. } = *self.file {
             self.ring.cancel(token);
         }
         None

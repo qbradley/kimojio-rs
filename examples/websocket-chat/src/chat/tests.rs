@@ -110,18 +110,21 @@ fn upgraded(chat: &mut Chat) -> ClientId {
     let id = chat.admit().unwrap();
     // Test fixture starts at the framing boundary; production only uses the
     // owned HTTP handoff path exercised by the preceding test.
-    chat.client_mut(id).unwrap().phase = Phase::WebSocket(Box::new(
-        WebSocket::new(
-            http::ConnectionId {
-                slot: id.slot() as u64,
-                generation: id.generation(),
-            },
-            chat.config.websocket.clone(),
-            vec![0; chat.config.receive_bytes].into_boxed_slice(),
-            http::Tick(0),
-        )
-        .unwrap(),
-    ));
+    chat.client_mut(id).unwrap().phase = Phase::WebSocket {
+        server: Box::new(
+            WebSocket::new(
+                http::ConnectionId {
+                    slot: id.slot() as u64,
+                    generation: id.generation(),
+                },
+                chat.config.websocket.clone(),
+                vec![0; chat.config.receive_bytes].into_boxed_slice(),
+                http::Tick(0),
+            )
+            .unwrap(),
+        ),
+        delivery: None,
+    };
     chat.hub.activate(id).unwrap();
     id
 }
@@ -138,7 +141,7 @@ fn typed_ws_send_rejection_after_observed_credit_returns_payload_to_hub() {
         panic!("send");
     };
     assert_eq!(delivery.id.client(), closing);
-    let Phase::WebSocket(server) = &mut chat.client_mut(closing).unwrap().phase else {
+    let Phase::WebSocket { server, .. } = &mut chat.client_mut(closing).unwrap().phase else {
         panic!()
     };
     assert!(server.can_send());
@@ -147,14 +150,23 @@ fn typed_ws_send_rejection_after_observed_credit_returns_payload_to_hub() {
         .unwrap();
     assert!(!server.can_send());
     chat.deliver(delivery);
-    assert!(chat.client_mut(closing).unwrap().delivery.is_none());
+    assert!(matches!(
+        chat.client_mut(closing).unwrap().phase,
+        Phase::WebSocket { delivery: None, .. }
+    ));
     assert_eq!(chat.hub.stats().active_clients, 1);
     let Some(HubEvent::Send(next)) = chat.hub.next(&mut HubPorts) else {
         panic!("healthy send");
     };
     assert_eq!(next.id.client(), healthy);
     chat.deliver(next);
-    assert!(chat.client_mut(healthy).unwrap().delivery.is_some());
+    assert!(matches!(
+        chat.client_mut(healthy).unwrap().phase,
+        Phase::WebSocket {
+            delivery: Some(_),
+            ..
+        }
+    ));
     assert_eq!(chat.hub.stats().resident_clients, 2);
 }
 
@@ -186,7 +198,13 @@ fn outbound_buffer_limit_must_fit_every_admissible_hub_message() {
         };
         assert_eq!(delivery.id.client(), id);
         chat.deliver(delivery);
-        assert!(chat.client_mut(id).unwrap().delivery.is_some());
+        assert!(matches!(
+            chat.client_mut(id).unwrap().phase,
+            Phase::WebSocket {
+                delivery: Some(_),
+                ..
+            }
+        ));
     }
     assert_eq!(chat.hub.stats().active_clients, 2);
 }
@@ -208,4 +226,292 @@ fn wrong_generation_completion_is_returned_owned_without_touching_live_http() {
         .unwrap_err();
     assert_eq!(second.client_mut(replacement).unwrap().id, replacement);
     first.complete(id, returned).unwrap();
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum ModelEvent {
+    Io(Identity),
+    Cancel(Identity),
+    Deadline(Option<http::Tick>),
+    Retired(ClientId),
+}
+
+struct ModelRoot {
+    yielding: bool,
+    operations: Vec<Io>,
+    trace: Vec<ModelEvent>,
+}
+
+impl Ports for ModelRoot {
+    type Output = ();
+    fn io(&mut self, _: ClientId, operation: Io) -> Option<()> {
+        self.trace.push(ModelEvent::Io(operation.identity()));
+        self.operations.push(operation);
+        self.yielding.then_some(())
+    }
+    fn cancel(&mut self, _: ClientId, identity: Identity) -> Option<()> {
+        self.trace.push(ModelEvent::Cancel(identity));
+        self.yielding.then_some(())
+    }
+    fn deadline_changed(&mut self, deadline: Option<http::Tick>) -> Option<()> {
+        self.trace.push(ModelEvent::Deadline(deadline));
+        self.yielding.then_some(())
+    }
+    fn retired(&mut self, client: ClientId) -> Option<()> {
+        self.trace.push(ModelEvent::Retired(client));
+        self.yielding.then_some(())
+    }
+    fn yield_turn(&mut self) -> Option<()> {
+        self.yielding.then_some(())
+    }
+}
+
+fn drain(chat: &mut Chat, root: &mut ModelRoot) {
+    for _ in 0..32 {
+        if chat.next(root).is_none() {
+            assert!(chat.ready.is_empty());
+            return;
+        }
+    }
+    panic!("one-connection composition did not quiesce");
+}
+
+fn cancellation_schedule(schedule: [u8; 3], success: bool, yielding: bool) -> Vec<ModelEvent> {
+    let mut chat = Chat::new(Config::default()).unwrap();
+    let baseline = chat.stats().used_bytes;
+    let id = upgraded(&mut chat);
+    chat.hub.begin(id, hub::Kind::Binary).unwrap();
+    chat.hub.append(id, b"lease").unwrap();
+    chat.hub.finish(id).unwrap();
+    chat.mark_hub();
+    let mut root = ModelRoot {
+        yielding,
+        operations: Vec::new(),
+        trace: Vec::new(),
+    };
+    drain(&mut chat, &mut root);
+    assert_eq!(
+        root.operations.len(),
+        2,
+        "duplex read and write before settlement"
+    );
+    let read_position = root
+        .operations
+        .iter()
+        .position(|op| matches!(op, Io::WsRead(_)))
+        .unwrap();
+    let Io::WsRead(read) = root.operations.remove(read_position) else {
+        unreachable!()
+    };
+    let Io::WsWrite(write) = root.operations.pop().unwrap() else {
+        panic!("write")
+    };
+    let read_id = Identity::WebSocket(read.id());
+    let write_id = Identity::WebSocket(write.id());
+    let length = write.slices().iter().map(|slice| slice.len()).sum();
+    let mut read = Some(read);
+    let mut write = Some(write);
+    for action in schedule {
+        match action {
+            0 => chat.shutdown(true),
+            1 => chat
+                .complete(
+                    id,
+                    Completion::WsRead(read.take().unwrap().complete(Err(http::IoError {
+                        code: None,
+                        kind: http::IoErrorKind::Cancelled,
+                    }))),
+                )
+                .unwrap(),
+            2 => chat
+                .complete(
+                    id,
+                    Completion::WsWrite(write.take().unwrap().complete(if success {
+                        Ok(length)
+                    } else {
+                        Err(http::IoError {
+                            code: None,
+                            kind: http::IoErrorKind::Reset,
+                        })
+                    })),
+                )
+                .unwrap(),
+            _ => unreachable!(),
+        }
+        let before = root.trace.len();
+        drain(&mut chat, &mut root);
+        for event in &root.trace[before..] {
+            match event {
+                ModelEvent::Cancel(target) if *target == read_id => assert!(read.is_some()),
+                ModelEvent::Cancel(target) if *target == write_id => assert!(write.is_some()),
+                ModelEvent::Cancel(_) => panic!("cancellation must target an original operation"),
+                ModelEvent::Retired(_) => panic!("retirement before transport settlement"),
+                _ => {}
+            }
+        }
+        assert_eq!(chat.stats().resident_clients, 1);
+        for operation in &root.operations {
+            assert!(
+                matches!(operation, Io::WsClose(_)),
+                "no replacement I/O on failed transport"
+            );
+            assert!(
+                read.is_none() && write.is_none(),
+                "close joins both originals"
+            );
+        }
+    }
+    assert_eq!(root.operations.len(), 1);
+    let Io::WsClose(close) = root.operations.pop().unwrap() else {
+        unreachable!()
+    };
+    assert!(
+        matches!(
+            chat.client_mut(id).unwrap().phase,
+            Phase::WebSocket { delivery: None, .. }
+        ),
+        "payload receipt precedes transport retirement"
+    );
+    chat.complete(id, Completion::WsClose(close.complete(Ok(()))))
+        .unwrap();
+    drain(&mut chat, &mut root);
+    assert_eq!(
+        root.trace
+            .iter()
+            .filter(|e| matches!(e, ModelEvent::Retired(_)))
+            .count(),
+        1
+    );
+    assert_eq!(root.trace.last(), Some(&ModelEvent::Retired(id)));
+    for identity in [read_id, write_id] {
+        assert!(
+            root.trace
+                .iter()
+                .filter(|e| **e == ModelEvent::Cancel(identity))
+                .count()
+                <= 1
+        );
+    }
+    assert!(chat.deadline().is_none());
+    assert_eq!(chat.stats().resident_clients, 0);
+    assert_eq!(chat.stats().used_bytes, baseline);
+    root.trace
+}
+
+#[test]
+fn bounded_composite_settlement_preserves_exact_yield_traces() {
+    for schedule in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        for success in [false, true] {
+            assert_eq!(
+                cancellation_schedule(schedule, success, false),
+                cancellation_schedule(schedule, success, true),
+                "schedule {schedule:?}, success={success}"
+            );
+        }
+    }
+}
+
+#[test]
+fn shutdown_at_completed_handshake_never_reactivates_a_removed_recipient() {
+    for abort in [false, true] {
+        for yielding in [false, true] {
+            let mut chat = Chat::new(Config::default()).unwrap();
+            let baseline = chat.stats().used_bytes;
+            let id = chat.admit().unwrap();
+            let mut root = ModelRoot {
+                yielding,
+                operations: Vec::new(),
+                trace: Vec::new(),
+            };
+            drain(&mut chat, &mut root);
+            let Io::HttpRead(mut read) = root.operations.pop().unwrap() else {
+                panic!("HTTP read")
+            };
+            read.bytes_mut()[..REQUEST.len()].copy_from_slice(REQUEST);
+            chat.complete(id, Completion::HttpRead(read.complete(Ok(REQUEST.len()))))
+                .unwrap();
+            drain(&mut chat, &mut root);
+            let Io::HttpWrite(write) = root.operations.pop().unwrap() else {
+                panic!("101 write")
+            };
+            let count = write.slices().iter().map(|s| s.len()).sum();
+            chat.complete(id, Completion::HttpWrite(write.complete(Ok(count))))
+                .unwrap();
+            chat.shutdown(abort);
+            drain(&mut chat, &mut root);
+            assert_eq!(chat.stats().active_clients, 0);
+            assert!(
+                matches!(chat.client_mut(id).unwrap().phase, Phase::Http(_)),
+                "HTTP shutdown owns a not-yet-transferred handoff"
+            );
+            chat.shutdown(true);
+            drain(&mut chat, &mut root);
+            assert_eq!(root.operations.len(), 1);
+            let Io::HttpClose(close) = root.operations.pop().unwrap() else {
+                panic!("only HTTP close after completed handshake shutdown")
+            };
+            chat.complete(id, Completion::HttpClose(close.complete(Ok(()))))
+                .unwrap();
+            drain(&mut chat, &mut root);
+            assert_eq!(chat.stats().resident_clients, 0);
+            assert_eq!(chat.stats().used_bytes, baseline);
+            assert!(root.operations.is_empty());
+        }
+    }
+}
+
+#[test]
+fn late_deadline_from_retired_generation_cannot_expire_reused_slot() {
+    let mut chat = Chat::new(Config::default()).unwrap();
+    let old = chat.admit().unwrap();
+    let mut root = ModelRoot {
+        yielding: false,
+        operations: Vec::new(),
+        trace: Vec::new(),
+    };
+    drain(&mut chat, &mut root);
+    let stale = chat.deadlines[0];
+    let Io::HttpRead(read) = root.operations.pop().unwrap() else {
+        panic!("old read")
+    };
+    chat.shutdown(true);
+    chat.complete(old, Completion::HttpRead(read.complete(Ok(0))))
+        .unwrap();
+    drain(&mut chat, &mut root);
+    let Io::HttpClose(close) = root.operations.pop().unwrap() else {
+        panic!("old close")
+    };
+    chat.complete(old, Completion::HttpClose(close.complete(Ok(()))))
+        .unwrap();
+    drain(&mut chat, &mut root);
+    assert!(chat.deadlines.is_empty());
+
+    let now = http::Tick(stale.deadline.at().0 + 1);
+    chat.observe_time(now);
+    let new = chat.admit().unwrap();
+    assert_eq!(old.slot(), new.slot());
+    assert_ne!(old.generation(), new.generation());
+    drain(&mut chat, &mut root);
+    let next_deadline = chat.deadline();
+    assert!(next_deadline.is_some_and(|at| at > now));
+    chat.schedule(old, Some(stale.deadline));
+    let before = root.trace.len();
+    chat.expire_due(now);
+    drain(&mut chat, &mut root);
+    assert_eq!(chat.deadline(), next_deadline);
+    assert!(
+        root.trace[before..]
+            .iter()
+            .all(|event| matches!(event, ModelEvent::Deadline(_)))
+    );
+    assert_eq!(root.operations.len(), 1);
+    assert_eq!(chat.client_mut(new).unwrap().id, new);
+    assert!(chat.ready.is_empty());
 }

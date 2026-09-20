@@ -105,6 +105,81 @@ This example is not a filesystem sandbox.
 
 ## Ownership and cancellation
 
+### Composition transition contracts
+
+The application has three independent components:
+
+| Component | Exclusive states and ownership |
+| --- | --- |
+| Lifecycle | Idle, producing an identified exchange, or draining that exchange |
+| File | Planned path, original open, available descriptor key, original stat/read, original close, or absent |
+| Payload | Local allocation, completed chunk, original read lease, or HTTP lease |
+
+The file operation owns its identity until its original completion.
+The pending read also owns its limit and file key.
+The payload state records which component must return the allocation.
+The offset advances only after a successful file read.
+The remaining length decreases only by the accepted HTTP byte count.
+
+Selection is pure and returns a unit-sized transition label.
+Each transition commits ownership before its callback.
+Producing permits open, stat, demand-driven read, and body delivery.
+Draining permits failure notification, a pending response, file close, and settlement.
+An exchange completion invalidates any pending response.
+Draining never starts another open, stat, read, or body delivery.
+
+| Transition | Prerequisite | Committed effect before callback |
+| --- | --- | --- |
+| Open | Producing with a planned path | Move the path to the port and retain the original identity |
+| Stat | Producing with an opened file | Retain the file key and original identity |
+| Read | Producing with metadata, local payload, and demand | Consume demand, retain the limit and identity, and transfer the payload |
+| Body | Producing with a completed chunk | Replace the local chunk with an HTTP lease count |
+| Response | Pending response for a live exchange | Consume the response obligation |
+| Failure | Pending source failure | Consume the failure obligation |
+| Close | Draining with an available file | Transfer the file key and retain only the close identity |
+| Settle | Completed exchange, absent file, and local payload | Enter idle and notify the connector |
+
+A source failure notification precedes a pending response or file close.
+A response precedes file close for HEAD, empty files, and application errors.
+Close waits for the original file operation, but not for an HTTP payload lease.
+Settlement joins exchange completion, file closure, and payload return.
+A successful late open requires exactly one close, without metadata or response production.
+A late read returns its allocation without body delivery.
+Close consumes ownership even on error. It never retries a possibly reused descriptor.
+
+The composite separates serving, reuse waiting, termination, and closed lifecycles.
+Reusable exchange completion blocks HTTP request admission until application settlement.
+Termination does not block HTTP lease returns, cancellation, bounded error output, or socket close.
+Closed permits only application settlement work.
+The root retains each connection until both machines and their original operations settle.
+Socket close requires the original network operations to return their descriptor references.
+File close and socket close can complete in either order.
+
+The composite first returns rejected payloads and incoming leases, then resolves pending credit.
+A transport completion or deadline observation gives HTTP one priority turn.
+This turn publishes terminal observations before competing application production.
+Body rejection still returns its allocation when notification priority is absent.
+Pending final responses wait for incoming-message completion.
+Application work precedes ordinary HTTP work.
+Each machine clears its ready obligation before its drive.
+Connectors never reenter the machine that owns the current drive.
+
+Each connector has at most one pending response, rejected payload, incoming lease, and credit obligation.
+New entries assert that their slot is empty.
+The request callback creates initial credit.
+Incoming delivery creates a lease return and replacement credit.
+Lease return precedes credit, so HTTP cannot reuse an allocation that the application still owns.
+Exchange completion invalidates the pending response and incoming-message identity.
+Termination discards unused credit instead of creating more producer demand.
+The closed lifecycle cannot reopen through shutdown or a delayed source-failure notification.
+
+Each selected transition consumes an obligation or advances a component.
+Callbacks that return `None` continue selection, including settlement callbacks.
+Only a selector with no eligible transition returns blocked.
+The composite offers a cooperative yield after 64 transitions.
+The root processes at most 256 ready connections before completions and deadlines.
+These budgets do not release operations or imply completion.
+
 The ring owns each operation in stable boxed storage.
 Each operation retains its buffers, path, metadata storage, and descriptors until its original completion.
 Completion identifiers do not reuse live generations.
@@ -163,6 +238,33 @@ Server tests cover real HTTP traffic, slow clients, disconnects, pipelining, and
 Deterministic composite tests cover terminal HTTP observations before successful late file completions.
 The rejection test also disables notification priority to exercise buffer recovery directly.
 
+`composition_model.rs` uses an independent resource ledger, without HTTP parser logic.
+It runs 1,152 completion schedules and compares each schedule with 26 callback yield patterns.
+The baseline always continues.
+The patterns include always yield, alternating yields, and one yield at each of the first 24 callback positions.
+All 31,104 runs use the same external inputs for each comparison.
+They compare exact callback sequences, operation identities, output bytes, and file offsets.
+
+The model starts with an outstanding open, stat, read, or body write.
+It explores abort and timeout, both competing-completion orders, and failed, partial, or full original results.
+It orders original completions, file close, socket close, and cancellation acknowledgements with all 24 priority permutations.
+Timeout cases also complete the bounded HTTP error response.
+The ledger rejects duplicate ownership, premature close, new producer work after termination, and repeated terminal notifications.
+Every run must settle within 16 external completions.
+Cancellation acknowledgements affect only the ledger's cancellation capacity.
+Native ring tests separately establish the actual cancellation/original CQE contract.
+
+Application tests cover all six orders of exchange completion, file-close completion, and HTTP payload return.
+They include partial payload acceptance, close errors, and both callback continuation modes.
+Literal sequence assertions require response-before-close and failure-before-close.
+A buffered 256-chunk request checks cooperative yielding and retained ready work.
+Repeated shutdown after closure leaves the service settled.
+
+These are bounded checks, not a complete proof.
+They assume that original operations and submitted cancellation requests eventually complete.
+The refactor adds no production heap queues, dynamic dispatch, or payload copies.
+No new throughput or latency claim follows from these structural changes.
+
 Run the independent Python and Go server suite after the interoperability tools build the Go peer:
 
 ```sh
@@ -172,3 +274,11 @@ python3 -B interop/http1/server_suite.py \
 ```
 
 The strict suite also checks malformed-request responses from the HTTP core.
+
+The composition refactor passed the default, release, and all-feature crate suites on CPUs 8–31.
+Formatting and both default and all-target/all-feature Clippy checks passed.
+The strict independent suite passed all 35 cases against debug and release binaries.
+The native transport suite passed all 13 reset, timeout, and recovery cases.
+Its sampled descriptor count returned from six to six.
+These descriptor samples do not prove the absence of every possible leak.
+No CPU2 timing or profiling run formed part of this refactor.
