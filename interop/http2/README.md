@@ -127,6 +127,51 @@ The no-action duplex probes require full uploads for both status 200 and status 
 The reset-discard case keeps the sibling response open until the peer observes at least 33,792 bytes of connection refunds.
 The connection must refund both the initial DATA and the late discarded DATA before graceful close.
 
+## Explicit wrapper qualification profile
+
+Both suites accept `--profile wrapper`.
+The default remains `--profile canonical`, with unchanged cold-start and exact-list trailer oracles.
+The wrapper profile needs the same client and server command adapters.
+It adds no fixture action, readiness API, raw-frame observer, or timing delay.
+
+```sh
+python interop/http2/suite.py --profile wrapper \
+  --client-adapter client.json --server-adapter server.json \
+  --output target/wrapper-flow
+python interop/http2/protocol_suite.py --profile wrapper \
+  --client-adapter client.json --server-adapter server.json \
+  --go-peer /absolute/path/to/go-peer --output target/wrapper-protocol
+```
+
+The profile runs 48 flow cells and 17 protocol cells.
+For independent-peer validation, `--selftest` replaces both adapter arguments.
+Those results remain peer selftests, not native wrapper qualification.
+
+Coverage differs from the canonical profile in these ways:
+
+* Reduced-window client uploads prepend one bodyless GET per concurrency slot.
+  The peer completes these warmups only after its SETTINGS/PING barrier.
+  Target uploads therefore start with the actual reduced window already applied.
+* The early-response case prepends two warmups, with concurrency two.
+  Each target request waits for a completed warmup to free its application slot.
+  Stream 5 sends exactly 1,024 bytes, receives the complete 413 response, then receives peer RST0.
+  Stream 7 remains the successful sibling.
+* Trailer comparisons use case-insensitive names and ordered occurrences for each name.
+  The client-response trailer case sends interleaved `x-list: one`, `x-other: marker`, and `x-list: two`.
+  Different-name regrouping is permitted, but value sorting, combining, deletion, or duplication fails.
+  Native-server routes retain their declared trailer contents.
+
+Every warmup requires an exact empty-body hash and successful retirement.
+Target hashes use their actual stream IDs, not renumbered IDs.
+Credit equations retain all wire traffic, while workload-size checks exclude zero-body warmup streams.
+The early-response peer returns no upload credit and rejects any post-barrier DATA beyond the 1,024-byte stream window.
+Its witness includes the partial upload hash, both remaining credit balances, actual RST0, receive completion, and terminal outcomes.
+
+Reports identify the selected profile, warmup count, startup method, and trailer comparison.
+Synchronized cases report `canonical_cold_start: false`.
+They never replace the separately identified cold-start diagnostics.
+The no-action 200/413 duplex probes remain unchanged and still require full uploads.
+
 ## Focused wrapper startup diagnostics
 
 `wrapper_startup_probe.py` diagnoses reduced-upload and early-response startup failures.

@@ -97,7 +97,7 @@ def client(spec):
     return report
 
 
-def serve(sock, *, config, timeout=60, case=None, refund=True, peer=None):
+def serve(sock, *, config, timeout=60, case=None, refund=True, peer=None, warmup_count=0, trailer_fields=None):
     peer = peer if peer is not None else configured_peer(client=False, config=config)
     channel = Channel(sock, peer, timeout=timeout, consume=False)
     sender = CreditSender(peer)
@@ -108,6 +108,19 @@ def serve(sock, *, config, timeout=60, case=None, refund=True, peer=None):
     receive_baseline = receive_initial - 65535
     try:
         channel.handshake()
+        startup = None
+        if warmup_count:
+            startup = {
+                "warmup_count": warmup_count, "settings_acks": channel.inbound.settings_acks,
+                "upload_flow_before_barrier": sum(channel.inbound.flow.values()),
+                "target_headers_before_barrier": [
+                    event.stream_id for event in channel.deferred
+                    if isinstance(event, RequestReceived) and event.stream_id > 2 * warmup_count
+                ],
+            }
+            require(startup["settings_acks"] >= 1, "warmup barrier preceded SETTINGS ACK")
+            require(startup["upload_flow_before_barrier"] == 0, "upload DATA preceded warmup barrier")
+            require(not startup["target_headers_before_barrier"], "target HEADERS preceded warmup barrier")
         baseline = channel.inbound.updates[0]
         for _ in range(1_000_000):
             sender.drive(frame_budget=8)
@@ -139,6 +152,12 @@ def serve(sock, *, config, timeout=60, case=None, refund=True, peer=None):
                 if isinstance(event, RequestReceived):
                     require(len(requests) < 1024, "request count limit exceeded")
                     requests[event.stream_id] = dict(event.headers)
+                    if warmup_count and event.stream_id <= 2 * warmup_count:
+                        require(
+                            requests[event.stream_id][b":method"] == b"GET"
+                            and requests[event.stream_id][b":path"] == b"/bytes/0",
+                            "warmup must be a bodyless GET /bytes/0",
+                        )
                 if isinstance(event, RequestReceived):
                     stream = event.stream_id
                     if stream in responded:
@@ -168,7 +187,8 @@ def serve(sock, *, config, timeout=60, case=None, refund=True, peer=None):
                         sender.response(
                             stream, length,
                             padding=case.padding if case else None,
-                            trailers=path.startswith("/trailers/"),
+                            trailers=(tuple(trailer_fields) if trailer_fields is not None else True)
+                            if path.startswith("/trailers/") else False,
                             informational=path.startswith("/informational/"),
                         )
                         if case and case.name == "empty-data-sibling" and stream == 1:
@@ -176,6 +196,8 @@ def serve(sock, *, config, timeout=60, case=None, refund=True, peer=None):
                                 peer.connection.send_data(stream, b"")
                     responded.add(stream)
                 if isinstance(event, DataReceived):
+                    if warmup_count and event.stream_id <= 2 * warmup_count:
+                        require(event.flow_controlled_length == 0, "warmup request contained DATA")
                     if event.stream_id in sender.streaming:
                         require(
                             event.data == bytes([event.stream_id % 251]) * len(event.data),
@@ -211,6 +233,7 @@ def serve(sock, *, config, timeout=60, case=None, refund=True, peer=None):
         return {
             "credit": credit, "receive_credit": receive_credit, "requests": len(requests),
             "peer_eof": channel.eof,
+            **({"startup": startup} if startup is not None else {}),
             "sibling_progress": sibling_progress,
             "empty_data_frames": channel.outbound.types[0] - sum(
                 send.frames for send in (*sender.completed.values(), *sender.cancelled.values())

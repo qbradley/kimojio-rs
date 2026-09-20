@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 
 from peer import digest_for
+from profiles import trailers_equal
 from socket_peer import require
 
 SUCCESS_CONNECTION_OUTCOMES = {"graceful", "peer_closed"}
@@ -99,7 +100,7 @@ def qualify(case, credit):
         )
 
 
-def validate_results(case, report, *, echo=False):
+def validate_results(case, report, *, echo=False, profile="canonical", stream_offset=0, expected_trailers=None):
     require(report.get("schema") == 1, "result schema must be 1")
     connection = report.get("connection", {})
     require(connection.get("closed") is True, "client did not explicitly close its socket")
@@ -111,7 +112,8 @@ def validate_results(case, report, *, echo=False):
     streams = report.get("streams")
     require(isinstance(streams, list) and len(streams) == case.count, "wrong result count")
     indexed = {entry["stream_id"]: entry for entry in streams}
-    require(set(indexed) == set(range(1, 2 * case.count, 2)), "missing or duplicate stream ID")
+    first = 1 + 2 * stream_offset
+    require(set(indexed) == set(range(first, first + 2 * case.count, 2)), "missing or duplicate stream ID")
     for stream, result in indexed.items():
         limited = (
             case.name == "empty-data-sibling" and stream == 1
@@ -137,5 +139,6 @@ def validate_results(case, report, *, echo=False):
             result.get("error") == ({"scope": "stream", "code": 11} if limited else None),
             f"stream {stream}: unexpected error",
         )
-        require(result.get("trailers") == ([["x-end", "done"]] if case.route == "trailers" else []), "wrong trailers")
+        trailers = expected_trailers if expected_trailers is not None else ([["x-end", "done"]] if case.route == "trailers" else [])
+        require(trailers_equal(result.get("trailers"), trailers, profile), "wrong trailers")
         require(result.get("informational") == ([103] if case.route == "informational" else []), "wrong informational sequence")

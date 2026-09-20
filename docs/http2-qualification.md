@@ -8,7 +8,8 @@ The core qualification gates are complete for the recorded scope and snapshots.
 The metadata-admission repair passed independent review, socket qualification, and source-specific measurements.
 Kimojio HTTP/2 wrapper implementation is in progress.
 The native client and server have focused runtime coverage.
-Selected wrapper interoperability cases passed. Full interoperability and wrapper performance qualification remain pending.
+The explicit wrapper interoperability profile passed for native and generic transports.
+Lifecycle evidence and wrapper performance qualification remain in progress.
 
 The current socket qualification covers the direct HTTP/2 engine.
 Separate models cover the HTTP/1 plus HTTP/2 composite.
@@ -200,7 +201,7 @@ That review did not independently inject kernel cancellation races or close fail
 | Shared ownership, native I/O, concurrent client | Implemented with focused runtime tests |
 | Concurrent native server | Implemented with focused runtime tests |
 | Generic established transports | Implemented with focused runtime tests |
-| Independent wrapper socket fixture and peers | Client/server fixture implemented, full suite and explicit startup profile in progress |
+| Independent wrapper socket fixture and peers | All 65 wrapper-profile cases passed per transport on `b3789dc6` |
 | Wrapper performance and final review | Pending |
 
 The current core socket results do not qualify the new wrapper.
@@ -224,7 +225,7 @@ Independent source review of `b9bd2445` through `af7d2ad4` found no significant 
 It covered server orchestration, shared-client changes, informational admission and cancellation, observers, retirement reports, and associated tests.
 The reviewer did not independently execute tests or fault-injection schedules.
 This review excludes subsequent generic-transport changes.
-The native fixture now uses these observation APIs. Full independent peer qualification remains in progress.
+The native fixture now uses these observation APIs, and the wrapper-profile socket suite passed.
 Broader fault injection and wrapper performance remain incomplete.
 
 ### Generic transport checkpoint
@@ -246,7 +247,7 @@ The reviewer also ran eight focused tests from existing compiled binaries.
 Those executions covered partial-write errors, cancellation, late completion, close errors, held body leases, and virtual time.
 The reviewer did not rebuild those binaries from the frozen revision, so those runs have weaker source provenance.
 Independent TLS qualification and exhaustive custom-transport cancellation remain outside this review.
-The generic socket fixture is implemented. Full dual-transport qualification remains in progress.
+The generic socket fixture is implemented, and the wrapper-profile socket suite passed for both transports.
 
 Fragmented forwarding can exhaust a retained-page bound without exceeding the wire window.
 The fragmented duplex test uses a 2 MiB per-stream receive-capacity bound and unchanged receive windows.
@@ -288,6 +289,37 @@ Generic transport errors do not always expose a separate terminal connection out
 For such errors, the fixture returns a failure with unknown outcome rather than inferred closure or success.
 Per-stream retirement and inexact failed-write receipts remain observable.
 Full peer qualification must distinguish a missing observation from a demonstrated protocol failure.
+
+### Qualified dual-transport socket snapshot
+
+The independent peer owner qualified the same immutable `b3789dc6` binary in native and generic modes.
+Peer source `1df3ea1e81e679c3da51b8c4ff1ed10b8d9f8868` provides the explicit `wrapper` profile.
+The peer owner checked the binary hash before and after the runs.
+Local evidence is in `target/http2-program/reports/wrapper-b3789dc6-summary.json`.
+
+| Transport | Flow cases | Protocol cases | No-action early-upload probes |
+| --- | --- | --- | --- |
+| Native | 48/48 | 17/17 | 2/2 |
+| Generic | 48/48 | 17/17 | 2/2 |
+
+Each mode covers both client and server roles.
+The early-200 and early-413 probes each received all 131,087 upload bytes and complete retirement.
+The synchronized reset-zero case preserved the 413 response, authoritative reset retirement, sibling completion, and graceful close.
+No exercised case had a failure or unresolved observation.
+
+Four cases per transport use bodyless warmups and peer SETTINGS/PING barriers.
+These synchronized cases do not claim equivalent cold-start coverage.
+The canonical profile remains separate and unchanged by default.
+The wrapper profile compares trailer occurrences in order per case-insensitive name.
+It does not discard, sort, or combine repeated values.
+
+Strict profile and credit controls passed.
+Without credit refunds, each transport stopped at 65,535 bytes and then reported an explicit watchdog abort.
+The parent integration passed 41 Python tests, Go tests, and Go vet.
+The earlier native-only `96e52805` report remains separate.
+
+These results do not qualify ambiguous split/I/O/close error observations or every native cancellation race.
+The lifecycle evidence matrix and performance measurements remain separate acceptance work.
 
 ### Initial wrapper client fixture
 

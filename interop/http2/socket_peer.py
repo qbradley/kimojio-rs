@@ -54,6 +54,7 @@ class Trace:
         self.resets = {}
         self.goaway = []
         self.settings = []
+        self.settings_acks = 0
 
     def feed(self, data):
         self.bytes += len(data)
@@ -91,6 +92,8 @@ class Trace:
                     "last_stream_id": int.from_bytes(body[:4], "big") & 0x7fffffff,
                     "code": int.from_bytes(body[4:8], "big"),
                 })
+            elif kind == 4 and flags & 1:
+                self.settings_acks += 1
             elif kind == 4 and not flags & 1:
                 require(len(self.settings) < 64, "SETTINGS count limit exceeded")
                 self.settings.append({

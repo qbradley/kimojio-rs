@@ -6,6 +6,7 @@ import sys
 import uuid
 
 from peer import digest_for
+from profiles import PROFILES, prepend_warmups, without_warmups, trailers_equal
 from cases import Case, SUCCESS_CONNECTION_OUTCOMES, validate_results
 from socket_peer import PeerProcess, prerequisites, require, run_command
 from suite import ROOT, adapter, command, read_json, write_json
@@ -18,7 +19,8 @@ SCENARIOS = (
 SERVER_SCENARIOS = ("connect", "request-continuation", "request-hpack-reuse", "request-trailers")
 
 
-def request(scenario, address, *, early_policy="peer-reset"):
+def request(scenario, address, *, early_policy="peer-reset", profile="canonical"):
+    require(profile in PROFILES, "unknown qualification profile")
     require(early_policy in ("peer-reset", "application-cancel"), "unknown early-response policy")
     two = scenario in ("reset-isolation", "content-length", "early-response", "reset-discard", "no-body-data", "admission-recovery")
     requests = [{
@@ -35,7 +37,7 @@ def request(scenario, address, *, early_policy="peer-reset"):
         actions = [{"action": "graceful_close", "after_streams": 1}]
     if scenario == "early-response" and early_policy == "application-cancel":
         actions = [{"action": "cancel_upload_after_response", "stream_id": 1}]
-    return {
+    spec = {
         "schema": 1, "host": address[0], "port": address[1],
         "timeout_ms": 8000,
         "config": {"stream_window": 65535, "connection_window": 65535} if scenario == "reset-discard" else {},
@@ -43,9 +45,30 @@ def request(scenario, address, *, early_policy="peer-reset"):
         "concurrency": 1 if scenario == "admission-recovery" else len(requests),
         "requests": requests, "actions": actions,
     }
+    if profile == "wrapper" and scenario == "early-response":
+        require(early_policy == "peer-reset", "wrapper profile requires canonical peer RST0 policy")
+        return prepend_warmups(spec, 2)
+    return spec
 
 
-def validate(scenario, report, witness, *, early_policy="peer-reset"):
+def validate(scenario, report, witness, *, early_policy="peer-reset", profile="canonical"):
+    require(profile in PROFILES, "unknown qualification profile")
+    warmups = 2 if profile == "wrapper" and scenario == "early-response" else 0
+    if warmups:
+        require(early_policy == "peer-reset", "wrapper profile requires canonical peer RST0 policy")
+        require(witness.get("warmup_barrier") is True, "missing wrapper SETTINGS/PING warmup barrier")
+        require(all(witness.get("request_ended", {}).get(str(s)) is True for s in (1, 3)), "warmup requests did not end")
+        require(all(witness.get("received_flow", {}).get(str(s), 0) == 0 for s in (1, 3)), "bodyless warmup received DATA")
+        require(witness.get("received_flow", {}).get("5") == 1024, "wrong post-barrier DATA credit")
+        require(witness.get("upload_at_response") == 1024, "early response preceded upload credit exhaustion")
+        require(witness.get("wrapper_upload_credit") == {
+            "stream_initial": 1024, "connection_initial": 65535,
+            "stream_refunds": 0, "connection_refunds": 0, "flow": 1024,
+            "stream_final": 0, "connection_final": 65535 - 1024,
+            "sha256": digest_for(5, 1024),
+        }, "wrapper upload hash or credit balance mismatch")
+        report = without_warmups(report, warmups, profile)
+    first, sibling = 1 + 2 * warmups, 3 + 2 * warmups
     require(early_policy in ("peer-reset", "application-cancel"), "unknown early-response policy")
     require(report.get("schema") == 1, "result schema mismatch")
     require(report.get("connection", {}).get("closed") is True, "missing explicit client close")
@@ -61,10 +84,10 @@ def validate(scenario, report, witness, *, early_policy="peer-reset"):
         "wrong connection terminal outcome",
     )
     count = 2 if scenario in ("reset-isolation", "content-length", "early-response", "reset-discard", "no-body-data", "admission-recovery") else 1
-    require(witness["requests"] == count, "wire request count mismatch")
+    require(witness["requests"] == count + warmups, "wire request count mismatch")
     results = report.get("streams", [])
     require(len(results) == count, "wrong result count")
-    require({result["stream_id"] for result in results} == set(range(1, 2 * count, 2)), "wrong stream IDs")
+    require({result["stream_id"] for result in results} == set(range(first, first + 2 * count, 2)), "wrong stream IDs")
     for result in results:
         stream = result["stream_id"]
         status, length, ended, error, outcome = 200, 37, True, None, "complete"
@@ -73,16 +96,16 @@ def validate(scenario, report, witness, *, early_policy="peer-reset"):
         if connection_error:
             status, length, ended = None, 0, False
             outcome = "connection_failed"
-        elif stream == 1 and scenario == "reset-isolation":
+        elif stream == first and scenario == "reset-isolation":
             status, length, ended = None, 0, False
             error = {"scope": "stream", "code": 8}
-        elif stream == 1 and scenario == "content-length":
+        elif stream == first and scenario == "content-length":
             ended, error = False, {"scope": "stream", "code": 1}
-        elif stream == 1 and scenario == "reset-discard":
+        elif stream == first and scenario == "reset-discard":
             length, ended, error = 1024, False, {"scope": "stream", "code": 8}
-        elif stream == 1 and scenario == "no-body-data":
+        elif stream == first and scenario == "no-body-data":
             status, length, ended, error = 204, 0, False, {"scope": "stream", "code": 1}
-        elif stream == 1 and scenario == "early-response":
+        elif stream == first and scenario == "early-response":
             status, length = 413, 0
             error = {"scope": "stream", "code": 8 if early_policy == "application-cancel" else 0}
         if error is not None:
@@ -99,7 +122,7 @@ def validate(scenario, report, witness, *, early_policy="peer-reset"):
         require(result.get("ended") is ended, f"stream {stream}: wrong END_STREAM result")
         require(result.get("error") == error, f"stream {stream}: wrong error scope/code")
         require(result.get("outcome") == outcome, f"stream {stream}: wrong terminal outcome")
-        require(result.get("trailers") == [] and result.get("informational") == [], "unexpected metadata")
+        require(trailers_equal(result.get("trailers"), [], profile) and result.get("informational") == [], "unexpected metadata")
     if scenario == "push-before-ack":
         require(witness["resets"].get("2") in (7, 8), "client did not refuse the promised stream")
     if scenario.startswith("push-"):
@@ -110,14 +133,14 @@ def validate(scenario, report, witness, *, early_policy="peer-reset"):
     if connection_error:
         require(witness["goaway"] == 1, "missing wire GOAWAY(PROTOCOL_ERROR)")
     if scenario == "early-response":
-        require(witness["received"].get("1") == 1024, "upload did not stop at actual advertised stream credit")
-        require(witness.get("request_ended", {}).get("1") is False, "upload ended instead of remaining blocked")
-        require(witness.get("request_ended", {}).get("3") is True, "sibling request did not end")
-        require(witness["received"].get("3", 0) == 0, "bodyless sibling sent request DATA")
-        require(not witness["window_updates"].get("1"), "unexpected response receive-credit update")
+        require(witness["received"].get(str(first)) == 1024, "upload did not stop at actual advertised stream credit")
+        require(witness.get("request_ended", {}).get(str(first)) is False, "upload ended instead of remaining blocked")
+        require(witness.get("request_ended", {}).get(str(sibling)) is True, "sibling request did not end")
+        require(witness["received"].get(str(sibling), 0) == 0, "bodyless sibling sent request DATA")
+        require(not witness["window_updates"].get(str(first)), "unexpected response receive-credit update")
         if early_policy == "peer-reset":
             require(witness.get("early_response_barrier") is True, "response END_STREAM barrier was not acknowledged")
-            require(witness.get("server_resets") == {"1": 0}, "missing server RST_STREAM(NO_ERROR)")
+            require(witness.get("server_resets") == {str(first): 0}, "missing server RST_STREAM(NO_ERROR)")
             require(not witness["resets"], "client reset before or in response to server NO_ERROR reset")
         else:
             require(witness.get("early_response_barrier") is False, "application-cancel peer unexpectedly sent a barrier")
@@ -145,18 +168,21 @@ def validate(scenario, report, witness, *, early_policy="peer-reset"):
         require(not witness["resets"] and witness["goaway"] == 0, "admission recovery reset or failed")
 
 
-def run_case(binary, client_adapter, scenario, directory, *, early_policy="peer-reset"):
+def run_case(binary, client_adapter, scenario, directory, *, early_policy="peer-reset", profile="canonical"):
     directory.mkdir(parents=True)
     witness_file = directory / "peer.json"
     peer_scenario = (
         "early-response-app-cancel"
         if scenario == "early-response" and early_policy == "application-cancel" else scenario
     )
+    if profile == "wrapper" and scenario == "early-response":
+        require(early_policy == "peer-reset", "wrapper profile requires canonical peer RST0 policy")
+        peer_scenario = "early-response-wrapper"
     with PeerProcess([
         str(binary), "--scenario", peer_scenario, "--report", str(witness_file),
     ], cwd=ROOT) as server:
         request_file, result_file = directory / "request.json", directory / "result.json"
-        write_json(request_file, request(scenario, server.address, early_policy=early_policy))
+        write_json(request_file, request(scenario, server.address, early_policy=early_policy, profile=profile))
         client_command = command(client_adapter, request_file, result_file)
         if scenario == "admission-recovery":
             client_command = ["env", "H2_FIXTURE_TRACE=1", *client_command]
@@ -175,14 +201,18 @@ def run_case(binary, client_adapter, scenario, directory, *, early_policy="peer-
         require(code == 0, f"Go peer failed: {server.diagnostics()}")
         require(server.output_bytes <= 128 * 1024, "server output exceeds bound")
         result, witness = read_json(result_file), read_json(witness_file)
-        validate(scenario, result, witness, early_policy=early_policy)
+        validate(scenario, result, witness, early_policy=early_policy, profile=profile)
     return {
         "name": scenario, "passed": True,
         **({"early_response_policy": early_policy} if scenario == "early-response" else {}),
+        "profile": profile,
+        "startup": "bodyless-warmup" if peer_scenario == "early-response-wrapper" else "unchanged",
+        "warmup_requests": 2 if peer_scenario == "early-response-wrapper" else 0,
+        "canonical_cold_start": peer_scenario != "early-response-wrapper",
     }
 
 
-def server_case(binary, server_adapter, scenario, directory):
+def server_case(binary, server_adapter, scenario, directory, *, profile="canonical"):
     directory.mkdir(parents=True)
     server_request = directory / "server.json"
     write_json(server_request, {"schema": 1, "config": {}, "timeout_ms": 10000})
@@ -212,9 +242,9 @@ def server_case(binary, server_adapter, scenario, directory):
             cwd=ROOT, timeout=12,
         )
         require(completed.returncode == 0, f"Go client failed: {completed.stderr!r}")
-        validate_results(case, read_json(result_file), echo=scenario == "request-trailers")
+        validate_results(case, read_json(result_file), echo=scenario == "request-trailers", profile=profile)
         require(server.output_bytes <= 128 * 1024, "server output exceeds bound")
-    return {"name": scenario, "role": "server", "passed": True}
+    return {"name": scenario, "role": "server", "passed": True, "profile": profile}
 
 
 def main():
@@ -224,10 +254,12 @@ def main():
     parser.add_argument("--client-adapter", type=Path)
     parser.add_argument("--server-adapter", type=Path)
     parser.add_argument("--selftest", action="store_true")
+    parser.add_argument("--profile", choices=PROFILES, default="canonical")
     parser.add_argument("--early-response-policy", choices=("peer-reset", "application-cancel"), default="peer-reset")
     parser.add_argument("--case", action="append", choices=sorted(set(SCENARIOS + SERVER_SCENARIOS)))
     parser.add_argument("--output", type=Path, default=ROOT / "target" / "http2-protocol" / uuid.uuid4().hex)
     args = parser.parse_args()
+    require(args.profile != "wrapper" or args.early_response_policy == "peer-reset", "wrapper profile requires canonical peer RST0 policy")
     binary = args.go_peer.resolve()
     require(binary.is_file(), "Go peer is missing; build interop/http2/gopeer first")
     directory = args.output.resolve()
@@ -245,6 +277,7 @@ def main():
     directory.mkdir(parents=True)
     report = {
         "schema": 1, "evidence": "Go-Framer-peer-selftest-NOT-core" if args.selftest else "adapter",
+        "profile": args.profile,
         "early_response_policy": args.early_response_policy,
         "cases": [], "failures": [],
     }
@@ -261,6 +294,7 @@ def main():
             result = run_case(
                 binary, case_adapter, scenario, directory / "client" / scenario,
                 early_policy=args.early_response_policy,
+                profile=args.profile,
             )
             result["role"] = "client"
             report["cases"].append(result)
@@ -270,7 +304,7 @@ def main():
             print(f"FAIL {scenario}: {error}", file=sys.stderr, flush=True)
     for scenario in server_cases if args.selftest or server_adapter else ():
         try:
-            report["cases"].append(server_case(binary, server_adapter, scenario, directory / "server" / scenario))
+            report["cases"].append(server_case(binary, server_adapter, scenario, directory / "server" / scenario, profile=args.profile))
             print(f"PASS server {scenario}", flush=True)
         except Exception as error:
             report["failures"].append({"role": "server", "name": scenario, "error": f"{type(error).__name__}: {error}"[:8192]})

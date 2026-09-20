@@ -131,7 +131,7 @@ class Send:
     stream_id: int
     length: int
     padding: int | None
-    trailers: bool
+    trailers: bool | tuple
     sent: int = 0
     flow_sent: int = 0
     frames: int = 0
@@ -165,7 +165,7 @@ class CreditSender:
         length: int,
         *,
         padding: int | None = None,
-        trailers: bool = False,
+        trailers: bool | tuple = False,
         informational: bool = False,
     ) -> None:
         if length < 0 or padding is not None and not 0 <= padding <= 255:
@@ -186,7 +186,7 @@ class CreditSender:
 
     def start(
         self, stream_id: int, length: int, *,
-        padding: int | None = None, trailers: bool = False, streaming: bool = False,
+        padding: int | None = None, trailers: bool | tuple = False, streaming: bool = False,
     ) -> None:
         """Queue an already opened response or request body."""
         if length < 0 or padding is not None and not 0 <= padding <= 255:
@@ -256,7 +256,9 @@ class CreditSender:
     def _finish(self, send: Send) -> None:
         if send.trailers:
             self.peer.connection.send_headers(
-                send.stream_id, [(b"x-end", b"done")], end_stream=True
+                send.stream_id,
+                [(b"x-end", b"done")] if send.trailers is True else list(send.trailers),
+                end_stream=True,
             )
         self.completed[send.stream_id] = send
 

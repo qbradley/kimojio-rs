@@ -206,7 +206,16 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 		return serveAdmission(p)
 	}
 	startupDiagnostic := scenario == "early-response-startup-diagnostic"
-	early := scenario == "early-response" || scenario == "early-response-app-cancel" || startupDiagnostic
+	wrapperWarmup := scenario == "early-response-wrapper"
+	warmupBarrier := false
+	warmupPingSent := false
+	wrapperUploadDigest := sha256.New()
+	uploadAtResponse := 0
+	earlyStream := uint32(1)
+	if wrapperWarmup {
+		earlyStream = 5
+	}
+	early := scenario == "early-response" || scenario == "early-response-app-cancel" || startupDiagnostic || wrapperWarmup
 	resetDiscardPendingEnd := false
 	resetDiscardRefundBarrier := false
 	window := uint32(65535)
@@ -219,6 +228,7 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 	requests := make(map[uint32][]hpack.HeaderField)
 	requestEnded := make(map[uint32]bool)
 	received := make(map[uint32]int)
+	receivedFlow := make(map[uint32]int)
 	sent := make(map[uint32]bool)
 	sawEOF, goaway := false, uint32(0)
 	pendingSettings := 0
@@ -245,8 +255,39 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 			if len(requests) >= 8 || frame.Truncated {
 				return nil, errors.New("request metadata limit exceeded")
 			}
+			if _, exists := requests[stream]; wrapperWarmup && exists {
+				return nil, errors.New("duplicate wrapper request HEADERS")
+			}
 			requests[stream] = frame.Fields
 			requestEnded[stream] = requestEnded[stream] || frame.StreamEnded()
+			if wrapperWarmup && stream < earlyStream {
+				if stream != 1 && stream != 3 {
+					return nil, errors.New("invalid wrapper warmup request")
+				}
+				values := make(map[string]string)
+				for _, field := range frame.Fields {
+					values[field.Name] = field.Value
+				}
+				if values[":method"] != "GET" || values[":path"] != "/bytes/0" {
+					return nil, errors.New("wrapper warmup must be GET /bytes/0")
+				}
+				if !warmupPingSent {
+					if err := p.framer.WritePing(false, [8]byte{'w', 'a', 'r', 'm', 'u', 'p', '0', '1'}); err != nil {
+						return nil, err
+					}
+					warmupPingSent = true
+				}
+				if warmupBarrier && requestEnded[stream] {
+					if err := p.headers(stream, fields("200", 0), true, false); err != nil {
+						return nil, err
+					}
+					sent[stream] = true
+				}
+				continue
+			}
+			if wrapperWarmup && (!warmupBarrier || p.acks < 1) {
+				return nil, errors.New("target HEADERS preceded wrapper warmup barrier")
+			}
 			if scenario == "connect" {
 				values := make(map[string]string)
 				for _, field := range frame.Fields {
@@ -257,7 +298,7 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 					return nil, errors.New("invalid classic CONNECT pseudoheaders")
 				}
 				err = p.headers(stream, []hpack.HeaderField{{Name: ":status", Value: "200"}}, false, false)
-			} else if early && stream == 1 {
+			} else if early && stream == earlyStream {
 				// Wait for upload DATA so the response races a blocked producer.
 			} else if scenario == "reset-discard" {
 				if stream == 1 {
@@ -336,7 +377,34 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 				sent[stream] = true
 			}
 		case *http2.DataFrame:
+			if wrapperWarmup && frame.StreamID != earlyStream {
+				if _, exists := requests[frame.StreamID]; !exists || frame.Length != 0 ||
+					(frame.StreamID != 1 && frame.StreamID != 3 && frame.StreamID != 7) {
+					return nil, errors.New("DATA used a bodyless wrapper stream")
+				}
+				requestEnded[frame.StreamID] = requestEnded[frame.StreamID] || frame.StreamEnded()
+				if frame.StreamID < earlyStream && warmupBarrier && requestEnded[frame.StreamID] && !sent[frame.StreamID] {
+					if err := p.headers(frame.StreamID, fields("200", 0), true, false); err != nil {
+						return nil, err
+					}
+					sent[frame.StreamID] = true
+				}
+				continue
+			}
+			if wrapperWarmup && !warmupBarrier {
+				return nil, errors.New("DATA preceded wrapper warmup")
+			}
 			received[frame.StreamID] += len(frame.Data())
+			receivedFlow[frame.StreamID] += int(frame.Length)
+			if wrapperWarmup && receivedFlow[earlyStream] > 1024 {
+				return nil, errors.New("wrapper upload exceeded post-barrier stream credit")
+			}
+			if wrapperWarmup {
+				if !bytes.Equal(frame.Data(), bytes.Repeat([]byte{byte(earlyStream % 251)}, len(frame.Data()))) {
+					return nil, errors.New("wrapper upload payload mismatch")
+				}
+				_, _ = wrapperUploadDigest.Write(frame.Data())
+			}
 			requestEnded[frame.StreamID] = requestEnded[frame.StreamID] || frame.StreamEnded()
 			if startupDiagnostic && received[frame.StreamID] > 65535 {
 				return nil, errors.New("startup diagnostic exceeded pre-SETTINGS credit")
@@ -345,32 +413,50 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 				err = p.body(frame.StreamID, frame.Data(), frame.StreamEnded())
 				sent[frame.StreamID] = frame.StreamEnded()
 			} else if early && !sent[frame.StreamID] {
+				if wrapperWarmup && receivedFlow[earlyStream] < 1024 {
+					continue
+				}
 				limit := 1024
 				if startupDiagnostic {
 					limit = 65535
 				}
-				if frame.StreamID != 1 || received[1] > limit {
-					return nil, fmt.Errorf("upload exceeded withheld credit: received=%d settings_acks=%d", received[1], p.acks)
+				if frame.StreamID != earlyStream || received[earlyStream] > limit {
+					return nil, fmt.Errorf("upload exceeded withheld credit: received=%d settings_acks=%d", received[earlyStream], p.acks)
 				}
 				err = p.headers(frame.StreamID, fields("413", 0), true, false)
+				uploadAtResponse = receivedFlow[frame.StreamID]
 				sent[frame.StreamID] = true
-				if err == nil && (scenario == "early-response" || startupDiagnostic) {
+				if err == nil && (scenario == "early-response" || startupDiagnostic || wrapperWarmup) {
 					err = p.framer.WritePing(false, [8]byte{'e', 'a', 'r', 'l', 'y', 'e', 'n', 'd'})
 				}
 			}
 		case *http2.GoAwayFrame:
 			goaway = uint32(frame.ErrCode)
 		case *http2.PingFrame:
+			if wrapperWarmup && frame.IsAck() && frame.Data == [8]byte{'w', 'a', 'r', 'm', 'u', 'p', '0', '1'} {
+				if p.acks < 1 || warmupBarrier {
+					return nil, errors.New("invalid wrapper SETTINGS/PING barrier")
+				}
+				warmupBarrier = true
+				for _, stream := range []uint32{1, 3} {
+					if _, exists := requests[stream]; exists && requestEnded[stream] {
+						if err := p.headers(stream, fields("200", 0), true, false); err != nil {
+							return nil, err
+						}
+						sent[stream] = true
+					}
+				}
+			}
 			if scenario == "content-length" && frame.IsAck() && frame.Data == [8]byte{2} {
 				err = p.body(1, nil, true)
 			}
-			if (scenario == "early-response" || startupDiagnostic) && frame.IsAck() &&
+			if (scenario == "early-response" || startupDiagnostic || wrapperWarmup) && frame.IsAck() &&
 				frame.Data == [8]byte{'e', 'a', 'r', 'l', 'y', 'e', 'n', 'd'} &&
-				sent[1] && !earlyResponseBarrier {
+				sent[earlyStream] && !earlyResponseBarrier {
 				earlyResponseBarrier = true
-				err = p.framer.WriteRSTStream(1, http2.ErrCodeNo)
+				err = p.framer.WriteRSTStream(earlyStream, http2.ErrCodeNo)
 				if err == nil {
-					serverResets[1] = uint32(http2.ErrCodeNo)
+					serverResets[earlyStream] = uint32(http2.ErrCodeNo)
 				}
 			}
 		case *http2.RSTStreamFrame:
@@ -401,15 +487,29 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 			sent[3] = true
 		}
 	}
+	var wrapperCredit map[string]any
+	if wrapperWarmup {
+		wrapperCredit = map[string]any{
+			"stream_initial": 1024, "connection_initial": 65535,
+			"stream_refunds": 0, "connection_refunds": 0,
+			"flow": receivedFlow[earlyStream], "stream_final": 1024 - receivedFlow[earlyStream],
+			"connection_final": 65535 - receivedFlow[earlyStream],
+			"sha256":           hex.EncodeToString(wrapperUploadDigest.Sum(nil)),
+		}
+	}
 	return map[string]any{
 		"requests": len(requests), "received": received, "sent": sent,
-		"resets": p.resets, "goaway": goaway, "peer_eof": sawEOF,
+		"received_flow": receivedFlow,
+		"resets":        p.resets, "goaway": goaway, "peer_eof": sawEOF,
 		"window_updates": p.updates, "bytes_in": p.conn.read, "bytes_out": p.conn.written,
 		"push_disabled": p.pushDisabled, "goaway_count": p.goaways,
 		"stream_updates_at_reset": resetUpdateBaseline,
 		"server_resets":           serverResets, "early_response_barrier": earlyResponseBarrier,
 		"request_ended":                requestEnded,
 		"reset_discard_refund_barrier": resetDiscardRefundBarrier,
+		"warmup_barrier":               warmupBarrier,
+		"wrapper_upload_credit":        wrapperCredit,
+		"upload_at_response":           uploadAtResponse,
 	}, nil
 }
 
@@ -425,6 +525,7 @@ type spec struct {
 	Port         int       `json:"port"`
 	Requests     []request `json:"requests"`
 	RequestCount int       `json:"request_count"`
+	Concurrency  int       `json:"concurrency"`
 	WireScenario string    `json:"wire_scenario"`
 	Actions      []struct {
 		Action     string `json:"action"`
@@ -488,14 +589,7 @@ func rawClient(input spec) (map[string]any, error) {
 	requestEnded := make(map[uint32]bool)
 	for index, req := range input.Requests {
 		stream := uint32(index*2 + 1)
-		headers := []hpack.HeaderField{{Name: ":method", Value: req.Method}, {Name: ":authority", Value: "localhost"}}
-		if req.Method != "CONNECT" {
-			headers = append(headers, hpack.HeaderField{Name: ":scheme", Value: "http"}, hpack.HeaderField{Name: ":path", Value: req.Path})
-		}
 		requestEnded[stream] = req.BodyBytes == 0 && len(req.Trailers) == 0
-		if err := p.headers(stream, headers, requestEnded[stream], input.WireScenario == "request-continuation"); err != nil {
-			return nil, err
-		}
 		results[stream] = &result{
 			StreamID: stream, Trailers: [][]string{}, Informational: []int{},
 			digest: sha256.New(), length: -1,
@@ -503,6 +597,38 @@ func rawClient(input spec) (map[string]any, error) {
 	}
 	done := 0
 	receiveDone := make(map[uint32]bool)
+	opened := make(map[uint32]bool)
+	nextRequest := 0
+	concurrency := input.Concurrency
+	if concurrency <= 0 {
+		concurrency = len(input.Requests)
+	}
+	openRequests := func() error {
+		active := 0
+		for stream := range opened {
+			if !receiveDone[stream] || !requestEnded[stream] && results[stream].Error == nil {
+				active++
+			}
+		}
+		for nextRequest < len(input.Requests) && active < concurrency {
+			req := input.Requests[nextRequest]
+			stream := uint32(nextRequest*2 + 1)
+			headers := []hpack.HeaderField{{Name: ":method", Value: req.Method}, {Name: ":authority", Value: "localhost"}}
+			if req.Method != "CONNECT" {
+				headers = append(headers, hpack.HeaderField{Name: ":scheme", Value: "http"}, hpack.HeaderField{Name: ":path", Value: req.Path})
+			}
+			if err := p.headers(stream, headers, requestEnded[stream], input.WireScenario == "request-continuation"); err != nil {
+				return err
+			}
+			opened[stream] = true
+			nextRequest++
+			active++
+		}
+		return nil
+	}
+	if err := openRequests(); err != nil {
+		return nil, err
+	}
 	markDone := func(stream uint32) {
 		if !receiveDone[stream] {
 			receiveDone[stream] = true
@@ -540,7 +666,15 @@ func rawClient(input spec) (map[string]any, error) {
 			if r == nil {
 				return nil, errors.New("unexpected response stream")
 			}
+			trailers := r.Status != nil
 			for _, field := range frame.Fields {
+				if trailers {
+					if strings.HasPrefix(field.Name, ":") {
+						return nil, errors.New("pseudoheader in response trailers")
+					}
+					r.Trailers = append(r.Trailers, []string{field.Name, field.Value})
+					continue
+				}
 				if field.Name == ":status" {
 					var status int
 					if _, err := fmt.Sscan(field.Value, &status); err != nil {
@@ -663,12 +797,15 @@ func rawClient(input spec) (map[string]any, error) {
 				uploaded[action.StreamID] = true
 			}
 		}
+		if err := openRequests(); err != nil {
+			return nil, err
+		}
 		for {
 			progress := false
 			for index, req := range input.Requests {
 				stream := uint32(index*2 + 1)
 				r := results[stream]
-				if req.BodyBytes > 0 && !uploaded[stream] && r.Error == nil && (req.Method != "CONNECT" || r.Status != nil) {
+				if opened[stream] && req.BodyBytes > 0 && !uploaded[stream] && r.Error == nil && (req.Method != "CONNECT" || r.Status != nil) {
 					if req.Method == "CONNECT" && uploadProgress[stream] > 0 && r.Bytes == 0 {
 						continue
 					}
@@ -791,6 +928,7 @@ func run() error {
 		"early-response-app-cancel":         true,
 		"admission-recovery":                true,
 		"early-response-startup-diagnostic": true,
+		"early-response-wrapper":            true,
 	}
 	if !allowed[*scenario] || *report == "" {
 		return errors.New("server requires a known scenario and report file")

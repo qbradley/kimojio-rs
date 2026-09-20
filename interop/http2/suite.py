@@ -10,6 +10,7 @@ import uuid
 
 from cases import flow_cases, qualify, semantic_cases, validate_results
 from reference import client, serve
+from profiles import PROFILES, WRAPPER_TRAILERS, prepend_warmups, without_warmups
 from socket_peer import PeerProcess, ScriptedPeer, prerequisites, require, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,30 +59,40 @@ def command(spec, request_file, result_file=None, *, config=None):
     ]
 
 
-def client_case(spec, case, directory, *, upload=False):
+def client_case(spec, case, directory, *, upload=False, profile="canonical"):
     """Independent server against a command-driven client."""
     directory.mkdir(parents=True)
     observations = []
+    warmups = case.concurrency if profile == "wrapper" and upload and case.config.get("stream_window", 65535) < 65535 else 0
+    trailers = WRAPPER_TRAILERS if profile == "wrapper" and case.route == "trailers" else None
 
     def handler(wire, _index):
-        observations.append(serve(wire.sock, config=case.config if upload else {}, case=case))
+        observations.append(serve(
+            wire.sock, config=case.config if upload else {}, case=case, warmup_count=warmups,
+            trailer_fields=trailers,
+        ))
 
     with ScriptedPeer(handler, timeout=65) as peer:
         request_file, result_file = directory / "request.json", directory / "result.json"
-        write_json(request_file, case.spec(peer.address, upload=upload))
+        request = case.spec(peer.address, upload=upload)
+        write_json(request_file, prepend_warmups(request, warmups) if warmups else request)
         completed = run_command(
             command(spec, request_file, result_file), cwd=ROOT, timeout=65,
         )
         require(completed.returncode == 0, f"client command failed: {completed.stderr!r}")
         result = read_json(result_file)
-        validate_results(case, result, echo=upload)
+        target = without_warmups(result, warmups, profile) if warmups else result
+        validate_results(case, target, echo=upload, profile=profile, stream_offset=warmups, expected_trailers=trailers)
     require(len(observations) == 1, "independent server did not finish")
     observation = observations[0]
-    require(observation["requests"] == case.count, "wrong request count on wire")
+    require(observation["requests"] == case.count + warmups, "wrong request count on wire")
     require(observation["peer_eof"], "client did not close the actual socket")
-    qualify(case, observation["credit"])
+    def target_credit(credit):
+        return {**credit, "streams": [s for s in credit["streams"] if s["stream_id"] > 2 * warmups]}
+
+    qualify(case, target_credit(observation["credit"]))
     if upload:
-        qualify(case, observation["receive_credit"])
+        qualify(case, target_credit(observation["receive_credit"]))
     if case.padding is not None:
         for stream in observation["credit"]["streams"]:
             require(
@@ -102,10 +113,15 @@ def client_case(spec, case, directory, *, upload=False):
         "name": case.name, "passed": True, "credit": observation["credit"],
         "outcome": "bounded-stream-rejection" if limited else "complete",
         **({"upload_credit": observation["receive_credit"]} if upload else {}),
+        "profile": profile,
+        "startup": "bodyless-warmup" if warmups else "unchanged",
+        "warmup_requests": warmups,
+        "canonical_cold_start": not bool(warmups),
+        "trailer_comparison": "per-name-occurrences" if profile == "wrapper" else "exact-list",
     }
 
 
-def server_case(spec, case, directory, *, upload):
+def server_case(spec, case, directory, *, upload, profile="canonical"):
     """Independent client against a command-driven server."""
     directory.mkdir(parents=True)
     request_file = directory / "request.json"
@@ -114,7 +130,7 @@ def server_case(spec, case, directory, *, upload):
     })
     with PeerProcess(command(spec, request_file, config=case.config), cwd=ROOT) as process:
         result = client(case.spec(process.address, upload=upload))
-        validate_results(case, result, echo=upload)
+        validate_results(case, result, echo=upload, profile=profile)
         require(process.output_bytes <= 128 * 1024, "server output exceeds limit")
         if upload:
             qualify(case, result["credit"])
@@ -125,11 +141,14 @@ def server_case(spec, case, directory, *, upload):
         "name": f"{'upload' if upload else 'download'}-{case.name}",
         "passed": True,
         "credit": result["credit"] if upload else result["receive_credit"],
+        "profile": profile, "startup": "independent-client-handshake",
+        "trailer_comparison": "per-name-occurrences" if profile == "wrapper" else "exact-list",
     }
 
 
-def run(*, client_adapter, server_adapter, directory, names=None, evidence="adapter"):
+def run(*, client_adapter, server_adapter, directory, names=None, evidence="adapter", profile="canonical"):
     prerequisites()
+    require(profile in PROFILES, "unknown qualification profile")
     directory.mkdir(parents=True)
     cases = flow_cases() + semantic_cases()
     if names:
@@ -137,24 +156,24 @@ def run(*, client_adapter, server_adapter, directory, names=None, evidence="adap
         require(not unknown, f"unknown cases: {sorted(unknown)}")
         cases = [case for case in cases if case.name in names]
     require(cases, "no cases selected")
-    report = {"schema": 1, "evidence": evidence, "cases": [], "failures": []}
+    report = {"schema": 1, "evidence": evidence, "profile": profile, "cases": [], "failures": []}
     for case in cases:
         tasks = []
         if client_adapter:
             tasks.append(("client", lambda: client_case(
-                client_adapter, case, directory / "client" / case.name,
+                client_adapter, case, directory / "client" / case.name, profile=profile,
             )))
             if case.qualification:
                 tasks.append(("client-upload", lambda: client_case(
-                    client_adapter, case, directory / "client-upload" / case.name, upload=True,
+                    client_adapter, case, directory / "client-upload" / case.name, upload=True, profile=profile,
                 )))
         if server_adapter and case.padding is None and case.name != "empty-data-sibling":
             tasks.append(("server-download", lambda: server_case(
-                server_adapter, case, directory / "server-download" / case.name, upload=False,
+                server_adapter, case, directory / "server-download" / case.name, upload=False, profile=profile,
             )))
             if case.qualification:
                 tasks.append(("server-upload", lambda: server_case(
-                    server_adapter, case, directory / "server-upload" / case.name, upload=True,
+                    server_adapter, case, directory / "server-upload" / case.name, upload=True, profile=profile,
                 )))
         for role, execute in tasks:
             try:
@@ -182,6 +201,7 @@ def main():
     parser.add_argument("--client-adapter", type=Path)
     parser.add_argument("--server-adapter", type=Path)
     parser.add_argument("--selftest", action="store_true")
+    parser.add_argument("--profile", choices=PROFILES, default="canonical")
     parser.add_argument("--case", action="append")
     parser.add_argument("--output", type=Path, default=ROOT / "target" / "http2-interop" / uuid.uuid4().hex)
     args = parser.parse_args()
@@ -199,6 +219,7 @@ def main():
     run(
         client_adapter=client_adapter, server_adapter=server_adapter, directory=directory,
         names=args.case, evidence="python-h2-peer-selftest-NOT-core" if args.selftest else "adapter",
+        profile=args.profile,
     )
 
 

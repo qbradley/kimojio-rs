@@ -10,18 +10,11 @@ from h2.settings import SettingCodes
 
 from cases import Case
 from peer import Peer
+from profiles import trailer_values
 from protocol_suite import request as protocol_request
 from reference import serve
 from socket_peer import PREFACE, PeerProcess, ScriptedPeer, prerequisites, require, run_command
 from suite import ROOT, command, read_json, write_json
-
-
-def trailer_values(fields):
-    """Compare HTTP field semantics without erasing same-name occurrence order."""
-    values = defaultdict(list)
-    for name, value in fields:
-        values[name.lower()].append(value)
-    return dict(values)
 
 
 class RecordingSocket:

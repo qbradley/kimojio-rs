@@ -246,6 +246,33 @@ The rejected stream outcome must be `reset`, while the sibling outcome must be `
 
 ## Early response with an explicit peer abort signal
 
+### Wrapper profile without a schema extension
+
+`--profile wrapper` is a harness option, not a request-file field.
+The fixture continues to use the existing ordered request array, request count, concurrency, and result schema.
+Reduced-window upload cases prepend `concurrency` bodyless GET requests to `/bytes/0`.
+The harness increases `request_count` but leaves `concurrency` unchanged.
+The fixture reports every warmup and target stream with its actual admitted stream ID and terminal outcome.
+
+The early-response request file contains four requests with concurrency two:
+
+1. GET `/bytes/0`, no body.
+2. GET `/bytes/0`, no body.
+3. POST `/protocol`, 131,087 deterministic body bytes.
+4. GET `/sibling`, no body.
+
+The independent peer withholds warmup responses until it observes the SETTINGS/PING barrier.
+No new fixture action or raw SETTINGS parsing is required.
+The peer then requires exactly 1,024 upload bytes on stream 5 before its complete 413 response and synchronized RST0.
+The fixture must preserve receive END_STREAM, report retirement `reset` with code 0, complete sibling 7, and close gracefully.
+Missing retirement remains a failure even when the send error contains Reset(0).
+
+The wrapper profile compares trailers by case-insensitive name and ordered per-name occurrences.
+It does not require global wire order across different names.
+The canonical profile retains its exact-list contract.
+
+### Canonical cold-start case
+
 Response END_STREAM alone never instructs the protocol engine to cancel the upload.
 This is true for status 200 and status 413.
 The withheld-credit case uses no fixture application action.
