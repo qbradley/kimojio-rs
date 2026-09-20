@@ -1,0 +1,47 @@
+   Compiling kimojio-fsm-http2 v0.17.0 (/workspace/kimojio-rs/target/http2-program/worktrees/http2-allocation/kimojio-fsm-http2)
+    Finished `release` profile [optimized + debuginfo] target(s) in 2.30s
+     Running tests/ownership_model.rs (/workspace/kimojio-rs/target/http2-program/build-http2-allocation/release/deps/ownership_model-974d7f7c1aff990c)
+
+running 5 tests
+test blocked_output_coalesces_released_credit_without_exhausting_control_items ... ok
+test completed_response_survives_no_error_reset_in_the_same_read_batch ... ok
+test all_connection_original_and_cancellation_ack_orders ... ok
+test all_small_stream_settlement_orders_and_selective_callbacks ... ok
+test repeated_eight_stream_megabyte_duplex_preserves_bounded_credit_progress ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests examples/allocation_probe.rs (/workspace/kimojio-rs/target/http2-program/build-http2-allocation/release/examples/allocation_probe-acb8cd8ec5f22740)
+
+running 11 tests
+test allocation_counter::tests::exact_alloc_zeroed_realloc_grow_shrink_and_free ... ok
+test allocation_counter::tests::pre_window_free_does_not_underflow_or_hide_allocations ... ok
+test allocation_counter::tests::surviving_allocations_and_reallocations_cross_windows ... ok
+test allocation_counter::tests::zero_events_do_not_mean_zero_live_storage ... ok
+test composition_bench_support::diagnostics::tests::fragmented_preface_frames_and_goaway ... ok
+test composition_bench_support::overlap::tests::counts_actual_delivery_before_transport_completion ... ok
+test composition_bench_support::diagnostics::tests::permission_and_lease_counters_distinguish_admission_from_wire_progress ... ok
+test composition_bench_support::overlap::tests::zero_payload_or_previous_cohort_cannot_mask_late_delivery - should panic ... ok
+test composition_bench_support::overlap::tests::rejects_late_delivery_without_any_sent_or_ended_notification - should panic ... ok
+test composition_bench_support::diagnostics::tests::first_failure_snapshot_and_history_are_bounded ... ok
+test tests::strict_routes_and_measurement_boundaries ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/composition_bench.rs (/workspace/kimojio-rs/target/http2-program/build-http2-allocation/release/examples/composition_bench-4c6023a0f7e5c5a7)
+
+running 11 tests
+test composition_bench_support::diagnostics::tests::fragmented_preface_frames_and_goaway ... ok
+test composition_bench_support::diagnostics::tests::first_failure_snapshot_and_history_are_bounded ... ok
+test composition_bench_support::overlap::tests::counts_actual_delivery_before_transport_completion ... ok
+test composition_bench_support::diagnostics::tests::permission_and_lease_counters_distinguish_admission_from_wire_progress ... ok
+test composition_bench_support::overlap::tests::zero_payload_or_previous_cohort_cannot_mask_late_delivery - should panic ... ok
+test composition_bench_support::overlap::tests::rejects_late_delivery_without_any_sent_or_ended_notification - should panic ... ok
+test tests::fragmented_duplex_regression ... ok
+test tests::duplex_payload_overlap_regression ... ok
+test tests::large_duplex_regression ... ok
+test tests::concurrency_and_construction ... ok
+test tests::routes_and_fragmentation ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+

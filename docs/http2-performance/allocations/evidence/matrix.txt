@@ -1,0 +1,1 @@
+{"schema": 1, "binary": "/workspace/kimojio-rs/target/http2-program/build-http2-allocation/frozen-9bc026a5/allocation_probe", "binary_sha256": "a3698d6817fc2ee19a4206aff37029ea06cdbe5dc0cfdd0d4ed603cfdb2405ca", "cells": 108, "successful_runs": 324, "failed_runs": 0, "repetitions": 3, "all_repetitions_identical": true}

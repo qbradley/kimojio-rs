@@ -96,6 +96,8 @@ The executor still copies transport bytes into owned read pages and compares eve
 Those costs are not exclusively client or server protocol costs.
 The result does not measure socket throughput or arbitrary application payload creation.
 This experiment does not measure allocation counts or a retained-memory plateau.
+The later [isolated allocation probe](../allocations/README.md) supplies count and requested-storage evidence on a separate frozen integration.
+Its warmed windows still show storage growth, so it does not establish a plateau.
 
 CPU affinity does not isolate shared memory bandwidth or package frequency changes.
 The paired experiment therefore uses alternating binary order and reports trial ranges.
