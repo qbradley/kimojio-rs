@@ -2,6 +2,8 @@
 
 This document defines the wrapper boundary, not a completed implementation.
 The core correctness and performance gates in [the composition design](http2-composition.md) precede implementation.
+Those core gates are complete for the snapshots in the [qualification ledger](http2-qualification.md).
+The shared runtime foundation and native client are the first implementation phase.
 
 ## Connection-level API
 

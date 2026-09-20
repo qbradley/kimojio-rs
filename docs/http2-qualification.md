@@ -4,9 +4,10 @@
 
 This ledger records bounded evidence for the scope in [the composition design](http2-composition.md).
 It does not claim an exhaustive RFC proof.
-The Kimojio HTTP/2 wrappers are not implemented.
-The metadata-admission repair passed independent review and socket qualification.
-Measurements of that changed source remain in progress.
+The core qualification gates are complete for the recorded scope and snapshots.
+The metadata-admission repair passed independent review, socket qualification, and source-specific measurements.
+Kimojio HTTP/2 wrapper implementation is in progress.
+No wrapper qualification or performance result is claimed yet.
 
 The current socket qualification covers the direct HTTP/2 engine.
 Separate models cover the HTTP/1 plus HTTP/2 composite.
@@ -128,6 +129,18 @@ The [source-specific report](http2-performance/final/) records distributions, me
 Its evidence remains unchanged.
 The metadata-admission repair is not part of this measured source.
 
+The admission-aware run measured `b3c6484b` against immutable `5505efc4`.
+All 945 matrix runs, 486 paired runs, 324 allocation runs, and 12 retention runs passed.
+The normalized storage counts match the earlier bounded baseline.
+Four new profiles retain client, server, and shared attribution.
+
+The admission-aware source has a measured common-path regression.
+Paired median changes range from 0.60 to 3.84 percent slower, with a 2.04 percent median across 27 cells.
+Nineteen bootstrap intervals are positive, and eight include zero.
+These measurements do not identify an instruction-level cause.
+Performance while metadata admission is blocked remains unmeasured.
+The [admission report](http2-performance/admission/) preserves hashes, distributions, profiles, and the complete measurement scope.
+
 ## Metadata admission
 
 Research found an interface defect in the earlier socket snapshot.
@@ -165,5 +178,6 @@ Repeated messages and mutable build paths caused redundant runs and confusion ab
 Later qualification used immutable paths, exact hashes, explicit source revisions, and one designated candidate.
 Old failures remain negative controls rather than evidence against repaired code.
 
-The next implementation gate requires measurements of the admission-aware source.
-Runtime wrappers then need their own ownership, cancellation, interoperability, and performance evidence.
+The runtime wrapper work now starts from the measured admission-aware baseline.
+The small measured regression remains explicit rather than hidden by a claim of unchanged cost.
+Runtime wrappers need their own ownership, cancellation, interoperability, and performance evidence.
