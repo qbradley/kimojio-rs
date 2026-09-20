@@ -38,6 +38,42 @@ fn response_body() -> OutgoingBody {
 }
 
 #[kimojio::test]
+async fn native_slots_do_not_starve_a_response_behind_a_ready_empty_source() {
+    let (fd, peer) = kimojio::pipe::bipipe();
+    let (mut client, driver) = connect_native(fd, config(30));
+    let polls = Rc::new(Cell::new(0));
+    let source_polls = polls.clone();
+    let source = futures::stream::repeat_with(move || {
+        source_polls.set(source_polls.get() + 1);
+        Ok(OutgoingFrame::Data(Vec::new()))
+    });
+    let app = async {
+        let response = client
+            .send(request(OutgoingBody::from_stream(None, source)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 413);
+        drop(response);
+        client.shutdown().await.unwrap();
+    };
+    let server = serve_connection_native(peer, config(31), |_| async {
+        operations::yield_io().await;
+        Ok(Response::builder()
+            .status(413)
+            .body(OutgoingBody::empty())
+            .unwrap())
+    });
+    operations::timeout_at(kimojio::clock_now() + Duration::from_secs(3), async {
+        let ((), driver, server) = futures::join!(app, driver.run(), server);
+        driver.unwrap();
+        server.unwrap();
+    })
+    .await
+    .unwrap();
+    assert!(polls.get() > 0);
+}
+
+#[kimojio::test]
 async fn native_and_generic_backends_interoperate_and_reuse_one_connection() {
     for native_client in [false, true] {
         for native_server in [false, true] {
@@ -175,4 +211,37 @@ async fn native_abort_settles_pending_read_before_peer_eof() {
     shutdown.abort();
     assert!(server.await.is_err());
     assert_eq!(operations::read(&peer, &mut [0; 1]).await, Ok(0));
+}
+
+#[cfg(feature = "virtual-clock")]
+#[kimojio::test]
+async fn generic_split_time_does_not_consume_protocol_deadlines() {
+    use kimojio::SplittableStream;
+
+    struct DelayedSplit(OwnedFdStream);
+    impl SplittableStream for DelayedSplit {
+        type ReadStream = kimojio::OwnedFdStreamRead;
+        type WriteStream = kimojio::OwnedFdStreamWrite;
+
+        async fn split(self) -> Result<(Self::ReadStream, Self::WriteStream), kimojio::Errno> {
+            operations::virtual_clock_advance(Duration::from_secs(1));
+            self.0.split().await
+        }
+    }
+    operations::virtual_clock_enable(true);
+    let (fd, peer) = kimojio::pipe::bipipe();
+    let mut client_config = config(40);
+    client_config.protocol.head_timeout_ns = Some(10_000_000);
+    let (mut client, driver) = connect(DelayedSplit(OwnedFdStream::new(fd)), client_config);
+    let app = async {
+        let mut response = client.send(request(OutgoingBody::empty())).await.unwrap();
+        assert_eq!(response.body_mut().collect(16).await.unwrap(), b"ready");
+        client.shutdown().await.unwrap();
+    };
+    let server = serve_connection(OwnedFdStream::new(peer), config(41), |_| async {
+        Ok(Response::new(OutgoingBody::full(b"ready")))
+    });
+    let ((), driver, server) = futures::join!(app, driver.run(), server);
+    driver.unwrap();
+    server.unwrap();
 }

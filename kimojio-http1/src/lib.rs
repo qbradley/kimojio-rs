@@ -6,6 +6,7 @@
 mod body;
 mod driver;
 mod io;
+mod io_driver;
 mod metadata;
 mod transport;
 

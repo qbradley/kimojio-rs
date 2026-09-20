@@ -107,7 +107,7 @@ impl WriteTransport for NativeWriter {
     }
 }
 
-fn native_error(error: Errno) -> IoError {
+pub(crate) fn native_error(error: Errno) -> IoError {
     IoError {
         kind: match error {
             Errno::CANCELED => IoErrorKind::Cancelled,
