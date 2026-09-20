@@ -123,6 +123,162 @@ fn eager_cancellation_counts_only_payload_and_preserves_unknown_acceptance() {
 }
 
 #[test]
+fn eager_cancellation_retains_late_positive_progress_without_reissuing_output() {
+    let head_len = b"HTTP/1.1 200 OK\r\ncontent-length: 3\r\n\r\n".len();
+    for prior in [0, 1, head_len - 1, head_len, head_len + 1] {
+        for late in 1..=head_len + 3 - prior {
+            let (mut server, exchange, id, mut op) = eager_server();
+            let pointer = op.slices()[1].as_ptr().wrapping_sub(1);
+            if prior != 0 {
+                server.complete_write(op.complete(Ok(prior))).unwrap();
+                op = match next_server(&mut server) {
+                    Some(Event::Write(op)) => op,
+                    _ => panic!(),
+                };
+            }
+            server.cancel_exchange(exchange).unwrap();
+            assert!(
+                matches!(next_server(&mut server), Some(Event::Cancel(cancel)) if cancel.target == op.id())
+            );
+            server.complete_write(op.complete(Ok(late))).unwrap();
+            let Some(Event::Sent(receipt)) = next_server(&mut server) else {
+                panic!()
+            };
+            assert_eq!(receipt.id, id);
+            assert_eq!(receipt.buffer.as_ptr(), pointer);
+            assert_eq!(receipt.accepted, (prior + late).saturating_sub(head_len));
+            assert_eq!(receipt.acceptance, Acceptance::Exact);
+            assert_eq!(receipt.result, Err(Failure::Cancelled));
+            assert!(
+                matches!(next_server(&mut server), Some(Event::Finished(result)) if !result.reusable)
+            );
+            let Some(Event::Close(op)) = next_server(&mut server) else {
+                panic!()
+            };
+            server.complete_close(op.complete(Ok(()))).unwrap();
+            assert!(matches!(
+                next_server(&mut server),
+                Some(Event::Closed(Err(Failure::Cancelled)))
+            ));
+            assert!(next_server(&mut server).is_none());
+        }
+    }
+}
+
+#[test]
+fn eager_cancellation_before_issuance_returns_one_zero_receipt_without_a_write() {
+    let mut server = server(config());
+    let exchange = feed_server(&mut server, b"GET / HTTP/1.1\r\nHost: a\r\n\r\n");
+    server
+        .respond(exchange, response(BodyLength::Known(3)))
+        .unwrap();
+    let body = command(exchange);
+    let pointer = body.buffer.as_ptr();
+    let id = server.send_body_eager(body).unwrap();
+    server.cancel_exchange(exchange).unwrap();
+    let Some(Event::Sent(receipt)) = next_server(&mut server) else {
+        panic!()
+    };
+    assert_eq!(receipt.id, id);
+    assert_eq!(receipt.buffer.as_ptr(), pointer);
+    assert_eq!(receipt.accepted, 0);
+    assert_eq!(receipt.acceptance, Acceptance::Exact);
+    assert_eq!(receipt.result, Err(Failure::Cancelled));
+    assert!(matches!(next_server(&mut server), Some(Event::Finished(result)) if !result.reusable));
+    let Some(Event::Close(op)) = next_server(&mut server) else {
+        panic!()
+    };
+    server.complete_close(op.complete(Ok(()))).unwrap();
+    assert!(matches!(
+        next_server(&mut server),
+        Some(Event::Closed(Err(Failure::Cancelled)))
+    ));
+    assert!(next_server(&mut server).is_none());
+}
+
+#[test]
+fn eager_duplex_output_does_not_release_a_separate_incoming_lease() {
+    for abandon in [false, true] {
+        let mut server = server(config());
+        let exchange = feed_server(
+            &mut server,
+            b"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 6\r\n\r\nabc",
+        );
+        server.grant_body_credit(exchange, 3).unwrap();
+        let Some(Event::Body(lease)) = next_server(&mut server) else {
+            panic!()
+        };
+        server
+            .respond_duplex(exchange, response(BodyLength::Known(3)))
+            .unwrap();
+        server.send_body_eager(command(exchange)).unwrap();
+        let Some(Event::Write(op)) = next_server(&mut server) else {
+            panic!()
+        };
+        assert_eq!(op.slices()[1], b"abc");
+        server.complete_write(finish_write(op)).unwrap();
+        assert!(
+            matches!(next_server(&mut server), Some(Event::Sent(receipt)) if receipt.accepted == 3)
+        );
+        assert!(
+            next_server(&mut server).is_none(),
+            "no retirement with a retained input lease"
+        );
+        if abandon {
+            server.cancel_exchange(exchange).unwrap();
+            assert!(
+                matches!(next_server(&mut server), Some(Event::Finished(result)) if !result.reusable && result.result == Err(Failure::Cancelled))
+            );
+            assert!(
+                next_server(&mut server).is_none(),
+                "close must wait for the input lease"
+            );
+            server.release_body(lease.release(3)).unwrap();
+            let Some(Event::Close(op)) = next_server(&mut server) else {
+                panic!()
+            };
+            server.complete_close(op.complete(Ok(()))).unwrap();
+            assert!(matches!(
+                next_server(&mut server),
+                Some(Event::Closed(Err(Failure::Cancelled)))
+            ));
+        } else {
+            server.release_body(lease.release(3)).unwrap();
+            server.grant_body_credit(exchange, 3).unwrap();
+            let Some(Event::Read(op)) = next_server(&mut server) else {
+                panic!()
+            };
+            server
+                .complete_read(fill(op, b"defGET /second HTTP/1.1\r\nHost: a\r\n\r\n"))
+                .unwrap();
+            let Some(Event::Body(lease)) = next_server(&mut server) else {
+                panic!()
+            };
+            server.release_body(lease.release(3)).unwrap();
+            assert!(
+                matches!(next_server(&mut server), Some(Event::Incoming(id)) if id == exchange)
+            );
+            assert!(
+                matches!(next_server(&mut server), Some(Event::Finished(result)) if result.reusable)
+            );
+            let Some(Event::Request(second, _)) = next_server(&mut server) else {
+                panic!()
+            };
+            assert_ne!(exchange, second);
+            server.respond(second, response(BodyLength::Empty)).unwrap();
+            let Some(Event::Write(op)) = next_server(&mut server) else {
+                panic!()
+            };
+            server.complete_write(finish_write(op)).unwrap();
+            assert!(matches!(next_server(&mut server), Some(Event::Incoming(id)) if id == second));
+            assert!(
+                matches!(next_server(&mut server), Some(Event::Finished(result)) if result.reusable)
+            );
+        }
+    }
+}
+
+#[test]
 fn eager_rejection_is_transactional_and_keeps_suppression_and_chunk_framing() {
     for (method, status, length) in [
         ("HEAD", 200, BodyLength::Known(3)),

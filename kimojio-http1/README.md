@@ -111,10 +111,18 @@ The application must continue to poll the server future until shutdown completes
 - `from_incoming(body)` forwards data leases and trailers with streaming framing.
 
 This experimental build retains `full` bytes directly instead of boxing a one-item stream.
-It asks the core to attach eligible fixed-length payloads to the queued head through `send_body_eager`.
+By default, it preserves separate metadata and payload writes through the normal demand path.
+`Config::coalesce_full_bodies` defaults to `false`.
+When this option is `true`, the wrapper asks the core to attach eligible full payloads through `send_body_eager`.
 The transport borrows separate head and payload slices from one owned write operation.
 Suppression, continue gates, and unavailable capacity return the payload to the normal demand path.
 Custom streams and forwarded leases retain their existing demand-driven path.
+
+Coalescing changes completion and deadline boundaries.
+The client upload deadline starts at eager admission and includes metadata.
+A generic write-all transport also hides separate metadata progress from the server's body-deadline refresh.
+Thus, an opted-in full body can time out where separate writes succeed.
+The default preserves both client and server boundaries without restoring the boxed full-body source.
 The [interface PoC report](../docs/http1-wrapper-lab/poc-interface.md) describes the experiment and validation limits.
 
 The direct source needs no producer task or channel.

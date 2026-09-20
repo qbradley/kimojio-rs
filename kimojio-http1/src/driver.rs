@@ -28,6 +28,12 @@ pub struct Config {
     pub connection_id: core::ConnectionId,
     pub protocol: core::Config,
     pub turn_budget: usize,
+    /// Combines eligible full bodies with metadata in one owned write.
+    ///
+    /// Disabled by default to retain separate metadata/payload completions.
+    /// When enabled, the client upload deadline includes metadata, and generic
+    /// write-all transports report coarser server progress for deadline refresh.
+    pub coalesce_full_bodies: bool,
 }
 
 impl Config {
@@ -37,6 +43,7 @@ impl Config {
             connection_id,
             protocol: core::Config::default(),
             turn_budget: 64,
+            coalesce_full_bodies: false,
         }
     }
 }
@@ -300,7 +307,11 @@ fn admit_eager(
     exchange: core::ExchangeId,
     body: &mut OutgoingBody,
     max_buffer: usize,
+    coalesce_full_bodies: bool,
 ) -> bool {
+    if !coalesce_full_bodies {
+        return false;
+    }
     let OutgoingSource::Ready(slot) = &mut body.source else {
         return false;
     };
@@ -563,6 +574,7 @@ struct State {
     max_buffer: usize,
     receive_capacity: usize,
     max_headers: usize,
+    coalesce_full_bodies: bool,
     rotation: usize,
 }
 
@@ -703,7 +715,13 @@ impl State {
         match result {
             Ok(id) => {
                 let mut active = Active::new(id, command.cancel, self.demand_send.clone());
-                if !admit_eager(&mut self.machine, id, &mut body, self.max_buffer) {
+                if !admit_eager(
+                    &mut self.machine,
+                    id,
+                    &mut body,
+                    self.max_buffer,
+                    self.coalesce_full_bodies,
+                ) {
                     active.source = Some(body);
                 }
                 active.response = Some(command.response);
@@ -737,7 +755,13 @@ impl State {
         } else {
             server.respond(active.id, response)?;
         }
-        if !admit_eager(&mut self.machine, active.id, &mut body, self.max_buffer) {
+        if !admit_eager(
+            &mut self.machine,
+            active.id,
+            &mut body,
+            self.max_buffer,
+            self.coalesce_full_bodies,
+        ) {
             active.source = Some(body);
         }
         Ok(())
@@ -1132,6 +1156,7 @@ where
         max_buffer,
         receive_capacity,
         max_headers,
+        coalesce_full_bodies: config.coalesce_full_bodies,
         rotation: 0,
     };
     let (result, (), ()) = futures::join!(
@@ -1297,6 +1322,10 @@ fn poll_handler(active: &mut Option<Active>, cx: &mut Context<'_>) -> Poll<Optio
 mod forwarding_tests;
 
 #[cfg(test)]
+#[path = "coalescing_tests.rs"]
+mod coalescing_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1335,7 +1364,7 @@ mod tests {
         let bytes = b"abc".to_vec();
         let pointer = bytes.as_ptr();
         let mut body = OutgoingBody::full(bytes);
-        assert!(admit_eager(&mut machine, id, &mut body, 1024));
+        assert!(admit_eager(&mut machine, id, &mut body, 1024, true));
         assert!(matches!(body.source, OutgoingSource::Ready(None)));
         let Machine::Client(mut client) = machine else {
             unreachable!()
@@ -1376,7 +1405,7 @@ mod tests {
             bytes.extend_from_slice(b"abc");
             let pointer = bytes.as_ptr();
             let mut body = OutgoingBody::full(bytes);
-            assert!(!admit_eager(&mut machine, id, &mut body, 1024));
+            assert!(!admit_eager(&mut machine, id, &mut body, 1024, true));
             let Some(Ok(OutgoingFrame::Data(bytes))) =
                 futures::executor::block_on(body.source.next())
             else {
@@ -1389,7 +1418,7 @@ mod tests {
             Some(3),
             futures::stream::poll_fn(|_| panic!("custom source must remain demand-driven")),
         );
-        assert!(!admit_eager(&mut machine, id, &mut body, 1024));
+        assert!(!admit_eager(&mut machine, id, &mut body, 1024, true));
     }
 
     #[test]

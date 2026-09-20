@@ -1,5 +1,47 @@
 # PoC 3: eager full-body admission
 
+## Compatibility hardening status
+
+The original measured candidate is `451f61b503fd60348e5cffedf33a26351533f46a`.
+Its worktree and executable remain unchanged.
+This hardening delta lives in the separate `interface-contract` worktree.
+It is not a production selection.
+
+`Config::coalesce_full_bodies` now defaults to `false`.
+Both client and server full bodies use normal demand and separate metadata/payload writes by default.
+Full storage remains unboxed.
+Custom streams keep the same representation and demand path as the original experiment.
+
+Explicit coalescing permits these differences:
+
+- One write can own both metadata and payload.
+- Client upload timeout starts at eager admission, before the old metadata-completion boundary.
+- Generic write-all hides metadata-only progress from server body-timeout refresh.
+- Source completion can precede metadata output.
+- The combined receipt can precede an incoming-completion notification.
+
+For example, a server body deadline initially expires at tick 10.
+A separate head completion at tick 9 refreshes that deadline to tick 19.
+A payload completion at tick 11 then succeeds.
+With one generic write-all operation, no completion arrives before tick 10, so an opted-in full body expires.
+A client-only gate does not preserve this server behavior.
+
+Applications can explicitly accept this contract:
+
+```rust
+use kimojio_http1::{Config, ConnectionId};
+
+let mut config = Config::new(ConnectionId { slot: 1, generation: 1 });
+config.coalesce_full_bodies = true;
+```
+
+`Config::new` supplies the compatibility default.
+Existing external struct literals must supply the new public field.
+The shared benchmark fixture remains unchanged and does not enable this option.
+The parent owns any later benchmark flag and production-selection decision.
+
+The following original design and validation sections describe candidate `451f61b5` unless this hardening section states otherwise.
+
 ## Question and initial finding
 
 Can the core interface remove a transport boundary that a conventional wrapper cannot otherwise avoid?
@@ -211,3 +253,69 @@ These checks did not run a timed benchmark.
 1. Run the unchanged shared benchmark during the assigned timing slot, or use the parent's matched comparison.
 2. Record measured latency and throughput with the frozen source and executable hashes.
 3. Make the final keep-or-reject decision.
+
+## Hardening regressions
+
+`src/coalescing_tests.rs` drives the actual wrapper admission helper and core with deterministic ticks.
+For each role, it compares full and custom fixed-length stream bodies with coalescing disabled and enabled.
+It reports separate head completion at tick 9 and final payload completion at tick 11.
+The combined-write case withholds intermediate completion, as the generic write-all contract permits.
+The tests establish this matrix:
+
+| Body and configuration | Client upload expiry | Server body expiry | Result at tick 11 |
+| --- | --- | --- | --- |
+| Full, default configuration | 19 | 19 | Success |
+| Custom stream, default configuration | 19 | 19 | Success |
+| Custom stream, coalescing enabled | 19 | 19 | Success |
+| Full, coalescing enabled | 10 | 10 | Timeout |
+
+The original client head deadline remains independent.
+These cases disable it to isolate upload timing.
+The tests use completion injection, not wall-clock sleeps or performance measurements.
+Existing generic transport and virtual-clock regressions cover runtime execution of these contracts.
+
+The eager core regressions now cover:
+
+- Cancellation followed by positive partial or complete original writes.
+- Prior progress before, at, and after the metadata/payload boundary.
+- Exact payload-only receipts after late positive progress, without replay.
+- Cancellation before write issuance, with one zero-byte receipt and the original buffer pointer.
+- Separate incoming leases held across eager duplex output completion.
+- Successful second-request reuse only after the remaining input completes.
+- Explicit abandonment with close blocked until the original input lease returns.
+
+The opted-in wrapper duplex test uses both generic and native backends.
+Its handler returns an owned full response while a separate consumer retains the incoming body and its first lease.
+The peer queues the remaining body and a second request after the first response.
+The held lease prevents premature dispatch.
+Continued consumption permits the second request.
+Consumer abandonment prevents reuse and cancels the exchange after lease return.
+
+## Hardening validation
+
+Builds and tests use CPUs 8-31 and a fresh target directory:
+
+```text
+/workspace/kimojio-rs/target/wrapper-lab/build-interface-contract
+```
+
+The original measurement artifact is not rebuilt by these commands.
+The original binary hashes in this report do not identify the hardening candidate.
+No timed benchmark or profiling command runs in this worktree.
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all` | Passed |
+| `cargo test -p kimojio-http1 -p kimojio-fsm-http1 --quiet` | Passed: 109 core tests, four core doctests, 64 wrapper tests |
+| `cargo test -p kimojio-http1 -p kimojio-fsm-http1 --release --quiet` | Same tests passed |
+| `cargo test -p kimojio-http1 --all-features --quiet` | Passed: 66 wrapper tests |
+| `cargo test -p kimojio-http1 --example keepalive_bench --quiet` | Four unchanged fixture tests passed |
+| `cargo clippy --quiet` | Passed with the existing example warning |
+| `cargo clippy --all-targets --all-features --quiet` | Passed with the existing example and two runtime-test warnings |
+| `cargo clippy -p kimojio-http1 -p kimojio-fsm-http1 --all-targets --all-features --quiet -- -D warnings` | Passed without warnings |
+
+The production hardening adds one configuration flag and passes it to the shared eager-admission helper.
+It changes no core production code, transport implementation, or payload representation.
+The remaining friction is explicit: generic write-all cannot preserve the original metadata-completion deadline boundary while hiding that completion.
+The default avoids that tradeoff.
+The opt-in documents and tests it rather than claiming equivalent timing semantics.
