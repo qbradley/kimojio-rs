@@ -171,6 +171,9 @@ This API change is not a measured performance claim.
 `WriteOp::slices()` exposes the remaining header and payload without concatenation.
 `WriteOp::complete(outcome)` preserves the original buffer and exact partial cursor.
 Write failure distinguishes exact progress from a known lower bound.
+Read, write, wake, and close completions expose `into_parts` for recovery after rejection.
+Body releases and cancellation completions expose `into_op` because they have no separate outcome.
+These methods return the original operation without a new token or storage copy.
 
 `BodyOp::bytes()` exposes one retained fragment.
 `BodyOp::release()` consumes the fragment and creates its release receipt.
@@ -273,6 +276,8 @@ The caller must complete both the cancellation request and the original alarm.
 
 An invalidated alarm completion releases its token without advancing protocol time.
 It cannot trigger a replacement deadline.
+An early current alarm completion settles that alarm but does not expire its deadline.
+The next drive requests a new alarm at the same deadline.
 The SETTINGS ACK deadline starts after the complete original SETTINGS write settles successfully.
 The server shutdown PING wait starts after its complete original write settles successfully.
 The overall shutdown deadline still starts at the shutdown command.
@@ -304,7 +309,7 @@ The pure engine does not create or drive an HTTP/1 parser.
 
 ## Standalone qualification
 
-The all-feature suite contains 210 unit tests, 49 integration tests, and two doctests.
+The all-feature suite contains 210 unit tests, 52 integration tests, and two doctests.
 Five unit tests are new direct-engine bounds tests.
 The default suite omits five feature-specific component tests.
 These counts do not include the six Criterion smoke workloads.

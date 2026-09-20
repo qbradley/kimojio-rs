@@ -305,6 +305,12 @@ impl SendBuffer for BodyOp {
 pub struct BodyRelease {
     pub(crate) op: BodyOp,
 }
+impl BodyRelease {
+    /// Recovers the original fragment from a rejected release.
+    pub fn into_op(self) -> BodyOp {
+        self.op
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HeadKind {
@@ -386,6 +392,12 @@ impl CancelOp {
 pub struct CancelCompletion {
     pub(crate) op: CancelOp,
 }
+impl CancelCompletion {
+    /// Recovers the original cancellation request from a rejected completion.
+    pub fn into_op(self) -> CancelOp {
+        self.op
+    }
+}
 
 /// A deadline alarm, never an I/O-readiness operation.
 ///
@@ -412,6 +424,12 @@ pub struct WakeCompletion {
     pub(crate) op: WakeOp,
     pub(crate) now: Duration,
 }
+impl WakeCompletion {
+    /// Recovers the original alarm and supplied time from a rejected completion.
+    pub fn into_parts(self) -> (WakeOp, Duration) {
+        (self.op, self.now)
+    }
+}
 
 #[derive(Debug)]
 pub struct CloseOp {
@@ -429,6 +447,12 @@ impl CloseOp {
 pub struct CloseCompletion {
     pub(crate) op: CloseOp,
     pub(crate) result: Result<(), IoFailure>,
+}
+impl CloseCompletion {
+    /// Recovers the original close operation and its reported result.
+    pub fn into_parts(self) -> (CloseOp, Result<(), IoFailure>) {
+        (self.op, self.result)
+    }
 }
 
 pub trait Ports<B: SendBuffer> {
