@@ -131,12 +131,6 @@ fn chunk_len(remaining: u64, max_bytes: usize, capacity: usize) -> usize {
     remaining.min(CHUNK.min(max_bytes).min(capacity) as u64) as usize
 }
 
-/// The explicit action cancels an unfinished upload after the complete response.
-/// A response status or END_STREAM alone never requests upload cancellation.
-fn cancel_upload_after_response(selected: bool, end: StreamOutcome, producer: &Producer) -> bool {
-    selected && end == StreamOutcome::Complete && (!producer.stopped || producer.busy)
-}
-
 fn fields(values: &Fields) -> Vec<H2HeaderField> {
     values
         .iter()
@@ -460,15 +454,6 @@ fn client_loop(
                         index += 1;
                     }
                 }
-                let cancel_upload = input.actions.iter().any(|action| {
-                    matches!(action, Action::CancelUploadAfterResponse { stream_id } if *stream_id == end.stream.get())
-                });
-                if producers.get(&end.stream).is_some_and(|producer| {
-                    cancel_upload_after_response(cancel_upload, end.outcome, producer)
-                }) && reset.insert(end.stream.get())
-                {
-                    checked(core.reset(end.stream, H2ErrorCode::Cancel))?;
-                }
                 if !shutdown
                     && input.actions.iter().any(|action| {
                         matches!(action, Action::GracefulClose {
@@ -758,40 +743,7 @@ mod tests {
         assert!(stream_error(StreamOutcome::ConnectionFailed).is_none());
         assert!(stream_error(StreamOutcome::Unprocessed).is_none());
         assert!(stream_error(StreamOutcome::Deadline).is_none());
+        assert_eq!(stream_error(StreamOutcome::Reset(0)).unwrap().code, 0);
         assert_eq!(stream_error(StreamOutcome::Reset(8)).unwrap().code, 8);
-    }
-
-    #[test]
-    fn upload_cancellation_requires_selection_receive_end_and_unfinished_source() {
-        let mut producer = Producer::bytes(131071, Vec::new());
-        assert!(cancel_upload_after_response(
-            true,
-            StreamOutcome::Complete,
-            &producer
-        ));
-        assert!(!cancel_upload_after_response(
-            false,
-            StreamOutcome::Complete,
-            &producer
-        ));
-        assert!(!cancel_upload_after_response(
-            true,
-            StreamOutcome::Reset(0),
-            &producer
-        ));
-        producer.remaining = 0;
-        producer.stopped = true;
-        producer.busy = true;
-        assert!(cancel_upload_after_response(
-            true,
-            StreamOutcome::Complete,
-            &producer
-        ));
-        producer.busy = false;
-        assert!(!cancel_upload_after_response(
-            true,
-            StreamOutcome::Complete,
-            &producer
-        ));
     }
 }

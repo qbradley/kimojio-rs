@@ -189,7 +189,6 @@ The native fixture needs each action for the corresponding case.
 * `{"action":"pause","stream_id":1,"until_stream_ended":3}` retains stream 1 body fragments until stream 3 ends.
 * `{"action":"reset","stream_id":1,"after_bytes":1024,"code":8}` cancels stream 1 after that many response bytes.
 * `{"action":"graceful_close","after_streams":2}` starts graceful shutdown after two completed streams.
-* `{"action":"cancel_upload_after_response","stream_id":1}` cancels that unfinished upload after normal receive END_STREAM.
 
 The harness must name every executed case in its report.
 Unsupported actions fail rather than produce a skip.
@@ -210,22 +209,24 @@ That outcome requires a matching RST_STREAM, no connection error, and a complete
 The report distinguishes this bounded resource rejection from full body delivery.
 The rejected stream outcome must be `reset`, while the sibling outcome must be `complete`.
 
-## Explicit early-response application policy
+## Early response with an explicit peer abort signal
 
 Response END_STREAM alone never instructs the protocol engine to cancel the upload.
 This is true for status 200 and status 413.
-The withheld-credit case includes the explicit `cancel_upload_after_response` fixture action.
-After normal receive END_STREAM, the fixture application executes that action with RST_STREAM(CANCEL).
-In this case, the core must keep the transmit half available until that explicit action.
-It preserves the completed receive result and lets its sibling finish.
-The rejected stream reports `ended: true`, `outcome: "reset"`, and the actual stream error code 8.
-The independent peer must observe that CANCEL frame.
-The connection still requires a normal terminal outcome and an actual close.
-`connection_failed` is not an acceptable substitute for this stream-local cancellation.
+The withheld-credit case uses no fixture application action.
+The independent server sends a complete status-413 response after it receives 1,024 request bytes.
+It then sends a PING after response END_STREAM.
+After the matching PING acknowledgment, it sends RST_STREAM(NO_ERROR) and keeps the socket open.
+This barrier proves that response END_STREAM preceded the reset in the received frame sequence.
 
-Without that action, the duplex probe requires the complete request body and request END_STREAM.
+The client preserves the completed response and lets its sibling finish.
+The rejected stream reports `ended: true`, `outcome: "reset"`, and the actual stream reset code 0.
+The connection requires `outcome: "graceful"`, a null wire error, and an actual close.
+`connection_failed` is not an acceptable substitute for this peer-requested stream termination.
+
+Without a reset or application cancellation, the duplex probe requires the complete request body and request END_STREAM.
 It can send status 200 or 413 while it continues to consume the upload and return credit.
 
-RFC 9113 section 8.1 also permits a server to send RST_STREAM(NO_ERROR) after a complete response.
+RFC 9113 section 8.1 permits a server to send RST_STREAM(NO_ERROR) after a complete response.
 The client must not discard that completed response.
-The withheld-credit case uses the explicit application action, not that alternative server signal.
+Explicit application cancellation is another valid policy, but this case does not require an additional fixture action.
