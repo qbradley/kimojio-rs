@@ -220,7 +220,7 @@ These results do not qualify the server or the complete client contract.
 
 The reduced-window upload and canonical early-response cases failed before response delivery.
 The wrapper reported `Error::Send` with `ConnectionFailed`.
-Peer startup synchronization needs investigation before either failure can establish a wrapper protocol defect.
+The peer diagnosis identified strict startup-window enforcement, not a demonstrated wrapper flow-control defect.
 The fixture does not parse raw SETTINGS frames to reconstruct readiness.
 
 The public API also limits the fixture observations.
@@ -229,3 +229,27 @@ A failed `Client::send` exposes neither an admitted stream identity nor a separa
 `HeaderMap` does not preserve global trailer occurrence order across distinct names.
 The fixture rejects unsupported observations instead of inventing successful outcomes.
 The API and peer contract need separate assessment before full qualification.
+
+### Wrapper startup diagnosis
+
+Peer commit `9dfd57a8b9ded9035a73b4101e38e87ba10bd6c3` records the bounded diagnosis.
+Local evidence is in `target/http2-program/reports/wrapper-00005698-startup/summary.json`.
+The trace captured 49,152 upload bytes before any server bytes, within the default 65,535-byte credit.
+The Python peer rejected these bytes against its reduced window.
+The strict Go peer separately rejected 16,384 bytes before acknowledgment of its 1,024-byte window.
+Neither failure demonstrates that the wrapper exceeded known credit.
+
+A bodyless warmup synchronized a later upload with the reduced window.
+A separate Python peer used public SETTINGS-update APIs to account for data already in transit.
+Both variants completed exact 131,087-byte echoes and graceful closure.
+Neither variant is the unchanged cold-first-request case.
+This evidence does not justify a new production readiness API.
+
+After synchronized startup, the reset-zero diagnostic preserved the 413 response, receive completion, sibling completion, and graceful closure.
+The wrapper still hid the authoritative retirement outcome behind `Error::Send` with `Reset(0)`.
+That observation remains a qualification failure, not successful full retirement.
+
+RFC 9110 section 5.3 makes field order across distinct names insignificant.
+Trailer comparisons must preserve every occurrence and the value order for each case-insensitive name.
+Global wire order is a stronger contract than HTTP requires.
+The peer diagnostic includes negative controls for missing values and reordered same-name values.

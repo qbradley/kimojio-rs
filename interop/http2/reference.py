@@ -97,8 +97,8 @@ def client(spec):
     return report
 
 
-def serve(sock, *, config, timeout=60, case=None, refund=True):
-    peer = configured_peer(client=False, config=config)
+def serve(sock, *, config, timeout=60, case=None, refund=True, peer=None):
+    peer = peer if peer is not None else configured_peer(client=False, config=config)
     channel = Channel(sock, peer, timeout=timeout, consume=False)
     sender = CreditSender(peer)
     requests = {}

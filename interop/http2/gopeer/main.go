@@ -119,6 +119,11 @@ func (p *peer) read(ackSettings bool) (http2.Frame, error) {
 	if err != nil {
 		return nil, err
 	}
+	if os.Getenv("H2_PEER_TRACE") != "" && p.frames <= 128 {
+		header := frame.Header()
+		fmt.Fprintf(os.Stderr, "frame=%s stream=%d length=%d flags=%d prior_settings_acks=%d\n",
+			header.Type, header.StreamID, header.Length, header.Flags, p.acks)
+	}
 	switch frame := frame.(type) {
 	case *http2.SettingsFrame:
 		if frame.IsAck() {
@@ -200,7 +205,8 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 	if scenario == "admission-recovery" {
 		return serveAdmission(p)
 	}
-	early := scenario == "early-response" || scenario == "early-response-app-cancel"
+	startupDiagnostic := scenario == "early-response-startup-diagnostic"
+	early := scenario == "early-response" || scenario == "early-response-app-cancel" || startupDiagnostic
 	resetDiscardPendingEnd := false
 	resetDiscardRefundBarrier := false
 	window := uint32(65535)
@@ -332,16 +338,23 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 		case *http2.DataFrame:
 			received[frame.StreamID] += len(frame.Data())
 			requestEnded[frame.StreamID] = requestEnded[frame.StreamID] || frame.StreamEnded()
+			if startupDiagnostic && received[frame.StreamID] > 65535 {
+				return nil, errors.New("startup diagnostic exceeded pre-SETTINGS credit")
+			}
 			if scenario == "connect" {
 				err = p.body(frame.StreamID, frame.Data(), frame.StreamEnded())
 				sent[frame.StreamID] = frame.StreamEnded()
 			} else if early && !sent[frame.StreamID] {
-				if frame.StreamID != 1 || received[1] > 1024 {
-					return nil, errors.New("upload exceeded withheld credit")
+				limit := 1024
+				if startupDiagnostic {
+					limit = 65535
+				}
+				if frame.StreamID != 1 || received[1] > limit {
+					return nil, fmt.Errorf("upload exceeded withheld credit: received=%d settings_acks=%d", received[1], p.acks)
 				}
 				err = p.headers(frame.StreamID, fields("413", 0), true, false)
 				sent[frame.StreamID] = true
-				if err == nil && scenario == "early-response" {
+				if err == nil && (scenario == "early-response" || startupDiagnostic) {
 					err = p.framer.WritePing(false, [8]byte{'e', 'a', 'r', 'l', 'y', 'e', 'n', 'd'})
 				}
 			}
@@ -351,7 +364,7 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 			if scenario == "content-length" && frame.IsAck() && frame.Data == [8]byte{2} {
 				err = p.body(1, nil, true)
 			}
-			if scenario == "early-response" && frame.IsAck() &&
+			if (scenario == "early-response" || startupDiagnostic) && frame.IsAck() &&
 				frame.Data == [8]byte{'e', 'a', 'r', 'l', 'y', 'e', 'n', 'd'} &&
 				sent[1] && !earlyResponseBarrier {
 				earlyResponseBarrier = true
@@ -774,9 +787,10 @@ func run() error {
 		"bad-continuation": true, "push-before-ack": true, "push-after-ack": true,
 		"reset-isolation": true, "content-length": true, "early-response": true,
 		"reset-discard": true, "graceful-close": true,
-		"no-body-data":              true,
-		"early-response-app-cancel": true,
-		"admission-recovery":        true,
+		"no-body-data":                      true,
+		"early-response-app-cancel":         true,
+		"admission-recovery":                true,
+		"early-response-startup-diagnostic": true,
 	}
 	if !allowed[*scenario] || *report == "" {
 		return errors.New("server requires a known scenario and report file")

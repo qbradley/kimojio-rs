@@ -127,6 +127,42 @@ The no-action duplex probes require full uploads for both status 200 and status 
 The reset-discard case keeps the sibling response open until the peer observes at least 33,792 bytes of connection refunds.
 The connection must refund both the initial DATA and the late discarded DATA before graceful close.
 
+## Focused wrapper startup diagnostics
+
+`wrapper_startup_probe.py` diagnoses reduced-upload and early-response startup failures.
+It does not run or qualify the full native suite.
+
+```sh
+python interop/http2/wrapper_startup_probe.py \
+  --binary /absolute/path/to/frozen-wrapper-client \
+  --go-peer /absolute/path/to/go-peer \
+  --output target/wrapper-startup-diagnostic
+```
+
+The echo variants retain the strict initial window, withhold server bytes until DATA arrives, update the default window, or add a bodyless warmup.
+The warmup response follows the peer's SETTINGS/PING barrier.
+Application concurrency one then starts the upload after synchronization, without a fixture action or production frame parser.
+The window-update variant uses public Python-h2 settings and consumption APIs.
+Neither successful alternative qualifies the original cold-start scenario.
+
+The strict Go early-response case remains unchanged.
+A separate diagnostic permits bounded in-flight DATA under the original 65,535-byte allowance and still sends the explicit RST0 after its response barrier.
+It never returns upload credit or treats a missing terminal outcome as success.
+`H2_PEER_TRACE=1` records at most 128 incoming frame descriptions.
+The Python recorder limits each direction to 4 MiB, 20,000 total frames, and 128 recorded descriptions.
+
+[RFC 9113 sections 6.9.2–6.9.3](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.9.2) permit default-window DATA before the client receives SETTINGS.
+A reduced stream window can create negative credit.
+The receiver can retain the in-flight bytes or reset the affected stream with FLOW_CONTROL_ERROR.
+A test that requires a cold first upload to respect an unapplied 1,024-byte advertisement has an additional synchronization requirement.
+These diagnostics do not establish a need for a public wrapper readiness API.
+
+[RFC 9110 section 5.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-5.3) makes same-name field value order significant, but not order across different names.
+`trailer_values` compares case-insensitive names while retaining each name's exact occurrence sequence.
+Its controls reject missing values and reversed same-name values.
+This assessment does not change the canonical suite's exact-list trailer oracle.
+Global wire-order fidelity is a separate contract from HTTP trailer semantics.
+
 ## Implemented flow and socket checks
 
 The complete flow command runs 48 cases across these roles:
