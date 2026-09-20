@@ -25,6 +25,32 @@ The core checks HTTP upgrade tokens and completion ordering.
 The next protocol owns its additional handshake checks.
 For example, WebSocket key verification does not belong to HTTP.
 
+## Early server responses
+
+`Server::respond` keeps its conservative policy.
+If the request is incomplete, the response requires connection close.
+After final output settles, the core stops unread input and cancels outstanding reads.
+
+`Server::respond_duplex` explicitly keeps request consumption active after final output settles.
+The caller must supply body credit and return body leases until `incoming_finished`.
+If the consumer abandons the request, the caller must use `cancel_exchange` or `fail_source`.
+The core does not drain the body without credit.
+
+Successful retirement requires complete request framing, settled response output, returned body storage, and settled external operations.
+The core reports `incoming_finished` before successful `exchange_finished`.
+Only then can the server dispatch the next pipelined request.
+Request-first and response-first completion both permit reuse.
+Connection-close headers, nonpersistent requests, request limits, shutdown, and EOF can still prohibit reuse.
+Body limits, timeouts, and upgrade rules do not change.
+
+For explicit duplex responses, an outstanding `Expect: 100-continue` receives 100 before the final head if no body bytes are buffered.
+This also applies to empty final responses and requests without current body credit.
+The default rejection policy does not change.
+Duplex selection does not require a peer to continue its upload after a final response.
+The client core retains its existing early-response policy.
+
+The [duplex policy report](../docs/http1-wrapper-lab/duplex-policy.md) describes wrapper integration and regression evidence.
+
 ## Construction
 
 Both constructors use the same arguments:
@@ -112,7 +138,8 @@ This completion-return step avoids recursive mutation without requiring a task o
 ## Internal state composition
 
 The implementation uses a product of smaller state machines.
-The public commands, callbacks, and completion types remain unchanged.
+Existing commands, callbacks, and completion types remain compatible.
+`Server::respond_duplex` adds explicit request-consumption intent without a new callback or operation type.
 
 | State | Responsibility |
 | --- | --- |
@@ -149,6 +176,7 @@ They also permit a queued final head behind an outstanding informational write.
 Completing that informational write cannot mark the queued final head as settled.
 The write operation retains its metadata role instead of inferring it from current exchange flags.
 Incoming body delivery remains eligible while the final response output is still in flight.
+An explicit duplex response also permits incoming body delivery after final output settles.
 An already received upgrade response still reaches the client callback before a pending graceful shutdown revokes handoff.
 
 State types remove contradictory local combinations, not the need to order callbacks and settle external resources.

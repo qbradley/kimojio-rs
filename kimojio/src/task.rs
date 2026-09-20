@@ -218,11 +218,9 @@ impl Task {
 
             for wait in io_scope_completions.waits.drain(..) {
                 wait.canceled.set(true);
-                wait.waker.use_mut(|waker| {
-                    if let Some(waker) = waker {
-                        wake_task(&mut task_state, waker)
-                    }
-                });
+                if let Some(waker) = wait.waker.use_mut(Option::take) {
+                    task_state = wake_task(task_state, waker);
+                }
             }
         })
     }

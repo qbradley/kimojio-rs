@@ -6,16 +6,23 @@ use std::rc::Rc;
 
 use crate::Task;
 use crate::task::TaskState;
+use crate::task_state_cell::TaskStateCellRef;
 
-/// wake_task can be used when you already have a &mut TaskState reference. This avoids
-/// recursive TaskState::get() calls.
-pub fn wake_task(task_state: &mut TaskState, waker: &std::task::Waker) {
+/// Schedule native wakers directly, but release TaskState before invoking an
+/// arbitrary waker: a combinator can forward the wake to a native task waker.
+pub fn wake_task<'a>(
+    mut task_state: TaskStateCellRef<'a>,
+    waker: std::task::Waker,
+) -> TaskStateCellRef<'a> {
     if waker.vtable() == &VTABLE {
         let task = clone_waker_task(waker.data());
         task_state.schedule_io(task);
     } else {
-        waker.wake_by_ref()
+        let cell = task_state.into_inner();
+        waker.wake();
+        task_state = cell.borrow_mut();
     }
+    task_state
 }
 
 static VTABLE: std::task::RawWakerVTable = std::task::RawWakerVTable::new(

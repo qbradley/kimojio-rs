@@ -1876,11 +1876,9 @@ fn io_scope_cancel_and_wait_internal(new_io_scope_completions: Option<IoScopeCom
 
         for wait in gathered_completions.waits.drain(..) {
             wait.canceled.set(true);
-            wait.waker.use_mut(|waker| {
-                if let Some(waker) = waker {
-                    wake_task(&mut task_state, waker)
-                }
-            });
+            if let Some(waker) = wait.waker.use_mut(Option::take) {
+                task_state = wake_task(task_state, waker);
+            }
         }
 
         // 3. wait for them to finish.
@@ -3009,6 +3007,104 @@ mod test {
         let result = sleep_a_long_time.await;
 
         assert_eq!(result.to_string(), "it was canceled".to_string());
+    }
+
+    #[crate::test]
+    async fn test_io_scope_cancel_futures_unordered_wait() {
+        let event = AsyncEvent::new();
+        io_scope(async || {
+            let mut waits = FuturesUnordered::new();
+            waits.push(event.wait());
+            assert!(futures::poll!(waits.next()).is_pending());
+
+            operations::io_scope_cancel();
+
+            assert_eq!(waits.next().await, Some(Err(CanceledError {})));
+            assert_eq!(waits.next().await, None);
+        })
+        .await;
+    }
+
+    #[crate::test]
+    async fn test_io_scope_exit_futures_unordered_wait() {
+        let event = AsyncEvent::new();
+        let mut waits = FuturesUnordered::new();
+        io_scope(async || {
+            waits.push(event.wait());
+            assert!(futures::poll!(waits.next()).is_pending());
+        })
+        .await;
+
+        assert_eq!(waits.next().await, Some(Err(CanceledError {})));
+        assert_eq!(waits.next().await, None);
+    }
+
+    #[crate::test]
+    async fn test_io_scope_drop_futures_unordered_wait() {
+        let event = AsyncEvent::new();
+        let mut waits = FuturesUnordered::new();
+        let mut scope = Box::pin(io_scope(async || {
+            waits.push(event.wait());
+            assert!(futures::poll!(waits.next()).is_pending());
+            futures::future::pending::<()>().await;
+        }));
+        assert!(futures::poll!(scope.as_mut()).is_pending());
+        drop(scope);
+
+        assert_eq!(waits.next().await, Some(Err(CanceledError {})));
+        assert_eq!(waits.next().await, None);
+    }
+
+    #[crate::test]
+    async fn test_io_scope_normal_futures_unordered_wait() {
+        let event = AsyncEvent::new();
+        io_scope(async || {
+            let mut waits = FuturesUnordered::new();
+            waits.push(event.wait());
+            assert!(futures::poll!(waits.next()).is_pending());
+            event.set();
+
+            assert_eq!(waits.next().await, Some(Ok(())));
+            assert_eq!(waits.next().await, None);
+        })
+        .await;
+    }
+
+    #[crate::test]
+    async fn test_io_scope_futures_unordered_sibling_connections() {
+        let (cancelled_fd, _cancelled_peer) = crate::pipe::bipipe();
+        let (sibling_fd, sibling_peer) = crate::pipe::bipipe();
+        let cancel = AsyncEvent::new();
+        let mut connections = FuturesUnordered::new();
+        connections.push(
+            io_scope(async || {
+                let mut buffer = [0; 1];
+                let mut read = operations::read(&cancelled_fd, &mut buffer);
+                assert!(futures::poll!(&mut read).is_pending());
+                cancel.wait().await.unwrap();
+                operations::io_scope_cancel();
+                assert_eq!(read.await, Err(Errno::CANCELED));
+                0
+            })
+            .boxed_local(),
+        );
+        connections.push(
+            io_scope(async || {
+                let mut buffer = [0; 1];
+                assert_eq!(operations::read(&sibling_fd, &mut buffer).await, Ok(1));
+                assert_eq!(buffer, [b's']);
+                1
+            })
+            .boxed_local(),
+        );
+
+        assert!(futures::poll!(connections.next()).is_pending());
+        cancel.set();
+        assert_eq!(connections.next().await, Some(0));
+        assert!(futures::poll!(connections.next()).is_pending());
+        assert_eq!(operations::write(&sibling_peer, b"s").await, Ok(1));
+        assert_eq!(connections.next().await, Some(1));
+        assert_eq!(connections.next().await, None);
     }
 
     #[crate::test]

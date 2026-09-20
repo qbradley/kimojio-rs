@@ -307,8 +307,9 @@ The experiment does not establish allocation-free adapters or maximum throughput
 The wrapper allocation counts are a concrete weakness.
 The small-response and large-chunked comparisons also show a material performance gap.
 Lower resident memory does not cancel those costs.
-The native runtime also retains the documented cancellation-scope limitation with wrapped `FuturesUnordered` wakers.
-The examples avoid that combinator rather than claim that this work corrected the runtime.
+At the time of this experiment, native cancellation scopes had a panic with wrapped `FuturesUnordered` wakers.
+The examples avoided that combinator.
+A subsequent [runtime correction](http1-wrapper-lab/runtime-cancellation.md) removes that limitation without changes to the HTTP machine.
 
 The design evidence supports an HTTP/2 prototype, not immediate migration of the historical engine.
 That prototype needs concurrent stream identities, connection-level flow control, and stream-local cancellation through the same ownership model.

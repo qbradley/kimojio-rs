@@ -2,7 +2,7 @@ use std::{io::Write, net::TcpListener};
 
 use kimojio::{OwnedFd, OwnedFdStream, operations, task_pool::TaskPool};
 use kimojio_http1::{
-    Config, ConnectionId, Error, IncomingBody, IncomingFrame, OutgoingBody, OutgoingFrame,
+    Config, ConnectionId, Error, IncomingBody, OutgoingBody, OutgoingFrame,
     http::{HeaderMap, Request, Response, StatusCode},
     serve_connection,
 };
@@ -12,18 +12,7 @@ async fn handle(request: Request<IncomingBody>) -> Result<Response<OutgoingBody>
         "/echo" => {
             let mut incoming = request.into_body();
             incoming.accept().await?;
-            let body = futures::stream::try_unfold(incoming, |mut incoming| async move {
-                Ok(match incoming.frame().await? {
-                    Some(IncomingFrame::Data(chunk)) => {
-                        Some((OutgoingFrame::Data(chunk.to_vec()), incoming))
-                    }
-                    Some(IncomingFrame::Trailers(headers)) => {
-                        Some((OutgoingFrame::Trailers(headers), incoming))
-                    }
-                    None => None,
-                })
-            });
-            Ok(Response::new(OutgoingBody::from_stream(None, body)))
+            Ok(Response::new(OutgoingBody::from_incoming(incoming)))
         }
         "/trailers" => {
             let mut trailers = HeaderMap::new();

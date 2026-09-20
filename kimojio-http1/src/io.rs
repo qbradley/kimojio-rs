@@ -6,18 +6,28 @@ use kimojio_fsm_http1::{
     WriteCompletion, WriteOp,
 };
 
+use crate::body::OutgoingData;
+
 pub(crate) struct Pending<T> {
     pub op: T,
     pub cancel: Rc<CancellationToken>,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The single-slot channel keeps operations inline instead of allocating per write."
+)]
 pub(crate) enum WriteAction {
-    Write(Pending<WriteOp<Vec<u8>>>),
+    Write(Pending<WriteOp<OutgoingData>>),
     Close(CloseOp),
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The single-slot channel returns the inline operation without a per-receipt allocation."
+)]
 pub(crate) enum WriteResult {
-    Write(WriteCompletion<Vec<u8>>),
+    Write(WriteCompletion<OutgoingData>),
     Close(CloseCompletion),
 }
 
@@ -316,6 +326,25 @@ mod tests {
         }
         writer.close().await.unwrap();
         operations::close(peer).await.unwrap();
+    }
+
+    #[kimojio::test]
+    async fn wrapped_wakers_settle_positive_write_completions() {
+        use futures::{StreamExt, stream::FuturesUnordered};
+
+        let mut connections = FuturesUnordered::new();
+        for case in [
+            CompletionCase::NextSlice,
+            CompletionCase::PartialWrite,
+            CompletionCase::Complete,
+        ] {
+            connections.push(late_write_completion(case));
+        }
+        let mut completed = 0;
+        while connections.next().await.is_some() {
+            completed += 1;
+        }
+        assert_eq!(completed, 3);
     }
 
     #[kimojio::test]

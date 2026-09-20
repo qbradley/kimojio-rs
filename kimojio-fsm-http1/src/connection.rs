@@ -24,6 +24,13 @@ enum Rx {
     Paused,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResponseMode {
+    Conservative,
+    Duplex,
+    Upgrade,
+}
+
 #[derive(Debug)]
 struct Exchange {
     id: ExchangeId,
@@ -35,6 +42,7 @@ struct Exchange {
     continue_gate: ContinueGate,
     incoming_notification: Notification,
     source_notification: Notification,
+    consume_request: bool,
 }
 
 #[derive(Debug)]
@@ -444,6 +452,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             },
             incoming_notification: Notification::Pending,
             source_notification: Notification::Pending,
+            consume_request: false,
         });
         self.exchanges += 1;
         self.tx = Transmit::begin(framing);
@@ -458,9 +467,10 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         &mut self,
         exchange: ExchangeId,
         mut response: Response<'_>,
-        upgrade: bool,
+        mode: ResponseMode,
     ) -> Result<(), CommandError> {
         self.check_exchange(exchange)?;
+        let upgrade = mode == ResponseMode::Upgrade;
         let current = self.exchange.as_ref().unwrap();
         if self.tx.started()
             || (!upgrade && response.head.status < 200)
@@ -489,7 +499,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             .map_err(|_| CommandError::InvalidHead)?;
         let early = self.rx != Rx::Done;
         let close = !current.persistent
-            || early
+            || (early && mode != ResponseMode::Duplex)
             || self.lifecycle.is_draining()
             || self.exchanges >= self.config.max_requests;
         let (final_bytes, framing) = codec::encode_response(
@@ -501,12 +511,13 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         )?;
         let fields = header_count(&final_bytes);
         let continue_first = current.expect
-            && self.credit != 0
             && self.start == self.end
             && !self.eof
             && !matches!(self.rx, Rx::Done | Rx::Paused)
-            && (200..300).contains(&response.head.status)
-            && framing != Framing::Empty;
+            && (mode == ResponseMode::Duplex
+                || (self.credit != 0
+                    && (200..300).contains(&response.head.status)
+                    && framing != Framing::Empty));
         let bytes = if continue_first {
             if self.outgoing_informational >= self.config.max_informational_responses {
                 return Err(CommandError::Limit);
@@ -550,6 +561,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             self.lifecycle.begin_upgrade();
         }
         self.tx = Transmit::begin(framing);
+        self.exchange.as_mut().unwrap().consume_request = mode == ResponseMode::Duplex;
         self.outgoing_connection_fields = connection_fields;
         if continue_first {
             self.exchange.as_mut().unwrap().expect = false;
@@ -1363,6 +1375,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                     continue_gate: ContinueGate::Open,
                     incoming_notification: Notification::Pending,
                     source_notification: Notification::Pending,
+                    consume_request: false,
                 });
                 self.exchanges += 1;
                 self.set_rx(framing)?;
@@ -1789,12 +1802,34 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
         self.core.assert_invariants();
         output
     }
+    /// Starts a final response, closing after an early response by default.
+    ///
+    /// Use [`Self::respond_duplex`] when the application will continue consuming
+    /// the request even after the response finishes.
     pub fn respond(
         &mut self,
         exchange: ExchangeId,
         response: Response<'_>,
     ) -> Result<(), CommandError> {
-        self.core.respond(exchange, response, false)
+        self.core
+            .respond(exchange, response, ResponseMode::Conservative)
+    }
+    /// Starts a final response without abandoning the incoming request.
+    ///
+    /// The caller must continue granting body credit and releasing body leases
+    /// until `incoming_finished`, or cancel the exchange if consumption stops.
+    /// Response completion does not cancel pending reads or retire the exchange.
+    /// Reuse requires both directions and all external operations to settle.
+    /// Other close policies, limits, timeouts, and upgrade restrictions still apply.
+    ///
+    /// An outstanding `Expect: 100-continue` is answered before the final head
+    /// when no request body bytes are buffered, even for an empty response.
+    pub fn respond_duplex(
+        &mut self,
+        exchange: ExchangeId,
+        response: Response<'_>,
+    ) -> Result<(), CommandError> {
+        self.core.respond(exchange, response, ResponseMode::Duplex)
     }
     pub fn inform(
         &mut self,
@@ -1814,7 +1849,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
                 head: response,
                 body: BodyLength::Empty,
             },
-            true,
+            ResponseMode::Upgrade,
         )
     }
 }

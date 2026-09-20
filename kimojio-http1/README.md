@@ -56,17 +56,22 @@ The application must continue to poll the server future until shutdown completes
 
 ## Bodies and metadata
 
-`OutgoingBody` supports three sources:
+`OutgoingBody` supports four sources:
 
 - `empty()` supplies no body.
 - `full(bytes)` owns a complete, fixed-length body.
 - `from_stream(length, stream)` polls a fallible source directly.
+- `from_incoming(body)` forwards data leases and trailers with streaming framing.
 
 The direct source needs no producer task or channel.
 `Some(length)` declares a fixed length.
 `None` requests streaming framing from the core.
 An `OutgoingFrame::Trailers` frame terminates a streaming body.
 Each data frame's length and allocated capacity must fit the configured buffer limit.
+`OutgoingFrame::Data(Vec<u8>)` retains its existing constructor.
+`OutgoingFrame::Forward(BodyChunk)` transfers an incoming lease without a payload copy.
+Both frame types can occur in the same source.
+Exhaustive matches on `OutgoingFrame` need a `Forward` arm.
 A large body needs several bounded frames instead of one large `full` value.
 Empty data frames do not terminate a source.
 The core's `source_finished` notification releases a producer that it no longer needs.
@@ -80,8 +85,32 @@ This demand prevents an unwanted `100 Continue` before a handler decides to read
 The echo handler uses it before returning final response headers.
 A `BodyChunk` exposes its bytes without a wrapper payload copy.
 The chunk's destructor returns its buffer to the core.
+For an admitted `Forward` frame, the outgoing receipt owns this return.
+Source termination and cancellation requests do not release an outstanding write's lease.
+The original write must settle before the receipt returns its lease.
+`BodyChunk::retained_capacity()` reports the capacity of the complete receive allocation, not just the visible body range.
+The destination rejects a lease whose retained capacity exceeds its buffer limit.
+A small visible range does not bypass that limit.
 A retained chunk stops further input delivery, but does not stop eligible writes.
 `collect(limit)` copies data into a bounded result and ignores trailers.
+
+For a same-connection echo, the handler uses:
+
+```rust,no_run
+use kimojio_http1::{Error, IncomingBody, OutgoingBody, http::{Request, Response}};
+
+async fn echo(request: Request<IncomingBody>) -> Result<Response<OutgoingBody>, Error> {
+    let mut incoming = request.into_body();
+    incoming.accept().await?;
+    Ok(Response::new(OutgoingBody::from_incoming(incoming)))
+}
+```
+
+Cross-connection forwarding requires both drivers to remain polled.
+The source connection cannot reuse its receive allocation until the destination returns the outgoing receipt.
+A cancelled destination can drop the forwarded `IncomingBody` and cancel an unfinished source response.
+The helper does not transfer HTTP headers or change the core's early-response policy.
+See [lease forwarding](../docs/http1-wrapper-lab/lease-forwarding.md) for ownership, costs, and limitations.
 
 A dropped client response body cancels its unfinished exchange.
 A dropped server request body causes the wrapper to discard further body deliveries within the core's limits.
@@ -130,9 +159,10 @@ A transport future that waits forever outside native cancellation cannot promise
 Abrupt driver destruction uses native resource destructors, not the normal async shutdown sequence.
 Keeping the driver alive through shutdown is part of the API contract.
 
-The current native runtime can panic when a cancellation scope wakes a wrapped `FuturesUnordered` waker.
-The server example uses bounded native tasks instead of that combinator.
-This runtime limitation is separate from the HTTP machine.
+Cancellation scopes support wrapped `FuturesUnordered` wakers.
+Scope cancellation and cleanup release the runtime state borrow before they invoke these wakers.
+The server example still uses bounded native tasks.
+See the [runtime cancellation record](../docs/http1-wrapper-lab/runtime-cancellation.md) for regression evidence and remaining limits.
 
 ## Bounds, scheduling, and costs
 
@@ -181,8 +211,8 @@ Socket creation and binding are synchronous setup operations.
 | `/early` | Status 413 with an empty body |
 | `/bytes/N` | N bytes of `x`, up to 16 MiB |
 
-The echo fixture does not collect the complete upload.
-It keeps at most one received chunk and one outgoing chunk.
+The echo fixture does not collect the complete upload or copy each chunk.
+Its outgoing frame owns the incoming lease until the write settles and its receipt returns.
 It can return response headers before the first upload byte arrives.
 The current core conservatively closes exchanges whose response starts before the complete request arrives.
 Ordinary exchanges can reuse a connection when the handler consumes the request before it responds.
