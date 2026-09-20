@@ -293,6 +293,9 @@ Handler, source, and timer futures must not receive duplicate polls in the secon
 
 ## Candidate 2: ready probes before blocked registration
 
+**The first timing series in this section is superseded by the isolated-build series below.**
+The combined allocator/benchmark build enabled an extra runtime feature.
+
 Commit `831c1513` implements the two-pass hypothesis.
 The binary SHA-256 is `3893743afb5fe167b9a9ecc7b021577c705bd424bdd12b3977d85a4058c7da62`.
 The allocation slope decreased from 152.9345 to 151.6985 calls per exchange.
@@ -345,3 +348,108 @@ Safe `unfold` streams can own each receive future without per-message boxes.
 However, their lifetimes require separation of receiver ownership from mutable `State`.
 That change is larger than retaining the two stable shutdown waits.
 This experiment first measures the smaller lifetime change.
+
+## Build-feature audit and corrected comparisons
+
+Building the benchmark and allocator package in one Cargo command unified their runtime features.
+The allocator package enables the default `tls` feature, unlike the standalone benchmark package.
+The first candidate 2 and candidate 3 timing binaries therefore differed from the specified isolated build.
+Those timing series do not isolate scheduling changes.
+Their results remain in the local artifacts for audit, not as selection evidence.
+Allocator comparisons remain consistent because all allocation runs used the same allocator package.
+
+The corrected binaries each used exactly:
+
+```sh
+CARGO_PROFILE_RELEASE_DEBUG=2 \
+CARGO_TARGET_DIR=/workspace/kimojio-rs/target/wrapper-lab/build-profile-poc \
+taskset -c 8-31 cargo build --release --offline \
+  -p kimojio-http1 --example keepalive_bench
+```
+
+| Binary | Revision | SHA-256 |
+| --- | --- | --- |
+| `candidate2-isolated` | `831c1513` | `e9e883a12461d2fbc48538e29ee33b9d09edfe8887cec573506c1cc43549a96c` |
+| `candidate3-isolated` | `24872b17` | `f743448c3f4d22f00d8a14186e4e02a3fdfc7f1f311ddde6b846e7ec66504faf` |
+
+The isolated control and candidate 1 hashes remain unchanged.
+The corrected shared-runner command was:
+
+```sh
+python3 perf/wrapper-lab/compare.py \
+  --manifest target/profile-artifacts/manifest-isolated.json \
+  --output target/profile-artifacts/comparison-isolated.json --trials 5 --cpu 2
+```
+
+All 120 runs passed.
+Medians in microseconds:
+
+| Workload | Same-base control90b | Candidate 1 | Candidate 2 | Candidate 3 |
+| --- | ---: | ---: | ---: | ---: |
+| Empty | 29.049 | 25.408 | 25.014 | 27.263 |
+| Small | 43.493 | 36.616 | 37.105 | 37.103 |
+| POST small | 53.214 | 45.531 | 52.270 | 48.579 |
+| Large | 140.233 | 120.546 | 121.594 | 120.671 |
+| Chunked | 2169.500 | 1862.877 | 1857.244 | 1834.795 |
+| Fragmented | 408.831 | 316.759 | 340.799 | 369.143 |
+
+The candidate 1 medians improve on the same-base control in every workload.
+Neither further iteration improves consistently on candidate 1.
+Candidate 3 removes allocations but has worse medians for five of six workloads.
+Its fragmented trial range is wide (311.568–465.999 microseconds).
+These observations do not prove a regression mechanism, but they do not support its added lifetime state.
+
+The final fused candidate 3 allocation slope remains 135.1695 calls per exchange.
+The 1,000/3,000-iteration allocation counts are 143,285/403,520.
+The zeroed counts are two in both runs.
+The reallocation counts are 5,564/15,668.
+Allocation reduction alone does not meet the performance-first selection criterion.
+
+### Corrected candidate 3 profile
+
+The first isolated recording lost one data chunk.
+A larger-buffer retry exited with status 255 without a diagnostic.
+A 499 Hz retry completed without lost samples:
+
+```sh
+perf record -q -o target/profile-artifacts/candidate3-isolated-repeat.perf.data \
+  -e cpu-clock:u -F 499 --call-graph dwarf,16384 --delay 300 -- \
+  taskset -c 2 target/profile-artifacts/frozen/candidate3-isolated \
+  --iterations 100000 --warmup 5000 --response-bytes 128 \
+  --json target/profile-artifacts/candidate3-isolated-repeat-profile.json
+```
+
+The shared input poll remains 9.99%, and event waits remain 5.59%.
+Persistent waits still execute event polling and task registration.
+Lower allocation counts do not remove those costs.
+Skipping event polls solely because a token remains unset is unsafe: an I/O-scope cancellation can complete the wait independently.
+
+## Retained PoC and rejected iterations
+
+The retained PoC restores candidate 1 scheduling.
+It also retains the additional ready-probe regression test.
+The public API, runtime channels, core interface, payload ownership, transport constructors, and I/O workers remain unchanged.
+
+Rejected iterations:
+
+- Two-pass ready probes: less than one percent allocation reduction and no consistent timing improvement.
+- Persistent shutdown waits: lower allocation counts, but no consistent timing improvement.
+
+Persistent receive streams remain unimplemented.
+They require receiver/state lifetime separation and careful cancellation-settlement coverage.
+The retained bounded change has stronger timing evidence and fewer ownership changes.
+The upcoming final common base still requires a rebase, regression runs, and a new comparison.
+This experiment does not select a production wrapper.
+
+The retained tree passed 145 default wrapper/core tests and 147 all-feature tests.
+Formatting and both required clippy commands succeeded with only the previously listed warnings.
+A final wrapper-library run also passed after restoration of the exact candidate 1 production source.
+
+The rebuilt retained binary SHA-256 is `d8099993cc1846f350f0b2c597017db07488e811e73f4a09e2e43722099b6ee8`.
+Only an additional test distinguishes its driver source from candidate 1.
+The two ELF `.text` sections are byte-identical.
+Their shared `.text` SHA-256 is `5164a680859b46f777ff032d237c8e5c5db9b43c4be680c6cc8f71741b55c52a`.
+The full-file hashes differ because the binaries also contain source/debug information.
+
+The exclusive measurement slot is released after this series.
+All binary manifests, comparisons, profiles, and functional logs remain under this worktree's `target/profile-artifacts/`.
