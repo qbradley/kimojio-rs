@@ -555,7 +555,12 @@ Independent review found no significant issues in `a4af94fd` through `cd81114e`.
 From a clean detached checkout, all 35 focused scope/wait tests passed in debug without default features plus virtual clock and release all-features.
 The review covered multi-scope growth, weak ownership, deduplication, generation isolation, migration, reentrant destruction, and pending originals.
 It did not measure performance or force kernel cancellation-acknowledgment order.
-A fixture rebuild and paired measurements remain in progress.
+The rebuilt fixture source is `c9b9ecbc07e40f0804fd3a1e5b2c6fe11c014e30`.
+Its binary SHA-256 is `4f2b8aa2eadde6b9bc36b4ed03b0da5fbb4fc39259815c71a136bdba0c289a1a`.
+The fixture owner passed 17 fixture tests, the paused-consumer regression, 12 socket smoke cases, and four actual-close probes.
+Local provenance is in `target/http2-program/worktrees/http2-membership-fixture/target/membership-fixture-evidence/summary.json`.
+This artifact remains separate and has not passed a complete new peer suite.
+Paired performance measurements remain in progress.
 The new performance and fixture worktrees start from the accepted baseline, without the rejected direct-read change.
 CPU2 is leased only to the measurement owner until this experiment completes.
 No broader registry rewrite or third optimization is part of this bounded follow-up.
