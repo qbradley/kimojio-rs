@@ -59,6 +59,7 @@ class Peer:
         self.remote_settings: list[dict[int, int]] = []
         self.resets: dict[int, int] = {}
         self.termination = None
+        self.generated_connection_refunds = 0
 
     def receive(self, wire: bytes, *, consume: bool = True) -> list:
         events = self.connection.receive_data(wire)
@@ -92,7 +93,12 @@ class Peer:
         amount = received.unconsumed if flow_bytes is None else flow_bytes
         if not 0 <= amount <= received.unconsumed:
             raise ValueError("consumption exceeds received flow-controlled bytes")
+        before = self.connection.inbound_flow_control_window
         self.connection.acknowledge_received_data(amount, stream_id)
+        granted = self.connection.inbound_flow_control_window - before
+        if granted < 0:
+            raise AssertionError("consumption reduced connection credit")
+        self.generated_connection_refunds += granted
         received.unconsumed -= amount
 
     def take_wire(self) -> bytes:
