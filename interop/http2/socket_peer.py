@@ -296,9 +296,18 @@ def receive_credit_report(channel, initial_connection, update_baseline):
     total_flow = sum(channel.inbound.flow.values())
     updates = channel.outbound.updates[0] - update_baseline
     final = initial_connection + updates - total_flow
+    generated = channel.peer.generated_connection_refunds
+    abandoned = generated - updates - pending.updates[0]
+    require(abandoned >= 0, "wire/pending refunds exceed generated connection credit")
     require(
-        final + pending.updates[0] == channel.peer.connection.inbound_flow_control_window,
-        "receive connection credit mismatch",
+        abandoned == 0 or channel.peer.termination is not None,
+        "connection credit disappeared before GOAWAY",
+    )
+    require(
+        initial_connection + generated - total_flow == channel.peer.connection.inbound_flow_control_window,
+        f"receive connection credit mismatch: initial={initial_connection}, generated={generated}, "
+        f"wire={updates}, pending={pending.updates[0]}, abandoned={abandoned}, flow={total_flow}, "
+        f"actual={channel.peer.connection.inbound_flow_control_window}",
     )
     streams = []
     for stream in channel.results:
@@ -316,6 +325,7 @@ def receive_credit_report(channel, initial_connection, update_baseline):
     return {
         "initial_connection": initial_connection, "connection_window_update": updates,
         "pending_connection_window_update": pending.updates[0],
+        "goaway_discarded_connection_window_update": abandoned,
         "flow": total_flow, "final_connection": final, "streams": streams,
     }
 

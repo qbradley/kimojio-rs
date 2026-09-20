@@ -145,6 +145,9 @@ Closed streams can receive late updates that python-h2 ignores in its retired st
 The wire equation still includes those increments.
 Queued refunds after peer EOF appear as `pending_connection_window_update`.
 They do not count as transmitted WINDOW_UPDATE increments.
+Python-h2 discards its queued output when it receives GOAWAY.
+Generated refunds that this operation discards appear separately as `goaway_discarded_connection_window_update`.
+They never count as transmitted credit, and missing refunds without GOAWAY fail the accounting check.
 
 Every successful stream needs an exact byte count, SHA-256, status, declared content length, trailers, informational sequence, and END_STREAM.
 HEAD must report its declared content length despite its empty body.

@@ -7,9 +7,9 @@ import unittest
 import uuid
 
 from cases import Case, qualify, validate_results
-from peer import Peer, digest_for
+from peer import Peer, digest_for, handshake
 from reference import client, serve
-from socket_peer import Channel, ScriptedPeer, Trace, require, run_command
+from socket_peer import Channel, ScriptedPeer, Trace, receive_credit_report, require, run_command
 from suite import ROOT, adapter, client_case, command, server_case
 
 
@@ -400,6 +400,39 @@ class SocketTests(unittest.TestCase):
         self.assertEqual(trace.flow[1], 21)
         self.assertEqual(trace.updates[0], 21)
         self.assertFalse(trace.buffer)
+
+    def test_goaway_discarded_refunds_are_not_claimed_as_wire_credit(self):
+        from unittest.mock import Mock
+
+        client_peer, server_peer = Peer(client=True), Peer(client=False)
+        handshake(client_peer, server_peer)
+        client_peer.connection.send_headers(1, [
+            (b":method", b"POST"), (b":scheme", b"http"),
+            (b":authority", b"localhost"), (b":path", b"/echo"),
+        ])
+        for index in range(2):
+            client_peer.connection.send_data(1, b"\x01" * 16384, end_stream=index == 1)
+        wire = client_peer.take_wire()
+        server_peer.receive(wire, consume=False)
+        server_peer.consume(1)
+        self.assertEqual(server_peer.generated_connection_refunds, 32768)
+        client_peer.connection.close_connection()
+        server_peer.receive(client_peer.take_wire())
+        self.assertEqual(server_peer.take_wire(), b"")
+
+        channel = Channel(Mock(), server_peer)
+        channel.inbound = Trace()
+        channel.inbound.feed(wire)
+        channel.result(1)
+        report = receive_credit_report(channel, 65535, 0)
+        self.assertEqual(report["connection_window_update"], 0)
+        self.assertEqual(report["pending_connection_window_update"], 0)
+        self.assertEqual(report["goaway_discarded_connection_window_update"], 32768)
+        self.assertEqual(report["final_connection"], 32767)
+        server_peer.termination = None
+        with self.assertRaisesRegex(AssertionError, "before GOAWAY"):
+            receive_credit_report(channel, 65535, 0)
+        channel.close()
 
 
 if __name__ == "__main__":
