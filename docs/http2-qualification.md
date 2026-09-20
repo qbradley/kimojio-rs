@@ -253,3 +253,6 @@ RFC 9110 section 5.3 makes field order across distinct names insignificant.
 Trailer comparisons must preserve every occurrence and the value order for each case-insensitive name.
 Global wire order is a stronger contract than HTTP requires.
 The peer diagnostic includes negative controls for missing values and reordered same-name values.
+Fixture repair `ba0310d687bb990292ddc11d5e604eef8fd330ae` removes the rejection of multi-name trailers.
+Its regression preserves repeated identical values, per-name order, and literal commas through outgoing construction and incoming projection.
+The frozen `00005698` binary remains unchanged. This repair has focused test coverage, not a new complete peer qualification.

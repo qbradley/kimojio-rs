@@ -32,11 +32,17 @@ The fixture does not invent retirement outcomes or HTTP/2 error codes.
 | Failed upload completion | `completion()` can return `Error::Send` instead of the retirement outcome. The report preserves the source error and actual reset code, but leaves retirement null. |
 | Failure before final headers | `send()` errors expose neither an admitted stream ID nor a separate retirement handle. Such reports cannot qualify a completed case. |
 | Strict startup gate | The public API has no peer-SETTINGS-ready signal. The fixture has no raw-frame observer or timing-based substitute. Reduced-window upload cases can fail the strict startup scenario. |
-| Global trailer order | `HeaderMap` preserves duplicate values, but not the original order across different names. The fixture rejects multi-name trailer sections instead of asserting an unknown order. |
 
 An empty `informational` list does not establish that the peer sent no informational response.
 The current fixture does not qualify informational-response behavior.
 Failed or unknown retirement never becomes success because receive END_STREAM was present.
+
+## Trailer representation
+
+Incoming trailer output groups occurrences using `HeaderMap::iter`.
+The fixture preserves each name and value, including the order of repeated values for the same name.
+It does not reconstruct original wire order across different names.
+Peer comparisons must use per-name semantics, as described by [RFC 9110 section 5.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-5.3).
 
 ## Bounds
 

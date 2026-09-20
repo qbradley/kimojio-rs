@@ -216,12 +216,18 @@ fn trailers(fields: &Fields) -> Result<HeaderMap, String> {
             header::HeaderValue::from_bytes(value.as_bytes()).map_err(|e| e.to_string())?,
         );
     }
-    if map.keys().count() > 1 {
-        return Err(
-            "unsupported: HeaderMap cannot preserve global trailer occurrence order".into(),
-        );
-    }
     Ok(map)
+}
+
+fn trailer_fields(headers: &HeaderMap) -> Result<Fields, header::ToStrError> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            value
+                .to_str()
+                .map(|value| (name.as_str().to_owned(), value.to_owned()))
+        })
+        .collect()
 }
 
 fn outgoing(remaining: u64, id: u32, trailers: HeaderMap) -> OutgoingBody {
@@ -439,30 +445,18 @@ async fn consume(index: usize, future: ResponseFuture, context: Context) {
                     body.cancel();
                 }
             }
-            Ok(Some(IncomingFrame::Trailers(headers))) => {
-                if headers.keys().count() > 1 {
-                    context.fail(
-                        "unsupported: wrapper HeaderMap loses global trailer occurrence order"
-                            .into(),
-                    );
-                }
-                let fields: Result<Fields, _> = headers
-                    .iter()
-                    .map(|(n, v)| v.to_str().map(|v| (n.as_str().to_owned(), v.to_owned())))
-                    .collect();
-                match fields {
-                    Ok(fields) => {
-                        let n = fields.iter().map(|(n, v)| n.len() + v.len()).sum::<usize>();
-                        if context.metadata.get() + n > MAX_METADATA {
-                            context.fail("response metadata exceeds fixture bound".into());
-                        } else {
-                            context.metadata.set(context.metadata.get() + n);
-                            context.report.borrow_mut().streams[index].trailers = fields;
-                        }
+            Ok(Some(IncomingFrame::Trailers(headers))) => match trailer_fields(&headers) {
+                Ok(fields) => {
+                    let n = fields.iter().map(|(n, v)| n.len() + v.len()).sum::<usize>();
+                    if context.metadata.get() + n > MAX_METADATA {
+                        context.fail("response metadata exceeds fixture bound".into());
+                    } else {
+                        context.metadata.set(context.metadata.get() + n);
+                        context.report.borrow_mut().streams[index].trailers = fields;
                     }
-                    Err(error) => context.fail(format!("non-text trailer: {error}")),
                 }
-            }
+                Err(error) => context.fail(format!("non-text trailer: {error}")),
+            },
             Ok(None) => break,
             Err(error) => {
                 context.report.borrow_mut().streams[index].note_error(&error);
@@ -511,19 +505,34 @@ mod tests {
     }
 
     #[test]
-    fn trailer_projection_rejects_unobservable_global_order() {
-        assert!(
-            trailers(&vec![
-                ("x-a".into(), "1".into()),
-                ("x-b".into(), "2".into())
-            ])
-            .is_err()
+    fn multi_name_trailers_preserve_every_same_name_occurrence_in_order() {
+        fn grouped(fields: &Fields) -> BTreeMap<&str, Vec<&str>> {
+            let mut names = BTreeMap::<&str, Vec<&str>>::new();
+            for (name, value) in fields {
+                names.entry(name).or_default().push(value);
+            }
+            names
+        }
+
+        let input: Fields = [
+            ("x-a", "first"),
+            ("x-b", "separate"),
+            ("x-a", "repeated"),
+            ("x-c", "other"),
+            ("x-b", "separate"),
+            ("x-a", "repeated"),
+            ("x-a", "last, literal"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.into(), value.into()))
+        .collect();
+        let output = trailer_fields(&trailers(&input).unwrap()).unwrap();
+        assert_eq!(output.len(), input.len());
+        assert_eq!(grouped(&output), grouped(&input));
+        assert_eq!(
+            grouped(&output)["x-a"],
+            ["first", "repeated", "repeated", "last, literal"]
         );
-        let headers = trailers(&vec![
-            ("x-a".into(), "1".into()),
-            ("x-a".into(), "2".into()),
-        ])
-        .unwrap();
-        assert_eq!(headers.get_all("x-a").iter().count(), 2);
+        assert_eq!(grouped(&output)["x-b"], ["separate", "separate"]);
     }
 }
