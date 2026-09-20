@@ -586,6 +586,7 @@ dependencies = [
 name = "kimojio-fsm-http2"
 version = "0.17.0"
 dependencies = [
+ "criterion",
  "rustc-hash",
 ]
 

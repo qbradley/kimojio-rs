@@ -1398,7 +1398,9 @@ impl H2StreamState {
             return Err(ServerError::InvalidContentLength);
         }
         let data_forbidden = request_is_head || matches!(status, 204 | 205 | 304);
-        enforce_optional_body_size(content_length.unwrap_or(0), body_limit)?;
+        if !data_forbidden {
+            enforce_optional_body_size(content_length.unwrap_or(0), body_limit)?;
+        }
         Ok(Self {
             content_length: if data_forbidden { None } else { content_length },
             received_data_len: 0,

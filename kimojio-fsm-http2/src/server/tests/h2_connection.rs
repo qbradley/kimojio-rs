@@ -2362,6 +2362,12 @@ fn h2_client_stream_record_keeps_halves_and_tombstones_disjoint() {
         .accept(&client_response_headers(early, 200, true))
         .unwrap();
     client.assert_stream_invariants();
+    assert!(client.has_send(early));
+    assert!(!client.has_receive_body(early));
+    assert!(!client.endpoint.tombstones.contains_key(&early));
+    let plan = client.prepare_data_frame(early, 0, true).unwrap().unwrap();
+    client.commit_data_frame(plan).unwrap();
+    client.assert_stream_invariants();
     assert!(!client.endpoint.streams.contains_key(&early));
     assert_eq!(
         client.endpoint.tombstones.get(&early),

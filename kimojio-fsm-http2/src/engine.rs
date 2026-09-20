@@ -85,6 +85,12 @@ enum Protocol {
 }
 
 impl Protocol {
+    fn connection_send_available(&self) -> usize {
+        match self {
+            Self::Client(role) => role.endpoint.connection_send_available(),
+            Self::Server(role) => role.endpoint.connection_send_available(),
+        }
+    }
     fn now(&mut self, now: Duration) {
         match self {
             Self::Client(role) => {
@@ -193,6 +199,11 @@ struct Stream<B> {
     request_head: bool,
     connect: bool,
     deadline: Option<Duration>,
+    demand_key: Option<u128>,
+    ready_key: Option<u128>,
+    body_limit: Option<usize>,
+    response_seen: bool,
+    outbound_complete: bool,
 }
 
 impl<B> Stream<B> {
@@ -214,6 +225,11 @@ impl<B> Stream<B> {
             request_head: false,
             connect: false,
             deadline: None,
+            demand_key: None,
+            ready_key: None,
+            body_limit: None,
+            response_seen: false,
+            outbound_complete: false,
         }
     }
     fn can_retire(&self) -> bool {
@@ -223,6 +239,9 @@ impl<B> Stream<B> {
             && self.writes == 0
             && self.returns == 0
             && self.chunk.is_none()
+    }
+    fn succeeded(&self) -> bool {
+        self.receive_end == Some(StreamOutcome::Complete) && self.outbound_complete
     }
 }
 
@@ -257,6 +276,13 @@ enum Deadline {
     Stream(StreamId),
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum SettingsOutput {
+    NotQueued,
+    Queued,
+    Flushed,
+}
+
 #[derive(Clone, Copy)]
 enum Transition {
     Notice,
@@ -271,6 +297,8 @@ enum Transition {
     Close,
     Closed,
     FinishDrain,
+    ExhaustIdentity,
+    TimerDue,
 }
 
 /// Shared operations for the direct client and server.
@@ -286,15 +314,15 @@ pub struct Connection<B: SendBuffer = Vec<u8>> {
     life: Life,
     streams: FxHashMap<StreamId, Stream<B>>,
     notices: VecDeque<Notice<B>>,
-    ready: VecDeque<StreamId>,
-    ready_set: FxHashSet<StreamId>,
+    ready: BTreeMap<u128, StreamId>,
     blocked: BTreeSet<StreamId>,
     probing: BTreeSet<StreamId>,
     probe_again: bool,
-    demand: VecDeque<StreamId>,
-    demand_set: FxHashSet<StreamId>,
+    prefer_probe: bool,
+    demand: BTreeMap<u128, StreamId>,
+    work_sequence: u128,
     send_capacity: usize,
-    controls: VecDeque<(Vec<u8>, Option<StreamId>)>,
+    controls: VecDeque<(Vec<u8>, Option<StreamId>, ControlPurpose)>,
     control_capacity: usize,
     pending_write: Option<WriteOp<B>>,
     read: Option<Token>,
@@ -307,6 +335,7 @@ pub struct Connection<B: SendBuffer = Vec<u8>> {
     receive_window: usize,
     deadlines: BTreeMap<(Duration, Deadline), ()>,
     settings_at: Option<Duration>,
+    settings_output: SettingsOutput,
     alarm: Option<(Token, Duration)>,
     wake_tokens: FxHashSet<u64>,
     cancellations: FxHashSet<u64>,
@@ -354,7 +383,8 @@ impl<B: SendBuffer> Client<B> {
         let preface = role.connection_preface();
         let mut core = Connection::new(Protocol::Client(role), config, now);
         core.queue_control(preface, None)?;
-        core.settings_deadline();
+        core.controls.back_mut().expect("client preface").2 = ControlPurpose::LocalSettings;
+        core.settings_output = SettingsOutput::Queued;
         Ok(Self(core))
     }
 
@@ -389,6 +419,14 @@ impl<B: SendBuffer> Client<B> {
             validate_decoded_header_fields_by(count, field, H2HeaderValidationRole::Request)
                 .map_err(crate::ServerError::from)?
                 .enforce_limits(self.config.http)?;
+        if let Some(actual) = section.content_length
+            && actual > self.config.http.max_body_bytes()
+        {
+            return Err(CommandError::Message(crate::ServerError::BodyTooLarge {
+                limit: self.config.http.max_body_bytes(),
+                actual,
+            }));
+        }
         if end && section.content_length.is_some_and(|n| n != 0) {
             return Err(CommandError::Message(
                 crate::ServerError::InvalidContentLength,
@@ -422,6 +460,7 @@ impl<B: SendBuffer> Client<B> {
             self.config.stream_receive_window,
         );
         state.expected_send = section.content_length;
+        state.body_limit = Some(self.config.http.max_body_bytes());
         state.request_head = head;
         state.connect = connect;
         self.streams.insert(id, state);
@@ -485,15 +524,26 @@ impl<B: SendBuffer> Server<B> {
         let status = section.response_status.ok_or(CommandError::InvalidState)?;
         let informational = status < 200;
         let tunnel = state.connect && (200..300).contains(&status);
-        let no_body = state.request_head || matches!(status, 204 | 205 | 304);
+        let no_body = !informational && (state.request_head || matches!(status, 204 | 205 | 304));
         if status == 101
             || (status == 204 && section.content_length.is_some())
             || (status == 205 && section.content_length.is_some_and(|n| n != 0))
             || (informational && end)
+            || (informational && section.content_length.is_some())
             || (tunnel && section.content_length.is_some())
             || (end && !no_body && section.content_length.is_some_and(|n| n != 0))
         {
             return Err(CommandError::Message(crate::ServerError::InvalidResponse));
+        }
+        if !no_body
+            && !tunnel
+            && let Some(actual) = section.content_length
+            && actual > self.config.http.max_body_bytes()
+        {
+            return Err(CommandError::Message(crate::ServerError::BodyTooLarge {
+                limit: self.config.http.max_body_bytes(),
+                actual,
+            }));
         }
         self.0.preflight_headers(count, field)?;
         let Protocol::Server(role) = &mut self.0.protocol else {
@@ -512,12 +562,20 @@ impl<B: SendBuffer> Server<B> {
             } else {
                 Source::Ready
             };
+            state.body_limit = if tunnel {
+                None
+            } else {
+                Some(self.0.config.http.max_body_bytes())
+            };
             if end || no_body {
                 role.finish_response_stream(id.0);
             }
             if tunnel && let Some(inbound) = role.inbound_mut(id.0) {
                 inbound.content_length = None;
                 inbound.body_limit = None;
+            }
+            if tunnel && let Some(outbound) = role.outbound_mut(id.0) {
+                outbound.sent.limit = None;
             }
         }
         self.0.collect_headers(id)?;
@@ -545,13 +603,13 @@ impl<B: SendBuffer> Connection<B> {
             life: Life::Open,
             streams: FxHashMap::default(),
             notices: VecDeque::new(),
-            ready: VecDeque::new(),
-            ready_set: FxHashSet::default(),
+            ready: BTreeMap::new(),
             blocked: BTreeSet::new(),
             probing: BTreeSet::new(),
             probe_again: false,
-            demand: VecDeque::new(),
-            demand_set: FxHashSet::default(),
+            prefer_probe: true,
+            demand: BTreeMap::new(),
+            work_sequence: 0,
             send_capacity: 0,
             controls: VecDeque::new(),
             control_capacity: 0,
@@ -565,6 +623,7 @@ impl<B: SendBuffer> Connection<B> {
             receive_capacity: 0,
             deadlines: BTreeMap::new(),
             settings_at: None,
+            settings_output: SettingsOutput::NotQueued,
             alarm: None,
             wake_tokens: FxHashSet::default(),
             cancellations: FxHashSet::default(),
@@ -602,19 +661,31 @@ impl<B: SendBuffer> Connection<B> {
         }
     }
     fn mark_demand(&mut self, id: StreamId) {
-        if self.demand_set.insert(id) {
-            self.demand.push_back(id);
+        if let Some(state) = self.streams.get_mut(&id)
+            && state.demand_key.is_none()
+        {
+            self.work_sequence += 1;
+            state.demand_key = Some(self.work_sequence);
+            self.demand.insert(self.work_sequence, id);
         }
     }
     fn mark_ready(&mut self, id: StreamId) {
         self.blocked.remove(&id);
         self.probing.remove(&id);
-        if self.ready_set.insert(id) {
-            self.ready.push_back(id);
+        if let Some(state) = self.streams.get_mut(&id)
+            && state.ready_key.is_none()
+        {
+            self.work_sequence += 1;
+            state.ready_key = Some(self.work_sequence);
+            self.ready.insert(self.work_sequence, id);
         }
     }
     fn settings_deadline(&mut self) {
-        if self.protocol.settings_owed() && self.settings_at.is_none() {
+        if self.protocol.settings_owed()
+            && self.settings_at.is_none()
+            && self.settings_output == SettingsOutput::Flushed
+            && self.check_live().is_ok()
+        {
             let at = self.now.saturating_add(self.config.settings_timeout);
             self.settings_at = Some(at);
             self.deadlines.insert((at, Deadline::Settings), ());
@@ -629,16 +700,29 @@ impl<B: SendBuffer> Connection<B> {
         count: usize,
         field: impl Fn(usize) -> H2RawHeaderRef<'a>,
     ) -> Result<(), CommandError> {
-        let bound = (0..count)
+        let payload_bound = (0..count)
             .map(field)
-            .try_fold(64usize, |n, f| {
+            .try_fold(16usize, |n, f| {
                 n.checked_add(f.name.len())?
                     .checked_add(f.value.len())?
                     .checked_add(24)
             })
             .ok_or(CommandError::Capacity)?;
+        let bound = payload_bound
+            .checked_add(
+                payload_bound
+                    .div_ceil(16_384)
+                    .max(1)
+                    .checked_mul(9)
+                    .ok_or(CommandError::Capacity)?,
+            )
+            .ok_or(CommandError::Capacity)?;
+        self.preflight_control(bound)
+    }
+
+    fn preflight_control(&self, capacity: usize) -> Result<(), CommandError> {
         if self.controls.len() >= self.config.max_outbound_items
-            || bound
+            || capacity
                 > self
                     .config
                     .max_outbound_capacity
@@ -676,7 +760,8 @@ impl<B: SendBuffer> Connection<B> {
         if let Some(state) = stream.and_then(|id| self.streams.get_mut(&id)) {
             state.writes += 1;
         }
-        self.controls.push_back((bytes, stream));
+        self.controls
+            .push_back((bytes, stream, ControlPurpose::Ordinary));
         Ok(())
     }
     fn frame(&mut self, kind: H2FrameType, id: u32, payload: &[u8]) -> Result<(), CommandError> {
@@ -688,7 +773,9 @@ impl<B: SendBuffer> Connection<B> {
             payload: payload.to_vec(),
         }
         .encode(&mut bytes);
-        self.queue_control(bytes, None)
+        let owner = (kind == H2FrameType::RstStream && self.streams.contains_key(&StreamId(id)))
+            .then_some(StreamId(id));
+        self.queue_control(bytes, owner)
     }
 
     pub fn send(
@@ -723,6 +810,17 @@ impl<B: SendBuffer> Connection<B> {
             .get_mut(&permit.stream)
             .expect("permit owns live source");
         let next = state.sent_bytes.checked_add(buffer.as_ref().len());
+        if let (Some(next), Some(limit)) = (next, state.body_limit)
+            && next > limit
+        {
+            return Err(Rejected {
+                error: CommandError::Message(crate::ServerError::BodyTooLarge {
+                    limit,
+                    actual: next,
+                }),
+                value: (permit, buffer),
+            });
+        }
         if next.is_none()
             || state.expected_send.is_some_and(|expected| {
                 next.is_some_and(|next| next > expected || (end && next != expected))
@@ -794,7 +892,11 @@ impl<B: SendBuffer> Connection<B> {
 
     pub fn reset(&mut self, id: StreamId, code: H2ErrorCode) -> Result<(), CommandError> {
         self.check_live()?;
-        if !self.streams.contains_key(&id) {
+        if !self
+            .streams
+            .get(&id)
+            .is_some_and(|state| state.outcome == StreamOutcome::Complete)
+        {
             return Err(CommandError::InvalidState);
         }
         self.frame(H2FrameType::RstStream, id.0, &code.as_u32().to_be_bytes())?;
@@ -808,10 +910,14 @@ impl<B: SendBuffer> Connection<B> {
         id: StreamId,
         deadline: Option<Duration>,
     ) -> Result<(), CommandError> {
+        self.check_live()?;
         let state = self
             .streams
             .get_mut(&id)
             .ok_or(CommandError::InvalidState)?;
+        if state.succeeded() || state.outcome != StreamOutcome::Complete {
+            return Err(CommandError::InvalidState);
+        }
         if let Some(old) = state.deadline.take() {
             self.deadlines.remove(&(old, Deadline::Stream(id)));
         }
@@ -846,17 +952,27 @@ impl<B: SendBuffer> Connection<B> {
                         .get(&id)
                         .is_some_and(|s| s.deadline == Some(at))
                     {
-                        self.frame(
+                        let queued = self.frame(
                             H2FrameType::RstStream,
                             id.0,
                             &H2ErrorCode::Cancel.as_u32().to_be_bytes(),
-                        )?;
+                        );
                         self.protocol.reset(id);
                         self.terminate_stream(id, StreamOutcome::Deadline);
+                        if queued.is_err() {
+                            self.fail(ConnectionResult::ResourceExhausted);
+                        }
                     }
                 }
-                Deadline::ShutdownPing => self.final_goaway()?,
-                Deadline::ShutdownEnd => self.fail(ConnectionResult::Graceful),
+                Deadline::ShutdownPing => {
+                    if self.final_goaway().is_err() {
+                        self.fail(ConnectionResult::ResourceExhausted);
+                    }
+                }
+                Deadline::ShutdownEnd => {
+                    self.fail(ConnectionResult::Graceful);
+                    self.fail(ConnectionResult::IoFailed);
+                }
                 Deadline::Settings => {}
             }
         }
@@ -865,21 +981,24 @@ impl<B: SendBuffer> Connection<B> {
 
     pub fn shutdown(&mut self) -> Result<(), CommandError> {
         self.check_open()?;
-        self.life = Life::Draining {
-            final_goaway: false,
-        };
+        self.preflight_control(if matches!(self.protocol, Protocol::Server(_)) {
+            34
+        } else {
+            17
+        })?;
         let bytes = match &mut self.protocol {
             Protocol::Server(role) => role.begin_graceful_shutdown()?,
             Protocol::Client(role) => role.goaway_frame(0, H2ErrorCode::NoError.as_u32())?,
         };
-        self.queue_control(bytes, None)?;
-        self.deadlines.insert(
-            (
-                self.now.saturating_add(Duration::from_secs(1)),
-                Deadline::ShutdownPing,
-            ),
-            (),
-        );
+        self.queue_control(bytes.into_boxed_slice().into_vec(), None)?;
+        self.life = Life::Draining {
+            final_goaway: false,
+        };
+        if matches!(self.protocol, Protocol::Server(_)) {
+            self.controls.back_mut().expect("shutdown output").2 = ControlPurpose::ShutdownPing;
+        } else {
+            self.life = Life::Draining { final_goaway: true };
+        }
         self.deadlines.insert(
             (
                 self.now.saturating_add(self.config.shutdown_timeout),
@@ -899,9 +1018,10 @@ impl<B: SendBuffer> Connection<B> {
         ) {
             return Ok(());
         }
+        self.preflight_control(17)?;
         if let Protocol::Server(role) = &mut self.protocol {
             let bytes = role.graceful_shutdown_ping_elapsed()?;
-            self.queue_control(bytes, None)?;
+            self.queue_control(bytes.into_boxed_slice().into_vec(), None)?;
         }
         self.life = Life::Draining { final_goaway: true };
         Ok(())
@@ -939,6 +1059,11 @@ impl<B: SendBuffer> Connection<B> {
             && state.receive_end.is_none()
         {
             state.receive_end = Some(outcome);
+            if state.outbound_complete
+                && let Some(at) = state.deadline.take()
+            {
+                self.deadlines.remove(&(at, Deadline::Stream(id)));
+            }
             self.notices.push_back(Notice::End(ReceiveEnd {
                 stream: id,
                 outcome,
@@ -965,6 +1090,12 @@ impl<B: SendBuffer> Connection<B> {
     fn maybe_retire(&mut self, id: StreamId) {
         if self.streams.get(&id).is_some_and(Stream::can_retire) {
             let state = self.streams.remove(&id).expect("retirement join");
+            if let Some(key) = state.demand_key {
+                self.demand.remove(&key);
+            }
+            if let Some(key) = state.ready_key {
+                self.ready.remove(&key);
+            }
             if let Some(at) = state.deadline {
                 self.deadlines.remove(&(at, Deadline::Stream(id)));
             }
@@ -983,9 +1114,10 @@ impl<B: SendBuffer> Connection<B> {
             ConnectionResult::IoFailed | ConnectionResult::PeerClosed
         ) {
             self.transport_broken = true;
-            while let Some((bytes, id)) = self.controls.pop_front() {
+            while let Some((bytes, id, _)) = self.controls.pop_front() {
                 self.control_capacity -= bytes.capacity();
                 if let Some(id) = id {
+                    self.fail_unsettled_stream(id);
                     if let Some(state) = self.streams.get_mut(&id) {
                         state.writes -= 1;
                     }
@@ -993,6 +1125,9 @@ impl<B: SendBuffer> Connection<B> {
                 }
             }
             if let Some(op) = self.pending_write.take() {
+                if let Some(id) = op.stream {
+                    self.fail_unsettled_stream(id);
+                }
                 if let WriteStorage::Data { buffer, range, .. } = op.storage {
                     let id = op.stream.expect("DATA stream");
                     self.send_capacity -= buffer.retained_capacity();
@@ -1007,7 +1142,7 @@ impl<B: SendBuffer> Connection<B> {
                         exact: true,
                         result: Err(SendStop::ConnectionFailed),
                     }));
-                } else if let WriteStorage::Control(bytes) = op.storage {
+                } else if let WriteStorage::Control { bytes, .. } = op.storage {
                     self.control_capacity -= bytes.capacity();
                 }
                 if let Some(id) = op.stream {
@@ -1022,28 +1157,42 @@ impl<B: SendBuffer> Connection<B> {
         if !matches!(self.life, Life::Open | Life::Draining { .. }) {
             return;
         }
-        if let ConnectionResult::Protocol(error) = result {
+        let goaway_code = match result {
+            ConnectionResult::Protocol(error) => Some(error.code),
+            ConnectionResult::ResourceExhausted if !self.transport_broken => {
+                Some(H2ErrorCode::EnhanceYourCalm)
+            }
+            _ => None,
+        };
+        if let Some(code) = goaway_code {
             let mut bytes = Vec::new();
-            encode_h2_goaway(
-                &mut bytes,
-                self.protocol.highest_processed(),
-                error.code.as_u32(),
-            );
+            encode_h2_goaway(&mut bytes, self.protocol.highest_processed(), code.as_u32());
             // One bounded emergency GOAWAY slot is independent of ordinary output admission.
             self.control_capacity += bytes.capacity();
-            self.controls.push_back((bytes, None));
+            self.controls
+                .push_back((bytes, None, ControlPurpose::Ordinary));
         }
         self.life = Life::Settling(result);
         self.deadlines.clear();
         let ids: Vec<_> = self.streams.keys().copied().collect();
         for id in ids {
-            self.terminate_stream(id, StreamOutcome::ConnectionFailed);
+            self.fail_unsettled_stream(id);
         }
         if let Some(input) = self.input.take() {
             self.recycle(input.page);
         }
         if let Some(assembly) = self.assembly.take() {
             self.recycle(assembly.page);
+        }
+    }
+
+    fn fail_unsettled_stream(&mut self, id: StreamId) {
+        if self
+            .streams
+            .get(&id)
+            .is_some_and(|state| state.outcome == StreamOutcome::Complete && !state.succeeded())
+        {
+            self.terminate_stream(id, StreamOutcome::ConnectionFailed);
         }
     }
 
@@ -1108,6 +1257,10 @@ impl<B: SendBuffer> Connection<B> {
         self.read = None;
         self.cancelled_read = false;
         let ReadCompletion { op, outcome } = completion;
+        if self.check_live().is_err() {
+            self.recycle(op.page);
+            return Ok(());
+        }
         match outcome {
             ReadOutcome::Read(n) if n != 0 && self.check_live().is_ok() => {
                 self.input = Some(Input {
@@ -1191,13 +1344,56 @@ impl<B: SendBuffer> Connection<B> {
                 ..
             }
         );
+        let frame_complete = op.remaining() == 0;
         if !success {
             self.fail(ConnectionResult::IoFailed);
         }
         let id = op.stream;
+        if success
+            && frame_complete
+            && op.end
+            && op.buffer_end
+            && let Some(state) = id.and_then(|id| self.streams.get_mut(&id))
+        {
+            state.outbound_complete = true;
+            if state.succeeded() && state.outcome == StreamOutcome::ConnectionFailed {
+                state.outcome = StreamOutcome::Complete;
+            }
+            if state.succeeded()
+                && let Some(at) = state.deadline.take()
+            {
+                self.deadlines
+                    .remove(&(at, Deadline::Stream(id.expect("owned terminal write"))));
+            }
+        }
         match op.storage {
-            WriteStorage::Control(bytes) => {
+            WriteStorage::Control { bytes, purpose } => {
                 self.control_capacity -= bytes.capacity();
+                if success && frame_complete {
+                    match purpose {
+                        ControlPurpose::LocalSettings => {
+                            self.settings_output = SettingsOutput::Flushed;
+                            self.settings_deadline();
+                        }
+                        ControlPurpose::ShutdownPing
+                            if matches!(
+                                self.life,
+                                Life::Draining {
+                                    final_goaway: false
+                                }
+                            ) =>
+                        {
+                            self.deadlines.insert(
+                                (
+                                    self.now.saturating_add(Duration::from_secs(1)),
+                                    Deadline::ShutdownPing,
+                                ),
+                                (),
+                            );
+                        }
+                        ControlPurpose::Ordinary | ControlPurpose::ShutdownPing => {}
+                    }
+                }
             }
             WriteStorage::Data { buffer, range, .. } => {
                 let id = id.expect("DATA has a stream");
@@ -1228,7 +1424,7 @@ impl<B: SendBuffer> Connection<B> {
                         buffer,
                         accepted,
                         exact,
-                        result: if success && op.buffer_end {
+                        result: if success && op.buffer_end && frame_complete {
                             Ok(())
                         } else if success {
                             stopped.map_or(Ok(()), Err)
@@ -1328,6 +1524,9 @@ impl<B: SendBuffer> Connection<B> {
     }
 
     fn select(&self) -> Option<Transition> {
+        if self.sequence >= u64::MAX - 8 && self.check_live().is_ok() {
+            return Some(Transition::ExhaustIdentity);
+        }
         if !self.notices.is_empty() {
             return Some(Transition::Notice);
         }
@@ -1372,6 +1571,13 @@ impl<B: SendBuffer> Connection<B> {
             }
             Life::Open | Life::Draining { .. } => {}
         }
+        if self
+            .deadlines
+            .first_key_value()
+            .is_some_and(|((at, _), _)| *at <= self.now)
+        {
+            return Some(Transition::TimerDue);
+        }
         if self.input.is_some() {
             return Some(Transition::Input);
         }
@@ -1379,8 +1585,8 @@ impl<B: SendBuffer> Connection<B> {
             && (self.pending_write.is_some()
                 || !self.controls.is_empty()
                 || !self.ready.is_empty()
-                || !self.probing.is_empty()
-                || self.probe_again)
+                || (self.protocol.connection_send_available() != 0
+                    && (!self.probing.is_empty() || self.probe_again)))
         {
             return Some(Transition::Write);
         }
@@ -1403,6 +1609,17 @@ impl<B: SendBuffer> Connection<B> {
         for _ in 0..self.config.turn_budget {
             let transition = self.select()?;
             let output = match transition {
+                Transition::TimerDue => {
+                    if self.advance_time(self.now).is_err() {
+                        self.fail(ConnectionResult::ResourceExhausted);
+                    }
+                    None
+                }
+                Transition::ExhaustIdentity => {
+                    self.fail(ConnectionResult::ResourceExhausted);
+                    self.fail(ConnectionResult::IoFailed);
+                    None
+                }
                 Transition::FinishDrain => {
                     self.life = Life::Settling(ConnectionResult::Graceful);
                     self.deadlines.clear();
@@ -1422,8 +1639,10 @@ impl<B: SendBuffer> Connection<B> {
                     }
                 }
                 Transition::Permit => {
-                    let id = self.demand.pop_front().expect("selected demand");
-                    self.demand_set.remove(&id);
+                    let (_, id) = self.demand.pop_first().expect("selected demand");
+                    if let Some(state) = self.streams.get_mut(&id) {
+                        state.demand_key = None;
+                    }
                     if self
                         .streams
                         .get(&id)
@@ -1533,28 +1752,39 @@ impl<B: SendBuffer> Connection<B> {
     }
 
     fn issue_write<P: Ports<B>>(&mut self, ports: &mut P) -> Option<P::Output> {
-        if self.probing.is_empty() && self.probe_again {
+        if self.probing.is_empty()
+            && self.probe_again
+            && self.protocol.connection_send_available() != 0
+        {
             std::mem::swap(&mut self.probing, &mut self.blocked);
             self.probe_again = false;
         }
         let op = if let Some(mut op) = self.pending_write.take() {
             op.token = self.token();
             op
-        } else if let Some((bytes, stream)) = self.controls.pop_front() {
+        } else if let Some((bytes, stream, purpose)) = self.controls.pop_front() {
+            let end = stream.is_some() && bytes.len() >= 9 && bytes[3] == 1 && bytes[4] & 1 != 0;
             WriteOp {
                 token: self.token(),
-                storage: WriteStorage::Control(bytes),
+                storage: WriteStorage::Control { bytes, purpose },
                 cursor: 0,
                 stream,
-                end: false,
+                end,
                 buffer_end: true,
             }
         } else {
-            let id = self
-                .ready
-                .pop_front()
-                .or_else(|| self.probing.pop_first())?;
-            self.ready_set.remove(&id);
+            let can_probe =
+                self.protocol.connection_send_available() != 0 && !self.probing.is_empty();
+            let id = if can_probe && (self.prefer_probe || self.ready.is_empty()) {
+                self.prefer_probe = false;
+                self.probing.pop_first()?
+            } else {
+                self.prefer_probe = true;
+                self.ready.pop_first().map(|(_, id)| id)?
+            };
+            if let Some(state) = self.streams.get_mut(&id) {
+                state.ready_key = None;
+            }
             let chunk = self.streams.get(&id).and_then(|s| s.chunk.as_ref())?;
             let remaining = chunk.buffer.as_ref().len() - chunk.offset;
             let plan = match self.protocol.prepare_data(id, remaining, chunk.end) {
@@ -1885,9 +2115,22 @@ impl<B: SendBuffer> Connection<B> {
                 return None;
             }
         };
-        if self.queue_control(output, None).is_err() {
+        let output_owner = if output.len() >= 9 && output[3] == 3 {
+            let id = StreamId(u32::from_be_bytes(
+                output[5..9].try_into().expect("RST_STREAM header"),
+            ));
+            self.streams.contains_key(&id).then_some(id)
+        } else {
+            None
+        };
+        if self.queue_control(output, output_owner).is_err() {
             self.fail(ConnectionResult::ResourceExhausted);
             return None;
+        }
+        if self.settings_output == SettingsOutput::NotQueued && self.protocol.settings_owed() {
+            self.controls.back_mut().expect("server SETTINGS output").2 =
+                ControlPurpose::LocalSettings;
+            self.settings_output = SettingsOutput::Queued;
         }
         self.settings_deadline();
         if bytes[3] == 8 || bytes[3] == 4 {
@@ -1915,6 +2158,11 @@ impl<B: SendBuffer> Connection<B> {
         match event {
             Event::Progress => None,
             Event::Headers(id, kind, end) => {
+                if matches!(kind, HeadKind::Response(_) | HeadKind::Informational(_))
+                    && let Some(state) = self.streams.get_mut(&id)
+                {
+                    state.response_seen = true;
+                }
                 if kind == HeadKind::Request {
                     if self.streams.len() >= self.config.http.max_active_streams() {
                         if self
@@ -1939,6 +2187,18 @@ impl<B: SendBuffer> Connection<B> {
                     state.request_head = method.is_some_and(|f| f.value == b"HEAD");
                     state.connect = method.is_some_and(|f| f.value == b"CONNECT");
                     self.streams.insert(id, state);
+                }
+                if matches!(kind, HeadKind::Response(200..=299))
+                    && self.streams.get(&id).is_some_and(|state| state.connect)
+                {
+                    let state = self.streams.get_mut(&id).expect("CONNECT response");
+                    state.expected_send = None;
+                    state.body_limit = None;
+                    if let Protocol::Client(role) = &mut self.protocol
+                        && let Some(send) = role.send_mut(id.0)
+                    {
+                        send.sent.limit = None;
+                    }
                 }
                 if end {
                     self.receive_end(id, StreamOutcome::Complete);
@@ -2006,8 +2266,16 @@ impl<B: SendBuffer> Connection<B> {
                     .filter(|id| matches!(self.protocol, Protocol::Client(_)) && id.0 > last)
                     .collect();
                 for id in excluded {
-                    self.protocol.reset(id);
-                    self.terminate_stream(id, StreamOutcome::Unprocessed);
+                    let state = self.streams.get(&id).expect("GOAWAY stream");
+                    if state.outcome == StreamOutcome::Complete && !state.succeeded() {
+                        let outcome = if state.response_seen {
+                            StreamOutcome::ConnectionFailed
+                        } else {
+                            StreamOutcome::Unprocessed
+                        };
+                        self.protocol.reset(id);
+                        self.terminate_stream(id, outcome);
+                    }
                 }
                 if code != 0 {
                     self.fail(ConnectionResult::PeerClosed);
@@ -2023,3 +2291,7 @@ impl<B: SendBuffer> Connection<B> {
 fn payload_len(bytes: &[u8]) -> usize {
     (usize::from(bytes[0]) << 16) | (usize::from(bytes[1]) << 8) | usize::from(bytes[2])
 }
+
+#[cfg(test)]
+#[path = "engine_tests.rs"]
+mod tests;

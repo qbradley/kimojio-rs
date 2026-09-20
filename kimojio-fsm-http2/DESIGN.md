@@ -5,7 +5,8 @@
 The private protocol components come from `ae1c3402b12a338d321246596aed33025fbc3b91`.
 They include HPACK, compact fields, frames, flow arithmetic, and separate client and server stream halves.
 They do not include the mixed HTTP driver or an HTTP/1 parser.
-The only external dependency is `rustc-hash`.
+The only production dependency is `rustc-hash`.
+The benchmark uses the workspace Criterion dependency.
 
 The extraction retains 205 component tests.
 Those tests do not qualify a complete owned-operation engine.
@@ -40,12 +41,29 @@ Protocol state, application leases, and transport settlement remain separate.
 Normal selection uses recorded readiness.
 Connection-wide SETTINGS work can visit all affected streams.
 
-## Unqualified gates
+## Support and acceptance boundary
 
-Stage two adds classic CONNECT, disabled-push transitions, owned operations, and an in-memory example.
-Its focused tests include frame-credit sequences and bounded completion-order cases.
-Release qualification, wider resource models, and the final support audit remain pending.
-Independent peers and performance qualification remain separate acceptance work.
+The standalone suite covers both direct roles and their owned-operation boundary.
+The protocol target is RFC 9113 with HPACK from RFC 7541.
+Passing this suite does not establish complete RFC conformance.
+Independent peers, the outer composite, runtime integration, and performance qualification remain separate acceptance work.
+
+| Area | Implemented behavior |
+| --- | --- |
+| Messages | Request and response bodies, informational responses, final headers, and both trailer directions |
+| Duplex | A response END_STREAM closes only the receive half of a client stream |
+| Message rules | Content-length accounting, HEAD and status-based body restrictions, and field syntax |
+| CONNECT | Classic CONNECT and independent tunnel halves after a successful response |
+| Push | Disabled advertisement, pre-ACK HPACK consumption and promised-stream cancellation, post-ACK connection error |
+| Flow control | Separate stream and connection windows, padding credit, discard credit, and receipt-based body credit |
+| Shutdown | GOAWAY retry boundary, server two-stage GOAWAY, supplied deadlines, and cancellation joins |
+| Compression | Bounded HPACK tables, compact fields, CONTINUATION assembly, and committed output order |
+
+The core does not implement extended CONNECT, RFC 9218 scheduling, h2c, socket I/O, TLS, or an asynchronous runtime.
+The core ignores legacy priority information rather than using it for scheduling.
+The pure path does not instantiate an HTTP/1 parser.
+Some inherited error variants and the HTTP/1 request-count limit remain public compatibility vocabulary.
+They do not select another protocol or constrain the HTTP/2 request count.
 
 ## Public API checkpoint
 
@@ -184,6 +202,9 @@ Reset, excluded GOAWAY streams, and connection failure revoke outstanding permit
 `sent` returns the original buffer after its last transport obligation settles.
 A successful complete write remains successful after a concurrent stream reset.
 Its stream outcome can still report that reset.
+A later connection failure preserves an already completed exchange and an existing reset, deadline, or retry outcome.
+An observed response prevents a later GOAWAY boundary from making that exchange retryable.
+Producer completion alone does not establish successful transport settlement of END_STREAM.
 
 ## Pages and drive cost
 
@@ -206,8 +227,41 @@ The default receive capacity is 8 MiB.
 
 Blocked senders occupy bounded ordered sets.
 A connection WINDOW_UPDATE swaps a set in constant time.
-Each subsequent drive transition checks one recorded sender.
+Each subsequent drive transition examines one recorded sender.
 SETTINGS window changes preflight all affected windows before commitment.
+Ordered readiness entries have per-stream removal keys.
+Retirement removes those entries even when an earlier stream retains its permit.
+One-byte connection refunds rotate among blocked siblings without a whole-stream scan.
+
+| Default limit | Value |
+| --- | --- |
+| Active application records | 100, including records with retained body fragments |
+| Header section | 64 KiB encoded bytes and decoded field accounting |
+| Header occurrences | 100 |
+| Message body | 8 MiB per direction, separate from flow windows |
+| Retained receive capacity per stream | 256 KiB |
+| Retained fragments per stream | 128, including empty fragments |
+| Retained send capacity per connection | 8 MiB |
+| Send permit length and capacity | 64 KiB each |
+| Queued control items | 512 |
+| Retained control capacity | 2 MiB |
+| Drive transitions per turn | 128 |
+| SETTINGS ACK deadline | 10 seconds after output settlement |
+| Shutdown deadline | 30 seconds after the shutdown command |
+
+Successful CONNECT tunnels do not use the HTTP message-body limit.
+The decoder uses its advertised table limit.
+The encoder also has a 1 MiB hard table limit.
+The page and send limits do not represent a bound on total process memory.
+Codec tables, compact-field storage, collection nodes, and operation metadata have separate bounded storage.
+The generic buffer type also occupies inline metadata space.
+A compact buffer handle avoids large inline arrays in every stream record.
+
+The control budget refills from supplied time once per second.
+Its limits are 64 SETTINGS, 4096 WINDOW_UPDATE, 64 PING, 256 RST_STREAM, four GOAWAY, and 256 PRIORITY frames.
+Protocol progress also restores up to two WINDOW_UPDATE credits per frame.
+Aggregate output exhaustion permits one additional emergency GOAWAY.
+It does not permit an unbounded error queue.
 
 ## Alarms and settlement
 
@@ -219,6 +273,19 @@ The caller must complete both the cancellation request and the original alarm.
 
 An invalidated alarm completion releases its token without advancing protocol time.
 It cannot trigger a replacement deadline.
+The SETTINGS ACK deadline starts after the complete original SETTINGS write settles successfully.
+The server shutdown PING wait starts after its complete original write settles successfully.
+The overall shutdown deadline still starts at the shutdown command.
+Expiry requests cancellation of blocked transport operations and abandons unsent output.
+The final connection result remains `Graceful` for caller-requested shutdown.
+Individual unfinished streams report their separate failure outcomes.
+
+Stream deadlines remain active until both protocol halves end and the final outbound write settles.
+Retained application fragments alone do not keep those deadlines active.
+Due deadlines run before new normal work.
+An exhausted output budget during a deadline causes explicit aggregate failure.
+It does not silently remove the deadline.
+
 Transport close waits for outstanding read, write, cancellation, and alarm operations.
 Application body receipts can remain outstanding after transport close.
 Stream retirement still waits for those receipts.
@@ -234,3 +301,64 @@ This arrangement avoids duplicate forwarding code without a universal operation 
 `examples/interop.rs` belongs to the parent integration work and is not part of this implementation.
 `src/http/**` and `tests/http_composition.rs` also belong to the parent.
 The pure engine does not create or drive an HTTP/1 parser.
+
+## Standalone qualification
+
+The all-feature suite contains 210 unit tests, 49 integration tests, and two doctests.
+Five unit tests are new direct-engine bounds tests.
+The default suite omits five feature-specific component tests.
+These counts do not include the six Criterion smoke workloads.
+
+The independent ownership model uses obligation sets rather than the engine selector.
+It explores 336 stream schedules and 480 connection schedules.
+The stream schedules combine 14 write cuts, six event orders, and four callback suspension policies.
+The connection schedules use all 120 orders of five outstanding completions and four callback suspension policies.
+Assertions cover exact wire bytes, original buffer identity, forbidden duplicate writes, receipts, and retirement joins.
+This is bounded schedule exploration, not an exhaustive proof or a concurrency model.
+
+The sustained-credit cases send 9 MiB plus 17 bytes in each direction with the message-body limit raised.
+The advertised flow windows retain their defaults.
+Another case completes 1,030 separate 1 KiB streams.
+Small-window cases cover padding, reset, discarded DATA, negative send windows, and one-byte connection refunds.
+Held-page cases exercise sibling progress and explicit aggregate exhaustion.
+Late-outcome cases cover batched release, failed reads, exact final writes, HEAD responses, and contradictory GOAWAY boundaries.
+
+The resource cases assert exact control sequences and HPACK continuity after rejected header sections.
+They also cover supplied-time budgets, shutdown admission failure, ACK deadlines, tunnel limits, and malformed trailers.
+The inherited component tests remain useful regression coverage, not independent peer evidence.
+
+## Frozen benchmark workload
+
+`benches/engine.rs` defines the workload family `pure-http2-v1`.
+Each iteration creates direct engines and uses an owned-operation executor.
+The executor copies transport bytes between in-memory queues.
+Thus, the workload includes executor cost, not only protocol cost.
+It excludes sockets, TLS, HTTP/1, runtime wrappers, and application header clones.
+Send buffers return through `Sent` for reuse.
+
+| Workload | Exchange |
+| --- | --- |
+| `new-1x-empty` | One empty response |
+| `new-1x-1KiB` | One 1 KiB response |
+| `new-16x-1KiB` | Sixteen concurrent 1 KiB responses |
+| `new-4x-64KiB-held` | Four 64 KiB responses with one fragment retained for eight turns |
+| `new-1x-4MiB` | One 4 MiB response |
+| `new-1x-1KiB-fragment7` | One 1 KiB response with seven-byte I/O completions |
+
+Only compilation and Criterion test mode qualify this workload here.
+No timing result or copy-cost reduction claim accompanies this stage.
+
+Run the following commands from the workspace root:
+
+```sh
+export CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http2-program/build-http2-core
+cargo fmt --all
+taskset -c 8-31 cargo test -p kimojio-fsm-http2
+taskset -c 8-31 cargo test -p kimojio-fsm-http2 --all-features
+taskset -c 8-31 cargo test -p kimojio-fsm-http2 --release
+taskset -c 8-31 cargo test -p kimojio-fsm-http2 --release --all-features
+taskset -c 8-31 cargo clippy
+taskset -c 8-31 cargo clippy --all-targets --all-features
+taskset -c 8-31 cargo run -p kimojio-fsm-http2 --example memory
+taskset -c 8-31 cargo bench -p kimojio-fsm-http2 --bench engine -- --test
+```

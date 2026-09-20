@@ -904,6 +904,12 @@ impl H2HeaderValidator {
             H2HeaderValidationRole::Response => self.invalid |= !self.saw_status,
             H2HeaderValidationRole::Trailers => {}
         }
+        if self.content_length.is_some()
+            && (self.role == H2HeaderValidationRole::Trailers
+                || self.response_status.is_some_and(|status| status < 200))
+        {
+            self.invalid_content_length = true;
+        }
         if self.invalid_content_length {
             Err(H2HeaderValidationError::InvalidContentLength)
         } else if self.invalid {
@@ -946,6 +952,18 @@ impl H2HeaderValidator {
     /// indexing past the buffer.
     pub(crate) fn stored_name(&self) -> Option<&[u8]> {
         self.name.get(..self.name_len)
+    }
+
+    fn semantic_value_byte(&mut self, byte: u8, index: usize) {
+        self.invalid |= match self.current_name {
+            H2ValidatedName::Method => !is_h2_field_name_byte(byte.to_ascii_lowercase()),
+            H2ValidatedName::Scheme if index == 0 => !byte.is_ascii_alphabetic(),
+            H2ValidatedName::Scheme => {
+                !(byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+            }
+            H2ValidatedName::Authority | H2ValidatedName::Path => byte <= b' ' || byte == 0x7f,
+            _ => false,
+        };
     }
 
     pub(crate) fn classify_name(name: &[u8]) -> H2ValidatedName {
@@ -1143,6 +1161,7 @@ impl crate::hpack::HeaderFieldVisitor for H2HeaderValidator {
     }
 
     fn value_byte(&mut self, byte: u8) {
+        self.semantic_value_byte(byte, self.value_len);
         if self.current_name == H2ValidatedName::Method {
             self.method_is_connect &= b"CONNECT".get(self.value_len) == Some(&byte);
         }
@@ -1170,6 +1189,17 @@ impl crate::hpack::HeaderFieldVisitor for H2HeaderValidator {
     }
 
     fn value_bytes(&mut self, bytes: &[u8]) {
+        if matches!(
+            self.current_name,
+            H2ValidatedName::Method
+                | H2ValidatedName::Scheme
+                | H2ValidatedName::Authority
+                | H2ValidatedName::Path
+        ) {
+            for (index, &byte) in bytes.iter().enumerate() {
+                self.semantic_value_byte(byte, index);
+            }
+        }
         if self.current_name == H2ValidatedName::Method {
             self.method_is_connect = bytes == b"CONNECT";
         }
@@ -1223,10 +1253,9 @@ impl crate::hpack::HeaderFieldVisitor for H2HeaderValidator {
                 }
             }
             H2ValidatedName::Status => {
-                if let Some(status) = self
-                    .status_value
-                    .filter(|status| self.value_len == 3 && *status != 101)
-                {
+                if let Some(status) = self.status_value.filter(|status| {
+                    self.value_len == 3 && (100..=599).contains(status) && *status != 101
+                }) {
                     self.response_status = Some(status);
                 } else {
                     self.invalid = true;

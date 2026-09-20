@@ -11,3 +11,10 @@ rustc-hash = "2"
 
 [features]
 hpack-test-support = []
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "engine"
+harness = false
