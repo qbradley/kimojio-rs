@@ -186,6 +186,7 @@ impl From<StreamOutcome> for StreamTerminalOutcome {
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionTerminalOutcome {
     Graceful,
+    Aborted,
     PeerClosed,
     IoFailed,
     Protocol,
@@ -196,6 +197,7 @@ impl From<ConnectionResult> for ConnectionTerminalOutcome {
     fn from(outcome: ConnectionResult) -> Self {
         match outcome {
             ConnectionResult::Graceful => Self::Graceful,
+            ConnectionResult::Aborted => Self::Aborted,
             ConnectionResult::PeerClosed => Self::PeerClosed,
             ConnectionResult::IoFailed => Self::IoFailed,
             ConnectionResult::Protocol(_) => Self::Protocol,
@@ -339,6 +341,7 @@ mod tests {
         }
         for (outcome, expected) in [
             (ConnectionResult::Graceful, "graceful"),
+            (ConnectionResult::Aborted, "aborted"),
             (ConnectionResult::PeerClosed, "peer_closed"),
             (ConnectionResult::IoFailed, "io_failed"),
             (ConnectionResult::ResourceExhausted, "resource_exhausted"),

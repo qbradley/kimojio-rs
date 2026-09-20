@@ -91,7 +91,7 @@ It remains null until retirement.
 An unexpected producer failure must remain a non-complete outcome, even after a successful response.
 
 `connection.outcome` records the terminal connection result.
-Its values are `graceful`, `peer_closed`, `io_failed`, `protocol`, and `resource_exhausted`.
+Its values are `graceful`, `aborted`, `peer_closed`, `io_failed`, `protocol`, and `resource_exhausted`.
 Normal cases require every stream outcome to be `complete`.
 They also require a `graceful` or `peer_closed` connection outcome and an actual socket close.
 Missing or null terminal outcomes cannot qualify a completed case.

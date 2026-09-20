@@ -3,7 +3,7 @@ use std::{rc::Rc, time::Duration};
 use super::{Protocol, ServerPorts, probe::Probe};
 use crate::{
     CancelCompletion, CancelOp, CloseCompletion, CloseOp, CommandError, IoFailure, ReadCompletion,
-    ReadOp, ReadOutcome, Rejected, SendBuffer, Token, WakeCompletion, WakeOp,
+    ReadOp, ReadOutcome, Rejected, SendBuffer, Token, WakeCompletion, WakeOp, WakeOutcome,
     api::{Owner, Page},
 };
 
@@ -188,8 +188,10 @@ impl Detector {
         completion: WakeCompletion,
     ) -> Result<(), Rejected<WakeCompletion>> {
         let current = matches!(self.phase, Phase::Reading);
-        if self.alarm.original.as_ref() != Some(&completion.op.token)
-            || current && (completion.now < self.deadline || completion.now < self.now)
+        if self.alarm.original.as_ref() != Some(completion.token())
+            || current
+                && matches!(completion.outcome(), WakeOutcome::Fired(now)
+                    if now < self.deadline || now < self.now)
         {
             return Err(Rejected {
                 error: CommandError::InvalidCompletion,
@@ -198,7 +200,12 @@ impl Detector {
         }
         self.alarm.original = None;
         if current {
-            self.advance_time(completion.now).expect("validated time");
+            match completion.outcome() {
+                WakeOutcome::Fired(now) => self.advance_time(now).expect("validated time"),
+                WakeOutcome::Failed(_) => {
+                    self.phase = Phase::Closing(DetectionFailure::Transport);
+                }
+            }
         }
         Ok(())
     }

@@ -991,13 +991,37 @@ impl<B: SendBuffer> Connection<B> {
                     }
                 }
                 Deadline::ShutdownEnd => {
-                    self.fail(ConnectionResult::Graceful);
-                    self.fail(ConnectionResult::IoFailed);
+                    self.abort_with_cause(ConnectionResult::Graceful);
                 }
                 Deadline::Settings => {}
             }
         }
         Ok(())
+    }
+
+    /// Abandons unsent output and requests transport cancellation without a grace period.
+    pub fn abort(&mut self) {
+        self.abort_with_cause(ConnectionResult::Aborted);
+    }
+
+    /// Hard-aborts with an explicit cause, preserving any earlier non-graceful cause.
+    ///
+    /// Graceful drain can be escalated until close completes. Repeated aborts are
+    /// harmless. Original operations and cancellation acknowledgments still join.
+    pub fn abort_with_cause(&mut self, cause: ConnectionResult) {
+        match &mut self.life {
+            Life::Closed { .. } => return,
+            Life::Closing { result, .. } => {
+                if *result == ConnectionResult::Graceful {
+                    *result = cause;
+                }
+                return;
+            }
+            Life::Settling(result) if *result == ConnectionResult::Graceful => *result = cause,
+            _ => {}
+        }
+        self.fail(cause);
+        self.break_transport();
     }
 
     pub fn shutdown(&mut self) -> Result<(), CommandError> {
@@ -1136,51 +1160,55 @@ impl<B: SendBuffer> Connection<B> {
         }
     }
 
+    fn break_transport(&mut self) {
+        self.transport_broken = true;
+        while let Some((bytes, id, _)) = self.controls.pop_front() {
+            self.control_capacity -= bytes.capacity();
+            if let Some(id) = id {
+                self.fail_unsettled_stream(id);
+                if let Some(state) = self.streams.get_mut(&id) {
+                    state.writes -= 1;
+                }
+                self.maybe_retire(id);
+            }
+        }
+        if let Some(op) = self.pending_write.take() {
+            if let Some(id) = op.stream {
+                self.fail_unsettled_stream(id);
+            }
+            if let WriteStorage::Data { buffer, range, .. } = op.storage {
+                let id = op.stream.expect("DATA stream");
+                self.send_capacity -= buffer.retained_capacity();
+                self.streams
+                    .get_mut(&id)
+                    .expect("pending write owns stream")
+                    .returns += 1;
+                self.notices.push_back(Notice::Sent(Sent {
+                    stream: id,
+                    buffer,
+                    accepted: range.start + op.cursor.saturating_sub(9).min(range.len()),
+                    exact: true,
+                    result: Err(SendStop::ConnectionFailed),
+                }));
+            } else if let WriteStorage::Control { bytes, .. } = op.storage {
+                self.control_capacity -= bytes.capacity();
+            }
+            if let Some(id) = op.stream {
+                self.streams
+                    .get_mut(&id)
+                    .expect("pending write owns stream")
+                    .writes -= 1;
+                self.maybe_retire(id);
+            }
+        }
+    }
+
     fn fail(&mut self, result: ConnectionResult) {
         if matches!(
             result,
             ConnectionResult::IoFailed | ConnectionResult::PeerClosed
         ) {
-            self.transport_broken = true;
-            while let Some((bytes, id, _)) = self.controls.pop_front() {
-                self.control_capacity -= bytes.capacity();
-                if let Some(id) = id {
-                    self.fail_unsettled_stream(id);
-                    if let Some(state) = self.streams.get_mut(&id) {
-                        state.writes -= 1;
-                    }
-                    self.maybe_retire(id);
-                }
-            }
-            if let Some(op) = self.pending_write.take() {
-                if let Some(id) = op.stream {
-                    self.fail_unsettled_stream(id);
-                }
-                if let WriteStorage::Data { buffer, range, .. } = op.storage {
-                    let id = op.stream.expect("DATA stream");
-                    self.send_capacity -= buffer.retained_capacity();
-                    self.streams
-                        .get_mut(&id)
-                        .expect("pending write owns stream")
-                        .returns += 1;
-                    self.notices.push_back(Notice::Sent(Sent {
-                        stream: id,
-                        buffer,
-                        accepted: range.start + op.cursor.saturating_sub(9).min(range.len()),
-                        exact: true,
-                        result: Err(SendStop::ConnectionFailed),
-                    }));
-                } else if let WriteStorage::Control { bytes, .. } = op.storage {
-                    self.control_capacity -= bytes.capacity();
-                }
-                if let Some(id) = op.stream {
-                    self.streams
-                        .get_mut(&id)
-                        .expect("pending write owns stream")
-                        .writes -= 1;
-                    self.maybe_retire(id);
-                }
-            }
+            self.break_transport();
         }
         if !matches!(self.life, Life::Open | Life::Draining { .. }) {
             return;
@@ -1522,15 +1550,23 @@ impl<B: SendBuffer> Connection<B> {
             .is_some_and(|(token, _)| token == &completion.op.token);
         if current {
             self.alarm = None;
-            let still_scheduled = self
-                .deadlines
-                .first_key_value()
-                .is_some_and(|((at, _), _)| *at == completion.op.deadline);
-            if !still_scheduled || completion.now < self.now {
-                return Ok(());
-            }
-            if self.advance_time(completion.now).is_err() {
-                self.fail(ConnectionResult::ResourceExhausted);
+        }
+        let still_scheduled = self
+            .deadlines
+            .first_key_value()
+            .is_some_and(|((at, _), _)| *at == completion.op.deadline);
+        if !current || !still_scheduled {
+            return Ok(());
+        }
+        match completion.outcome {
+            WakeOutcome::Failed(_) => self.abort_with_cause(ConnectionResult::IoFailed),
+            WakeOutcome::Fired(now) => {
+                if now < self.now {
+                    return Ok(());
+                }
+                if self.advance_time(now).is_err() {
+                    self.fail(ConnectionResult::ResourceExhausted);
+                }
             }
         }
         Ok(())
@@ -1551,12 +1587,11 @@ impl<B: SendBuffer> Connection<B> {
                 value: completion,
             });
         }
-        let result =
-            if completion.result.is_err() && !matches!(result, ConnectionResult::Protocol(_)) {
-                ConnectionResult::IoFailed
-            } else {
-                *result
-            };
+        let result = if completion.result.is_err() && *result == ConnectionResult::Graceful {
+            ConnectionResult::IoFailed
+        } else {
+            *result
+        };
         self.life = Life::Closed {
             result,
             notified: false,
@@ -1659,8 +1694,7 @@ impl<B: SendBuffer> Connection<B> {
                     None
                 }
                 Transition::ExhaustIdentity => {
-                    self.fail(ConnectionResult::ResourceExhausted);
-                    self.fail(ConnectionResult::IoFailed);
+                    self.abort_with_cause(ConnectionResult::ResourceExhausted);
                     None
                 }
                 Transition::FinishDrain => {

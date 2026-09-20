@@ -62,6 +62,14 @@ The detector cancels its alarm after it selects a protocol.
 Activation waits for both the original alarm and any issued cancellation acknowledgment.
 A late alarm cannot reverse selection or advance the replacement child's clock.
 A timeout or shutdown also waits for an outstanding read, including a late successful read.
+An active alarm failure ends detection with `DetectionFailure::Transport`.
+An obsolete alarm failure only settles its original obligation.
+It cannot advance time, reverse selection, or replace a primary failure.
+
+Both composites expose `abort()` for hard termination through the selected child.
+The server also accepts this command during detection and prefetched-input replay.
+Abort preserves original-operation and cancellation joins without a graceful-shutdown wait.
+`Server::shutdown()` retains its existing graceful behavior after protocol selection.
 
 The selected child receives the prefetched bytes through its own typed read completion.
 This cold path retains the child's ownership and parser contracts.
@@ -96,6 +104,7 @@ The composition tests compare exact response bytes with explicitly selected chil
 They include persistent HTTP/1 requests, concurrent HTTP/2 requests, fragmented input, and yielding or continuing callbacks.
 The detector model covers both original-completion orders, batched completions, and both cancellation-join orders.
 It also covers EOF, shutdown, wrong-owner completions, invalid counts, close failure, and invalidated alarms.
+Failure schedules include active and obsolete alarm failures, hard abort, and primary-cause preservation across late completions.
 
 These checks qualify composition behavior.
 They do not establish independent HTTP/2 interoperability or runtime-wrapper performance.

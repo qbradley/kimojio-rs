@@ -89,6 +89,10 @@ The returned receipt retains the exact accepted count and any failure of the uns
 Per-stream pressure must preserve siblings until the configured aggregate bound is exhausted.
 Retained pages and externally held chunks must remain explicit resource obligations.
 The close contract must distinguish descriptor settlement from the lifetime of read-only application data.
+The core can close the transport while an application still holds a read-only body lease.
+That lease remains valid, and release still precedes stream retirement.
+The driver continues to process releases and pending retirements after transport closure.
+It must not discard the release channel and strand retirement waiters.
 
 ## Completion and errors
 

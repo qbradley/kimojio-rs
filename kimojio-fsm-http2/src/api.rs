@@ -371,6 +371,7 @@ pub struct StreamResult {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConnectionResult {
     Graceful,
+    Aborted,
     PeerClosed,
     IoFailed,
     Protocol(H2ProtocolError),
@@ -387,6 +388,9 @@ impl CancelOp {
     pub fn original(&self) -> &Token {
         &self.original
     }
+    /// Reports that the driver accepted the cancellation request.
+    ///
+    /// This does not settle the original operation or release its storage.
     pub fn complete(self) -> CancelCompletion {
         CancelCompletion { op: self }
     }
@@ -419,18 +423,39 @@ impl WakeOp {
         self.deadline
     }
     pub fn complete(self, now: Duration) -> WakeCompletion {
-        WakeCompletion { op: self, now }
+        WakeCompletion {
+            op: self,
+            outcome: WakeOutcome::Fired(now),
+        }
+    }
+    pub fn failed(self, error: IoFailure) -> WakeCompletion {
+        WakeCompletion {
+            op: self,
+            outcome: WakeOutcome::Failed(error),
+        }
     }
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WakeOutcome {
+    Fired(Duration),
+    Failed(IoFailure),
+}
+
 #[derive(Debug)]
 pub struct WakeCompletion {
     pub(crate) op: WakeOp,
-    pub(crate) now: Duration,
+    pub(crate) outcome: WakeOutcome,
 }
 impl WakeCompletion {
-    /// Recovers the original alarm and supplied time from a rejected completion.
-    pub fn into_parts(self) -> (WakeOp, Duration) {
-        (self.op, self.now)
+    pub fn token(&self) -> &Token {
+        self.op.token()
+    }
+    pub fn outcome(&self) -> WakeOutcome {
+        self.outcome
+    }
+    /// Recovers the original alarm and its outcome from a rejected completion.
+    pub fn into_parts(self) -> (WakeOp, WakeOutcome) {
+        (self.op, self.outcome)
     }
 }
 

@@ -239,7 +239,7 @@ impl Transport {
             .position(|op| op.token() == cancel.original())
         {
             let alarm = self.alarms.swap_remove(index);
-            checked(core.complete_wake(alarm.complete(self.now())))?;
+            checked(core.complete_wake(alarm.failed(IoFailure::Cancelled)))?;
         }
         checked(core.complete_cancel(cancel.complete()))
     }
@@ -290,10 +290,9 @@ impl Transport {
     }
 
     pub fn drain(&mut self, core: &mut Connection<Buffer>) -> Result<(), String> {
-        let _ = core.shutdown();
+        core.abort();
         let deadline = self.now() + Duration::from_secs(2);
         while self.now() < deadline {
-            let progress = self.io(core)?;
             match core.next(self) {
                 Some(Event::Body(body)) => checked(core.release_body(body.release()))?,
                 Some(Event::Sent(Sent {
@@ -306,8 +305,11 @@ impl Transport {
                 Some(Event::Close(close)) => self.close(core, close)?,
                 Some(Event::Closed(_)) => return Ok(()),
                 Some(_) => (),
-                None if !progress => self.wait(deadline)?,
-                None => (),
+                None => {
+                    if !self.io(core)? {
+                        self.wait(deadline)?;
+                    }
+                }
             }
         }
         Err("cleanup watchdog expired before CloseOp settlement".into())
@@ -410,14 +412,14 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_settles_original_operations_and_closes_the_fd() {
+    fn error_cleanup_aborts_pending_operations_without_a_graceful_wait() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (mut peer, _) = listener.accept().unwrap();
         peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         let mut transport = Transport::new(socket).unwrap();
         let config = Config {
-            shutdown_timeout: Duration::from_millis(10),
+            shutdown_timeout: Duration::from_secs(3600),
             ..Config::default()
         };
         let mut core = Client::<Buffer>::new(config, Duration::ZERO).unwrap();
@@ -430,8 +432,9 @@ mod tests {
         assert!(transport.socket.is_none());
         assert!(transport.read.is_none());
         assert!(transport.write.is_none());
+        assert!(transport.alarms.is_empty());
         let mut wire = Vec::new();
         peer.read_to_end(&mut wire).unwrap();
-        assert!(wire.starts_with(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"));
+        assert!(wire.is_empty());
     }
 }

@@ -203,6 +203,15 @@ fn drive(server: &mut http::Server, ports: &mut Ports) {
     panic!("bounded drive did not suspend");
 }
 
+fn drive_client(client: &mut http::Client, ports: &mut Ports) {
+    for _ in 0..100 {
+        if client.next(ports).is_none() {
+            return;
+        }
+    }
+    panic!("bounded client drive did not suspend");
+}
+
 fn settle_detection_cancels(server: &mut http::Server, ports: &mut Ports) {
     for op in std::mem::take(&mut ports.h2.cancels) {
         if let Some(index) = ports
@@ -563,6 +572,366 @@ fn invalidated_alarm_cannot_reverse_protocol_selection() {
     drive(&mut server, &mut ports);
     assert_eq!(server.protocol(), Some(http::Protocol::Http1));
     assert!(ports.detection_closed.is_empty());
+}
+
+#[test]
+fn active_alarm_failure_waits_for_read_and_preserves_transport_cause() {
+    for yielding in [false, true] {
+        for ack_first in [false, true] {
+            for failure in [h2::IoFailure::Cancelled, h2::IoFailure::Failed] {
+                let mut server = detecting();
+                let mut ports = Ports {
+                    yielding,
+                    ..Ports::default()
+                };
+                drive(&mut server, &mut ports);
+                let alarm = ports.h2.alarms.pop().unwrap();
+                server.complete_wake(alarm.failed(failure)).unwrap();
+                server.advance_time(Duration::ZERO).unwrap();
+                server.abort();
+                drive(&mut server, &mut ports);
+                assert_eq!(ports.h2.cancels.len(), 1);
+                assert!(ports.h2.close.is_none());
+                let cancel = ports.h2.cancels.pop().unwrap();
+                let mut cancel = Some(cancel);
+                if ack_first {
+                    server
+                        .complete_cancel(cancel.take().unwrap().complete())
+                        .unwrap();
+                    drive(&mut server, &mut ports);
+                    assert!(ports.h2.close.is_none());
+                }
+                let mut read = ports.h2.read.take().unwrap();
+                read.buffer_mut()[0] = b'G';
+                server
+                    .complete_read(read.complete(h2::ReadOutcome::Read(1)))
+                    .unwrap();
+                if let Some(cancel) = cancel {
+                    drive(&mut server, &mut ports);
+                    assert!(ports.h2.close.is_none());
+                    server.complete_cancel(cancel.complete()).unwrap();
+                }
+                drive(&mut server, &mut ports);
+                let close = ports.h2.close.take().unwrap();
+                server
+                    .complete_close(close.complete(Err(h2::IoFailure::Failed)))
+                    .unwrap();
+                drive(&mut server, &mut ports);
+                server.abort();
+                drive(&mut server, &mut ports);
+                assert_eq!(
+                    ports.detection_closed,
+                    [http::DetectionClosed {
+                        failure: http::DetectionFailure::Transport,
+                        close_result: Err(h2::IoFailure::Failed),
+                    }]
+                );
+                assert_eq!(server.protocol(), None);
+                assert!(ports.h1_trace.is_empty());
+                assert!(ports.h2.write.is_none());
+                assert!(ports.h2.closed.is_empty());
+                assert_eq!(ports.h2.sequence, ["wake", "read", "cancel", "close"]);
+            }
+        }
+    }
+}
+
+#[test]
+fn wrong_owner_returns_a_failed_alarm_unchanged() {
+    let mut first = detecting();
+    let mut second = detecting();
+    let mut ports = Ports::default();
+    drive(&mut first, &mut ports);
+    let alarm = ports.h2.alarms.pop().unwrap();
+    let token = alarm.token().clone();
+    let rejected = second
+        .complete_wake(alarm.failed(h2::IoFailure::Failed))
+        .unwrap_err();
+    assert_eq!(rejected.error, h2::CommandError::InvalidCompletion);
+    assert_eq!(rejected.value.token(), &token);
+    assert_eq!(
+        rejected.value.outcome(),
+        h2::WakeOutcome::Failed(h2::IoFailure::Failed)
+    );
+    first.complete_wake(rejected.value).unwrap();
+    drive(&mut first, &mut ports);
+    assert_eq!(ports.h2.cancels.len(), 1);
+    assert_eq!(second.protocol(), None);
+}
+
+#[test]
+fn obsolete_alarm_failure_preserves_selection_before_and_after_cancel_dispatch() {
+    for prefix in [b"G".as_slice(), b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"] {
+        for yielding in [false, true] {
+            for dispatch_cancel in [false, true] {
+                for ack_first in [false, true] {
+                    for failure in [h2::IoFailure::Cancelled, h2::IoFailure::Failed] {
+                        let mut server = detecting();
+                        let mut ports = Ports {
+                            yielding,
+                            ..Ports::default()
+                        };
+                        drive(&mut server, &mut ports);
+                        let alarm = ports.h2.alarms.pop().unwrap();
+                        let mut read = ports.h2.read.take().unwrap();
+                        read.buffer_mut()[..prefix.len()].copy_from_slice(prefix);
+                        server
+                            .complete_read(read.complete(h2::ReadOutcome::Read(prefix.len())))
+                            .unwrap();
+                        let mut cancel = None;
+                        if dispatch_cancel {
+                            drive(&mut server, &mut ports);
+                            assert_eq!(ports.h2.cancels.len(), 1);
+                            cancel = ports.h2.cancels.pop();
+                            if ack_first {
+                                server
+                                    .complete_cancel(cancel.take().unwrap().complete())
+                                    .unwrap();
+                                drive(&mut server, &mut ports);
+                            }
+                            assert_eq!(server.protocol(), None);
+                        }
+                        server.complete_wake(alarm.failed(failure)).unwrap();
+                        server.advance_time(Duration::ZERO).unwrap();
+                        if let Some(cancel) = cancel {
+                            drive(&mut server, &mut ports);
+                            assert_eq!(server.protocol(), None);
+                            server.complete_cancel(cancel.complete()).unwrap();
+                        }
+                        drive(&mut server, &mut ports);
+                        assert_eq!(
+                            server.protocol(),
+                            Some(if prefix.len() == 1 {
+                                http::Protocol::Http1
+                            } else {
+                                http::Protocol::Http2
+                            })
+                        );
+                        assert!(ports.detection_closed.is_empty());
+                        assert!(ports.h2.closed.is_empty());
+                        assert!(ports.closed.is_empty());
+                        assert!(ports.h2.close.is_none());
+                        assert!(ports.close.is_none());
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn hard_abort_joins_detection_operations_and_preserves_an_earlier_timeout() {
+    for yielding in [false, true] {
+        for timeout_first in [false, true] {
+            for ack_first in [false, true] {
+                let mut server = detecting();
+                let mut ports = Ports {
+                    yielding,
+                    ..Ports::default()
+                };
+                drive(&mut server, &mut ports);
+                if timeout_first {
+                    server.advance_time(Duration::from_secs(1)).unwrap();
+                }
+                server.abort();
+                server.abort();
+                drive(&mut server, &mut ports);
+                assert_eq!(ports.h2.cancels.len(), 2);
+                assert!(ports.h2.close.is_none());
+                let mut cancels = std::mem::take(&mut ports.h2.cancels);
+                if ack_first {
+                    for cancel in cancels.drain(..) {
+                        server.complete_cancel(cancel.complete()).unwrap();
+                    }
+                    drive(&mut server, &mut ports);
+                    assert!(ports.h2.close.is_none());
+                }
+                let alarm = ports.h2.alarms.pop().unwrap();
+                server
+                    .complete_wake(alarm.failed(h2::IoFailure::Failed))
+                    .unwrap();
+                let mut read = ports.h2.read.take().unwrap();
+                read.buffer_mut()[0] = b'G';
+                server
+                    .complete_read(read.complete(h2::ReadOutcome::Read(1)))
+                    .unwrap();
+                if !ack_first {
+                    drive(&mut server, &mut ports);
+                    assert!(ports.h2.close.is_none());
+                }
+                for cancel in cancels {
+                    server.complete_cancel(cancel.complete()).unwrap();
+                }
+                drive(&mut server, &mut ports);
+                let close = ports.h2.close.take().unwrap();
+                server.complete_close(close.complete(Ok(()))).unwrap();
+                drive(&mut server, &mut ports);
+                server.abort();
+                drive(&mut server, &mut ports);
+                assert_eq!(
+                    ports.detection_closed,
+                    [http::DetectionClosed {
+                        failure: if timeout_first {
+                            http::DetectionFailure::Timeout
+                        } else {
+                            http::DetectionFailure::Aborted
+                        },
+                        close_result: Ok(()),
+                    }]
+                );
+                assert_eq!(server.protocol(), None);
+                assert!(ports.h1_trace.is_empty());
+                assert!(ports.h2.write.is_none());
+                assert!(ports.h2.closed.is_empty());
+                assert_eq!(
+                    ports.h2.sequence,
+                    ["wake", "read", "cancel", "cancel", "close"]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn selected_clients_and_servers_hard_abort_without_starting_transport_work() {
+    for yielding in [false, true] {
+        let h1_client = h1::Client::with_output_type(
+            h1::ConnectionId {
+                slot: 4,
+                generation: 2,
+            },
+            h1::Config::default(),
+            vec![0; 65536],
+            h1::Tick(0),
+        )
+        .unwrap();
+        for mut client in [
+            http::Client::http1(h1_client),
+            http::Client::http2(h2::Client::new(h2::Config::default(), Duration::ZERO).unwrap()),
+        ] {
+            let mut ports = Ports {
+                yielding,
+                ..Ports::default()
+            };
+            client.abort();
+            client.abort();
+            drive_client(&mut client, &mut ports);
+            match client.protocol() {
+                http::Protocol::Http1 => {
+                    let close = ports.close.take().unwrap();
+                    client
+                        .http1_mut()
+                        .unwrap()
+                        .complete_close(close.complete(Ok(())))
+                        .unwrap();
+                }
+                http::Protocol::Http2 => {
+                    let close = ports.h2.close.take().unwrap();
+                    client
+                        .http2_mut()
+                        .unwrap()
+                        .complete_close(close.complete(Ok(())))
+                        .unwrap();
+                }
+            }
+            drive_client(&mut client, &mut ports);
+            client.abort();
+            assert!(client.next(&mut ports).is_none());
+            if client.protocol() == http::Protocol::Http1 {
+                assert_eq!(ports.closed, [Err(h1::Failure::Cancelled)]);
+                assert!(ports.h2.sequence.is_empty());
+            } else {
+                assert_eq!(ports.h2.closed, [h2::ConnectionResult::Aborted]);
+                assert_eq!(ports.h2.sequence, ["close", "closed"]);
+                assert!(ports.h1_trace.is_empty());
+            }
+            assert!(ports.read.is_none());
+            assert!(ports.write.is_none());
+        }
+        for mut server in [
+            http::Server::http1(h1_server()),
+            http::Server::http2(h2::Server::new(h2::Config::default(), Duration::ZERO).unwrap()),
+        ] {
+            let mut ports = Ports {
+                yielding,
+                ..Ports::default()
+            };
+            server.abort();
+            server.abort();
+            drive(&mut server, &mut ports);
+            match server.protocol().unwrap() {
+                http::Protocol::Http1 => {
+                    let close = ports.close.take().unwrap();
+                    server
+                        .http1_mut()
+                        .unwrap()
+                        .complete_close(close.complete(Ok(())))
+                        .unwrap();
+                }
+                http::Protocol::Http2 => {
+                    let close = ports.h2.close.take().unwrap();
+                    server.complete_close(close.complete(Ok(()))).unwrap();
+                }
+            }
+            drive(&mut server, &mut ports);
+            server.abort();
+            drive(&mut server, &mut ports);
+            if server.protocol() == Some(http::Protocol::Http1) {
+                assert_eq!(ports.closed, [Err(h1::Failure::Cancelled)]);
+                assert!(ports.h2.sequence.is_empty());
+            } else {
+                assert_eq!(ports.h2.closed, [h2::ConnectionResult::Aborted]);
+                assert_eq!(ports.h2.sequence, ["close", "closed"]);
+                assert!(ports.h1_trace.is_empty());
+            }
+            assert!(ports.read.is_none());
+            assert!(ports.write.is_none());
+            assert!(ports.detection_closed.is_empty());
+        }
+    }
+}
+
+#[test]
+fn abort_after_detection_selection_never_activates_the_child() {
+    for prefix in [b"G".as_slice(), b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"] {
+        for yielding in [false, true] {
+            for dispatched in [false, true] {
+                let mut server = detecting();
+                let mut ports = Ports {
+                    yielding,
+                    ..Ports::default()
+                };
+                drive(&mut server, &mut ports);
+                let mut read = ports.h2.read.take().unwrap();
+                read.buffer_mut()[..prefix.len()].copy_from_slice(prefix);
+                server
+                    .complete_read(read.complete(h2::ReadOutcome::Read(prefix.len())))
+                    .unwrap();
+                if dispatched {
+                    drive(&mut server, &mut ports);
+                }
+                server.abort();
+                drive(&mut server, &mut ports);
+                assert_eq!(ports.h2.cancels.len(), 1);
+                assert!(ports.h2.close.is_none());
+                settle_detection_cancels(&mut server, &mut ports);
+                drive(&mut server, &mut ports);
+                let close = ports.h2.close.take().unwrap();
+                server.complete_close(close.complete(Ok(()))).unwrap();
+                drive(&mut server, &mut ports);
+                assert_eq!(server.protocol(), None);
+                assert_eq!(
+                    ports.detection_closed,
+                    [http::DetectionClosed {
+                        failure: http::DetectionFailure::Aborted,
+                        close_result: Ok(()),
+                    }]
+                );
+                assert!(ports.h1_trace.is_empty());
+                assert_eq!(ports.h2.sequence, ["wake", "read", "cancel", "close"]);
+            }
+        }
+    }
 }
 
 #[test]

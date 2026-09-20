@@ -279,7 +279,7 @@ class SocketTests(unittest.TestCase):
             broken["streams"][0]["outcome"] = outcome
             with self.assertRaisesRegex(AssertionError, "terminal outcome"):
                 validate_results(case, broken)
-        for outcome in ("io_failed", "resource_exhausted", "protocol", None):
+        for outcome in ("aborted", "io_failed", "resource_exhausted", "protocol", None):
             broken = json.loads(json.dumps(report))
             broken["connection"]["outcome"] = outcome
             with self.assertRaisesRegex(AssertionError, "connection terminal outcome"):

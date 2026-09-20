@@ -87,6 +87,14 @@ impl<B: SendBuffer> Client<B> {
             ClientInner::Http2(client) => client.next(ports),
         }
     }
+
+    /// Hard-aborts the selected child while preserving its original-operation joins.
+    pub fn abort(&mut self) {
+        match &mut self.inner {
+            ClientInner::Http1(client) => client.shutdown(h1::ShutdownMode::Abort),
+            ClientInner::Http2(client) => client.abort(),
+        }
+    }
 }
 
 enum ServerInner<B: SendBuffer> {
@@ -219,6 +227,18 @@ impl<B: SendBuffer> Server<B> {
                 state.detector.abort();
                 Ok(())
             }
+            ServerInner::Moving => unreachable!("synchronous ownership transfer"),
+        }
+    }
+
+    /// Hard-aborts detection or the selected child without a graceful-shutdown wait.
+    pub fn abort(&mut self) {
+        match &mut self.inner {
+            ServerInner::Http1(server) | ServerInner::Replay1(server, _) => {
+                server.shutdown(h1::ShutdownMode::Abort);
+            }
+            ServerInner::Http2(server) | ServerInner::Replay2(server, _) => server.abort(),
+            ServerInner::Detect(state) => state.detector.abort(),
             ServerInner::Moving => unreachable!("synchronous ownership transfer"),
         }
     }
