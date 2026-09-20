@@ -5,7 +5,7 @@
 This ledger records bounded evidence for the scope in [the composition design](http2-composition.md).
 It does not claim an exhaustive RFC proof.
 The Kimojio HTTP/2 wrappers are not implemented.
-Final performance measurements and wrapper command-admission research remain in progress.
+Final performance measurements and a metadata-admission interface repair remain in progress.
 
 The current socket qualification covers the direct HTTP/2 engine.
 Separate models cover the HTTP/1 plus HTTP/2 composite.
@@ -132,5 +132,13 @@ Repeated messages and mutable build paths caused redundant runs and confusion ab
 Later qualification used immutable paths, exact hashes, explicit source revisions, and one designated candidate.
 Old failures remain negative controls rather than evidence against repaired code.
 
-The next implementation gate requires final performance evidence and unambiguous command-admission behavior for wrapper queues.
+Command-admission research found another interface defect in the qualified socket snapshot.
+`Capacity` covers both temporary pressure and a command that exceeds the entire control-byte limit.
+Peer concurrency zero instead produces `Message(InvalidFrame)`, despite its temporary nature.
+No semantic callback reports when metadata admission changes.
+The normal socket cases do not establish correct wrapper retry behavior for these conditions.
+
+The [composition design](http2-composition.md#metadata-command-admission) separates `Blocked` from permanent rejection and adds one coalesced admission-change notification.
+That repair remains in progress.
+The next implementation gate requires its evidence and measurements of the changed source.
 Runtime wrappers then need their own ownership, cancellation, interoperability, and performance evidence.

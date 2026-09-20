@@ -49,6 +49,13 @@ Bounded cooperative turns preserve command, cancellation, timer, and sibling pro
 
 ## Admission and producers
 
+The wrapper retains metadata until its synchronous command succeeds.
+Only `CommandError::Blocked` permits a queued retry.
+The driver retries after the coalesced `admission_changed` notification, not after a guessed peer limit or a body permit.
+The notification is not a reservation, so another attempt can still return `Blocked`.
+Permanent rejection and connection-terminal rejection complete the queued operation with an error.
+An accepted command is never resubmitted.
+
 The engine's `SendPermit` is the authoritative buffer-admission signal.
 The wrapper must not reconstruct stream or connection wire credit.
 It obeys both the visible-byte limit and the retained-capacity limit.

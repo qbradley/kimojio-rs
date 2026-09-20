@@ -93,6 +93,24 @@ The scheduler must preserve control work and sibling progress during a long uplo
 Persistent receive-credit work must not defer all eligible response DATA until uploads finish.
 Directional overlap is a separate requirement from eventual completion of both directions.
 
+### Metadata command admission
+
+Synchronous command success is the only acceptance boundary for requests, responses, and trailers.
+The caller owns metadata that a command does not accept.
+It must not replay an accepted command while its transport write remains outstanding.
+
+`CommandError::Blocked` identifies temporary admission pressure.
+Peer concurrency, local stream slots, queued control items, and available control bytes can cause this pressure.
+A command that exceeds an immutable bound is not a retryable capacity failure.
+Exhausted stream IDs and closed admission are terminal for that connection.
+
+`Ports::admission_changed` is a coalesced notification for blocked metadata commands.
+It reports a change, not permission or guaranteed capacity for specific fields.
+The next command attempt remains authoritative.
+The core reports relevant capacity changes and invalidation without requiring adapter inspection of SETTINGS or protocol state.
+An unchanged blocked state must not produce repeated notifications.
+The notification does not introduce a request permit, an internal metadata queue, or a second drive mechanism.
+
 ## Storage, credit, and transport
 
 The core must support independent read and write progress.
