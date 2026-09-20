@@ -230,3 +230,63 @@ Its source is candidate commit `781d5808`, before this results-only documentatio
 Binary: `/workspace/kimojio-rs/target/wrapper-lab/build-profile-poc/release/examples/keepalive_bench`.
 SHA-256: `1de1bd29352289abf197365cae10d9e739664d9e25d57e9ff78b56a0d5efff53`.
 The final common base will require a new build and new binary identity.
+
+## Exclusive-slot measurements on prerequisite `90b7ff60`
+
+The coordinator granted exclusive CPU2 use for this series.
+All three binaries use release optimization and `CARGO_PROFILE_RELEASE_DEBUG=2`.
+Frozen binaries reside in `target/profile-artifacts/frozen/`.
+
+| Binary | Revision | SHA-256 |
+| --- | --- | --- |
+| `control90b` | `90b7ff60` | `2ba8e6eb91ad714e33d84dacfd069f2aa699d0ae6827557122c6487dda4b349d` |
+| `candidate1` | `781d5808` | `1de1bd29352289abf197365cae10d9e739664d9e25d57e9ff78b56a0d5efff53` |
+| Frozen original | `58e304d8` | `993602a3ba20bd884e7c77ad23ef3fa05fca1afe1d17e5afa3dbd2ca92d8eade` |
+
+The shared runner command was:
+
+```sh
+python3 perf/wrapper-lab/compare.py \
+  --manifest target/profile-artifacts/manifest1.json \
+  --output target/profile-artifacts/comparison1.json --trials 3 --cpu 2
+```
+
+All 54 runs passed the unchanged benchmark assertions and runner requirements.
+The order uses the default seed `20260920`.
+The table reports medians in microseconds per complete exchange.
+
+| Workload | Original58e | Same-base control90b | Candidate 1 |
+| --- | ---: | ---: | ---: |
+| Empty | 32.190 | 34.174 | 28.219 |
+| Small | 47.821 | 46.465 | 40.073 |
+| POST small | 55.042 | 57.564 | 48.155 |
+| Large | 160.162 | 169.142 | 125.070 |
+| Chunked | 2307.615 | 2458.588 | 2029.504 |
+| Fragmented | 392.476 | 421.923 | 349.281 |
+
+Trial ranges are material.
+For example, candidate fragmented results span 319.245–474.860 microseconds, and original fragmented results span 358.711–610.615.
+These medians support another scheduler experiment, not a precise causal speedup claim.
+The same-base control isolates the code delta better than the historical original.
+Neither comparison includes the upcoming raw transport and duplex prerequisites.
+
+### Candidate 1 profile
+
+```sh
+perf record -q -o target/profile-artifacts/candidate1.perf.data \
+  -e cpu-clock:u -F 999 --call-graph dwarf,16384 --delay 300 -- \
+  taskset -c 2 target/profile-artifacts/frozen/candidate1 \
+  --iterations 100000 --warmup 5000 --response-bytes 128 \
+  --json target/profile-artifacts/candidate1-profile.json
+```
+
+There were no lost samples.
+The next-input poll remains the hottest leaf at 10.10%.
+Event waits remain at 5.94%, `malloc` at 2.49%, and unregister at 1.09%.
+These are shared leaves unless a stack supplies an endpoint ancestor.
+This profile supports a second bounded iteration before persistent wait storage.
+
+The second hypothesis concerns a blocked core with an already-populated completion channel.
+Candidate 1 can register unrelated waits before its rotation reaches that ready channel.
+A ready-probe pass before the blocking registration pass can avoid those short-lived registrations.
+Handler, source, and timer futures must not receive duplicate polls in the second pass.
