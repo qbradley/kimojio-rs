@@ -1,0 +1,4 @@
+Audit timestamp: 2026-09-20T10:26:07Z
+CPU2 timing lease: RELEASED after final profile recording.
+Release notice delivered to core, interop, and fixture owners.
+No further CPU2 timing or profile work is planned.

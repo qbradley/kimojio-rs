@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s
+     Running unittests examples/composition_bench.rs (/workspace/kimojio-rs/target/http2-program/build-http2-performance/debug/examples/composition_bench-4201b4235032e1cd)
+
+running 4 tests
+test tests::fragmented_duplex_regression ... ignored, frozen 5491242b: fragmented concurrent duplex returns ConnectionFailed; strict repro
+test tests::large_duplex_regression ... ignored, frozen 5491242b: concurrent 1MiB duplex returns ConnectionFailed; strict repro
+test tests::concurrency_and_construction ... ok
+test tests::routes_and_fragmentation ... ok
+
+test result: ok. 2 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 3.80s
+

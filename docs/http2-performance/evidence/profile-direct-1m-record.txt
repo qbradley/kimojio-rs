@@ -1,0 +1,2 @@
+[ perf record: Woken up 139 times to write data ]
+[ perf record: Captured and wrote 34.649 MB /workspace/kimojio-rs/target/http2-program/build-http2-performance/frozen-d4bc869/direct-1m.data (4304 samples) ]
