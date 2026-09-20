@@ -77,6 +77,30 @@ Repeated `--case` arguments select several cases.
 A selection without a matching adapter role fails.
 Reports contain only cases that the command actually ran.
 
+## Diagnose an early successful response
+
+This separate probe sends status 200 and response END_STREAM before the upload ends.
+The independent server keeps its socket open and continues to consume the upload.
+It returns stream and connection credit and never sends RST_STREAM or GOAWAY.
+
+```sh
+taskset -c 8-31 "$PYTHON" interop/http2/duplex_probe.py \
+  --client-adapter target/http2-program/client.json \
+  --output target/http2-program/reports/early-success
+```
+
+The report contains the bounded fixture trace, peer events, credit totals, reset frames, EOF, and the adapter result.
+Its classification distinguishes peer errors, native resets, and native failure while the peer remains open.
+The last classification does not, by itself, distinguish engine policy from fixture policy.
+`--selftest` uses the independent reference client.
+`--withhold-credit` is an explicit failing control, not successful interoperability evidence.
+It stops the reference upload at exactly 65,535 bytes.
+
+The main protocol suite's early-413 case differs from this probe.
+That case withholds upload credit deliberately.
+The application must stop that rejected upload explicitly after it accepts the final response.
+It must not wait indefinitely for the rejected producer to finish.
+
 ## Implemented flow and socket checks
 
 The complete flow command runs 48 cases across these roles:

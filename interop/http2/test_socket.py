@@ -54,6 +54,29 @@ class SocketTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "connection_window"):
             adapter(path, client_role=False)
 
+    def test_early_success_does_not_end_upload_in_reference_client(self):
+        from duplex_probe import run_probe
+
+        report = run_probe(self.client_adapter, self.directory / "early-success", timeout_ms=3000)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(report["classification"], "completed-upload-after-final-response")
+        self.assertFalse(report["peer"]["peer_resets"])
+        self.assertFalse(report["peer"]["peer_goaway"])
+        self.assertIsNotNone(report["peer"]["native_socket_close"])
+
+    def test_early_success_without_credit_is_an_explicit_negative_control(self):
+        from duplex_probe import run_probe
+
+        report = run_probe(
+            self.client_adapter, self.directory / "early-success-no-credit",
+            consume=False, timeout_ms=300,
+        )
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["classification"], "no-credit-negative-control")
+        self.assertEqual(report["peer"]["received_bytes"], 65535)
+        self.assertFalse(report["peer"]["request_ended"])
+        self.assertFalse(report["peer"]["window_updates_sent"])
+
     def test_requests_before_handshake_barrier_are_not_lost(self):
         import socket
 
