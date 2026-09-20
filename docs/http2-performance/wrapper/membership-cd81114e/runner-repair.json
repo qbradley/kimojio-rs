@@ -1,0 +1,8 @@
+{
+  "phase": "before sensitivity launch",
+  "error": "IndentationError in newly added controls utility branch",
+  "completed_primary_groups": 9,
+  "primary_groups_repeated": 0,
+  "sensitivity_groups_after_repair": 9,
+  "binary_or_harness_changes": false
+}

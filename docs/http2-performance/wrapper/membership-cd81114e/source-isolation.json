@@ -1,0 +1,11 @@
+{
+  "source_revision": "a2bbb0666c5a3adcf740569243b20efa875a9223",
+  "production_and_test_delta": [
+    "kimojio/src/async_event.rs",
+    "kimojio/src/task.rs",
+    "kimojio/src/task/io_scope.rs",
+    "kimojio/src/task/io_scope/tests.rs"
+  ],
+  "async_stream_equals_accepted": true,
+  "direct_read_tests_absent": true
+}

@@ -1,0 +1,672 @@
+[
+  {
+    "version": "baseline",
+    "backend": "native",
+    "site": "reverse_vector_growth",
+    "address": "0x18bfb2",
+    "symbol": "<kimojio::task::io_scope::IoScopeRegistry>::register_wait",
+    "offset": "0x162",
+    "return_address": "0x18bfb8",
+    "samples": 7063,
+    "exact_return_samples": 18,
+    "near_self_samples": 19,
+    "parent_samples": 197,
+    "instructions": [
+      [
+        1621894,
+        "shufpd xmm1,XMMWORD PTR [rip+0xffffffffffea0501],0x2        # 2c490 <anon.891a45d665fabd3672b6b026ca080918.83.llvm.5983328093700853390+0x50>"
+      ],
+      [
+        1621903,
+        "psubq  xmm0,xmm1"
+      ],
+      [
+        1621907,
+        "movdqu XMMWORD PTR [r15+0x50],xmm0"
+      ],
+      [
+        1621913,
+        "inc    QWORD PTR [r15+0x8]"
+      ],
+      [
+        1621917,
+        "je     18c01d <_RNvMNtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB2_15IoScopeRegistry13register_wait+0x1cd>"
+      ],
+      [
+        1621919,
+        "mov    QWORD PTR [rsp+0x8],r15"
+      ],
+      [
+        1621924,
+        "mov    rbx,QWORD PTR [r14+0x50]"
+      ],
+      [
+        1621928,
+        "cmp    rbx,QWORD PTR [r14+0x40]"
+      ],
+      [
+        1621932,
+        "jne    18bfb8 <_RNvMNtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB2_15IoScopeRegistry13register_wait+0x168>"
+      ],
+      [
+        1621934,
+        "lea    rdi,[r14+0x40]"
+      ],
+      [
+        1621938,
+        "call   QWORD PTR [rip+0x5a160]        # 1e6118 <_DYNAMIC+0xce8>"
+      ],
+      [
+        1621944,
+        "mov    rax,QWORD PTR [r14+0x48]"
+      ],
+      [
+        1621948,
+        "mov    QWORD PTR [rax+rbx*8],r15"
+      ]
+    ]
+  },
+  {
+    "version": "baseline",
+    "backend": "native",
+    "site": "reverse_vector_free",
+    "address": "0x18c4c1",
+    "symbol": "<kimojio::async_event::WaitData>::retire_from_scopes",
+    "offset": "0x2b1",
+    "return_address": "0x18c4c7",
+    "samples": 7063,
+    "exact_return_samples": 60,
+    "near_self_samples": 6,
+    "parent_samples": 299,
+    "instructions": [
+      [
+        1623191,
+        "mov    rcx,0xffffffffffffffff"
+      ],
+      [
+        1623198,
+        "jmp    18c43c <_RNvMs1_NtCscUOoqF9Cpfl_7kimojio11async_eventNtB5_8WaitData18retire_from_scopes+0x22c>"
+      ],
+      [
+        1623200,
+        "mov    rsi,0xffffffffffffffff"
+      ],
+      [
+        1623207,
+        "jmp    18c456 <_RNvMs1_NtCscUOoqF9Cpfl_7kimojio11async_eventNtB5_8WaitData18retire_from_scopes+0x246>"
+      ],
+      [
+        1623209,
+        "mov    rsi,QWORD PTR [rsp+0x20]"
+      ],
+      [
+        1623214,
+        "test   rsi,rsi"
+      ],
+      [
+        1623217,
+        "je     18c4c7 <_RNvMs1_NtCscUOoqF9Cpfl_7kimojio11async_eventNtB5_8WaitData18retire_from_scopes+0x2b7>"
+      ],
+      [
+        1623219,
+        "shl    rsi,0x3"
+      ],
+      [
+        1623223,
+        "mov    edx,0x8"
+      ],
+      [
+        1623228,
+        "mov    rdi,QWORD PTR [rsp+0x18]"
+      ],
+      [
+        1623233,
+        "call   QWORD PTR [rip+0x591b9]        # 1e5680 <_DYNAMIC+0x250>"
+      ],
+      [
+        1623239,
+        "add    rsp,0x58"
+      ],
+      [
+        1623243,
+        "pop    rbx"
+      ]
+    ]
+  },
+  {
+    "version": "baseline",
+    "backend": "generic",
+    "site": "reverse_vector_growth",
+    "address": "0x18bfb2",
+    "symbol": "<kimojio::task::io_scope::IoScopeRegistry>::register_wait",
+    "offset": "0x162",
+    "return_address": "0x18bfb8",
+    "samples": 8754,
+    "exact_return_samples": 3,
+    "near_self_samples": 26,
+    "parent_samples": 183,
+    "instructions": [
+      [
+        1621894,
+        "shufpd xmm1,XMMWORD PTR [rip+0xffffffffffea0501],0x2        # 2c490 <anon.891a45d665fabd3672b6b026ca080918.83.llvm.5983328093700853390+0x50>"
+      ],
+      [
+        1621903,
+        "psubq  xmm0,xmm1"
+      ],
+      [
+        1621907,
+        "movdqu XMMWORD PTR [r15+0x50],xmm0"
+      ],
+      [
+        1621913,
+        "inc    QWORD PTR [r15+0x8]"
+      ],
+      [
+        1621917,
+        "je     18c01d <_RNvMNtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB2_15IoScopeRegistry13register_wait+0x1cd>"
+      ],
+      [
+        1621919,
+        "mov    QWORD PTR [rsp+0x8],r15"
+      ],
+      [
+        1621924,
+        "mov    rbx,QWORD PTR [r14+0x50]"
+      ],
+      [
+        1621928,
+        "cmp    rbx,QWORD PTR [r14+0x40]"
+      ],
+      [
+        1621932,
+        "jne    18bfb8 <_RNvMNtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB2_15IoScopeRegistry13register_wait+0x168>"
+      ],
+      [
+        1621934,
+        "lea    rdi,[r14+0x40]"
+      ],
+      [
+        1621938,
+        "call   QWORD PTR [rip+0x5a160]        # 1e6118 <_DYNAMIC+0xce8>"
+      ],
+      [
+        1621944,
+        "mov    rax,QWORD PTR [r14+0x48]"
+      ],
+      [
+        1621948,
+        "mov    QWORD PTR [rax+rbx*8],r15"
+      ]
+    ]
+  },
+  {
+    "version": "baseline",
+    "backend": "generic",
+    "site": "reverse_vector_free",
+    "address": "0x18c4c1",
+    "symbol": "<kimojio::async_event::WaitData>::retire_from_scopes",
+    "offset": "0x2b1",
+    "return_address": "0x18c4c7",
+    "samples": 8754,
+    "exact_return_samples": 38,
+    "near_self_samples": 7,
+    "parent_samples": 300,
+    "instructions": [
+      [
+        1623191,
+        "mov    rcx,0xffffffffffffffff"
+      ],
+      [
+        1623198,
+        "jmp    18c43c <_RNvMs1_NtCscUOoqF9Cpfl_7kimojio11async_eventNtB5_8WaitData18retire_from_scopes+0x22c>"
+      ],
+      [
+        1623200,
+        "mov    rsi,0xffffffffffffffff"
+      ],
+      [
+        1623207,
+        "jmp    18c456 <_RNvMs1_NtCscUOoqF9Cpfl_7kimojio11async_eventNtB5_8WaitData18retire_from_scopes+0x246>"
+      ],
+      [
+        1623209,
+        "mov    rsi,QWORD PTR [rsp+0x20]"
+      ],
+      [
+        1623214,
+        "test   rsi,rsi"
+      ],
+      [
+        1623217,
+        "je     18c4c7 <_RNvMs1_NtCscUOoqF9Cpfl_7kimojio11async_eventNtB5_8WaitData18retire_from_scopes+0x2b7>"
+      ],
+      [
+        1623219,
+        "shl    rsi,0x3"
+      ],
+      [
+        1623223,
+        "mov    edx,0x8"
+      ],
+      [
+        1623228,
+        "mov    rdi,QWORD PTR [rsp+0x18]"
+      ],
+      [
+        1623233,
+        "call   QWORD PTR [rip+0x591b9]        # 1e5680 <_DYNAMIC+0x250>"
+      ],
+      [
+        1623239,
+        "add    rsp,0x58"
+      ],
+      [
+        1623243,
+        "pop    rbx"
+      ]
+    ]
+  },
+  {
+    "version": "candidate",
+    "backend": "native",
+    "site": "fallback_initial_allocation",
+    "address": "0x18d220",
+    "symbol": "<kimojio::task::io_scope::IoScopeRegistry>::register_wait",
+    "offset": "0x1b0",
+    "return_address": "0x18d226",
+    "samples": 6529,
+    "exact_return_samples": 0,
+    "near_self_samples": 0,
+    "parent_samples": 189,
+    "instructions": [
+      [
+        1626609,
+        "test   rax,rax"
+      ],
+      [
+        1626612,
+        "mov    ecx,0x2"
+      ],
+      [
+        1626617,
+        "cmovs  rcx,rdx"
+      ],
+      [
+        1626621,
+        "test   rcx,rcx"
+      ],
+      [
+        1626624,
+        "je     18d29b <_RNvMs_NtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB4_15IoScopeRegistry13register_wait+0x22b>"
+      ],
+      [
+        1626630,
+        "cmp    rcx,0x1"
+      ],
+      [
+        1626634,
+        "jne    18d2aa <_RNvMs_NtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB4_15IoScopeRegistry13register_wait+0x23a>"
+      ],
+      [
+        1626640,
+        "call   QWORD PTR [rip+0x58af2]        # 1e5d08 <_DYNAMIC+0x260>"
+      ],
+      [
+        1626646,
+        "mov    edi,0x10"
+      ],
+      [
+        1626651,
+        "mov    esi,0x8"
+      ],
+      [
+        1626656,
+        "call   QWORD PTR [rip+0x58aea]        # 1e5d10 <_DYNAMIC+0x268>"
+      ],
+      [
+        1626662,
+        "test   rax,rax"
+      ],
+      [
+        1626665,
+        "je     18d342 <_RNvMs_NtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB4_15IoScopeRegistry13register_wait+0x2d2>"
+      ]
+    ]
+  },
+  {
+    "version": "candidate",
+    "backend": "native",
+    "site": "fallback_growth",
+    "address": "0x18d2bc",
+    "symbol": "<kimojio::task::io_scope::IoScopeRegistry>::register_wait",
+    "offset": "0x24c",
+    "return_address": "0x18d2c2",
+    "samples": 6529,
+    "exact_return_samples": 0,
+    "near_self_samples": 8,
+    "parent_samples": 189,
+    "instructions": [
+      [
+        1626777,
+        "jmp    18d2d3 <_RNvMs_NtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB4_15IoScopeRegistry13register_wait+0x263>"
+      ],
+      [
+        1626779,
+        "inc    r13"
+      ],
+      [
+        1626782,
+        "mov    QWORD PTR [r12+0x40],r13"
+      ],
+      [
+        1626787,
+        "mov    QWORD PTR [r12+0x48],r15"
+      ],
+      [
+        1626792,
+        "jmp    18d2d3 <_RNvMs_NtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB4_15IoScopeRegistry13register_wait+0x263>"
+      ],
+      [
+        1626794,
+        "mov    QWORD PTR [rsp+0x10],r15"
+      ],
+      [
+        1626799,
+        "mov    r13,QWORD PTR [r12+0x50]"
+      ],
+      [
+        1626804,
+        "cmp    r13,rax"
+      ],
+      [
+        1626807,
+        "jne    18d2c2 <_RNvMs_NtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB4_15IoScopeRegistry13register_wait+0x252>"
+      ],
+      [
+        1626809,
+        "mov    rdi,r14"
+      ],
+      [
+        1626812,
+        "call   QWORD PTR [rip+0x594d6]        # 1e6798 <_DYNAMIC+0xcf0>"
+      ],
+      [
+        1626818,
+        "mov    rax,QWORD PTR [r12+0x48]"
+      ],
+      [
+        1626823,
+        "mov    QWORD PTR [rax+r13*8],r15"
+      ]
+    ]
+  },
+  {
+    "version": "candidate",
+    "backend": "native",
+    "site": "fallback_vector_free",
+    "address": "0x195127",
+    "symbol": "<alloc::vec::into_iter::IntoIter<alloc::rc::Weak<kimojio::task::io_scope::IoScopeRegistry>> as core::iter::traits::iterator::Iterator>::fold::<(), core::iter::traits::iterator::Iterator::for_each::call<alloc::rc::Weak<kimojio::task::io_scope::IoScopeRegistry>, <kimojio::task::io_scope::WaitScopes>::retire::{closure#0}>::{closure#0}>",
+    "offset": "0xb7",
+    "return_address": "0x19512d",
+    "samples": 6529,
+    "exact_return_samples": 0,
+    "near_self_samples": 0,
+    "parent_samples": 0,
+    "instructions": [
+      [
+        1659141,
+        "mov    edx,0x8"
+      ],
+      [
+        1659146,
+        "mov    rdi,r12"
+      ],
+      [
+        1659149,
+        "call   r15"
+      ],
+      [
+        1659152,
+        "jmp    1950a7 <_RINvXs4_NtNtCs6i54tJFfzR_5alloc3vec9into_iterINtB6_8IntoIterINtNtBa_2rc4WeakNtNtNtCscUOoqF9Cpfl_7kimojio4task8io_scope15IoScopeRegistryEENtNtNtNtCsgxBkk5gSRhY_4core4iter6traits8iterator8Iterator4folduNCINvNvB2b_8for_each4callBW_NCNvMB1e_NtB1e_10WaitScopes6retire0E0EB1i_+0x37>"
+      ],
+      [
+        1659154,
+        "mov    rsi,QWORD PTR [rbx+0x10]"
+      ],
+      [
+        1659158,
+        "test   rsi,rsi"
+      ],
+      [
+        1659161,
+        "je     19512d <_RINvXs4_NtNtCs6i54tJFfzR_5alloc3vec9into_iterINtB6_8IntoIterINtNtBa_2rc4WeakNtNtNtCscUOoqF9Cpfl_7kimojio4task8io_scope15IoScopeRegistryEENtNtNtNtCsgxBkk5gSRhY_4core4iter6traits8iterator8Iterator4folduNCINvNvB2b_8for_each4callBW_NCNvMB1e_NtB1e_10WaitScopes6retire0E0EB1i_+0xbd>"
+      ],
+      [
+        1659163,
+        "mov    rdi,QWORD PTR [rbx]"
+      ],
+      [
+        1659166,
+        "shl    rsi,0x3"
+      ],
+      [
+        1659170,
+        "mov    edx,0x8"
+      ],
+      [
+        1659175,
+        "call   QWORD PTR [rip+0x50bcb]        # 1e5cf8 <_DYNAMIC+0x250>"
+      ],
+      [
+        1659181,
+        "add    rsp,0x18"
+      ],
+      [
+        1659185,
+        "pop    rbx"
+      ]
+    ]
+  },
+  {
+    "version": "candidate",
+    "backend": "generic",
+    "site": "fallback_initial_allocation",
+    "address": "0x18d220",
+    "symbol": "<kimojio::task::io_scope::IoScopeRegistry>::register_wait",
+    "offset": "0x1b0",
+    "return_address": "0x18d226",
+    "samples": 8804,
+    "exact_return_samples": 0,
+    "near_self_samples": 0,
+    "parent_samples": 196,
+    "instructions": [
+      [
+        1626609,
+        "test   rax,rax"
+      ],
+      [
+        1626612,
+        "mov    ecx,0x2"
+      ],
+      [
+        1626617,
+        "cmovs  rcx,rdx"
+      ],
+      [
+        1626621,
+        "test   rcx,rcx"
+      ],
+      [
+        1626624,
+        "je     18d29b <_RNvMs_NtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB4_15IoScopeRegistry13register_wait+0x22b>"
+      ],
+      [
+        1626630,
+        "cmp    rcx,0x1"
+      ],
+      [
+        1626634,
+        "jne    18d2aa <_RNvMs_NtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB4_15IoScopeRegistry13register_wait+0x23a>"
+      ],
+      [
+        1626640,
+        "call   QWORD PTR [rip+0x58af2]        # 1e5d08 <_DYNAMIC+0x260>"
+      ],
+      [
+        1626646,
+        "mov    edi,0x10"
+      ],
+      [
+        1626651,
+        "mov    esi,0x8"
+      ],
+      [
+        1626656,
+        "call   QWORD PTR [rip+0x58aea]        # 1e5d10 <_DYNAMIC+0x268>"
+      ],
+      [
+        1626662,
+        "test   rax,rax"
+      ],
+      [
+        1626665,
+        "je     18d342 <_RNvMs_NtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB4_15IoScopeRegistry13register_wait+0x2d2>"
+      ]
+    ]
+  },
+  {
+    "version": "candidate",
+    "backend": "generic",
+    "site": "fallback_growth",
+    "address": "0x18d2bc",
+    "symbol": "<kimojio::task::io_scope::IoScopeRegistry>::register_wait",
+    "offset": "0x24c",
+    "return_address": "0x18d2c2",
+    "samples": 8804,
+    "exact_return_samples": 0,
+    "near_self_samples": 16,
+    "parent_samples": 196,
+    "instructions": [
+      [
+        1626777,
+        "jmp    18d2d3 <_RNvMs_NtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB4_15IoScopeRegistry13register_wait+0x263>"
+      ],
+      [
+        1626779,
+        "inc    r13"
+      ],
+      [
+        1626782,
+        "mov    QWORD PTR [r12+0x40],r13"
+      ],
+      [
+        1626787,
+        "mov    QWORD PTR [r12+0x48],r15"
+      ],
+      [
+        1626792,
+        "jmp    18d2d3 <_RNvMs_NtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB4_15IoScopeRegistry13register_wait+0x263>"
+      ],
+      [
+        1626794,
+        "mov    QWORD PTR [rsp+0x10],r15"
+      ],
+      [
+        1626799,
+        "mov    r13,QWORD PTR [r12+0x50]"
+      ],
+      [
+        1626804,
+        "cmp    r13,rax"
+      ],
+      [
+        1626807,
+        "jne    18d2c2 <_RNvMs_NtNtCscUOoqF9Cpfl_7kimojio4task8io_scopeNtB4_15IoScopeRegistry13register_wait+0x252>"
+      ],
+      [
+        1626809,
+        "mov    rdi,r14"
+      ],
+      [
+        1626812,
+        "call   QWORD PTR [rip+0x594d6]        # 1e6798 <_DYNAMIC+0xcf0>"
+      ],
+      [
+        1626818,
+        "mov    rax,QWORD PTR [r12+0x48]"
+      ],
+      [
+        1626823,
+        "mov    QWORD PTR [rax+r13*8],r15"
+      ]
+    ]
+  },
+  {
+    "version": "candidate",
+    "backend": "generic",
+    "site": "fallback_vector_free",
+    "address": "0x195127",
+    "symbol": "<alloc::vec::into_iter::IntoIter<alloc::rc::Weak<kimojio::task::io_scope::IoScopeRegistry>> as core::iter::traits::iterator::Iterator>::fold::<(), core::iter::traits::iterator::Iterator::for_each::call<alloc::rc::Weak<kimojio::task::io_scope::IoScopeRegistry>, <kimojio::task::io_scope::WaitScopes>::retire::{closure#0}>::{closure#0}>",
+    "offset": "0xb7",
+    "return_address": "0x19512d",
+    "samples": 8804,
+    "exact_return_samples": 0,
+    "near_self_samples": 0,
+    "parent_samples": 0,
+    "instructions": [
+      [
+        1659141,
+        "mov    edx,0x8"
+      ],
+      [
+        1659146,
+        "mov    rdi,r12"
+      ],
+      [
+        1659149,
+        "call   r15"
+      ],
+      [
+        1659152,
+        "jmp    1950a7 <_RINvXs4_NtNtCs6i54tJFfzR_5alloc3vec9into_iterINtB6_8IntoIterINtNtBa_2rc4WeakNtNtNtCscUOoqF9Cpfl_7kimojio4task8io_scope15IoScopeRegistryEENtNtNtNtCsgxBkk5gSRhY_4core4iter6traits8iterator8Iterator4folduNCINvNvB2b_8for_each4callBW_NCNvMB1e_NtB1e_10WaitScopes6retire0E0EB1i_+0x37>"
+      ],
+      [
+        1659154,
+        "mov    rsi,QWORD PTR [rbx+0x10]"
+      ],
+      [
+        1659158,
+        "test   rsi,rsi"
+      ],
+      [
+        1659161,
+        "je     19512d <_RINvXs4_NtNtCs6i54tJFfzR_5alloc3vec9into_iterINtB6_8IntoIterINtNtBa_2rc4WeakNtNtNtCscUOoqF9Cpfl_7kimojio4task8io_scope15IoScopeRegistryEENtNtNtNtCsgxBkk5gSRhY_4core4iter6traits8iterator8Iterator4folduNCINvNvB2b_8for_each4callBW_NCNvMB1e_NtB1e_10WaitScopes6retire0E0EB1i_+0xbd>"
+      ],
+      [
+        1659163,
+        "mov    rdi,QWORD PTR [rbx]"
+      ],
+      [
+        1659166,
+        "shl    rsi,0x3"
+      ],
+      [
+        1659170,
+        "mov    edx,0x8"
+      ],
+      [
+        1659175,
+        "call   QWORD PTR [rip+0x50bcb]        # 1e5cf8 <_DYNAMIC+0x250>"
+      ],
+      [
+        1659181,
+        "add    rsp,0x18"
+      ],
+      [
+        1659185,
+        "pop    rbx"
+      ]
+    ]
+  }
+]

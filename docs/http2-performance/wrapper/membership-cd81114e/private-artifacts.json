@@ -1,0 +1,102 @@
+[
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/baseline-generic/generic-duplex.data",
+    "bytes": 289060744,
+    "sha256": "5bf19d1bf27217623161a6f045e1719b10f06b1744f3861db809e08aeb659ea9"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/baseline-generic/runtime-nm.txt",
+    "bytes": 720116,
+    "sha256": "02fd07747ddac388e9b27554825b80432e0d343a7d7ba9dc44bd4d95d349de29"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/baseline-generic/runtime-objdump.txt",
+    "bytes": 21663252,
+    "sha256": "fcbef4689a38f996eb5869e8b4f6bbf8dc7900eb01f3030d5bf65b67e029a160"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/baseline-generic/samples.txt",
+    "bytes": 4020114,
+    "sha256": "567882b62c961eaf8f9354438e9f19572a1685bd06ac18f1d882e945e3ed8bec"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/baseline-generic/script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/baseline-native/native-duplex.data",
+    "bytes": 233227928,
+    "sha256": "4931029413b2b5daeba92e0514baf3a1663cf909a39df6b1823481436a8c5411"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/baseline-native/runtime-nm.txt",
+    "bytes": 720116,
+    "sha256": "02fd07747ddac388e9b27554825b80432e0d343a7d7ba9dc44bd4d95d349de29"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/baseline-native/runtime-objdump.txt",
+    "bytes": 21663252,
+    "sha256": "fcbef4689a38f996eb5869e8b4f6bbf8dc7900eb01f3030d5bf65b67e029a160"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/baseline-native/samples.txt",
+    "bytes": 2913840,
+    "sha256": "acf59703f0de6052c1785f9abb0403199c6cb15ba06f22341d29de4d8fcf0c4c"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/baseline-native/script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/candidate-generic/generic-duplex.data",
+    "bytes": 290711496,
+    "sha256": "308fe634aa2b14e303dc61789e81a7820930b5380cb8903ba2fb771667f575a9"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/candidate-generic/runtime-nm.txt",
+    "bytes": 720579,
+    "sha256": "4c872ee34248ed3ac9ac46ae88da68641a50b251e4c3297bdab3a4022ba91e45"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/candidate-generic/runtime-objdump.txt",
+    "bytes": 21677989,
+    "sha256": "e769ef572c35ade32e6ffc6d82e029e6a1395107a8904aa2d3fa168822bd3486"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/candidate-generic/samples.txt",
+    "bytes": 3969973,
+    "sha256": "02467c39b67c100ce202421729d4443b2248201c2a62d4d25e6486123deea249"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/candidate-generic/script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/candidate-native/native-duplex.data",
+    "bytes": 215596848,
+    "sha256": "f79facaebc82d3ad2a5ed14cd587fbfa35f9b2f059cc2cf49f5df43d1cfad35c"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/candidate-native/runtime-nm.txt",
+    "bytes": 720579,
+    "sha256": "4c872ee34248ed3ac9ac46ae88da68641a50b251e4c3297bdab3a4022ba91e45"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/candidate-native/runtime-objdump.txt",
+    "bytes": 21677989,
+    "sha256": "e769ef572c35ade32e6ffc6d82e029e6a1395107a8904aa2d3fa168822bd3486"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/candidate-native/samples.txt",
+    "bytes": 2649705,
+    "sha256": "28bc40e5be9584d5ff8b1af4da61ecf0762f7b60b093e7e5b4aa23fb69a396ba"
+  },
+  {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/profiles/candidate-native/script-errors.txt",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "command": [
+    "taskset",
+    "-c",
+    "8-31",
+    "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/allocations"
+  ],
+  "control": "nop-scoped",
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "",
+  "timing_evidence": false,
+  "address_space_limit": 536870912,
+  "cpu_limit": [
+    100,
+    105
+  ],
+  "wall_limit": 110
+}

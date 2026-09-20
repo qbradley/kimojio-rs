@@ -179,7 +179,7 @@ pub struct Task {
 }
 
 mod io_scope;
-pub(crate) use io_scope::{IoScopeCompletions, IoScopeRegistry};
+pub(crate) use io_scope::{IoScopeCompletions, IoScopeRegistry, WaitScopes};
 
 impl Task {
     pub(crate) fn replace_io_scope_completions(

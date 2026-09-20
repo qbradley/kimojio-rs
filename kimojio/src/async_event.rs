@@ -20,7 +20,7 @@
 //! }
 //! ```
 
-use crate::task::{IoScopeRegistry, Task, TaskReadyState, TaskState};
+use crate::task::{Task, TaskReadyState, TaskState, WaitScopes};
 use crate::tracing::Events;
 use crate::{CanceledError, MutInPlaceCell, TimeoutError, operations};
 use futures::future::FusedFuture;
@@ -29,7 +29,7 @@ use rustix_uring::Errno;
 use std::cell::Cell;
 use std::future::Future;
 use std::pin::Pin;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -246,7 +246,7 @@ pub struct WaitData {
     pub canceled: Cell<bool>,
     pub tag: u32,
     pub link: LinkedListLink,
-    pub(crate) scopes: MutInPlaceCell<Vec<Weak<IoScopeRegistry>>>,
+    pub(crate) scopes: MutInPlaceCell<WaitScopes>,
 }
 
 intrusive_adapter!(pub WaitDataAdapter = Rc<WaitData>: WaitData { link => LinkedListLink });
@@ -260,11 +260,7 @@ impl WaitData {
 
     fn retire_from_scopes(self: &Rc<Self>) {
         let scopes = self.scopes.use_mut(std::mem::take);
-        for scope in scopes {
-            if let Some(scope) = scope.upgrade() {
-                scope.retire_wait(Rc::as_ptr(self));
-            }
-        }
+        scopes.retire(Rc::as_ptr(self));
     }
 }
 

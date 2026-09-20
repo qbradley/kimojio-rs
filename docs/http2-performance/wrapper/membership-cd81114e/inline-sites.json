@@ -1,0 +1,266 @@
+[
+  {
+    "version": "baseline",
+    "backend": "native",
+    "sites": [
+      {
+        "address": "0xfd77e",
+        "instruction": "movups xmm1,XMMWORD PTR [rbx+0x10]",
+        "samples": 61
+      },
+      {
+        "address": "0xfdc48",
+        "instruction": "movups xmm3,XMMWORD PTR [rsp+0x370]",
+        "samples": 42
+      },
+      {
+        "address": "0xdd4ad",
+        "instruction": "movups XMMWORD PTR [rsp+0x3a],xmm0",
+        "samples": 24
+      },
+      {
+        "address": "0x15ae38",
+        "instruction": "movaps XMMWORD PTR [rsp+0x160],xmm0",
+        "samples": 15
+      },
+      {
+        "address": "0xe48fb",
+        "instruction": "movups xmm1,XMMWORD PTR [rsp+0x20]",
+        "samples": 12
+      },
+      {
+        "address": "0x18d484",
+        "instruction": "movups XMMWORD PTR [rax+0x50],xmm0",
+        "samples": 12
+      },
+      {
+        "address": "0xb5e49",
+        "instruction": "movdqu xmm1,XMMWORD PTR [rsp+0x30]",
+        "samples": 11
+      },
+      {
+        "address": "0xdd451",
+        "instruction": "movups xmm1,XMMWORD PTR [rbp+0x10]",
+        "samples": 11
+      },
+      {
+        "address": "0x1751b8",
+        "instruction": "movaps XMMWORD PTR [rsp+0xf0],xmm0",
+        "samples": 11
+      },
+      {
+        "address": "0xdc870",
+        "instruction": "movdqu XMMWORD PTR [rsp+0xc0],xmm0",
+        "samples": 9
+      },
+      {
+        "address": "0x18dd47",
+        "instruction": "movdqa XMMWORD PTR [rsp+0x10],xmm1",
+        "samples": 9
+      },
+      {
+        "address": "0xdd568",
+        "instruction": "movaps XMMWORD PTR [rsp+0x70],xmm0",
+        "samples": 8
+      }
+    ]
+  },
+  {
+    "version": "baseline",
+    "backend": "generic",
+    "sites": [
+      {
+        "address": "0xfb7d6",
+        "instruction": "movups xmm1,XMMWORD PTR [rbx+0x10]",
+        "samples": 64
+      },
+      {
+        "address": "0xfbc99",
+        "instruction": "movups xmm3,XMMWORD PTR [rsp+0x340]",
+        "samples": 38
+      },
+      {
+        "address": "0x1013ae",
+        "instruction": "movups XMMWORD PTR [rsp+0x18],xmm0",
+        "samples": 29
+      },
+      {
+        "address": "0x18c92b",
+        "instruction": "movdqa XMMWORD PTR [rsp+0x10],xmm0",
+        "samples": 21
+      },
+      {
+        "address": "0xdd4ad",
+        "instruction": "movups XMMWORD PTR [rsp+0x3a],xmm0",
+        "samples": 19
+      },
+      {
+        "address": "0xdd451",
+        "instruction": "movups xmm1,XMMWORD PTR [rbp+0x10]",
+        "samples": 14
+      },
+      {
+        "address": "0xe48fb",
+        "instruction": "movups xmm1,XMMWORD PTR [rsp+0x20]",
+        "samples": 14
+      },
+      {
+        "address": "0x18bcaf",
+        "instruction": "movdqa xmm3,xmm2",
+        "samples": 14
+      },
+      {
+        "address": "0xb8e89",
+        "instruction": "movdqu xmm1,XMMWORD PTR [rsp+0x30]",
+        "samples": 13
+      },
+      {
+        "address": "0x116a90",
+        "instruction": "movaps XMMWORD PTR [rsp+0x10],xmm0",
+        "samples": 12
+      },
+      {
+        "address": "0x18beb0",
+        "instruction": "movdqa xmm3,xmm2",
+        "samples": 12
+      },
+      {
+        "address": "0x18c941",
+        "instruction": "movdqu XMMWORD PTR [rsp+0x28],xmm1",
+        "samples": 12
+      }
+    ]
+  },
+  {
+    "version": "candidate",
+    "backend": "native",
+    "sites": [
+      {
+        "address": "0x10749e",
+        "instruction": "movups xmm1,XMMWORD PTR [rbx+0x10]",
+        "samples": 61
+      },
+      {
+        "address": "0x107968",
+        "instruction": "movups xmm3,XMMWORD PTR [rsp+0x370]",
+        "samples": 43
+      },
+      {
+        "address": "0x18d0d4",
+        "instruction": "movdqa xmm3,xmm2",
+        "samples": 24
+      },
+      {
+        "address": "0xdd67d",
+        "instruction": "movups XMMWORD PTR [rsp+0x3a],xmm0",
+        "samples": 19
+      },
+      {
+        "address": "0x18da18",
+        "instruction": "movups XMMWORD PTR [rax+0x50],xmm0",
+        "samples": 15
+      },
+      {
+        "address": "0xe4acb",
+        "instruction": "movups xmm1,XMMWORD PTR [rsp+0x20]",
+        "samples": 13
+      },
+      {
+        "address": "0x15b078",
+        "instruction": "movaps XMMWORD PTR [rsp+0x160],xmm0",
+        "samples": 13
+      },
+      {
+        "address": "0xdcd69",
+        "instruction": "movups xmm1,XMMWORD PTR [rsp+0x30]",
+        "samples": 12
+      },
+      {
+        "address": "0x17c1a2",
+        "instruction": "movups XMMWORD PTR [r13+0x98],xmm0",
+        "samples": 11
+      },
+      {
+        "address": "0xb6019",
+        "instruction": "movdqu xmm1,XMMWORD PTR [rsp+0x30]",
+        "samples": 10
+      },
+      {
+        "address": "0xbcf77",
+        "instruction": "movdqu XMMWORD PTR [r12],xmm0",
+        "samples": 10
+      },
+      {
+        "address": "0xcd085",
+        "instruction": "movdqa xmm3,xmm2",
+        "samples": 10
+      }
+    ]
+  },
+  {
+    "version": "candidate",
+    "backend": "generic",
+    "sites": [
+      {
+        "address": "0x1059b9",
+        "instruction": "movups xmm3,XMMWORD PTR [rsp+0x340]",
+        "samples": 56
+      },
+      {
+        "address": "0x1054f6",
+        "instruction": "movups xmm1,XMMWORD PTR [rbx+0x10]",
+        "samples": 46
+      },
+      {
+        "address": "0x11280e",
+        "instruction": "movups XMMWORD PTR [rsp+0x18],xmm0",
+        "samples": 23
+      },
+      {
+        "address": "0xdd67d",
+        "instruction": "movups XMMWORD PTR [rsp+0x3a],xmm0",
+        "samples": 22
+      },
+      {
+        "address": "0x18c77a",
+        "instruction": "movups XMMWORD PTR [rax+0x60],xmm0",
+        "samples": 18
+      },
+      {
+        "address": "0x18c11b",
+        "instruction": "movdqa XMMWORD PTR [rsp+0x20],xmm0",
+        "samples": 16
+      },
+      {
+        "address": "0x18d413",
+        "instruction": "movdqa xmm3,xmm2",
+        "samples": 14
+      },
+      {
+        "address": "0xf84e0",
+        "instruction": "movaps XMMWORD PTR [rsp+0x10],xmm0",
+        "samples": 13
+      },
+      {
+        "address": "0x15b078",
+        "instruction": "movaps XMMWORD PTR [rsp+0x160],xmm0",
+        "samples": 12
+      },
+      {
+        "address": "0xdd621",
+        "instruction": "movups xmm1,XMMWORD PTR [rbp+0x10]",
+        "samples": 11
+      },
+      {
+        "address": "0x103482",
+        "instruction": "movups xmm1,XMMWORD PTR [rbx+0x18]",
+        "samples": 11
+      },
+      {
+        "address": "0xd5df4",
+        "instruction": "movups xmm1,XMMWORD PTR [rbx+0x10]",
+        "samples": 10
+      }
+    ]
+  }
+]

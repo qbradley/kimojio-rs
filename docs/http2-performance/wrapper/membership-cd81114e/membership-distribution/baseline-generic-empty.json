@@ -1,0 +1,15 @@
+{
+  "version": "baseline",
+  "wait_data_bytes": 80,
+  "rc_wait_allocation_bytes": 96,
+  "membership_storage_bytes": 24,
+  "counts_by_membership_length": {
+    "1": 5143,
+    "0": 768
+  },
+  "retirement_observations": 5911,
+  "failure": null,
+  "timing_evidence": false,
+  "scope": "entry to retire_from_scopes; excludes ready waits without WaitData",
+  "instrumentation": "software breakpoint changes scheduling; frozen on-disk normal binary unchanged"
+}

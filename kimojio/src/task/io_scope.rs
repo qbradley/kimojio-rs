@@ -13,6 +13,9 @@
 //! Strong entries prevent pointer reuse while a key exists.
 //! Weak reverse memberships avoid cycles and permit direct removal without history scans.
 //! A canceled wait retry creates a new waiter, without memberships from its previous generation.
+//! Zero or one reverse membership needs no separate allocation.
+//! A second membership creates a vector of weak references for all captured scopes.
+//! Retirement detaches the entire membership value before it visits registries.
 //!
 //! The per-scope map operations use expected amortized constant time.
 //! Repeated pending polls do not append duplicate entries.
@@ -28,7 +31,11 @@
 //! The ownership-order test controls ACK-owner release around genuine NOP completions.
 //! It does not force kernel CQE order.
 
-use std::{collections::HashMap, hash::Hash, rc::Rc};
+use std::{
+    collections::HashMap,
+    hash::Hash,
+    rc::{Rc, Weak},
+};
 
 use crate::{Completion, MutInPlaceCell, async_event::WaitData, task_ref::wake_task};
 
@@ -42,6 +49,45 @@ pub(crate) struct IoScopeCompletions {
 #[derive(Default)]
 pub(crate) struct IoScopeRegistry {
     entries: MutInPlaceCell<Entries>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) enum WaitScopes {
+    #[default]
+    Empty,
+    One(Weak<IoScopeRegistry>),
+    Many(Vec<Weak<IoScopeRegistry>>),
+}
+
+impl WaitScopes {
+    pub(crate) fn push(&mut self, scope: Weak<IoScopeRegistry>) {
+        match self {
+            Self::Empty => *self = Self::One(scope),
+            Self::One(_) => {
+                let mut scopes = Vec::with_capacity(2);
+                let Self::One(first) = std::mem::take(self) else {
+                    unreachable!()
+                };
+                scopes.push(first);
+                scopes.push(scope);
+                *self = Self::Many(scopes);
+            }
+            Self::Many(scopes) => scopes.push(scope),
+        }
+    }
+
+    pub(crate) fn retire(self, wait: *const WaitData) {
+        let retire = |scope: Weak<IoScopeRegistry>| {
+            if let Some(scope) = scope.upgrade() {
+                scope.retire_wait(wait);
+            }
+        };
+        match self {
+            Self::Empty => {}
+            Self::One(scope) => retire(scope),
+            Self::Many(scopes) => scopes.into_iter().for_each(retire),
+        }
+    }
 }
 
 #[derive(Default)]

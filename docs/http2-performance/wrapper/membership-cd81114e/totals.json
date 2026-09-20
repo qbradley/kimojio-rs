@@ -1,0 +1,16 @@
+[
+  {
+    "file": "matrix",
+    "cells": 36,
+    "runs": 4140,
+    "measured_exchanges": 6971760,
+    "required_overlap_witnesses": 121500
+  },
+  {
+    "file": "sensitivity",
+    "cells": 6,
+    "runs": 108,
+    "measured_exchanges": 60192,
+    "required_overlap_witnesses": 67104
+  }
+]

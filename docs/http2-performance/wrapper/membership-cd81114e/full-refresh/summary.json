@@ -1,0 +1,13 @@
+{
+  "cells": 80,
+  "trial_groups": 400,
+  "process_runs": 2000,
+  "failures": 0,
+  "measured_exchanges": 820250,
+  "retirements_per_endpoint_including_warmup": 1154490,
+  "compared_payload_bytes_including_warmup": 119074448640,
+  "required_overlap_witnesses": 23840,
+  "minimum_steady_window_ns": 214447748,
+  "maximum_steady_window_ns": 534864794,
+  "uncertainty": "exact 5^5 percentile bootstrap of trial-group medians; five groups only; no request-latency tail claim"
+}

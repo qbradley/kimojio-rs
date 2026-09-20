@@ -1,0 +1,2928 @@
+{
+  "schema": 1,
+  "report_revision": 1,
+  "status": "PASS: final-source socket qualification",
+  "source_commit": "c9b9ecbc07e40f0804fd3a1e5b2c6fe11c014e30",
+  "membership_commit": "cd81114e8dd8596ca709106271bfbd21bb542e74",
+  "runtime_commit": "a4af94fd97c986877f1ba23188d923dbe31fae2d",
+  "wrapper_commit": "d8ca94b6c6ba8439085609b289ff1ddbd6698357",
+  "fixture_logic_commit": "b3789dc6a1ec91efb1f295e9931d373946477852",
+  "binary": "/workspace/kimojio-rs/target/http2-program/worktrees/http2-membership-fixture/target/membership-fixture-evidence/frozen/c9b9ecbc07e40f0804fd3a1e5b2c6fe11c014e30/interop",
+  "sha256": "4f2b8aa2eadde6b9bc36b4ed03b0da5fbb4fc39259815c71a136bdba0c289a1a",
+  "binary_hash_verified_before_and_after": true,
+  "provenance_summary": "/workspace/kimojio-rs/target/http2-program/worktrees/http2-membership-fixture/target/membership-fixture-evidence/summary.json",
+  "peer_commit": "1df3ea1e81e679c3da51b8c4ff1ed10b8d9f8868",
+  "profile": "wrapper",
+  "modes": {
+    "native": {
+      "flow_passed": 48,
+      "protocol_passed": 17,
+      "flow_by_role": {
+        "client": 16,
+        "client-upload": 9,
+        "server-download": 14,
+        "server-upload": 9
+      },
+      "protocol_by_role": {
+        "client": 13,
+        "server": 4
+      },
+      "synchronized_not_cold_start": [
+        {
+          "name": "reduced-single",
+          "role": "client-upload",
+          "warmup_requests": 1,
+          "startup": "bodyless-warmup"
+        },
+        {
+          "name": "reduced-aggregate-serial",
+          "role": "client-upload",
+          "warmup_requests": 1,
+          "startup": "bodyless-warmup"
+        },
+        {
+          "name": "reduced-aggregate-concurrent",
+          "role": "client-upload",
+          "warmup_requests": 8,
+          "startup": "bodyless-warmup"
+        },
+        {
+          "name": "early-response",
+          "role": "client",
+          "warmup_requests": 2,
+          "startup": "bodyless-warmup"
+        }
+      ],
+      "flow_credit_results": [
+        {
+          "name": "reduced-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131087,
+            "flow": 131087,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "reduced-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131087,
+            "flow": 131087,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131072,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 131087,
+            "final_connection": 65520
+          },
+          "profile": "wrapper",
+          "startup": "bodyless-warmup",
+          "warmup_requests": 1,
+          "canonical_cold_start": false,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-reduced-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131072,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 131087,
+            "final_connection": 65520
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-reduced-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131087,
+            "flow": 131087,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "reduced-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "reduced-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "bodyless-warmup",
+          "warmup_requests": 1,
+          "canonical_cold_start": false,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-reduced-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-reduced-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "reduced-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "reduced-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "bodyless-warmup",
+          "warmup_requests": 8,
+          "canonical_cold_start": false,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-reduced-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-reduced-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "standard-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131087,
+            "flow": 131087,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "standard-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131087,
+            "flow": 131087,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 114687,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 131087,
+            "final_connection": 49135
+          },
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-standard-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131070,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 131087,
+            "final_connection": 65518
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-standard-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131087,
+            "flow": 131087,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "standard-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "standard-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-standard-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-standard-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "standard-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "standard-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660796,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 65531
+          },
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-standard-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660500,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 65235
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-standard-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "default-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 16777233,
+            "flow": 16777233,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "default-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 16777233,
+            "flow": 16777233,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 16760577,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 16777233,
+            "final_connection": 48879
+          },
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-default-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 16777187,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 16777233,
+            "final_connection": 65489
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-default-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 16777233,
+            "flow": 16777233,
+            "final_connection": 1048576
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "default-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "default-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-default-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-default-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 1048576
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "default-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "default-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19628170,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 32905
+          },
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-default-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19644168,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 48903
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-default-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 1048576
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "trailers",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 131087,
+            "flow": 131087,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "download-trailers",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131072,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 131087,
+            "final_connection": 65520
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "informational",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 37,
+            "flow": 37,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "download-informational",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 0,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 37,
+            "final_connection": 65498
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "head",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 0,
+            "flow": 0,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "download-head",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 0,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 0,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "no-content",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 0,
+            "flow": 0,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "download-no-content",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 0,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 0,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "padding",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 133445,
+            "flow": 133445,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "paused-consumer",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 7168,
+            "flow": 8192,
+            "final_connection": 1047552
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "download-paused-consumer",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 0,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 8192,
+            "final_connection": 57343
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "empty-data-sibling",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 5120,
+            "flow": 5120,
+            "final_connection": 1048576
+          },
+          "outcome": "bounded-stream-rejection",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        }
+      ],
+      "protocol_observed_outcomes": {
+        "client/admission-recovery": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 0,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            },
+            {
+              "stream_id": 3,
+              "status": 200,
+              "bytes": 0,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/bad-continuation": {
+          "connection": {
+            "outcome": "protocol",
+            "error": {
+              "scope": "connection",
+              "code": 1
+            },
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": null,
+              "bytes": 0,
+              "ended": false,
+              "outcome": "connection_failed",
+              "error": null
+            }
+          ]
+        },
+        "client/connect": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/content-length": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": false,
+              "outcome": "reset",
+              "error": {
+                "scope": "stream",
+                "code": 1
+              }
+            },
+            {
+              "stream_id": 3,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/continuation": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/early-response": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 0,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            },
+            {
+              "stream_id": 3,
+              "status": 200,
+              "bytes": 0,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            },
+            {
+              "stream_id": 5,
+              "status": 413,
+              "bytes": 0,
+              "ended": true,
+              "outcome": "reset",
+              "error": {
+                "scope": "stream",
+                "code": 0
+              }
+            },
+            {
+              "stream_id": 7,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/goaway": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/graceful-close": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/no-body-data": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 204,
+              "bytes": 0,
+              "ended": false,
+              "outcome": "reset",
+              "error": {
+                "scope": "stream",
+                "code": 1
+              }
+            },
+            {
+              "stream_id": 3,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/push-after-ack": {
+          "connection": {
+            "outcome": "protocol",
+            "error": {
+              "scope": "connection",
+              "code": 1
+            },
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": null,
+              "bytes": 0,
+              "ended": false,
+              "outcome": "connection_failed",
+              "error": null
+            }
+          ]
+        },
+        "client/push-before-ack": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/reset-discard": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 1024,
+              "ended": false,
+              "outcome": "reset",
+              "error": {
+                "scope": "stream",
+                "code": 8
+              }
+            },
+            {
+              "stream_id": 3,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/reset-isolation": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": null,
+              "bytes": 0,
+              "ended": false,
+              "outcome": "reset",
+              "error": {
+                "scope": "stream",
+                "code": 8
+              }
+            },
+            {
+              "stream_id": 3,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "server/connect": {
+          "connection": {
+            "closed": true,
+            "error": null,
+            "outcome": "graceful"
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "server/request-continuation": {
+          "connection": {
+            "closed": true,
+            "error": null,
+            "outcome": "graceful"
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "server/request-hpack-reuse": {
+          "connection": {
+            "closed": true,
+            "error": null,
+            "outcome": "graceful"
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            },
+            {
+              "stream_id": 3,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "server/request-trailers": {
+          "connection": {
+            "closed": true,
+            "error": null,
+            "outcome": "graceful"
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        }
+      },
+      "early_peer_reset": {
+        "stream": {
+          "stream_id": 5,
+          "status": 413,
+          "content_length": 0,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "trailers": [],
+          "informational": [],
+          "ended": true,
+          "outcome": "reset",
+          "error": {
+            "scope": "stream",
+            "code": 0
+          },
+          "send_failure": {
+            "accepted": 1024,
+            "exact": true,
+            "reason": "reset",
+            "error": {
+              "scope": "stream",
+              "code": 0
+            }
+          },
+          "wrapper_error": "Send { accepted: 1024, exact: true, reason: Reset(0) }"
+        },
+        "connection": {
+          "outcome": "graceful",
+          "error": null,
+          "closed": true
+        },
+        "credit": {
+          "connection_final": 64511,
+          "connection_initial": 65535,
+          "connection_refunds": 0,
+          "flow": 1024,
+          "sha256": "1ba794e9305174cbcd58c9e8ce282af85b353d87ccd380db3a41c3bc4615d273",
+          "stream_final": 0,
+          "stream_initial": 1024,
+          "stream_refunds": 0
+        },
+        "peer": {
+          "bytes_in": 1271,
+          "bytes_out": 201,
+          "early_response_barrier": true,
+          "goaway": 0,
+          "goaway_count": 1,
+          "peer_eof": true,
+          "push_disabled": true,
+          "received": {
+            "5": 1024
+          },
+          "received_flow": {
+            "5": 1024
+          },
+          "request_ended": {
+            "1": true,
+            "3": true,
+            "5": false,
+            "7": true
+          },
+          "requests": 4,
+          "reset_discard_refund_barrier": false,
+          "resets": {},
+          "sent": {
+            "1": true,
+            "3": true,
+            "5": true,
+            "7": true
+          },
+          "server_resets": {
+            "5": 0
+          },
+          "stream_updates_at_reset": {},
+          "upload_at_response": 1024,
+          "warmup_barrier": true,
+          "window_updates": {
+            "0": 983078
+          },
+          "wrapper_upload_credit": {
+            "connection_final": 64511,
+            "connection_initial": 65535,
+            "connection_refunds": 0,
+            "flow": 1024,
+            "sha256": "1ba794e9305174cbcd58c9e8ce282af85b353d87ccd380db3a41c3bc4615d273",
+            "stream_final": 0,
+            "stream_initial": 1024,
+            "stream_refunds": 0
+          }
+        }
+      },
+      "full_upload_probes": {
+        "200": {
+          "upload_bytes": 131087,
+          "sha256": "33421ebb74d7d8f57e8bd54f7ad65e4b7049ccdfa20018ce97ecfc8e78595ab7",
+          "request_ended": true,
+          "response_ended": true,
+          "retirement": "complete",
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "actual_peer_close": "eof",
+          "window_updates": {
+            "0": 114687,
+            "1": 114687
+          }
+        },
+        "413": {
+          "upload_bytes": 131087,
+          "sha256": "33421ebb74d7d8f57e8bd54f7ad65e4b7049ccdfa20018ce97ecfc8e78595ab7",
+          "request_ended": true,
+          "response_ended": true,
+          "retirement": "complete",
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "actual_peer_close": "eof",
+          "window_updates": {
+            "0": 114687,
+            "1": 114687
+          }
+        }
+      },
+      "no_credit_control": {
+        "expected_failure": true,
+        "excluded_from_success_count": true,
+        "exact_upload_stop": 65535,
+        "refunds": {},
+        "request_ended": false,
+        "stream": {
+          "stream_id": 1,
+          "status": 200,
+          "content_length": 0,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "trailers": [],
+          "informational": [],
+          "ended": true,
+          "outcome": "connection_failed",
+          "error": null,
+          "send_failure": {
+            "accepted": 16383,
+            "exact": true,
+            "reason": "connection_failed",
+            "error": null
+          },
+          "wrapper_error": "Send { accepted: 16383, exact: true, reason: ConnectionFailed }"
+        },
+        "connection": {
+          "outcome": "aborted",
+          "error": null,
+          "closed": true
+        },
+        "actual_peer_close": "eof",
+        "watchdog_ms": 750,
+        "exit_code": 1
+      },
+      "reports": {
+        "flow": "/workspace/kimojio-rs/target/http2-program/reports/membership-c9b9ecbc-native-flow/report.json",
+        "protocol": "/workspace/kimojio-rs/target/http2-program/reports/membership-c9b9ecbc-native-protocol/report.json",
+        "early-200": "/workspace/kimojio-rs/target/http2-program/reports/membership-c9b9ecbc-native-early-200/report.json",
+        "early-413": "/workspace/kimojio-rs/target/http2-program/reports/membership-c9b9ecbc-native-early-413/report.json",
+        "no-credit-control": "/workspace/kimojio-rs/target/http2-program/reports/membership-c9b9ecbc-native-no-credit-control/report.json"
+      },
+      "failures": []
+    },
+    "generic": {
+      "flow_passed": 48,
+      "protocol_passed": 17,
+      "flow_by_role": {
+        "client": 16,
+        "client-upload": 9,
+        "server-download": 14,
+        "server-upload": 9
+      },
+      "protocol_by_role": {
+        "client": 13,
+        "server": 4
+      },
+      "synchronized_not_cold_start": [
+        {
+          "name": "reduced-single",
+          "role": "client-upload",
+          "warmup_requests": 1,
+          "startup": "bodyless-warmup"
+        },
+        {
+          "name": "reduced-aggregate-serial",
+          "role": "client-upload",
+          "warmup_requests": 1,
+          "startup": "bodyless-warmup"
+        },
+        {
+          "name": "reduced-aggregate-concurrent",
+          "role": "client-upload",
+          "warmup_requests": 8,
+          "startup": "bodyless-warmup"
+        },
+        {
+          "name": "early-response",
+          "role": "client",
+          "warmup_requests": 2,
+          "startup": "bodyless-warmup"
+        }
+      ],
+      "flow_credit_results": [
+        {
+          "name": "reduced-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131087,
+            "flow": 131087,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "reduced-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131087,
+            "flow": 131087,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131072,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 131087,
+            "final_connection": 65520
+          },
+          "profile": "wrapper",
+          "startup": "bodyless-warmup",
+          "warmup_requests": 1,
+          "canonical_cold_start": false,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-reduced-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131072,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 131087,
+            "final_connection": 65520
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-reduced-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131087,
+            "flow": 131087,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "reduced-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "reduced-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "bodyless-warmup",
+          "warmup_requests": 1,
+          "canonical_cold_start": false,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-reduced-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-reduced-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "reduced-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "reduced-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "bodyless-warmup",
+          "warmup_requests": 8,
+          "canonical_cold_start": false,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-reduced-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-reduced-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 163840,
+            "flow": 163840,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "standard-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131087,
+            "flow": 131087,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "standard-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131087,
+            "flow": 131087,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 114687,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 131087,
+            "final_connection": 49135
+          },
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-standard-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131070,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 131087,
+            "final_connection": 65518
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-standard-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131087,
+            "flow": 131087,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "standard-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "standard-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-standard-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-standard-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "standard-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "standard-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19644416,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 49151
+          },
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-standard-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660500,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 65235
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-standard-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "default-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 16777233,
+            "flow": 16777233,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "default-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 16777233,
+            "flow": 16777233,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 16760776,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 16777233,
+            "final_connection": 49078
+          },
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-default-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 16760832,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 16777233,
+            "final_connection": 49134
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-default-single",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 16777233,
+            "flow": 16777233,
+            "final_connection": 1048576
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "default-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "default-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-default-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-default-aggregate-serial",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 1048576
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "default-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "default-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "upload_credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660800,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client-upload"
+        },
+        {
+          "name": "download-default-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 19660500,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 19660800,
+            "final_connection": 65235
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "upload-default-aggregate-concurrent",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 19660800,
+            "flow": 19660800,
+            "final_connection": 1048576
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-upload"
+        },
+        {
+          "name": "trailers",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 131087,
+            "flow": 131087,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "download-trailers",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 131072,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 131087,
+            "final_connection": 65520
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "informational",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 37,
+            "flow": 37,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "download-informational",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 0,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 37,
+            "final_connection": 65498
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "head",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 0,
+            "flow": 0,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "download-head",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 0,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 0,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "no-content",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 0,
+            "flow": 0,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "download-no-content",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 0,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 0,
+            "final_connection": 65535
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "padding",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 133445,
+            "flow": 133445,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "paused-consumer",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 8192,
+            "flow": 8192,
+            "final_connection": 1048576
+          },
+          "outcome": "complete",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        },
+        {
+          "name": "download-paused-consumer",
+          "passed": true,
+          "credit": {
+            "initial_connection": 65535,
+            "connection_window_update": 0,
+            "pending_connection_window_update": 0,
+            "goaway_discarded_connection_window_update": 0,
+            "flow": 8192,
+            "final_connection": 57343
+          },
+          "profile": "wrapper",
+          "startup": "independent-client-handshake",
+          "trailer_comparison": "per-name-occurrences",
+          "role": "server-download"
+        },
+        {
+          "name": "empty-data-sibling",
+          "passed": true,
+          "credit": {
+            "initial_connection": 1048576,
+            "connection_window_update": 5120,
+            "flow": 5120,
+            "final_connection": 1048576
+          },
+          "outcome": "bounded-stream-rejection",
+          "profile": "wrapper",
+          "startup": "unchanged",
+          "warmup_requests": 0,
+          "canonical_cold_start": true,
+          "trailer_comparison": "per-name-occurrences",
+          "role": "client"
+        }
+      ],
+      "protocol_observed_outcomes": {
+        "client/admission-recovery": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 0,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            },
+            {
+              "stream_id": 3,
+              "status": 200,
+              "bytes": 0,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/bad-continuation": {
+          "connection": {
+            "outcome": "protocol",
+            "error": {
+              "scope": "connection",
+              "code": 1
+            },
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": null,
+              "bytes": 0,
+              "ended": false,
+              "outcome": "connection_failed",
+              "error": null
+            }
+          ]
+        },
+        "client/connect": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/content-length": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": false,
+              "outcome": "reset",
+              "error": {
+                "scope": "stream",
+                "code": 1
+              }
+            },
+            {
+              "stream_id": 3,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/continuation": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/early-response": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 0,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            },
+            {
+              "stream_id": 3,
+              "status": 200,
+              "bytes": 0,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            },
+            {
+              "stream_id": 5,
+              "status": 413,
+              "bytes": 0,
+              "ended": true,
+              "outcome": "reset",
+              "error": {
+                "scope": "stream",
+                "code": 0
+              }
+            },
+            {
+              "stream_id": 7,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/goaway": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/graceful-close": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/no-body-data": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 204,
+              "bytes": 0,
+              "ended": false,
+              "outcome": "reset",
+              "error": {
+                "scope": "stream",
+                "code": 1
+              }
+            },
+            {
+              "stream_id": 3,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/push-after-ack": {
+          "connection": {
+            "outcome": "protocol",
+            "error": {
+              "scope": "connection",
+              "code": 1
+            },
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": null,
+              "bytes": 0,
+              "ended": false,
+              "outcome": "connection_failed",
+              "error": null
+            }
+          ]
+        },
+        "client/push-before-ack": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/reset-discard": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 1024,
+              "ended": false,
+              "outcome": "reset",
+              "error": {
+                "scope": "stream",
+                "code": 8
+              }
+            },
+            {
+              "stream_id": 3,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "client/reset-isolation": {
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": null,
+              "bytes": 0,
+              "ended": false,
+              "outcome": "reset",
+              "error": {
+                "scope": "stream",
+                "code": 8
+              }
+            },
+            {
+              "stream_id": 3,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "server/connect": {
+          "connection": {
+            "closed": true,
+            "error": null,
+            "outcome": "graceful"
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "server/request-continuation": {
+          "connection": {
+            "closed": true,
+            "error": null,
+            "outcome": "graceful"
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "server/request-hpack-reuse": {
+          "connection": {
+            "closed": true,
+            "error": null,
+            "outcome": "graceful"
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            },
+            {
+              "stream_id": 3,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        },
+        "server/request-trailers": {
+          "connection": {
+            "closed": true,
+            "error": null,
+            "outcome": "graceful"
+          },
+          "streams": [
+            {
+              "stream_id": 1,
+              "status": 200,
+              "bytes": 37,
+              "ended": true,
+              "outcome": "complete",
+              "error": null
+            }
+          ]
+        }
+      },
+      "early_peer_reset": {
+        "stream": {
+          "stream_id": 5,
+          "status": 413,
+          "content_length": 0,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "trailers": [],
+          "informational": [],
+          "ended": true,
+          "outcome": "reset",
+          "error": {
+            "scope": "stream",
+            "code": 0
+          },
+          "send_failure": {
+            "accepted": 1024,
+            "exact": true,
+            "reason": "reset",
+            "error": {
+              "scope": "stream",
+              "code": 0
+            }
+          },
+          "wrapper_error": "Send { accepted: 1024, exact: true, reason: Reset(0) }"
+        },
+        "connection": {
+          "outcome": "graceful",
+          "error": null,
+          "closed": true
+        },
+        "credit": {
+          "connection_final": 64511,
+          "connection_initial": 65535,
+          "connection_refunds": 0,
+          "flow": 1024,
+          "sha256": "1ba794e9305174cbcd58c9e8ce282af85b353d87ccd380db3a41c3bc4615d273",
+          "stream_final": 0,
+          "stream_initial": 1024,
+          "stream_refunds": 0
+        },
+        "peer": {
+          "bytes_in": 1271,
+          "bytes_out": 201,
+          "early_response_barrier": true,
+          "goaway": 0,
+          "goaway_count": 1,
+          "peer_eof": true,
+          "push_disabled": true,
+          "received": {
+            "5": 1024
+          },
+          "received_flow": {
+            "5": 1024
+          },
+          "request_ended": {
+            "1": true,
+            "3": true,
+            "5": false,
+            "7": true
+          },
+          "requests": 4,
+          "reset_discard_refund_barrier": false,
+          "resets": {},
+          "sent": {
+            "1": true,
+            "3": true,
+            "5": true,
+            "7": true
+          },
+          "server_resets": {
+            "5": 0
+          },
+          "stream_updates_at_reset": {},
+          "upload_at_response": 1024,
+          "warmup_barrier": true,
+          "window_updates": {
+            "0": 983078
+          },
+          "wrapper_upload_credit": {
+            "connection_final": 64511,
+            "connection_initial": 65535,
+            "connection_refunds": 0,
+            "flow": 1024,
+            "sha256": "1ba794e9305174cbcd58c9e8ce282af85b353d87ccd380db3a41c3bc4615d273",
+            "stream_final": 0,
+            "stream_initial": 1024,
+            "stream_refunds": 0
+          }
+        }
+      },
+      "full_upload_probes": {
+        "200": {
+          "upload_bytes": 131087,
+          "sha256": "33421ebb74d7d8f57e8bd54f7ad65e4b7049ccdfa20018ce97ecfc8e78595ab7",
+          "request_ended": true,
+          "response_ended": true,
+          "retirement": "complete",
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "actual_peer_close": "eof",
+          "window_updates": {
+            "0": 114687,
+            "1": 114687
+          }
+        },
+        "413": {
+          "upload_bytes": 131087,
+          "sha256": "33421ebb74d7d8f57e8bd54f7ad65e4b7049ccdfa20018ce97ecfc8e78595ab7",
+          "request_ended": true,
+          "response_ended": true,
+          "retirement": "complete",
+          "connection": {
+            "outcome": "graceful",
+            "error": null,
+            "closed": true
+          },
+          "actual_peer_close": "eof",
+          "window_updates": {
+            "0": 114687,
+            "1": 114687
+          }
+        }
+      },
+      "no_credit_control": {
+        "expected_failure": true,
+        "excluded_from_success_count": true,
+        "exact_upload_stop": 65535,
+        "refunds": {},
+        "request_ended": false,
+        "stream": {
+          "stream_id": 1,
+          "status": 200,
+          "content_length": 0,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "trailers": [],
+          "informational": [],
+          "ended": true,
+          "outcome": "connection_failed",
+          "error": null,
+          "send_failure": {
+            "accepted": 16383,
+            "exact": true,
+            "reason": "connection_failed",
+            "error": null
+          },
+          "wrapper_error": "Send { accepted: 16383, exact: true, reason: ConnectionFailed }"
+        },
+        "connection": {
+          "outcome": "aborted",
+          "error": null,
+          "closed": true
+        },
+        "actual_peer_close": "eof",
+        "watchdog_ms": 750,
+        "exit_code": 1
+      },
+      "reports": {
+        "flow": "/workspace/kimojio-rs/target/http2-program/reports/membership-c9b9ecbc-generic-flow/report.json",
+        "protocol": "/workspace/kimojio-rs/target/http2-program/reports/membership-c9b9ecbc-generic-protocol/report.json",
+        "early-200": "/workspace/kimojio-rs/target/http2-program/reports/membership-c9b9ecbc-generic-early-200/report.json",
+        "early-413": "/workspace/kimojio-rs/target/http2-program/reports/membership-c9b9ecbc-generic-early-413/report.json",
+        "no-credit-control": "/workspace/kimojio-rs/target/http2-program/reports/membership-c9b9ecbc-generic-no-credit-control/report.json"
+      },
+      "failures": []
+    }
+  },
+  "total_fixture_cases_passed": 130,
+  "full_upload_probes_passed": 4,
+  "strict_negative_controls": {
+    "python_tests_passed": 41,
+    "go_tests": "PASS: fresh go test -count=1 ./...",
+    "native_and_generic_no_credit": "PASS: expected failure at exact 65535, no refunds, actual close",
+    "logs": [
+      "/workspace/kimojio-rs/target/http2-program/reports/membership-c9b9ecbc-python-controls.log",
+      "/workspace/kimojio-rs/target/http2-program/reports/membership-c9b9ecbc-go-controls.log"
+    ]
+  },
+  "qualification_scope": "Unchanged wrapper profile, actual client and server wrappers, native and generic transports.",
+  "limits": [
+    "Four synchronized cases per mode are not unchanged cold-start qualification.",
+    "No injected split/I/O/close transport-fault success claim. Ambiguous Error::Transport observability remains outside this run.",
+    "No exhaustive RFC, TLS, performance, allocation, retention, or source-review claim from these socket runs.",
+    "Performance and source-review acceptance supplied by parent remains separate from this socket gate."
+  ],
+  "cpu_affinity": "8-31",
+  "cpu2_used": false,
+  "source_modified": false,
+  "source_worktree_clean": true,
+  "historical_reports_untouched": true,
+  "old_binaries_rerun": false,
+  "failures": [],
+  "observed_blockers": []
+}

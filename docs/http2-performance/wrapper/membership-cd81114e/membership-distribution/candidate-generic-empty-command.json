@@ -1,0 +1,52 @@
+{
+  "command": [
+    "taskset",
+    "-c",
+    "8-31",
+    "gdb",
+    "-nx",
+    "-batch",
+    "--readnever",
+    "-iex",
+    "maint set worker-threads 1",
+    "-iex",
+    "set auto-load python-scripts off",
+    "-iex",
+    "set debuginfod enabled off",
+    "-x",
+    "/workspace/kimojio-rs/target/http2-program/worktrees/http2-membership-performance/docs/http2-performance/wrapper/membership-cd81114e/membership_gdb.py",
+    "--args",
+    "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/runtime",
+    "--backend",
+    "generic",
+    "--case",
+    "empty",
+    "--bytes",
+    "1048576",
+    "--concurrency",
+    "8",
+    "--cohorts",
+    "32",
+    "--warmup",
+    "0",
+    "--timeout-seconds",
+    "90"
+  ],
+  "returncode": 0,
+  "binary": {
+    "path": "/workspace/kimojio-rs/target/http2-program/build-http2-membership-performance/frozen-a2bbb066/runtime",
+    "sha256": "670dba3077c072839cf2d45a9afbb2936c86e98f9d0166cc87607b0f9eb42d84"
+  },
+  "address_space_limit": 1073741824,
+  "wall_limit": 110,
+  "cpu_limit": [
+    100,
+    105
+  ],
+  "environment": {
+    "MALLOC_ARENA_MAX": "2",
+    "MEMBERSHIP_VERSION": "candidate",
+    "MEMBERSHIP_SYMBOL": "_RNvMs1_NtCscUOoqF9Cpfl_7kimojio11async_eventNtB5_8WaitData18retire_from_scopes",
+    "MEMBERSHIP_OUTPUT": "/workspace/kimojio-rs/target/http2-program/worktrees/http2-membership-performance/docs/http2-performance/wrapper/membership-cd81114e/membership-distribution/candidate-generic-empty.json"
+  }
+}
