@@ -31,9 +31,14 @@ class Received:
 class Peer:
     """Let python-h2 enforce framing and both flow-control windows."""
 
-    def __init__(self, *, client: bool, stream_window: int = 65535):
+    def __init__(
+        self, *, client: bool, stream_window: int = 65535,
+        connection_window: int = 65535,
+    ):
         if not 0 < stream_window <= 2**31 - 1:
             raise ValueError("stream window must be in 1..2^31-1")
+        if not 65535 <= connection_window <= 2**31 - 1:
+            raise ValueError("connection window must be in 65535..2^31-1")
         self.connection = H2Connection(
             config=H2Configuration(client_side=client, header_encoding=None)
         )
@@ -42,6 +47,8 @@ class Peer:
         if client:
             settings[SettingCodes.ENABLE_PUSH] = 0
         self.connection.update_settings(settings)
+        if connection_window > 65535:
+            self.connection.increment_flow_control_window(connection_window - 65535)
         self.received: dict[int, Received] = {}
         self.window_updates: dict[int, int] = {}
         self.remote_settings: list[dict[int, int]] = []
@@ -145,6 +152,18 @@ class CreditSender:
             [(b":status", b"200"), (b"content-length", str(length).encode())],
             end_stream=length == 0 and not trailers,
         )
+        self.start(stream_id, length, padding=padding, trailers=trailers)
+
+    def start(
+        self, stream_id: int, length: int, *,
+        padding: int | None = None, trailers: bool = False,
+    ) -> None:
+        """Queue an already opened response or request body."""
+        if length < 0 or padding is not None and not 0 <= padding <= 255:
+            raise ValueError("invalid body length or padding")
+        if stream_id in self.initial_stream_credit:
+            raise ValueError("body already started")
+        connection = self.peer.connection
         # Capture the peer's actual balances, not assumed defaults.
         self.initial_stream_credit[stream_id] = (
             connection.streams[stream_id].outbound_flow_control_window

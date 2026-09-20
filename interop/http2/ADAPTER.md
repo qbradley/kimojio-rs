@@ -22,8 +22,8 @@ The request file contains:
   "schema":1,
   "host":"127.0.0.1",
   "port":12345,
-  "timeout_ms":6000,
-  "config":{"stream_window":1024},
+  "timeout_ms":60000,
+  "config":{"stream_window":1024,"connection_window":65535},
   "request_count":2,
   "concurrency":2,
   "requests":[
@@ -35,12 +35,18 @@ The request file contains:
 ```
 
 The fixture uses one connection for all requests.
+For upload scenarios, the fixture waits for the peer's initial SETTINGS before it starts body DATA.
+It must not wait for acknowledgment of its own SETTINGS before it sends request headers.
+That distinction permits the legal pre-ACK push scenario.
 Request array order determines stream IDs: 1, 3, 5, and subsequent odd IDs.
 `concurrency` limits active requests, not lifetime requests.
 Upload bytes repeat the byte `stream_id % 251`.
 The fixture must not retain the complete body.
 `config.stream_window` controls the advertised initial receive window.
-The initial connection window remains 65,535, unless the fixture explicitly reports another value.
+`config.connection_window` controls the initial connection receive credit.
+Values larger than 65,535 require an initial connection WINDOW_UPDATE.
+An absent key selects the fixture default without an override.
+Default cases use an empty `config` object and measure both actual balances.
 
 The result file contains:
 
@@ -68,6 +74,8 @@ Every issued stream needs exactly one result.
 `informational` contains status integers, such as `[103]`.
 `error` is null or `{"scope":"stream","code":1}`.
 A connection error uses `{"scope":"connection","code":1}`.
+The `connection.error` field reports terminal connection errors.
+Pending streams retain null errors when a connection error prevents their completion.
 Codes are HTTP/2 wire error codes.
 `closed` means that the fixture explicitly closed its socket.
 It does not mean that the fixture observed EOF from the server.
@@ -79,10 +87,11 @@ Setup errors return nonzero.
 The server adapter file contains:
 
 ```json
-{"schema":1,"command":["/absolute/fixture","server","--stream-window","{stream_window}"]}
+{"schema":1,"command":["/absolute/fixture","server","{request_file}"]}
 ```
 
 The process binds an ephemeral loopback port.
+Its request file contains `schema`, `config`, and `timeout_ms`, with the same meanings as the client file.
 It prints and flushes `LISTEN 127.0.0.1:PORT`.
 The harness owns process termination after each case.
 Each connection supports multiple requests.
@@ -104,14 +113,18 @@ The fixture consumes ordinary uploads as it receives them.
 
 ## Initial concrete cases
 
-Both directions require a 131,071-byte body with stream windows 1,024 and 65,535.
+Both directions require a 131,087-byte body with stream windows 1,024 and 65,535.
+These explicit cases select connection credit 65,535.
+Default cases use 16 MiB plus 17 bytes, without receive-window overrides.
 The sender must first record the actual SETTINGS and connection credit.
-A case fails if the body does not exceed both actual initial balances.
+A case fails unless its body is at least twice the larger actual initial balance plus 17 bytes.
+Default cases also fail if either initial balance exceeds 8 MiB.
 Senders obey both balances and every WINDOW_UPDATE increment.
 
-Serial and concurrent cases use 160 bodies of 512 bytes.
+Reduced-window serial and concurrent cases use 320 bodies of 512 bytes.
+Other serial and concurrent cases use 600 bodies of 32,768 bytes.
 Each body is smaller than the advertised stream window.
-Their total exceeds the actual initial connection window.
+Their total exceeds twice the actual initial connection window.
 Every body needs exact byte counts, SHA-256, END_STREAM, and expected trailers.
 The peer records all WINDOW_UPDATE increments and final send balances.
 Those values must satisfy the stream and connection credit equations.
@@ -119,10 +132,10 @@ Those values must satisfy the stream and connection credit equations.
 The initial semantic cases cover trailers, informational responses, HEAD, and status 204.
 Fault controls include a receiver that withholds consumption and a server that never returns upload credit.
 
-## Follow-up action interface
+## Actions exercised by socket suites
 
-These actions reserve explicit fixture behavior for later cases.
-They are not claims of implemented test coverage.
+The independent reference peers implement these actions.
+The native fixture needs each action for the corresponding case.
 
 * `{"action":"pause","stream_id":1,"until_stream_ended":3}` retains stream 1 body fragments until stream 3 ends.
 * `{"action":"reset","stream_id":1,"after_bytes":1024,"code":8}` cancels stream 1 after that many response bytes.
@@ -131,3 +144,13 @@ They are not claims of implemented test coverage.
 The harness must name every executed case in its report.
 Unsupported actions fail rather than produce a skip.
 Further protocol cases can use fixed independent-peer scenarios without new fixture routes.
+
+The reset case reports status 200, 1,024 delivered bytes, no END_STREAM, and a stream error with code 8.
+The peer sends late DATA after reset to exercise connection-credit refunds.
+These late frames remain within the credit that existed before reset.
+The test prohibits stream credit for the discarded DATA.
+
+The graceful-close case requires GOAWAY(NO_ERROR) on the wire before actual socket close.
+The content-length error case sends 37 bytes, then an empty END_STREAM after a PING barrier.
+Its declared content length is 38.
+It requires stream PROTOCOL_ERROR without a connection error.
