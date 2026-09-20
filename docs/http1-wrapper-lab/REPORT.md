@@ -7,10 +7,11 @@ It preserves the streaming API, generic transports, explicit duplex responses, a
 Full-body coalescing requires an explicit opt-in because it changes observable timeout progress.
 The buffered minimum-code API remains a separate experiment.
 
-The measured production source is `da081a89349ef1cc5619496e74556a898dcb98c6`.
+The accepted production source is `5068d6582b18db490192a16041e6a3d465b9c5d6`.
+It adds one measured inlining hint to integration `da081a89349ef1cc5619496e74556a898dcb98c6`.
 The [comparison](COMPARISON.md) records the four experiments, selection, rejected alternatives, and compatibility review.
 The [benchmark contract](BENCHMARK.md) defines payloads, timing boundaries, failure gates, and reproduction.
-The fresh final profile and its bounded follow-up remain the last active assessment step.
+The [final profile](FINAL-PROFILE.md) records fresh samples, disassembly, and the accepted bounded follow-up.
 
 ## Measured performance
 
@@ -21,30 +22,33 @@ Every run requires exact payloads, exchange counts, connection reuse, and succes
 
 | Workload | Original wrapper | Final generic | Final native | Final native, coalesced |
 | --- | ---: | ---: | ---: | ---: |
-| Empty request and response | 28.065 | 28.825 | 21.679 | 21.522 |
-| Empty request, 128-byte response | 41.343 | 39.051 | 30.568 | 25.046 |
-| 128 bytes in both directions | 54.457 | 47.496 | 37.297 | 27.074 |
-| 64 KiB in both directions | 133.525 | 127.668 | 97.168 | 97.763 |
-| 1 MiB chunked in both directions | 2090.884 | 1892.483 | 1530.762 | 1533.253 |
-| 8 KiB with 512-byte source frames | 391.074 | 332.904 | 241.907 | 243.492 |
+| Empty request and response | 28.224 | 25.708 | 20.786 | 20.771 |
+| Empty request, 128-byte response | 41.929 | 38.073 | 30.119 | 24.517 |
+| 128 bytes in both directions | 51.713 | 46.550 | 40.699 | 26.374 |
+| 64 KiB in both directions | 134.092 | 121.302 | 95.281 | 96.237 |
+| 1 MiB chunked in both directions | 2073.709 | 1880.927 | 1497.613 | 1494.552 |
+| 8 KiB with 512-byte source frames | 360.928 | 326.985 | 261.147 | 235.187 |
 
-The native default reduces these medians by approximately 23-38% against the original wrapper.
-Coalescing reduces the bidirectional small-body median by approximately 50%.
+The native default reduces these medians by approximately 21-29% against the original wrapper.
+Coalescing reduces the bidirectional small-body median by approximately 49%.
 It does not improve streaming workloads generally.
 The generic path improves several workloads but retains its transport workers and write-all behavior.
-The generic empty median does not improve in this matrix.
+The generic improvements are smaller than the native improvements in this matrix.
 
 These figures are not TCP throughput claims.
 CPU affinity does not reserve the CPU on this shared host.
+Kernel execution is not isolated by the userspace affinity.
 Some trial ranges are wide, and the raw results retain that variability.
-The final matrix contains 330 successful executions, including common-baseline and individual-PoC controls.
+The accepted-source matrix contains 210 successful executions, including original and common-baseline controls.
+The preceding integration matrix contains 330 successful executions with additional individual-PoC controls.
+All raw matrices remain available rather than replacing earlier observations with selected favorable results.
 
 ### Reusable duplex
 
-The final duplex matrix contains 120 successful executions.
+The integration duplex matrix contains 120 successful executions at `da081a89`, before the one-line refinement.
 It covers fixed-length and chunked uploads, receive-lease forwarding, and a vector-copy control.
 
-| Workload | Common native | Final native |
+| Workload | Common native | Combined native before refinement |
 | --- | ---: | ---: |
 | 64 KiB fixed request with lease echo | 151.601 | 110.667 |
 | 1 MiB chunked request with lease echo | 2515.287 | 1857.093 |
@@ -54,6 +58,8 @@ Copy and lease rankings vary across runs and configurations.
 Earlier lease return can permit more receive progress even when it requires a payload copy.
 The API exposes both choices.
 The evidence does not support an unconditional claim that lease forwarding is faster.
+The accepted refinement also passed 106 matched duplex runs against that integration.
+Its independent peer matrix again passed every gated reuse case.
 
 ### Allocation calls
 
@@ -76,6 +82,8 @@ The coalesced native mode removes approximately 73%.
 The counts include allocation, zeroed allocation, and reallocation calls.
 They are not allocations isolated inside the timed interval.
 Instrumented elapsed times do not enter the performance table.
+All probes use the same allocation-package feature graph, which differs from the standalone timing build.
+Fresh accepted-source probes reproduced all four final slopes exactly.
 
 The small-workload peak requested allocation was about 128 KiB for the original and 59 KiB for final native.
 Those process-wide counters include startup, fixture arguments, and reporting.
@@ -139,7 +147,7 @@ It is not merely an allocation switch.
 
 ## Correctness and review
 
-The complete workspace passed 780 tests and doctests with all features.
+The exact accepted source passed 780 workspace tests and doctests with all features.
 Four pre-existing macro doctests remain ignored.
 Targeted core/wrapper matrices also passed in release and with both feature configurations.
 The benchmark has six tests, and the comparison runner has eight.
@@ -151,14 +159,33 @@ These cases retain conservative `/echo` and `/early` behavior.
 They also require three gated `/duplex` exchanges on one socket.
 Each response prefix must arrive before the peer sends its next upload fragment.
 
-The independent final source review recommends adoption without a high-confidence correctness finding.
+The independent combined-source review recommends adoption without a high-confidence correctness finding.
 It examined slot ownership, conditional wake registration, fairness, close ordering, and duplex ownership joins.
 Earlier review found client and server timeout compatibility changes.
 The explicit opt-in and deterministic regressions address both findings.
 Additional tests cover late positive completions, cancellation before issuance, and independently held duplex leases.
+The later refinement changes only one private inlining attribute.
+Direct diff review, optimized regressions, fresh workspace tests, and repeated independent peers cover that final delta.
 
 The [peer record](INDEPENDENT-PEERS.md) explains the initial acceptance contract.
-The final [peer publication](evidence/final-independent-peers.json) records all final outcomes and binary hashes.
+The accepted [peer publication](evidence/accepted-independent-peers.json) records all final outcomes and binary hashes.
+
+## Fresh profile and final refinement
+
+The fresh native profiles place `Core::next`, input selection, metadata reception, and event waits ahead of individual copy sites.
+The hottest identified client and server stacks both reach metadata reception.
+The largest sampled wrapper copies are owned-value moves, not payload clones.
+
+A 288-byte native completion-return move had 16/9 nearby samples in the default/coalesced profiles.
+Inlining private `Slot::poll` removes that separate return boundary without changing operation lifetime or control flow.
+The complete code section grows only 32 bytes.
+Two five-trial series show 0.59-3.04% lower medians across all ten ordinary workload/mode cells.
+The follow-up includes 306 successful matched runs and retains its initially noisy duplex observations.
+
+The final parent build matches the profiled refinement's binary hash.
+Its 210-run acceptance matrix and 180-case peer matrix use that exact source.
+The inlining result is compiler-specific and modest.
+It does not justify rewriting input ownership, metadata storage, or runtime wait registration without separate evidence.
 
 ## Assessment
 
@@ -216,12 +243,17 @@ Those experiments need explicit progress and ownership contracts rather than API
 | Minimum code | `mvpmxsqz` | `06eb49be` |
 | Eager wrapper interface | `utxknnpr` | `451f61b5` |
 | Profile-guided scheduling | `zsvowumt` | `a75433ce` |
+| Rejected blocked-probe iteration | `uqzxpmpw` | `831c1513` |
+| Rejected persistent-wait iteration | `usrozsox` | `24872b17` |
 | Explicit coalescing contract | `ylmqyzum` | `4129a197` |
 | Measured selection and plan | `npymkptm` | `031a63f3` |
 | Example and benchmark policy wiring | `nolsnwvp` | `61b7bdcb` |
 | Combined library implementation | `lmqqvroz` | `53d0a0a9` |
 | Measured complete integration | `twyqmwoy` | `da081a89` |
+| Accepted slot-poll refinement | `topwqmpt` | `5068d658` |
+| Final profile and bounded follow-up | `twslozlo` | `959c6593` |
 
 The isolated worktrees and frozen executables remain under `target/wrapper-lab`.
 The evidence directory retains ordinary comparisons, allocation counters, commands, source identities, and peer outcomes.
+The final-profile evidence includes both repeated comparisons and the initially unfavorable duplex observations.
 The large profile files and executable files remain outside version control.

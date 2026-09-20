@@ -196,5 +196,5 @@ They need direct polling, not channel probes or additional temporary registratio
 Application channels still benefit from runnable probes.
 Neither path can suspend without the wake sources that its pending work requires.
 
-This selection is a measured implementation plan.
-The combined wrapper still needs its own evidence before acceptance.
+This section records the implementation gate before production integration.
+The completed implementation and its own acceptance evidence are in the [assessment](REPORT.md).

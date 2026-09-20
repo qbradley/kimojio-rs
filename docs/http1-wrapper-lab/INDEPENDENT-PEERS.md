@@ -6,6 +6,11 @@ Both wrapper backends passed 45 independent cases each.
 These results precede production optimization.
 They establish the behavior that the selected implementation must retain.
 
+The accepted implementation subsequently passed 180 cases across both backends and both coalescing policies.
+That repeat uses source `5068d6582b18db490192a16041e6a3d465b9c5d6`.
+The [accepted publication](evidence/accepted-independent-peers.json) retains its exact commands, binary hashes, and per-case outcomes.
+The prerequisite results in this document remain a separate historical record.
+
 | Suite | Generic stream | Native descriptor |
 | --- | ---: | ---: |
 | Server fixture, including Go clients | 20/20 | 20/20 |

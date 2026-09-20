@@ -136,6 +136,9 @@ python3 -B -m unittest discover -s perf/wrapper-lab -p 'test_*.py' -v
 Its totals include startup, warmup, measured exchanges, shutdown, and reporting before the final allocator record.
 Two runs with different measured counts and identical warmup expose a per-exchange slope.
 Instrumented throughput is not a timing result.
+The probe package's other example dependencies enable additional runtime features.
+All allocation controls use that same feature graph.
+Those counts describe the instrumented package build, not necessarily the standalone binary's absolute allocation count.
 
 Profiles use the uninstrumented release binary and a separate execution.
 The publication must retain the source identity, binary hash, command, event, and sample scope.

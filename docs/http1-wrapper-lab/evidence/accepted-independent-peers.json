@@ -1,0 +1,1937 @@
+{
+  "source": "5068d6582b18db490192a16041e6a3d465b9c5d6",
+  "complete": true,
+  "valid": true,
+  "passed_cases": 180,
+  "scope": "Exact accepted source, independent Python/Go framing, reuse, and gated duplex progress.",
+  "binaries": {
+    "client": "0e99796171fb9181b3d32c979626a06ea1b2a6e6c97fa9775bb87b1c320c2519",
+    "server": "6e1f12dba673a0f1b5bd9ff74e8bfe3a8d31ba45ff7b65e9e1cda5342faf7e1d"
+  },
+  "reports": [
+    {
+      "label": "accepted-interop-native-client-duplex",
+      "raw_report": "/workspace/kimojio-rs/target/interop/duplex-5e2ebe7a3ed94d39b017d98d5c1a83e0/results.json",
+      "raw_sha256": "c68a01d7067112d5ea85ca2a408c7e0034b48d4fe3e18d38ed75823ceb80a39e",
+      "metadata": {
+        "scope": "Independent duplex progress, not deterministic kernel completion scheduling.",
+        "adapter": {
+          "schema": 1,
+          "command": [
+            "python3",
+            "-B",
+            "interop/http1/kimojio_adapter.py",
+            "--client",
+            "target/wrapper-lab/frozen/accepted/client",
+            "--native",
+            "--request",
+            "{request_file}",
+            "--result",
+            "{result_file}"
+          ],
+          "capabilities": [
+            "basic",
+            "reuse",
+            "upload",
+            "chunked-upload",
+            "trailers",
+            "strict-framing",
+            "expect-continue"
+          ]
+        }
+      },
+      "results": [
+        {
+          "case": "client-duplex-length",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjU4Nzk5DQpjb250ZW50LWxlbmd0aDogODM4ODYwOA0KDQo=",
+          "request_wire_bytes_buffered_before_response_head": 4096,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMjAwIE9LDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KVHJhaWxlcjogWC1EdXBsZXgNCkNvbm5lY3Rpb246IGNsb3NlDQoNCjE2DQpkdXBsZXgtcmVzcG9uc2Utc3RhcnQ6DQo=",
+          "passed": true
+        },
+        {
+          "case": "client-duplex-chunked",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjQwMTc1DQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KDQo=",
+          "request_wire_bytes_buffered_before_response_head": 6144,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMjAwIE9LDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KVHJhaWxlcjogWC1EdXBsZXgNCkNvbm5lY3Rpb246IGNsb3NlDQoNCjE2DQpkdXBsZXgtcmVzcG9uc2Utc3RhcnQ6DQo=",
+          "passed": true
+        },
+        {
+          "case": "client-duplex-length-expect",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjQwNDI1DQpjb250ZW50LWxlbmd0aDogODM4ODYwOA0KZXhwZWN0OiAxMDAtY29udGludWUNCg0K",
+          "request_wire_bytes_buffered_before_response_head": 0,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMTAwIENvbnRpbnVlDQoNCkhUVFAvMS4xIDIwMCBPSw0KVHJhbnNmZXItRW5jb2Rpbmc6IGNodW5rZWQNClRyYWlsZXI6IFgtRHVwbGV4DQpDb25uZWN0aW9uOiBjbG9zZQ0KDQoxNg0KZHVwbGV4LXJlc3BvbnNlLXN0YXJ0Og0K",
+          "passed": true
+        },
+        {
+          "case": "client-duplex-chunked-expect",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjQzNjk5DQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KZXhwZWN0OiAxMDAtY29udGludWUNCg0K",
+          "request_wire_bytes_buffered_before_response_head": 0,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMTAwIENvbnRpbnVlDQoNCkhUVFAvMS4xIDIwMCBPSw0KVHJhbnNmZXItRW5jb2Rpbmc6IGNodW5rZWQNClRyYWlsZXI6IFgtRHVwbGV4DQpDb25uZWN0aW9uOiBjbG9zZQ0KDQoxNg0KZHVwbGV4LXJlc3BvbnNlLXN0YXJ0Og0K",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-native-client",
+      "raw_report": "/workspace/kimojio-rs/target/interop/client-81bcd1171c1b429c9e5561e1fb3b2a0c/results.json",
+      "raw_sha256": "77159791a538ca2f1747e84bab3954645f8e28239fa6a83579f1e7b0fd0bfb28",
+      "metadata": {
+        "schema": 1,
+        "adapter": {
+          "schema": 1,
+          "command": [
+            "python3",
+            "-B",
+            "interop/http1/kimojio_adapter.py",
+            "--client",
+            "target/wrapper-lab/frozen/accepted/client",
+            "--native",
+            "--request",
+            "{request_file}",
+            "--result",
+            "{result_file}"
+          ],
+          "capabilities": [
+            "basic",
+            "reuse",
+            "upload",
+            "chunked-upload",
+            "trailers",
+            "strict-framing",
+            "expect-continue"
+          ]
+        },
+        "capabilities": [
+          "basic",
+          "reuse",
+          "upload",
+          "chunked-upload",
+          "trailers",
+          "strict-framing",
+          "expect-continue"
+        ],
+        "not_covered": [
+          "cancel",
+          "stalled-upload",
+          "upgrade",
+          "deterministic-short-write",
+          "interim"
+        ]
+      },
+      "results": [
+        {
+          "case": "length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.10352
+        },
+        {
+          "case": "chunked",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.122549
+        },
+        {
+          "case": "interim",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102232
+        },
+        {
+          "case": "head",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 68
+            }
+          ],
+          "seconds": 0.102447
+        },
+        {
+          "case": "no-content",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102805
+        },
+        {
+          "case": "not-modified",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102161
+        },
+        {
+          "case": "close-delimited",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102533
+        },
+        {
+          "case": "truncated-length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102289
+        },
+        {
+          "case": "truncated-chunk",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.10218
+        },
+        {
+          "case": "conflicting-length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102153
+        },
+        {
+          "case": "invalid-status",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102089
+        },
+        {
+          "case": "reuse",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            },
+            {
+              "index": 1,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102166
+        },
+        {
+          "case": "upload",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 87
+            }
+          ],
+          "seconds": 0.102117
+        },
+        {
+          "case": "chunked-upload",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 106
+            }
+          ],
+          "seconds": 0.102065
+        },
+        {
+          "case": "transfer-encoding-with-length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.112102
+        },
+        {
+          "case": "expect-continue",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 109
+            }
+          ],
+          "seconds": 0.102225
+        },
+        {
+          "case": "expect-reject",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 91
+            }
+          ],
+          "seconds": 0.10239
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-native-coalesced-client-duplex",
+      "raw_report": "/workspace/kimojio-rs/target/interop/duplex-8d2515643ecf4611b603beff186d0b11/results.json",
+      "raw_sha256": "168dcf26cdc27f48fb7149b6d99008b597e0e56515623bcc1c61925e62a66575",
+      "metadata": {
+        "scope": "Independent duplex progress, not deterministic kernel completion scheduling.",
+        "adapter": {
+          "schema": 1,
+          "command": [
+            "python3",
+            "-B",
+            "interop/http1/kimojio_adapter.py",
+            "--client",
+            "target/wrapper-lab/frozen/accepted/client",
+            "--native",
+            "--coalesce-full-bodies",
+            "--request",
+            "{request_file}",
+            "--result",
+            "{result_file}"
+          ],
+          "capabilities": [
+            "basic",
+            "reuse",
+            "upload",
+            "chunked-upload",
+            "trailers",
+            "strict-framing",
+            "expect-continue"
+          ]
+        }
+      },
+      "results": [
+        {
+          "case": "client-duplex-length",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjQ2NzQ5DQpjb250ZW50LWxlbmd0aDogODM4ODYwOA0KDQo=",
+          "request_wire_bytes_buffered_before_response_head": 6144,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMjAwIE9LDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KVHJhaWxlcjogWC1EdXBsZXgNCkNvbm5lY3Rpb246IGNsb3NlDQoNCjE2DQpkdXBsZXgtcmVzcG9uc2Utc3RhcnQ6DQo=",
+          "passed": true
+        },
+        {
+          "case": "client-duplex-chunked",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjMzNzU3DQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KDQo=",
+          "request_wire_bytes_buffered_before_response_head": 2048,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMjAwIE9LDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KVHJhaWxlcjogWC1EdXBsZXgNCkNvbm5lY3Rpb246IGNsb3NlDQoNCjE2DQpkdXBsZXgtcmVzcG9uc2Utc3RhcnQ6DQo=",
+          "passed": true
+        },
+        {
+          "case": "client-duplex-length-expect",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjQ4NjI5DQpjb250ZW50LWxlbmd0aDogODM4ODYwOA0KZXhwZWN0OiAxMDAtY29udGludWUNCg0K",
+          "request_wire_bytes_buffered_before_response_head": 0,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMTAwIENvbnRpbnVlDQoNCkhUVFAvMS4xIDIwMCBPSw0KVHJhbnNmZXItRW5jb2Rpbmc6IGNodW5rZWQNClRyYWlsZXI6IFgtRHVwbGV4DQpDb25uZWN0aW9uOiBjbG9zZQ0KDQoxNg0KZHVwbGV4LXJlc3BvbnNlLXN0YXJ0Og0K",
+          "passed": true
+        },
+        {
+          "case": "client-duplex-chunked-expect",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjM1NzkxDQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KZXhwZWN0OiAxMDAtY29udGludWUNCg0K",
+          "request_wire_bytes_buffered_before_response_head": 0,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMTAwIENvbnRpbnVlDQoNCkhUVFAvMS4xIDIwMCBPSw0KVHJhbnNmZXItRW5jb2Rpbmc6IGNodW5rZWQNClRyYWlsZXI6IFgtRHVwbGV4DQpDb25uZWN0aW9uOiBjbG9zZQ0KDQoxNg0KZHVwbGV4LXJlc3BvbnNlLXN0YXJ0Og0K",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-native-coalesced-client",
+      "raw_report": "/workspace/kimojio-rs/target/interop/client-4394c6be20ce492a8f5e191c6de4f08b/results.json",
+      "raw_sha256": "f0627b5378a1b7106c46ff666432a6833f23630556a102f1ba72e25db8f9956b",
+      "metadata": {
+        "schema": 1,
+        "adapter": {
+          "schema": 1,
+          "command": [
+            "python3",
+            "-B",
+            "interop/http1/kimojio_adapter.py",
+            "--client",
+            "target/wrapper-lab/frozen/accepted/client",
+            "--native",
+            "--coalesce-full-bodies",
+            "--request",
+            "{request_file}",
+            "--result",
+            "{result_file}"
+          ],
+          "capabilities": [
+            "basic",
+            "reuse",
+            "upload",
+            "chunked-upload",
+            "trailers",
+            "strict-framing",
+            "expect-continue"
+          ]
+        },
+        "capabilities": [
+          "basic",
+          "reuse",
+          "upload",
+          "chunked-upload",
+          "trailers",
+          "strict-framing",
+          "expect-continue"
+        ],
+        "not_covered": [
+          "cancel",
+          "stalled-upload",
+          "upgrade",
+          "deterministic-short-write",
+          "interim"
+        ]
+      },
+      "results": [
+        {
+          "case": "length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102998
+        },
+        {
+          "case": "chunked",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102272
+        },
+        {
+          "case": "interim",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102501
+        },
+        {
+          "case": "head",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 68
+            }
+          ],
+          "seconds": 0.102606
+        },
+        {
+          "case": "no-content",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102541
+        },
+        {
+          "case": "not-modified",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102735
+        },
+        {
+          "case": "close-delimited",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102173
+        },
+        {
+          "case": "truncated-length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102552
+        },
+        {
+          "case": "truncated-chunk",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102424
+        },
+        {
+          "case": "conflicting-length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102162
+        },
+        {
+          "case": "invalid-status",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102284
+        },
+        {
+          "case": "reuse",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            },
+            {
+              "index": 1,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102283
+        },
+        {
+          "case": "upload",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 87
+            }
+          ],
+          "seconds": 0.102229
+        },
+        {
+          "case": "chunked-upload",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 106
+            }
+          ],
+          "seconds": 0.102676
+        },
+        {
+          "case": "transfer-encoding-with-length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102273
+        },
+        {
+          "case": "expect-continue",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 109
+            }
+          ],
+          "seconds": 0.102214
+        },
+        {
+          "case": "expect-reject",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 91
+            }
+          ],
+          "seconds": 0.102296
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-native-coalesced-reuse",
+      "raw_report": "/workspace/kimojio-rs/target/interop/duplex-bd835123fd0e417c8d5a5cd08884e205/results.json",
+      "raw_sha256": "a8d33f41d4026f585b882f00b29ea739e21e6b59a38d43cee8c548536ad33de0",
+      "metadata": {
+        "scope": "Independent duplex progress, not deterministic kernel completion scheduling.",
+        "server_command": [
+          "target/wrapper-lab/frozen/accepted/server",
+          "--native",
+          "--coalesce-full-bodies",
+          "--bind",
+          "127.0.0.1:0"
+        ]
+      },
+      "results": [
+        {
+          "case": "server-duplex-length-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        },
+        {
+          "case": "server-duplex-chunked-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        },
+        {
+          "case": "server-duplex-length-expect-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        },
+        {
+          "case": "server-duplex-chunked-expect-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-native-coalesced-server",
+      "raw_report": "/workspace/kimojio-rs/target/interop/fixture-server-1edc7201213b4ae9a4114ecb6905219e.json",
+      "raw_sha256": "bdb792b66877ad09c3b3e1a7d6f5b4aa2da8a934926307fed487c13e0fc7834a",
+      "metadata": {
+        "command": [
+          "target/wrapper-lab/frozen/accepted/server",
+          "--native",
+          "--coalesce-full-bodies",
+          "--bind",
+          "127.0.0.1:0"
+        ],
+        "matrix": "fixture-application-boundary-v3"
+      },
+      "results": [
+        {
+          "case": "get",
+          "passed": true,
+          "seconds": 0.002346
+        },
+        {
+          "case": "head",
+          "passed": true,
+          "seconds": 0.000288
+        },
+        {
+          "case": "keepalive",
+          "passed": true,
+          "seconds": 0.000361
+        },
+        {
+          "case": "pipeline",
+          "passed": true,
+          "seconds": 0.000289
+        },
+        {
+          "case": "trailers",
+          "passed": true,
+          "seconds": 0.000391
+        },
+        {
+          "case": "echo-length",
+          "passed": true,
+          "seconds": 0.001168
+        },
+        {
+          "case": "echo-chunked",
+          "passed": true,
+          "seconds": 0.001399
+        },
+        {
+          "case": "echo-chunked-trailers",
+          "passed": true,
+          "seconds": 0.001204
+        },
+        {
+          "case": "echo-continue",
+          "passed": true,
+          "seconds": 0.00099
+        },
+        {
+          "case": "early-expect",
+          "passed": true,
+          "seconds": 0.00017
+        },
+        {
+          "case": "early-no-expect",
+          "passed": true,
+          "seconds": 0.000161
+        },
+        {
+          "case": "missing-host",
+          "passed": true,
+          "seconds": 0.000226
+        },
+        {
+          "case": "negative-length",
+          "passed": true,
+          "seconds": 0.000184
+        },
+        {
+          "case": "te-cl",
+          "passed": true,
+          "seconds": 0.000167
+        },
+        {
+          "case": "bare-lf-prefix",
+          "passed": true,
+          "seconds": 0.000167
+        },
+        {
+          "case": "bare-cr-prefix",
+          "passed": true,
+          "seconds": 0.000161
+        },
+        {
+          "case": "http10-close",
+          "passed": true,
+          "seconds": 0.000163
+        },
+        {
+          "case": "unsupported-expect",
+          "passed": true,
+          "seconds": 0.000219
+        },
+        {
+          "case": "go-upload-length",
+          "stdout": "{\"index\":0,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n{\"index\":1,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n",
+          "stderr": "",
+          "passed": true
+        },
+        {
+          "case": "go-upload-chunked",
+          "stdout": "{\"index\":0,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n{\"index\":1,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n",
+          "stderr": "",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-native-reuse",
+      "raw_report": "/workspace/kimojio-rs/target/interop/duplex-95e4df24acf149a79ed277d8f1761140/results.json",
+      "raw_sha256": "93565027890d1ed234b31b3cf864e09bb9424fd338e317193fc6ef3d811125ab",
+      "metadata": {
+        "scope": "Independent duplex progress, not deterministic kernel completion scheduling.",
+        "server_command": [
+          "target/wrapper-lab/frozen/accepted/server",
+          "--native",
+          "--bind",
+          "127.0.0.1:0"
+        ]
+      },
+      "results": [
+        {
+          "case": "server-duplex-length-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        },
+        {
+          "case": "server-duplex-chunked-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        },
+        {
+          "case": "server-duplex-length-expect-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        },
+        {
+          "case": "server-duplex-chunked-expect-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-native-server",
+      "raw_report": "/workspace/kimojio-rs/target/interop/fixture-server-2540990d200a470aaf61302875d556cd.json",
+      "raw_sha256": "e6bc1a238fdf65c4c0bf34106bd0252e03a92037fa484570eb7ac3992d75ad97",
+      "metadata": {
+        "command": [
+          "target/wrapper-lab/frozen/accepted/server",
+          "--native",
+          "--bind",
+          "127.0.0.1:0"
+        ],
+        "matrix": "fixture-application-boundary-v3"
+      },
+      "results": [
+        {
+          "case": "get",
+          "passed": true,
+          "seconds": 0.002376
+        },
+        {
+          "case": "head",
+          "passed": true,
+          "seconds": 0.000315
+        },
+        {
+          "case": "keepalive",
+          "passed": true,
+          "seconds": 0.000358
+        },
+        {
+          "case": "pipeline",
+          "passed": true,
+          "seconds": 0.000268
+        },
+        {
+          "case": "trailers",
+          "passed": true,
+          "seconds": 0.00039
+        },
+        {
+          "case": "echo-length",
+          "passed": true,
+          "seconds": 0.001194
+        },
+        {
+          "case": "echo-chunked",
+          "passed": true,
+          "seconds": 0.001575
+        },
+        {
+          "case": "echo-chunked-trailers",
+          "passed": true,
+          "seconds": 0.001904
+        },
+        {
+          "case": "echo-continue",
+          "passed": true,
+          "seconds": 0.001411
+        },
+        {
+          "case": "early-expect",
+          "passed": true,
+          "seconds": 0.000236
+        },
+        {
+          "case": "early-no-expect",
+          "passed": true,
+          "seconds": 0.000238
+        },
+        {
+          "case": "missing-host",
+          "passed": true,
+          "seconds": 0.000389
+        },
+        {
+          "case": "negative-length",
+          "passed": true,
+          "seconds": 0.000268
+        },
+        {
+          "case": "te-cl",
+          "passed": true,
+          "seconds": 0.000225
+        },
+        {
+          "case": "bare-lf-prefix",
+          "passed": true,
+          "seconds": 0.000243
+        },
+        {
+          "case": "bare-cr-prefix",
+          "passed": true,
+          "seconds": 0.000237
+        },
+        {
+          "case": "http10-close",
+          "passed": true,
+          "seconds": 0.000224
+        },
+        {
+          "case": "unsupported-expect",
+          "passed": true,
+          "seconds": 0.000228
+        },
+        {
+          "case": "go-upload-length",
+          "stdout": "{\"index\":0,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n{\"index\":1,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n",
+          "stderr": "",
+          "passed": true
+        },
+        {
+          "case": "go-upload-chunked",
+          "stdout": "{\"index\":0,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n{\"index\":1,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n",
+          "stderr": "",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-stream-client-duplex",
+      "raw_report": "/workspace/kimojio-rs/target/interop/duplex-34ef4c0d17264179963ebd68210dd96b/results.json",
+      "raw_sha256": "70dee9d090d94720ff78c5c78db3ff2d359bd7d1ec2f47d24cb35af1a50b6149",
+      "metadata": {
+        "scope": "Independent duplex progress, not deterministic kernel completion scheduling.",
+        "adapter": {
+          "schema": 1,
+          "command": [
+            "python3",
+            "-B",
+            "interop/http1/kimojio_adapter.py",
+            "--client",
+            "target/wrapper-lab/frozen/accepted/client",
+            "--request",
+            "{request_file}",
+            "--result",
+            "{result_file}"
+          ],
+          "capabilities": [
+            "basic",
+            "reuse",
+            "upload",
+            "chunked-upload",
+            "trailers",
+            "strict-framing",
+            "expect-continue"
+          ]
+        }
+      },
+      "results": [
+        {
+          "case": "client-duplex-length",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjU0MTY3DQpjb250ZW50LWxlbmd0aDogODM4ODYwOA0KDQo=",
+          "request_wire_bytes_buffered_before_response_head": 0,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMjAwIE9LDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KVHJhaWxlcjogWC1EdXBsZXgNCkNvbm5lY3Rpb246IGNsb3NlDQoNCjE2DQpkdXBsZXgtcmVzcG9uc2Utc3RhcnQ6DQo=",
+          "passed": true
+        },
+        {
+          "case": "client-duplex-chunked",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjU4MDQzDQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KDQo=",
+          "request_wire_bytes_buffered_before_response_head": 0,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMjAwIE9LDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KVHJhaWxlcjogWC1EdXBsZXgNCkNvbm5lY3Rpb246IGNsb3NlDQoNCjE2DQpkdXBsZXgtcmVzcG9uc2Utc3RhcnQ6DQo=",
+          "passed": true
+        },
+        {
+          "case": "client-duplex-length-expect",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjQ0NTA5DQpjb250ZW50LWxlbmd0aDogODM4ODYwOA0KZXhwZWN0OiAxMDAtY29udGludWUNCg0K",
+          "request_wire_bytes_buffered_before_response_head": 0,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMTAwIENvbnRpbnVlDQoNCkhUVFAvMS4xIDIwMCBPSw0KVHJhbnNmZXItRW5jb2Rpbmc6IGNodW5rZWQNClRyYWlsZXI6IFgtRHVwbGV4DQpDb25uZWN0aW9uOiBjbG9zZQ0KDQoxNg0KZHVwbGV4LXJlc3BvbnNlLXN0YXJ0Og0K",
+          "passed": true
+        },
+        {
+          "case": "client-duplex-chunked-expect",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjQzMjYxDQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KZXhwZWN0OiAxMDAtY29udGludWUNCg0K",
+          "request_wire_bytes_buffered_before_response_head": 0,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMTAwIENvbnRpbnVlDQoNCkhUVFAvMS4xIDIwMCBPSw0KVHJhbnNmZXItRW5jb2Rpbmc6IGNodW5rZWQNClRyYWlsZXI6IFgtRHVwbGV4DQpDb25uZWN0aW9uOiBjbG9zZQ0KDQoxNg0KZHVwbGV4LXJlc3BvbnNlLXN0YXJ0Og0K",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-stream-client",
+      "raw_report": "/workspace/kimojio-rs/target/interop/client-00b2a35fc84e40e3bb7acff1d00ca7d9/results.json",
+      "raw_sha256": "a9affeb0ad41b599c1f31e8557d1c3793c4a81e263f012128315960f7a9de6b8",
+      "metadata": {
+        "schema": 1,
+        "adapter": {
+          "schema": 1,
+          "command": [
+            "python3",
+            "-B",
+            "interop/http1/kimojio_adapter.py",
+            "--client",
+            "target/wrapper-lab/frozen/accepted/client",
+            "--request",
+            "{request_file}",
+            "--result",
+            "{result_file}"
+          ],
+          "capabilities": [
+            "basic",
+            "reuse",
+            "upload",
+            "chunked-upload",
+            "trailers",
+            "strict-framing",
+            "expect-continue"
+          ]
+        },
+        "capabilities": [
+          "basic",
+          "reuse",
+          "upload",
+          "chunked-upload",
+          "trailers",
+          "strict-framing",
+          "expect-continue"
+        ],
+        "not_covered": [
+          "cancel",
+          "stalled-upload",
+          "upgrade",
+          "deterministic-short-write",
+          "interim"
+        ]
+      },
+      "results": [
+        {
+          "case": "length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.123033
+        },
+        {
+          "case": "chunked",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.13315
+        },
+        {
+          "case": "interim",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.123014
+        },
+        {
+          "case": "head",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 68
+            }
+          ],
+          "seconds": 0.102625
+        },
+        {
+          "case": "no-content",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.10251
+        },
+        {
+          "case": "not-modified",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102694
+        },
+        {
+          "case": "close-delimited",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102548
+        },
+        {
+          "case": "truncated-length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102404
+        },
+        {
+          "case": "truncated-chunk",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102221
+        },
+        {
+          "case": "conflicting-length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102365
+        },
+        {
+          "case": "invalid-status",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102205
+        },
+        {
+          "case": "reuse",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            },
+            {
+              "index": 1,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102206
+        },
+        {
+          "case": "upload",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 87
+            }
+          ],
+          "seconds": 0.102268
+        },
+        {
+          "case": "chunked-upload",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 106
+            }
+          ],
+          "seconds": 0.102221
+        },
+        {
+          "case": "transfer-encoding-with-length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102195
+        },
+        {
+          "case": "expect-continue",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 109
+            }
+          ],
+          "seconds": 0.102403
+        },
+        {
+          "case": "expect-reject",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 91
+            }
+          ],
+          "seconds": 0.102535
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-stream-coalesced-client-duplex",
+      "raw_report": "/workspace/kimojio-rs/target/interop/duplex-eca656d5cec84690a1a7ce4513b7b943/results.json",
+      "raw_sha256": "f34d9fab9c8ba32f06fac55a6a15acb9aa83894dfdbecf616a2ac55123ab523b",
+      "metadata": {
+        "scope": "Independent duplex progress, not deterministic kernel completion scheduling.",
+        "adapter": {
+          "schema": 1,
+          "command": [
+            "python3",
+            "-B",
+            "interop/http1/kimojio_adapter.py",
+            "--client",
+            "target/wrapper-lab/frozen/accepted/client",
+            "--coalesce-full-bodies",
+            "--request",
+            "{request_file}",
+            "--result",
+            "{result_file}"
+          ],
+          "capabilities": [
+            "basic",
+            "reuse",
+            "upload",
+            "chunked-upload",
+            "trailers",
+            "strict-framing",
+            "expect-continue"
+          ]
+        }
+      },
+      "results": [
+        {
+          "case": "client-duplex-length",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjU2Mzg3DQpjb250ZW50LWxlbmd0aDogODM4ODYwOA0KDQo=",
+          "request_wire_bytes_buffered_before_response_head": 0,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMjAwIE9LDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KVHJhaWxlcjogWC1EdXBsZXgNCkNvbm5lY3Rpb246IGNsb3NlDQoNCjE2DQpkdXBsZXgtcmVzcG9uc2Utc3RhcnQ6DQo=",
+          "passed": true
+        },
+        {
+          "case": "client-duplex-chunked",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjQ2NTUxDQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KDQo=",
+          "request_wire_bytes_buffered_before_response_head": 0,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMjAwIE9LDQpUcmFuc2Zlci1FbmNvZGluZzogY2h1bmtlZA0KVHJhaWxlcjogWC1EdXBsZXgNCkNvbm5lY3Rpb246IGNsb3NlDQoNCjE2DQpkdXBsZXgtcmVzcG9uc2Utc3RhcnQ6DQo=",
+          "passed": true
+        },
+        {
+          "case": "client-duplex-length-expect",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjU5NDAxDQpjb250ZW50LWxlbmd0aDogODM4ODYwOA0KZXhwZWN0OiAxMDAtY29udGludWUNCg0K",
+          "request_wire_bytes_buffered_before_response_head": 0,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMTAwIENvbnRpbnVlDQoNCkhUVFAvMS4xIDIwMCBPSw0KVHJhbnNmZXItRW5jb2Rpbmc6IGNodW5rZWQNClRyYWlsZXI6IFgtRHVwbGV4DQpDb25uZWN0aW9uOiBjbG9zZQ0KDQoxNg0KZHVwbGV4LXJlc3BvbnNlLXN0YXJ0Og0K",
+          "passed": true
+        },
+        {
+          "case": "client-duplex-chunked-expect",
+          "request_body_bytes": 8388608,
+          "peer_verified_body_bytes": 8388608,
+          "phase": "final-response-sent",
+          "request_head_base64": "UE9TVCAvZml4dHVyZSBIVFRQLzEuMQ0KaG9zdDogMTI3LjAuMC4xOjM4NjkxDQp0cmFuc2Zlci1lbmNvZGluZzogY2h1bmtlZA0KZXhwZWN0OiAxMDAtY29udGludWUNCg0K",
+          "request_wire_bytes_buffered_before_response_head": 0,
+          "receive_buffer_bytes": 8192,
+          "early_response_base64": "SFRUUC8xLjEgMTAwIENvbnRpbnVlDQoNCkhUVFAvMS4xIDIwMCBPSw0KVHJhbnNmZXItRW5jb2Rpbmc6IGNodW5rZWQNClRyYWlsZXI6IFgtRHVwbGV4DQpDb25uZWN0aW9uOiBjbG9zZQ0KDQoxNg0KZHVwbGV4LXJlc3BvbnNlLXN0YXJ0Og0K",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-stream-coalesced-client",
+      "raw_report": "/workspace/kimojio-rs/target/interop/client-ad84989467604a37b4fd499d7a3ff02a/results.json",
+      "raw_sha256": "1c899bd457efa50c5891d388ad3b483208019c42db1973acdd65fcebd21ff770",
+      "metadata": {
+        "schema": 1,
+        "adapter": {
+          "schema": 1,
+          "command": [
+            "python3",
+            "-B",
+            "interop/http1/kimojio_adapter.py",
+            "--client",
+            "target/wrapper-lab/frozen/accepted/client",
+            "--coalesce-full-bodies",
+            "--request",
+            "{request_file}",
+            "--result",
+            "{result_file}"
+          ],
+          "capabilities": [
+            "basic",
+            "reuse",
+            "upload",
+            "chunked-upload",
+            "trailers",
+            "strict-framing",
+            "expect-continue"
+          ]
+        },
+        "capabilities": [
+          "basic",
+          "reuse",
+          "upload",
+          "chunked-upload",
+          "trailers",
+          "strict-framing",
+          "expect-continue"
+        ],
+        "not_covered": [
+          "cancel",
+          "stalled-upload",
+          "upgrade",
+          "deterministic-short-write",
+          "interim"
+        ]
+      },
+      "results": [
+        {
+          "case": "length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.103078
+        },
+        {
+          "case": "chunked",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.112568
+        },
+        {
+          "case": "interim",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102458
+        },
+        {
+          "case": "head",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 68
+            }
+          ],
+          "seconds": 0.102547
+        },
+        {
+          "case": "no-content",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.103116
+        },
+        {
+          "case": "not-modified",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102528
+        },
+        {
+          "case": "close-delimited",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102417
+        },
+        {
+          "case": "truncated-length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.10243
+        },
+        {
+          "case": "truncated-chunk",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102206
+        },
+        {
+          "case": "conflicting-length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102309
+        },
+        {
+          "case": "invalid-status",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102322
+        },
+        {
+          "case": "reuse",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            },
+            {
+              "index": 1,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102419
+        },
+        {
+          "case": "upload",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 87
+            }
+          ],
+          "seconds": 0.102387
+        },
+        {
+          "case": "chunked-upload",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 106
+            }
+          ],
+          "seconds": 0.102441
+        },
+        {
+          "case": "transfer-encoding-with-length",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 67
+            }
+          ],
+          "seconds": 0.102135
+        },
+        {
+          "case": "expect-continue",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 109
+            }
+          ],
+          "seconds": 0.102216
+        },
+        {
+          "case": "expect-reject",
+          "passed": true,
+          "observations": [
+            {
+              "index": 0,
+              "request_bytes": 91
+            }
+          ],
+          "seconds": 0.10233
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-stream-coalesced-reuse",
+      "raw_report": "/workspace/kimojio-rs/target/interop/duplex-e98b5bd4e179495190413152c748ac81/results.json",
+      "raw_sha256": "136d04acd00ce94ec6d3569e7f046aad27b0c104137dd84c0422d014f9b87fab",
+      "metadata": {
+        "scope": "Independent duplex progress, not deterministic kernel completion scheduling.",
+        "server_command": [
+          "target/wrapper-lab/frozen/accepted/server",
+          "--coalesce-full-bodies",
+          "--bind",
+          "127.0.0.1:0"
+        ]
+      },
+      "results": [
+        {
+          "case": "server-duplex-length-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        },
+        {
+          "case": "server-duplex-chunked-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        },
+        {
+          "case": "server-duplex-length-expect-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        },
+        {
+          "case": "server-duplex-chunked-expect-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-stream-coalesced-server",
+      "raw_report": "/workspace/kimojio-rs/target/interop/fixture-server-cece3b68fb6344d0b56b2294a813ebf7.json",
+      "raw_sha256": "57688922555444d42ec3e5a4def475059945a9d10bd500fc924fb14a2e0f3e60",
+      "metadata": {
+        "command": [
+          "target/wrapper-lab/frozen/accepted/server",
+          "--coalesce-full-bodies",
+          "--bind",
+          "127.0.0.1:0"
+        ],
+        "matrix": "fixture-application-boundary-v3"
+      },
+      "results": [
+        {
+          "case": "get",
+          "passed": true,
+          "seconds": 0.001876
+        },
+        {
+          "case": "head",
+          "passed": true,
+          "seconds": 0.000255
+        },
+        {
+          "case": "keepalive",
+          "passed": true,
+          "seconds": 0.000317
+        },
+        {
+          "case": "pipeline",
+          "passed": true,
+          "seconds": 0.000239
+        },
+        {
+          "case": "trailers",
+          "passed": true,
+          "seconds": 0.000363
+        },
+        {
+          "case": "echo-length",
+          "passed": true,
+          "seconds": 0.000711
+        },
+        {
+          "case": "echo-chunked",
+          "passed": true,
+          "seconds": 0.000734
+        },
+        {
+          "case": "echo-chunked-trailers",
+          "passed": true,
+          "seconds": 0.000915
+        },
+        {
+          "case": "echo-continue",
+          "passed": true,
+          "seconds": 0.000833
+        },
+        {
+          "case": "early-expect",
+          "passed": true,
+          "seconds": 0.000187
+        },
+        {
+          "case": "early-no-expect",
+          "passed": true,
+          "seconds": 0.000166
+        },
+        {
+          "case": "missing-host",
+          "passed": true,
+          "seconds": 0.000215
+        },
+        {
+          "case": "negative-length",
+          "passed": true,
+          "seconds": 0.000227
+        },
+        {
+          "case": "te-cl",
+          "passed": true,
+          "seconds": 0.000218
+        },
+        {
+          "case": "bare-lf-prefix",
+          "passed": true,
+          "seconds": 0.000232
+        },
+        {
+          "case": "bare-cr-prefix",
+          "passed": true,
+          "seconds": 0.000215
+        },
+        {
+          "case": "http10-close",
+          "passed": true,
+          "seconds": 0.000206
+        },
+        {
+          "case": "unsupported-expect",
+          "passed": true,
+          "seconds": 0.000263
+        },
+        {
+          "case": "go-upload-length",
+          "stdout": "{\"index\":0,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n{\"index\":1,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n",
+          "stderr": "",
+          "passed": true
+        },
+        {
+          "case": "go-upload-chunked",
+          "stdout": "{\"index\":0,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n{\"index\":1,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n",
+          "stderr": "",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-stream-reuse",
+      "raw_report": "/workspace/kimojio-rs/target/interop/duplex-2d2195e74d1545868c59d166316850e8/results.json",
+      "raw_sha256": "709f81de53fda883ba4c8fcdc2f13d31ad16c94cad400e344c19c0c2afbc95de",
+      "metadata": {
+        "scope": "Independent duplex progress, not deterministic kernel completion scheduling.",
+        "server_command": [
+          "target/wrapper-lab/frozen/accepted/server",
+          "--bind",
+          "127.0.0.1:0"
+        ]
+      },
+      "results": [
+        {
+          "case": "server-duplex-length-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        },
+        {
+          "case": "server-duplex-chunked-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        },
+        {
+          "case": "server-duplex-length-expect-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        },
+        {
+          "case": "server-duplex-chunked-expect-reuse",
+          "exchanges": 3,
+          "connections_created": 1,
+          "response_head_before_request_body": true,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "label": "accepted-interop-stream-server",
+      "raw_report": "/workspace/kimojio-rs/target/interop/fixture-server-46ba7acb3cff4356aee461bd97a83209.json",
+      "raw_sha256": "72659beb50c52fa833ecf878d2c09e616c4d6df32a7a9615565a552d47e4bbf6",
+      "metadata": {
+        "command": [
+          "target/wrapper-lab/frozen/accepted/server",
+          "--bind",
+          "127.0.0.1:0"
+        ],
+        "matrix": "fixture-application-boundary-v3"
+      },
+      "results": [
+        {
+          "case": "get",
+          "passed": true,
+          "seconds": 0.001853
+        },
+        {
+          "case": "head",
+          "passed": true,
+          "seconds": 0.000263
+        },
+        {
+          "case": "keepalive",
+          "passed": true,
+          "seconds": 0.000314
+        },
+        {
+          "case": "pipeline",
+          "passed": true,
+          "seconds": 0.000208
+        },
+        {
+          "case": "trailers",
+          "passed": true,
+          "seconds": 0.000295
+        },
+        {
+          "case": "echo-length",
+          "passed": true,
+          "seconds": 0.000642
+        },
+        {
+          "case": "echo-chunked",
+          "passed": true,
+          "seconds": 0.000845
+        },
+        {
+          "case": "echo-chunked-trailers",
+          "passed": true,
+          "seconds": 0.00095
+        },
+        {
+          "case": "echo-continue",
+          "passed": true,
+          "seconds": 0.000822
+        },
+        {
+          "case": "early-expect",
+          "passed": true,
+          "seconds": 0.00017
+        },
+        {
+          "case": "early-no-expect",
+          "passed": true,
+          "seconds": 0.000164
+        },
+        {
+          "case": "missing-host",
+          "passed": true,
+          "seconds": 0.000186
+        },
+        {
+          "case": "negative-length",
+          "passed": true,
+          "seconds": 0.000183
+        },
+        {
+          "case": "te-cl",
+          "passed": true,
+          "seconds": 0.000166
+        },
+        {
+          "case": "bare-lf-prefix",
+          "passed": true,
+          "seconds": 0.000162
+        },
+        {
+          "case": "bare-cr-prefix",
+          "passed": true,
+          "seconds": 0.000163
+        },
+        {
+          "case": "http10-close",
+          "passed": true,
+          "seconds": 0.000168
+        },
+        {
+          "case": "unsupported-expect",
+          "passed": true,
+          "seconds": 0.000169
+        },
+        {
+          "case": "go-upload-length",
+          "stdout": "{\"index\":0,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n{\"index\":1,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n",
+          "stderr": "",
+          "passed": true
+        },
+        {
+          "case": "go-upload-chunked",
+          "stdout": "{\"index\":0,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n{\"index\":1,\"status\":200,\"headers\":{},\"body_base64\":\"aW5kZXBlbmRlbnQtZ28tYm9keQ==\",\"interim_statuses\":[],\"trailers\":null}\n",
+          "stderr": "",
+          "passed": true
+        }
+      ]
+    }
+  ]
+}

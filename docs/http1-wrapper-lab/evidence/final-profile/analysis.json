@@ -1,0 +1,876 @@
+{
+  "binary": "/workspace/kimojio-rs/target/wrapper-lab/frozen/final/keepalive_bench",
+  "sha256": "604778177b4c2b03b969297fd811542c419bfe38582667f470ec3990af316b19",
+  "revision": "da081a89349ef1cc5619496e74556a898dcb98c6",
+  "profiles": {
+    "native": {
+      "samples": 3148,
+      "buckets": {
+        "client": 247,
+        "server": 267,
+        "shared": 2634
+      },
+      "top_leaves": {
+        "client": [
+          [
+            "[unknown]",
+            82
+          ],
+          [
+            "<kimojio_fsm_http1[7b34761bfe04be75]::connection::Core<alloc[12e961f32105355]::vec::Vec<u8>, kimojio_http1[1061bfca3742032]::body::OutgoingData>>::receive_metadata::<kimojio_http1[1061bfca3742032]::driver::Ports>",
+            40
+          ],
+          [
+            "kimojio_http1[1061bfca3742032]::driver::drive::<<kimojio_http1[1061bfca3742032]::driver::NativeConnection>::run::{closure#0}::{closure#0}, core[c0acaeba6ab4c2e0]::future::ready::Ready<core[c0acaeba6ab4c2e0]::result::Result<http[d475cf46ed305321]::response::Response<kimojio_http1[1061bfca3742032]::body::OutgoingBody>, kimojio_http1[1061bfca3742032]::Error>>, kimojio_http1[1061bfca3742032]::io_driver::NativeIo<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once, kimojio_http1[1061bfca3742032]::io_driver::write_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::write_once>>::{closure#0}",
+            24
+          ],
+          [
+            "<kimojio_http1[1061bfca3742032]::driver::State>::event::<<kimojio_http1[1061bfca3742032]::driver::NativeConnection>::run::{closure#0}::{closure#0}, core[c0acaeba6ab4c2e0]::future::ready::Ready<core[c0acaeba6ab4c2e0]::result::Result<http[d475cf46ed305321]::response::Response<kimojio_http1[1061bfca3742032]::body::OutgoingBody>, kimojio_http1[1061bfca3742032]::Error>>, kimojio_http1[1061bfca3742032]::io_driver::NativeIo<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once, kimojio_http1[1061bfca3742032]::io_driver::write_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::write_once>>",
+            18
+          ],
+          [
+            "<kimojio_http1[1061bfca3742032]::driver::NativeConnection>::run::{closure#0}",
+            9
+          ],
+          [
+            "<kimojio_fsm_http1[7b34761bfe04be75]::connection::Core<alloc[12e961f32105355]::vec::Vec<u8>, kimojio_http1[1061bfca3742032]::body::OutgoingData>>::advance::<kimojio_http1[1061bfca3742032]::driver::Ports>",
+            6
+          ],
+          [
+            "<core[c0acaeba6ab4c2e0]::pin::Pin<alloc[12e961f32105355]::boxed::Box<kimojio_http1[1061bfca3742032]::driver::run_native<<kimojio_http1[1061bfca3742032]::driver::NativeConnection>::run::{closure#0}::{closure#0}, core[c0acaeba6ab4c2e0]::future::ready::Ready<core[c0acaeba6ab4c2e0]::result::Result<http[d475cf46ed305321]::response::Response<kimojio_http1[1061bfca3742032]::body::OutgoingBody>, kimojio_http1[1061bfca3742032]::Error>>>::{closure#0}>> as core[c0acaeba6ab4c2e0]::future::future::Future>::poll",
+            6
+          ],
+          [
+            "<kimojio_fsm_http1[7b34761bfe04be75]::connection::Core<alloc[12e961f32105355]::vec::Vec<u8>, kimojio_http1[1061bfca3742032]::body::OutgoingData>>::metadata::<kimojio_http1[1061bfca3742032]::driver::Ports>",
+            5
+          ],
+          [
+            "<kimojio_fsm_http1[7b34761bfe04be75]::connection::Core<alloc[12e961f32105355]::vec::Vec<u8>, kimojio_http1[1061bfca3742032]::body::OutgoingData>>::retire_exchange",
+            4
+          ],
+          [
+            "<core[c0acaeba6ab4c2e0]::option::Option<kimojio_fsm_http1[7b34761bfe04be75]::state::ArmedDeadline>>::map::<kimojio_fsm_http1[7b34761bfe04be75]::types::Deadline, <kimojio_fsm_http1[7b34761bfe04be75]::state::Timers>::deadline::{closure#0}>",
+            4
+          ]
+        ],
+        "server": [
+          [
+            "[unknown]",
+            81
+          ],
+          [
+            "<kimojio_fsm_http1[7b34761bfe04be75]::connection::Core<alloc[12e961f32105355]::vec::Vec<u8>, kimojio_http1[1061bfca3742032]::body::OutgoingData>>::receive_metadata::<kimojio_http1[1061bfca3742032]::driver::Ports>",
+            66
+          ],
+          [
+            "kimojio_http1[1061bfca3742032]::driver::drive::<keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}, keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::NativeIo<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once, kimojio_http1[1061bfca3742032]::io_driver::write_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::write_once>>::{closure#0}",
+            23
+          ],
+          [
+            "<kimojio_http1[1061bfca3742032]::driver::State>::event::<keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}, keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::NativeIo<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once, kimojio_http1[1061bfca3742032]::io_driver::write_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::write_once>>",
+            15
+          ],
+          [
+            "malloc",
+            7
+          ],
+          [
+            "__vdso_clock_gettime",
+            7
+          ],
+          [
+            "<kimojio_fsm_http1[7b34761bfe04be75]::connection::Core<alloc[12e961f32105355]::vec::Vec<u8>, kimojio_http1[1061bfca3742032]::body::OutgoingData>>::process_metadata::<kimojio_http1[1061bfca3742032]::driver::Ports>",
+            6
+          ],
+          [
+            "kimojio_http1[1061bfca3742032]::driver::serve_connection_native_with_shutdown::<keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}, keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}::{closure#0}>::{closure#0}",
+            5
+          ],
+          [
+            "<u8 as core[c0acaeba6ab4c2e0]::slice::cmp::SlicePartialEq<u8>>::equal_same_length",
+            5
+          ],
+          [
+            "<core[c0acaeba6ab4c2e0]::option::Option<kimojio_fsm_http1[7b34761bfe04be75]::state::ArmedDeadline>>::map::<kimojio_fsm_http1[7b34761bfe04be75]::types::Deadline, <kimojio_fsm_http1[7b34761bfe04be75]::state::Timers>::deadline::{closure#0}>",
+            4
+          ]
+        ],
+        "shared": [
+          [
+            "[unknown]",
+            353
+          ],
+          [
+            "kimojio_http1[1061bfca3742032]::driver::next_input::<kimojio_http1[1061bfca3742032]::io_driver::NativeIo<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once, kimojio_http1[1061bfca3742032]::io_driver::write_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::write_once>>::{closure#0}::{closure#2}",
+            234
+          ],
+          [
+            "kimojio_http1[1061bfca3742032]::driver::next_input::<kimojio_http1[1061bfca3742032]::io_driver::NativeIo<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once, kimojio_http1[1061bfca3742032]::io_driver::write_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::write_once>>::{closure#0}",
+            110
+          ],
+          [
+            "malloc",
+            86
+          ],
+          [
+            "cfree",
+            44
+          ],
+          [
+            "core[c0acaeba6ab4c2e0]::intrinsics::unlikely",
+            43
+          ],
+          [
+            "rustix[fce56d438f1bfb30]::backend::io::errno::try_decode_c_uint::<rustix[fce56d438f1bfb30]::backend::reg::R0>",
+            42
+          ],
+          [
+            "<kimojio[9671cdff8e9a9fdd]::task::TASK_STATE::{K#0}::{closure#0} as core[c0acaeba6ab4c2e0]::ops::function::FnOnce<(core[c0acaeba6ab4c2e0]::option::Option<&mut core[c0acaeba6ab4c2e0]::option::Option<kimojio[9671cdff8e9a9fdd]::task_state_cell::TaskStateCell>>,)>>::call_once",
+            38
+          ],
+          [
+            "<kimojio_http1[1061bfca3742032]::io_driver::Slot<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once>>::poll",
+            33
+          ],
+          [
+            "core[c0acaeba6ab4c2e0]::mem::replace::<usize>",
+            31
+          ]
+        ]
+      },
+      "malloc_stacks": [
+        [
+          "WaitData",
+          36
+        ],
+        [
+          "<[u8]>::to_vec",
+          10
+        ],
+        [
+          "<http[d475cf46ed305321]::header::map::HeaderMap>::try_with_capacity",
+          8
+        ],
+        [
+          "kimojio[9671cdff8e9a9fdd]::operations::sleep",
+          7
+        ],
+        [
+          "SleepFuture",
+          7
+        ],
+        [
+          "kimojio[9671cdff8e9a9fdd]::async_channel::async_channel::<kimojio_http1[1061bfca3742032]::body::BodyChunk>",
+          6
+        ],
+        [
+          "kimojio[9671cdff8e9a9fdd]::async_oneshot::oneshot::<core[c0acaeba6ab4c2e0]::result::Result<http[d475cf46ed305321]::header::map::HeaderMap, kimojio_http1[1061bfca3742032]::Error>>",
+          5
+        ],
+        [
+          "unresolved",
+          5
+        ],
+        [
+          "kimojio_http1[1061bfca3742032]::metadata::borrowed_headers",
+          3
+        ],
+        [
+          "<http[d475cf46ed305321]::header::map::HeaderMap>::try_reserve_one",
+          2
+        ],
+        [
+          "<kimojio_http1[1061bfca3742032]::driver::Active>::new",
+          2
+        ],
+        [
+          "<kimojio_http1[1061bfca3742032]::driver::State>::event::<keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}, keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::NativeIo<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once, kimojio_http1[1061bfca3742032]::io_driver::write_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::write_once>>",
+          2
+        ],
+        [
+          "kimojio[9671cdff8e9a9fdd]::async_oneshot::oneshot::<core[c0acaeba6ab4c2e0]::result::Result<http[d475cf46ed305321]::response::Response<kimojio_http1[1061bfca3742032]::body::IncomingBody>, kimojio_http1[1061bfca3742032]::Error>>",
+          2
+        ],
+        [
+          "<keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}::{closure#0} as futures_util[36645fca2678f83a]::future::future::FutureExt>::boxed_local",
+          1
+        ]
+      ]
+    },
+    "coalesced": {
+      "samples": 2725,
+      "buckets": {
+        "client": 194,
+        "shared": 2297,
+        "server": 234
+      },
+      "top_leaves": {
+        "client": [
+          [
+            "[unknown]",
+            50
+          ],
+          [
+            "<kimojio_fsm_http1[7b34761bfe04be75]::connection::Core<alloc[12e961f32105355]::vec::Vec<u8>, kimojio_http1[1061bfca3742032]::body::OutgoingData>>::receive_metadata::<kimojio_http1[1061bfca3742032]::driver::Ports>",
+            39
+          ],
+          [
+            "kimojio_http1[1061bfca3742032]::driver::drive::<<kimojio_http1[1061bfca3742032]::driver::NativeConnection>::run::{closure#0}::{closure#0}, core[c0acaeba6ab4c2e0]::future::ready::Ready<core[c0acaeba6ab4c2e0]::result::Result<http[d475cf46ed305321]::response::Response<kimojio_http1[1061bfca3742032]::body::OutgoingBody>, kimojio_http1[1061bfca3742032]::Error>>, kimojio_http1[1061bfca3742032]::io_driver::NativeIo<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once, kimojio_http1[1061bfca3742032]::io_driver::write_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::write_once>>::{closure#0}",
+            17
+          ],
+          [
+            "<kimojio_http1[1061bfca3742032]::driver::State>::event::<<kimojio_http1[1061bfca3742032]::driver::NativeConnection>::run::{closure#0}::{closure#0}, core[c0acaeba6ab4c2e0]::future::ready::Ready<core[c0acaeba6ab4c2e0]::result::Result<http[d475cf46ed305321]::response::Response<kimojio_http1[1061bfca3742032]::body::OutgoingBody>, kimojio_http1[1061bfca3742032]::Error>>, kimojio_http1[1061bfca3742032]::io_driver::NativeIo<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once, kimojio_http1[1061bfca3742032]::io_driver::write_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::write_once>>",
+            16
+          ],
+          [
+            "<kimojio_fsm_http1[7b34761bfe04be75]::connection::Core<alloc[12e961f32105355]::vec::Vec<u8>, kimojio_http1[1061bfca3742032]::body::OutgoingData>>::process_metadata::<kimojio_http1[1061bfca3742032]::driver::Ports>",
+            15
+          ],
+          [
+            "<kimojio_http1[1061bfca3742032]::driver::NativeConnection>::run::{closure#0}",
+            9
+          ],
+          [
+            "__vdso_clock_gettime",
+            7
+          ],
+          [
+            "<usize>::saturating_add",
+            4
+          ],
+          [
+            "<core[c0acaeba6ab4c2e0]::option::Option<kimojio_fsm_http1[7b34761bfe04be75]::state::ArmedDeadline>>::map::<kimojio_fsm_http1[7b34761bfe04be75]::types::Deadline, <kimojio_fsm_http1[7b34761bfe04be75]::state::Timers>::deadline::{closure#0}>",
+            4
+          ],
+          [
+            "clock_gettime",
+            3
+          ]
+        ],
+        "shared": [
+          [
+            "[unknown]",
+            281
+          ],
+          [
+            "kimojio_http1[1061bfca3742032]::driver::next_input::<kimojio_http1[1061bfca3742032]::io_driver::NativeIo<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once, kimojio_http1[1061bfca3742032]::io_driver::write_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::write_once>>::{closure#0}::{closure#2}",
+            223
+          ],
+          [
+            "kimojio_http1[1061bfca3742032]::driver::next_input::<kimojio_http1[1061bfca3742032]::io_driver::NativeIo<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once, kimojio_http1[1061bfca3742032]::io_driver::write_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::write_once>>::{closure#0}",
+            82
+          ],
+          [
+            "malloc",
+            76
+          ],
+          [
+            "__vdso_clock_gettime",
+            43
+          ],
+          [
+            "cfree",
+            42
+          ],
+          [
+            "rustix[fce56d438f1bfb30]::backend::io::errno::try_decode_c_uint::<rustix[fce56d438f1bfb30]::backend::reg::R0>",
+            32
+          ],
+          [
+            "core[c0acaeba6ab4c2e0]::intrinsics::unlikely",
+            25
+          ],
+          [
+            "core[c0acaeba6ab4c2e0]::mem::replace::<usize>",
+            25
+          ],
+          [
+            "<kimojio_fsm_http1[7b34761bfe04be75]::connection::Core<alloc[12e961f32105355]::vec::Vec<u8>, kimojio_http1[1061bfca3742032]::body::OutgoingData>>::next::<kimojio_http1[1061bfca3742032]::driver::Ports>",
+            25
+          ]
+        ],
+        "server": [
+          [
+            "<kimojio_fsm_http1[7b34761bfe04be75]::connection::Core<alloc[12e961f32105355]::vec::Vec<u8>, kimojio_http1[1061bfca3742032]::body::OutgoingData>>::receive_metadata::<kimojio_http1[1061bfca3742032]::driver::Ports>",
+            75
+          ],
+          [
+            "[unknown]",
+            61
+          ],
+          [
+            "<kimojio_http1[1061bfca3742032]::driver::State>::event::<keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}, keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::NativeIo<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once, kimojio_http1[1061bfca3742032]::io_driver::write_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::write_once>>",
+            16
+          ],
+          [
+            "kimojio_http1[1061bfca3742032]::driver::drive::<keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}, keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::NativeIo<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once, kimojio_http1[1061bfca3742032]::io_driver::write_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::write_once>>::{closure#0}",
+            16
+          ],
+          [
+            "<kimojio_fsm_http1[7b34761bfe04be75]::connection::Core<alloc[12e961f32105355]::vec::Vec<u8>, kimojio_http1[1061bfca3742032]::body::OutgoingData>>::process_metadata::<kimojio_http1[1061bfca3742032]::driver::Ports>",
+            7
+          ],
+          [
+            "kimojio_http1[1061bfca3742032]::driver::run_native::<keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}, keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}::{closure#0}>::{closure#0}",
+            6
+          ],
+          [
+            "kimojio_http1[1061bfca3742032]::driver::serve_connection_native_with_shutdown::<keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}, keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}::{closure#0}>::{closure#0}",
+            5
+          ],
+          [
+            "malloc",
+            5
+          ],
+          [
+            "<kimojio_fsm_http1[7b34761bfe04be75]::connection::Core<alloc[12e961f32105355]::vec::Vec<u8>, kimojio_http1[1061bfca3742032]::body::OutgoingData>>::metadata::<kimojio_http1[1061bfca3742032]::driver::Ports>",
+            3
+          ],
+          [
+            "<[u8]>::ends_with",
+            3
+          ]
+        ]
+      },
+      "malloc_stacks": [
+        [
+          "WaitData",
+          37
+        ],
+        [
+          "kimojio[9671cdff8e9a9fdd]::operations::sleep",
+          14
+        ],
+        [
+          "<[u8]>::to_vec",
+          9
+        ],
+        [
+          "SleepFuture",
+          5
+        ],
+        [
+          "kimojio[9671cdff8e9a9fdd]::async_oneshot::oneshot::<core[c0acaeba6ab4c2e0]::result::Result<http[d475cf46ed305321]::header::map::HeaderMap, kimojio_http1[1061bfca3742032]::Error>>",
+          4
+        ],
+        [
+          "<http[d475cf46ed305321]::header::map::HeaderMap>::try_with_capacity",
+          3
+        ],
+        [
+          "kimojio[9671cdff8e9a9fdd]::async_oneshot::oneshot::<core[c0acaeba6ab4c2e0]::result::Result<(), kimojio_http1[1061bfca3742032]::Error>>",
+          3
+        ],
+        [
+          "kimojio_http1[1061bfca3742032]::metadata::borrowed_headers",
+          2
+        ],
+        [
+          "<kimojio_http1[1061bfca3742032]::driver::State>::event::<keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}, keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::NativeIo<kimojio_http1[1061bfca3742032]::io_driver::read_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::read_once, kimojio_http1[1061bfca3742032]::io_driver::write_once::{closure#0}, kimojio_http1[1061bfca3742032]::io_driver::write_once>>",
+          2
+        ],
+        [
+          "kimojio[9671cdff8e9a9fdd]::async_oneshot::oneshot::<core[c0acaeba6ab4c2e0]::result::Result<http[d475cf46ed305321]::response::Response<kimojio_http1[1061bfca3742032]::body::IncomingBody>, kimojio_http1[1061bfca3742032]::Error>>",
+          1
+        ],
+        [
+          "<keepalive_bench[d254d56b7b6205d1]::run_pair::{closure#0}::{closure#2}::{closure#0} as futures_util[36645fca2678f83a]::future::future::FutureExt>::boxed_local",
+          1
+        ],
+        [
+          "<http[d475cf46ed305321]::header::map::HeaderMap>::try_reserve_one",
+          1
+        ],
+        [
+          "<kimojio_http1[1061bfca3742032]::driver::Client>::send::{closure#0}",
+          1
+        ],
+        [
+          "bytes[1c80c713c898a2dc]::bytes::PROMOTABLE_ODD_VTABLE",
+          1
+        ]
+      ]
+    }
+  },
+  "sites": {
+    "core-next": {
+      "address": "0x6cd60",
+      "size": "0x3637",
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, kimojio_http1::body::OutgoingData>>::next::<kimojio_http1::driver::Ports>",
+      "parent_samples": {
+        "native": 358,
+        "coalesced": 314
+      },
+      "direct_calls": [
+        {
+          "offset": "0x5e7",
+          "immediate_edx": 160,
+          "instruction": "6d347:\tff d5                \tcall   *%rbp",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 2,
+            "coalesced": 0
+          }
+        },
+        {
+          "offset": "0x91d",
+          "immediate_edx": 264,
+          "instruction": "6d67d:\tff 15 05 12 0a 00    \tcall   *0xa1205(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 0,
+            "coalesced": 0
+          }
+        },
+        {
+          "offset": "0xfb0",
+          "immediate_edx": 264,
+          "instruction": "6dd10:\tff d3                \tcall   *%rbx",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 8,
+            "coalesced": 1
+          }
+        },
+        {
+          "offset": "0xff7",
+          "immediate_edx": 272,
+          "instruction": "6dd57:\tff d3                \tcall   *%rbx",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 5,
+            "coalesced": 4
+          }
+        },
+        {
+          "offset": "0x1b08",
+          "immediate_edx": 272,
+          "instruction": "6e868:\tff 15 1a 00 0a 00    \tcall   *0xa001a(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 4,
+            "coalesced": 1
+          }
+        },
+        {
+          "offset": "0x213b",
+          "immediate_edx": 272,
+          "instruction": "6ee9b:\tff 15 e7 f9 09 00    \tcall   *0x9f9e7(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 6,
+            "coalesced": 9
+          }
+        },
+        {
+          "offset": "0x2b08",
+          "immediate_edx": 184,
+          "instruction": "6f868:\tff 15 1a f0 09 00    \tcall   *0x9f01a(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 1,
+            "coalesced": 1
+          }
+        },
+        {
+          "offset": "0x3571",
+          "immediate_edx": 216,
+          "instruction": "702d1:\tff 15 b1 e5 09 00    \tcall   *0x9e5b1(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 0,
+            "coalesced": 0
+          }
+        }
+      ],
+      "vector_instruction_count": 109,
+      "rep_movs_instruction_count": 0
+    },
+    "event-server": {
+      "address": "0x4b3c0",
+      "size": "0x136a",
+      "name": "<kimojio_http1::driver::State>::event::<keepalive_bench::run_pair::{closure#0}::{closure#2}, keepalive_bench::run_pair::{closure#0}::{closure#2}::{closure#0}, kimojio_http1::io_driver::NativeIo<kimojio_http1::io_driver::read_once::{closure#0}, kimojio_http1::io_driver::read_once, kimojio_http1::io_driver::write_once::{closure#0}, kimojio_http1::io_driver::write_once>>",
+      "parent_samples": {
+        "native": 58,
+        "coalesced": 36
+      },
+      "direct_calls": [
+        {
+          "offset": "0x242",
+          "immediate_edx": 304,
+          "instruction": "4b602:\tff 15 80 32 0c 00    \tcall   *0xc3280(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 3,
+            "coalesced": 2
+          }
+        },
+        {
+          "offset": "0x5a0",
+          "immediate_edx": 192,
+          "instruction": "4b960:\tff 15 22 2f 0c 00    \tcall   *0xc2f22(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 2,
+            "coalesced": 1
+          }
+        },
+        {
+          "offset": "0x655",
+          "immediate_edx": 224,
+          "instruction": "4ba15:\tff 15 6d 2e 0c 00    \tcall   *0xc2e6d(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 5,
+            "coalesced": 1
+          }
+        },
+        {
+          "offset": "0x6c3",
+          "immediate_edx": 289,
+          "instruction": "4ba83:\tff 15 ff 2d 0c 00    \tcall   *0xc2dff(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 1,
+            "coalesced": 2
+          }
+        },
+        {
+          "offset": "0x75b",
+          "immediate_edx": 672,
+          "instruction": "4bb1b:\tff 15 67 2d 0c 00    \tcall   *0xc2d67(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 1,
+            "coalesced": 0
+          }
+        },
+        {
+          "offset": "0x7c3",
+          "immediate_edx": 312,
+          "instruction": "4bb83:\tff 15 ff 2c 0c 00    \tcall   *0xc2cff(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 2,
+            "coalesced": 2
+          }
+        },
+        {
+          "offset": "0x7f2",
+          "immediate_edx": 312,
+          "instruction": "4bbb2:\tff 15 d0 2c 0c 00    \tcall   *0xc2cd0(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 1,
+            "coalesced": 0
+          }
+        },
+        {
+          "offset": "0x92b",
+          "immediate_edx": 272,
+          "instruction": "4bceb:\tff 15 97 2b 0c 00    \tcall   *0xc2b97(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 1,
+            "coalesced": 0
+          }
+        },
+        {
+          "offset": "0xc08",
+          "immediate_edx": 192,
+          "instruction": "4bfc8:\tff 15 ba 28 0c 00    \tcall   *0xc28ba(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 2,
+            "coalesced": 1
+          }
+        },
+        {
+          "offset": "0x120b",
+          "immediate_edx": 312,
+          "instruction": "4c5cb:\tff 15 b7 22 0c 00    \tcall   *0xc22b7(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 0,
+            "coalesced": 0
+          }
+        }
+      ],
+      "vector_instruction_count": 133,
+      "rep_movs_instruction_count": 0
+    },
+    "event-client": {
+      "address": "0x4daa0",
+      "size": "0x1382",
+      "name": "<kimojio_http1::driver::State>::event::<<kimojio_http1::driver::NativeConnection>::run::{closure#0}::{closure#0}, core::future::ready::Ready<core::result::Result<http::response::Response<kimojio_http1::body::OutgoingBody>, kimojio_http1::Error>>, kimojio_http1::io_driver::NativeIo<kimojio_http1::io_driver::read_once::{closure#0}, kimojio_http1::io_driver::read_once, kimojio_http1::io_driver::write_once::{closure#0}, kimojio_http1::io_driver::write_once>>",
+      "parent_samples": {
+        "native": 32,
+        "coalesced": 27
+      },
+      "direct_calls": [
+        {
+          "offset": "0x242",
+          "immediate_edx": 304,
+          "instruction": "4dce2:\tff 15 a0 0b 0c 00    \tcall   *0xc0ba0(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 0,
+            "coalesced": 3
+          }
+        },
+        {
+          "offset": "0x59d",
+          "immediate_edx": 192,
+          "instruction": "4e03d:\tff 15 45 08 0c 00    \tcall   *0xc0845(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 0,
+            "coalesced": 0
+          }
+        },
+        {
+          "offset": "0x661",
+          "immediate_edx": 224,
+          "instruction": "4e101:\t41 ff d5             \tcall   *%r13",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 0,
+            "coalesced": 0
+          }
+        },
+        {
+          "offset": "0x674",
+          "immediate_edx": 289,
+          "instruction": "4e114:\t41 ff d5             \tcall   *%r13",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 0,
+            "coalesced": 0
+          }
+        },
+        {
+          "offset": "0x731",
+          "immediate_edx": 160,
+          "instruction": "4e1d1:\tff 15 b1 06 0c 00    \tcall   *0xc06b1(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 0,
+            "coalesced": 0
+          }
+        },
+        {
+          "offset": "0x799",
+          "immediate_edx": 312,
+          "instruction": "4e239:\tff 15 49 06 0c 00    \tcall   *0xc0649(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 0,
+            "coalesced": 0
+          }
+        },
+        {
+          "offset": "0x7c8",
+          "immediate_edx": 312,
+          "instruction": "4e268:\tff 15 1a 06 0c 00    \tcall   *0xc061a(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 0,
+            "coalesced": 0
+          }
+        },
+        {
+          "offset": "0x901",
+          "immediate_edx": 272,
+          "instruction": "4e3a1:\tff 15 e1 04 0c 00    \tcall   *0xc04e1(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 1,
+            "coalesced": 2
+          }
+        },
+        {
+          "offset": "0xbde",
+          "immediate_edx": 192,
+          "instruction": "4e67e:\tff 15 04 02 0c 00    \tcall   *0xc0204(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 0,
+            "coalesced": 0
+          }
+        },
+        {
+          "offset": "0x11f3",
+          "immediate_edx": 312,
+          "instruction": "4ec93:\tff 15 ef fb 0b 00    \tcall   *0xbfbef(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 0,
+            "coalesced": 0
+          }
+        }
+      ],
+      "vector_instruction_count": 133,
+      "rep_movs_instruction_count": 0
+    },
+    "input-async": {
+      "address": "0x5c4a0",
+      "size": "0x7ec",
+      "name": "kimojio_http1::driver::next_input::<kimojio_http1::io_driver::NativeIo<kimojio_http1::io_driver::read_once::{closure#0}, kimojio_http1::io_driver::read_once, kimojio_http1::io_driver::write_once::{closure#0}, kimojio_http1::io_driver::write_once>>::{closure#0}",
+      "parent_samples": {
+        "native": 218,
+        "coalesced": 170
+      },
+      "direct_calls": [],
+      "vector_instruction_count": 35,
+      "rep_movs_instruction_count": 0
+    },
+    "slot-write": {
+      "address": "0x7ed40",
+      "size": "0x899",
+      "name": "<kimojio_http1::io_driver::Slot<kimojio_http1::io_driver::write_once::{closure#0}, kimojio_http1::io_driver::write_once>>::poll",
+      "parent_samples": {
+        "native": 51,
+        "coalesced": 31
+      },
+      "direct_calls": [
+        {
+          "offset": "0x6b",
+          "immediate_edx": 272,
+          "instruction": "7edab:\tff 15 d7 fa 08 00    \tcall   *0x8fad7(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 1,
+            "coalesced": 2
+          }
+        },
+        {
+          "offset": "0x1ec",
+          "immediate_edx": 272,
+          "instruction": "7ef2c:\tff 15 56 f9 08 00    \tcall   *0x8f956(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 2,
+            "coalesced": 2
+          }
+        },
+        {
+          "offset": "0x27f",
+          "immediate_edx": 216,
+          "instruction": "7efbf:\tff 15 c3 f8 08 00    \tcall   *0x8f8c3(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 1,
+            "coalesced": 1
+          }
+        },
+        {
+          "offset": "0x52c",
+          "immediate_edx": 216,
+          "instruction": "7f26c:\tff 15 16 f6 08 00    \tcall   *0x8f616(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 2,
+            "coalesced": 0
+          }
+        },
+        {
+          "offset": "0x64b",
+          "immediate_edx": 216,
+          "instruction": "7f38b:\tff 15 f7 f4 08 00    \tcall   *0x8f4f7(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 5,
+            "coalesced": 0
+          }
+        },
+        {
+          "offset": "0x695",
+          "immediate_edx": 288,
+          "instruction": "7f3d5:\tff 15 ad f4 08 00    \tcall   *0x8f4ad(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 16,
+            "coalesced": 9
+          }
+        }
+      ],
+      "vector_instruction_count": 32,
+      "rep_movs_instruction_count": 0
+    },
+    "slot-read": {
+      "address": "0x7f5e0",
+      "size": "0x55f",
+      "name": "<kimojio_http1::io_driver::Slot<kimojio_http1::io_driver::read_once::{closure#0}, kimojio_http1::io_driver::read_once>>::poll",
+      "parent_samples": {
+        "native": 51,
+        "coalesced": 31
+      },
+      "direct_calls": [],
+      "vector_instruction_count": 34,
+      "rep_movs_instruction_count": 0
+    },
+    "input-poll": {
+      "address": "0x75ff0",
+      "size": "0x7c7",
+      "name": "<futures_util::future::poll_fn::PollFn<kimojio_http1::driver::next_input<kimojio_http1::io_driver::NativeIo<kimojio_http1::io_driver::read_once::{closure#0}, kimojio_http1::io_driver::read_once, kimojio_http1::io_driver::write_once::{closure#0}, kimojio_http1::io_driver::write_once>>::{closure#0}::{closure#2}> as core::future::future::Future>::poll",
+      "parent_samples": {
+        "native": 318,
+        "coalesced": 281
+      },
+      "direct_calls": [
+        {
+          "offset": "0x2db",
+          "immediate_edx": 288,
+          "instruction": "762cb:\tff d3                \tcall   *%rbx",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 1,
+            "coalesced": 1
+          }
+        },
+        {
+          "offset": "0x2fc",
+          "immediate_edx": 294,
+          "instruction": "762ec:\tff d3                \tcall   *%rbx",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 12,
+            "coalesced": 5
+          }
+        },
+        {
+          "offset": "0x3d7",
+          "immediate_edx": 288,
+          "instruction": "763c7:\tff d3                \tcall   *%rbx",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 4,
+            "coalesced": 2
+          }
+        },
+        {
+          "offset": "0x3f8",
+          "immediate_edx": 294,
+          "instruction": "763e8:\tff d3                \tcall   *%rbx",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 5,
+            "coalesced": 6
+          }
+        },
+        {
+          "offset": "0x6ed",
+          "immediate_edx": 296,
+          "instruction": "766dd:\tff 15 a5 81 09 00    \tcall   *0x981a5(%rip)        # 10e888 <memcpy@GLIBC_2.14>",
+          "copy_name": "memcpy",
+          "nearby_samples": {
+            "native": 25,
+            "coalesced": 14
+          }
+        }
+      ],
+      "vector_instruction_count": 36,
+      "rep_movs_instruction_count": 0
+    }
+  }
+}

@@ -74,3 +74,12 @@ Cancellation can lose a race to successful partial progress.
 Explicit duplex reuse must not reinterpret incomplete or abandoned uploads as complete.
 Fewer lines or allocations do not establish lower latency.
 Root scheduling budgets and bounded queues must remain effective under continuously ready work.
+
+## Completion
+
+All four PoCs remain separate changes.
+The [comparison](COMPARISON.md) records the measured selection and compatibility constraints.
+The selected implementation combines native slots, runnable probes, and ready bodies.
+Full-body coalescing remains an explicit opt-in.
+The [assessment](REPORT.md) records the accepted source, measurements, correctness evidence, and remaining limits.
+The [final profile](FINAL-PROFILE.md) includes one additional measured inlining change and deferred alternatives.

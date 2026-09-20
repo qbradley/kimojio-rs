@@ -163,6 +163,7 @@ impl<F: Future, Make> Slot<F, Make> {
         self.future.as_mut().set(Some((self.make)(input)));
     }
 
+    #[inline(always)]
     fn poll(&mut self, cx: &mut Context<'_>) -> Poll<F::Output> {
         let Some(future) = self.future.as_mut().as_pin_mut() else {
             return Poll::Pending;

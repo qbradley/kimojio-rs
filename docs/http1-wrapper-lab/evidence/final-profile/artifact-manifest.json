@@ -1,0 +1,268 @@
+{
+  "source": "da081a89349ef1cc5619496e74556a898dcb98c6",
+  "trial_source": "5068d6582b18db490192a16041e6a3d465b9c5d6",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "perf": "perf version 6.6.139.1",
+  "files": [
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/analysis.json",
+      "sha256": "941879853885562111dfec5c31533c68c28a3ec50bcb85b6563f34614790b18a"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/analysis.txt",
+      "sha256": "164ca92fbbe6aa9e97743a3ccc9064147c4b92e8ef85d81b47e839d58b869d7c"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/analyze.py",
+      "sha256": "bee3d87ced9b1362112b5173a6f081719ba1d62a23333ed846628c6814a8c0a8"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/coalesced-report.txt",
+      "sha256": "38cf8f627e0081f7fa8a1da499222b9815494d79a4eb164f774974e7ccb11909"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/coalesced-stacks.txt",
+      "sha256": "5ac33d47afd27a8956c6c3be8618a42145eba522c60727c98a4c412603e5de5e"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/coalesced.json",
+      "sha256": "7e410e472e8bbaee8eceee46546843a1974b146d2cc535d3ceefe94d756be52f"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/coalesced.perf.data",
+      "sha256": "5e6ed056de5b241b238ac29377d48fe0078cf00845aea587b6d8c4d5298f73fb"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/coalesced.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/coalesced.stdout",
+      "sha256": "7e410e472e8bbaee8eceee46546843a1974b146d2cc535d3ceefe94d756be52f"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/core-next.asm",
+      "sha256": "1f4e0888880473d2f78f60c619216ae5da3a54a922116162b988b85cd2ea21e2"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/event-client.asm",
+      "sha256": "e3ded863b71469665fb3433a18cd66cae89e2d4fac88fc173dd18c0e6a4fdeba"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/event-server.asm",
+      "sha256": "2189acc5d6fc5aef61b3f8a0af260da6da152f7eb9704b8914cb14612ab7bf95"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/input-async.asm",
+      "sha256": "fa281d2f45284d855d8ed713b2e6c226c3e0c38c498180c220f2ba122ae001f2"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/input-poll.asm",
+      "sha256": "c26a47a7e60667ebe3d2b079d2b2fe115e3739792210f0cce420218b61f3d1c8"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/native-report.txt",
+      "sha256": "154ba3466bdaf4d4e3898e9102a3cf859e00455e57fc098bb7a09991320694d2"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/native-stacks.txt",
+      "sha256": "020169004efd2ca7f6385d338a234f98b23565919f7a98d8c594bdb32df556c4"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/native.json",
+      "sha256": "c0e224c7b62314932c637a153298a860a85c0a9085c1d3e385fb29b2007f116d"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/native.perf.data",
+      "sha256": "25a317c277ed5a645beefdd6e91059440f8d9dfd8c79c19fbd8e26e989b4eb85"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/native.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/native.stdout",
+      "sha256": "c0e224c7b62314932c637a153298a860a85c0a9085c1d3e385fb29b2007f116d"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/slot-read.asm",
+      "sha256": "7bf685b64834579fd700c6f3307d687177459da52958ac21466ed1fdd6264506"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/slot-write.asm",
+      "sha256": "da5eb3974be4cd796d90767210b7aa1e2493067907d2dbf1814b9cbb9ec55fd3"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/symbols-demangled.txt",
+      "sha256": "1e642512c2428ca965aa9dc7783acb46a929de4f594e29dbc3f421ac946006b1"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/symbols.txt",
+      "sha256": "43af5286e0f865235fe52cbbdea1f92ea132f6d08dddc811c96cba20435eff3b"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/trial-comparison.json",
+      "sha256": "656d46937cf2b7ab72d170fd77a5a592faa5a0f9c4818850ddffb7cfe2432588"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/trial-comparison.txt",
+      "sha256": "5f5bc4b0209a222fbf4b4dee34e874e87a9d7861b02bd70a81ad125780a106fc"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/trial-copy-focus.json",
+      "sha256": "04c20bef3ca689a504a5be17ca4aae12c633af0dd68d57636e705cc983524369"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/trial-copy-focus.txt",
+      "sha256": "809b77161b56d1b3ff336c25b75bda68aab87e2c810d7fe81812c71362a57e08"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/trial-duplex-repeat.json",
+      "sha256": "e690a4f6f9ccb605cfea7f3e166a78d62d8ea5c94e4451d439da5bbf20006e54"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/trial-duplex-repeat.txt",
+      "sha256": "9b287d7663293551e004bc5e1cc7aa1f6872c7d624b1906fcdc0bba215fa85e0"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/trial-duplex.json",
+      "sha256": "ec85fb46c42c01da9cff2121b8af79b28f2236a1b1a84b211626361f99230dad"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/trial-duplex.txt",
+      "sha256": "116883d94142b3bd4a1923fcfbd99a27cd6f7166279222b1130dec82a4260ba1"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/trial-manifest.json",
+      "sha256": "3f148a4f70cf5a786bd675db62cfe3abd3d5fe2137b89916c2bbc7a55ad38289"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/trial-native-manifest.json",
+      "sha256": "c796d3717d2c75d54a5bacc67d7e41a98da32a27f0154eacdba8b96172c1c4ef"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/trial-repeat.json",
+      "sha256": "f3a0e78637a56b2d2149dfcef46de3f4adb7d5470973153c4259700bfd948970"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile/target/final-profile-artifacts/trial-repeat.txt",
+      "sha256": "17ba6de35b846df1b4f94f08f69ad0f139c352a76de61f61935a04df0598f8f2"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/analysis.json",
+      "sha256": "2f42436cd20d3bea1ce42daea60af61fd41ee95ee7cc4e56100f61c31a077cd3"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/analysis.txt",
+      "sha256": "593689e5c7c09134166ef5a220a7fce383d8fba40e064d04e8e92ceae7bcf730"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/build.log",
+      "sha256": "562bafb31b17cf055a1691dcad254fd5d8dc195d5fe2a5cc9db3d414888b2401"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/clippy-all.log",
+      "sha256": "607462caefc6b60ad96f5ac0d3f736dbec459758a35b8de5c0dc4b8724a5263d"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/clippy.log",
+      "sha256": "1f1bf4f00834d7a22669701b15e5ad076ab19663d712ae4eeedcc3f590d15b3d"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/coalesced-report.txt",
+      "sha256": "b09260fae1f00833fcc347bf2e346964bc844aadeba7bd32833809d682b7263b"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/coalesced-stacks.txt",
+      "sha256": "73c33fa7899b67aaa820f9f9ba55f8ef73a6972cab05348f8cbba2cd62bd3ba8"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/coalesced.json",
+      "sha256": "6c39d35d17f30bd5fa94f3cb4fa9778d5a98a8d02c08987fdc035f2fc4c29058"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/coalesced.perf.data",
+      "sha256": "5d9423715eb053211d11bca9328c9eb53f1e68b627e7a17e35c235c8326acc32"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/coalesced.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/coalesced.stdout",
+      "sha256": "6c39d35d17f30bd5fa94f3cb4fa9778d5a98a8d02c08987fdc035f2fc4c29058"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/core-next.asm",
+      "sha256": "e9c029534749ce21583bf0e568012c6574aec6d0c24e1ea444276e12f0b5c327"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/event-client.asm",
+      "sha256": "8a9c86a6ab552adb028e9ae9dd5d5237ce926aa8c01697dc8d452799e8941ba1"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/event-server.asm",
+      "sha256": "ee1bf180aa865bc231884eeb6a2c940002bbf318dc424c71cccd72add060fd65"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/input-async.asm",
+      "sha256": "a7c973891e305c02bafaf2aa3eda9464fc3e7b25cac7614dde03a78c4a08cf0f"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/input-poll.asm",
+      "sha256": "9ce09bbe70532aa45979d48517fbb9e9e58021db8e607b19c7136df6bd3d89c6"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/io-scope-tests.log",
+      "sha256": "9634d9b1f13c936eef8b055595145a95e4b4bc00594cb6b362d08c8c9291e92e"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/keepalive_bench",
+      "sha256": "ee27800c7b4293ee5b0229795885d7fd0c8a9be695e491e116cd319150f208f9"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/native-report.txt",
+      "sha256": "4b8ac51d0ad1676f4b71f691304f2ca62ce9020fa41426953b7d94fc33d47281"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/native-stacks.txt",
+      "sha256": "b7c9286f8a3669fd2176374f68dd33b64a91ab99ac0113edfec916eb3a14f5b0"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/native.json",
+      "sha256": "5b4e28057dbf978585de3a2c7ae108ce86f7bb80158588b8575c5d06593ad441"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/native.perf.data",
+      "sha256": "902324742a99ec82794d1cec10ffecd106438a23b9283fc41523f42f896a441d"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/native.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/native.stdout",
+      "sha256": "5b4e28057dbf978585de3a2c7ae108ce86f7bb80158588b8575c5d06593ad441"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/symbols-demangled.txt",
+      "sha256": "02d565f0c1075b46d55dc4fe014a45abd7ba4095a65a4273cd924f6ce86e72d0"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/symbols.txt",
+      "sha256": "53859b7409e5e079839322622c4c0f9a39f97cfe7fa14fc41becb8ea59be9291"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/tests-all.log",
+      "sha256": "3842361d4484bf4cae701c41ccce8a676f171f6ec68ca76dff477a35373f4e4f"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/tests-release-all.log",
+      "sha256": "0b98e3694eeb96c2b2f54961aacb9ee73d605171ed6c1dd2f2604e32a58f62fa"
+    },
+    {
+      "path": "/workspace/kimojio-rs/target/wrapper-lab/worktrees/final-profile-trial/target/final-profile-trial-artifacts/tests.log",
+      "sha256": "02822383092d0ac684a6341e7ee2171861272238908b4ebb327f2a0d6ee9922c"
+    }
+  ]
+}
