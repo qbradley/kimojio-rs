@@ -3,6 +3,7 @@
 This document applies the [FSM composition guidance](fsm-composition.md) to HTTP/2.
 It records the approved scope and the implementation gates.
 It is not a claim that an implementation passes those gates.
+The [qualification ledger](http2-qualification.md) records source-specific evidence and the remaining gates.
 
 ## Approved scope
 
