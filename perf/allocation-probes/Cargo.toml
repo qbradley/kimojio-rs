@@ -34,3 +34,8 @@ test = false
 name = "alloc-http1-client"
 path = "src/http_client.rs"
 test = false
+
+[[bin]]
+name = "alloc-http1-keepalive"
+path = "src/http_keepalive.rs"
+test = false

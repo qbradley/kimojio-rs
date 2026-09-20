@@ -229,6 +229,10 @@ It covers trailers, reuse, queued-request cancellation, source failure, partial-
 
 ## Benchmark client
 
+The [`keepalive_bench`](examples/keepalive_bench.rs) example measures repeated exchanges through both wrapper endpoints on one established native socket pair.
+It checks every payload byte, exact exchange counts, connection reuse, and successful shutdown.
+The [benchmark contract](../docs/http1-wrapper-lab/BENCHMARK.md) describes its timing scope, comparison runner, and allocation probe.
+
 `bench_client` uses the public client API and native transport.
 It supplies no server, connection pool, automatic retry, or performance claim.
 Each native worker uses one connection at a time.

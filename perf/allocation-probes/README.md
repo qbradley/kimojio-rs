@@ -18,6 +18,7 @@ The executables accept the original CLI arguments:
 | `alloc-http1-wrapper` | Wrapper `server` example | `--connections N`, then close those connections |
 | `alloc-websocket-chat` | `websocket-chat` | `--run-for-ms N` |
 | `alloc-http1-client` | Wrapper `bench_client` example | `--warmup-ms N --duration-ms N` |
+| `alloc-http1-keepalive` | Wrapper `keepalive_bench` example | `--iterations N --warmup N`, then settle the one connection |
 
 After the original entry point returns, stderr contains one `ALLOC_STATS` JSON record.
 The probe preserves the original exit status.
