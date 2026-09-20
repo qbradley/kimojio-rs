@@ -131,10 +131,10 @@ fn chunk_len(remaining: u64, max_bytes: usize, capacity: usize) -> usize {
     remaining.min(CHUNK.min(max_bytes).min(capacity) as u64) as usize
 }
 
-/// The fixture cancels an unfinished upload only after the complete 413 response.
-/// Other responses do not close the request send half.
-fn cancel_early_upload(status: Option<u16>, end: StreamOutcome, producer: &Producer) -> bool {
-    status == Some(413) && end == StreamOutcome::Complete && (!producer.stopped || producer.busy)
+/// The explicit action cancels an unfinished upload after the complete response.
+/// A response status or END_STREAM alone never requests upload cancellation.
+fn cancel_upload_after_response(selected: bool, end: StreamOutcome, producer: &Producer) -> bool {
+    selected && end == StreamOutcome::Complete && (!producer.stopped || producer.busy)
 }
 
 fn fields(values: &Fields) -> Vec<H2HeaderField> {
@@ -460,8 +460,11 @@ fn client_loop(
                         index += 1;
                     }
                 }
+                let cancel_upload = input.actions.iter().any(|action| {
+                    matches!(action, Action::CancelUploadAfterResponse { stream_id } if *stream_id == end.stream.get())
+                });
                 if producers.get(&end.stream).is_some_and(|producer| {
-                    cancel_early_upload(report.status, end.outcome, producer)
+                    cancel_upload_after_response(cancel_upload, end.outcome, producer)
                 }) && reset.insert(end.stream.get())
                 {
                     checked(core.reset(end.stream, H2ErrorCode::Cancel))?;
@@ -759,34 +762,34 @@ mod tests {
     }
 
     #[test]
-    fn early_upload_policy_requires_complete_413_and_an_unfinished_source() {
+    fn upload_cancellation_requires_selection_receive_end_and_unfinished_source() {
         let mut producer = Producer::bytes(131071, Vec::new());
-        assert!(cancel_early_upload(
-            Some(413),
+        assert!(cancel_upload_after_response(
+            true,
             StreamOutcome::Complete,
             &producer
         ));
-        assert!(!cancel_early_upload(
-            Some(200),
+        assert!(!cancel_upload_after_response(
+            false,
             StreamOutcome::Complete,
             &producer
         ));
-        assert!(!cancel_early_upload(
-            Some(413),
+        assert!(!cancel_upload_after_response(
+            true,
             StreamOutcome::Reset(0),
             &producer
         ));
         producer.remaining = 0;
         producer.stopped = true;
         producer.busy = true;
-        assert!(cancel_early_upload(
-            Some(413),
+        assert!(cancel_upload_after_response(
+            true,
             StreamOutcome::Complete,
             &producer
         ));
         producer.busy = false;
-        assert!(!cancel_early_upload(
-            Some(413),
+        assert!(!cancel_upload_after_response(
+            true,
             StreamOutcome::Complete,
             &producer
         ));

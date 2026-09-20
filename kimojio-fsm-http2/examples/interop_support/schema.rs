@@ -68,6 +68,9 @@ pub enum Action {
     GracefulClose {
         after_streams: usize,
     },
+    CancelUploadAfterResponse {
+        stream_id: u32,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,6 +149,13 @@ impl Input {
                 Action::GracefulClose { after_streams } => {
                     if after_streams == 0 || after_streams > self.request_count {
                         return Err("invalid graceful_close threshold".into());
+                    }
+                }
+                Action::CancelUploadAfterResponse { stream_id } => {
+                    if !valid_stream(stream_id) || controlled.insert(stream_id, ()).is_some() {
+                        return Err(
+                            "invalid or duplicate cancel_upload_after_response action".into()
+                        );
                     }
                 }
             }
@@ -285,6 +295,24 @@ mod tests {
         i.requests[0].body_bytes = 16 * 1024 * 1024 + 17;
         assert!(i.validate().is_ok());
         assert!(serde_json::from_str::<Action>(r#"{"action":"unknown"}"#).is_err());
+    }
+
+    #[test]
+    fn upload_cancellation_requires_an_explicit_valid_stream_action() {
+        let mut input = input();
+        input.actions.push(
+            serde_json::from_str(r#"{"action":"cancel_upload_after_response","stream_id":1}"#)
+                .unwrap(),
+        );
+        assert!(input.validate().is_ok());
+        input
+            .actions
+            .push(Action::CancelUploadAfterResponse { stream_id: 1 });
+        assert!(input.validate().is_err());
+        input.actions = vec![Action::CancelUploadAfterResponse { stream_id: 2 }];
+        assert!(input.validate().is_err());
+        input.actions = vec![Action::CancelUploadAfterResponse { stream_id: 3 }];
+        assert!(input.validate().is_err());
     }
 
     #[test]
