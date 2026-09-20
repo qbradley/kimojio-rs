@@ -233,6 +233,27 @@ Their safe reduction requires separate protocol, ownership, or wake-registration
 The earlier scheduler experiments already showed that fewer allocations do not automatically improve timing.
 This bounded trial does not revisit persistent channel waits or runtime registration internals.
 
+### Deferred hypothesis: native-only blocked probing
+
+The earlier two-pass rejection used worker-channel completions.
+It does not establish the result for the final native slots.
+An already-ready native completion can potentially avoid unrelated temporary wait registrations.
+
+The fresh profiles show event-wait costs of 4.22%/3.56%, but they do not identify the blocked selector's readiness state.
+They therefore cannot separate necessary suspension registrations from discarded registrations before an already-ready native completion.
+That missing distinction prevents a specific gain estimate.
+
+A future experiment must preserve the ten-way rotation and every eligible handler/source poll.
+An unconditional native-first probe can change fairness even if it never returns `Pending`.
+A two-phase scan also needs clear rules against duplicate cooperative-source polls.
+Every actual suspension must still register the applicable channel and cancellation waits.
+
+The possible benefit is fewer temporary registrations on blocked turns.
+The costs are another selection phase, more readiness state, and additional fairness/wake tests.
+This hypothesis is neither disproved by the older worker result nor supported strongly enough by these samples for another trial.
+The one permitted implementation iteration was used for the sampled completion-return move.
+No native-only blocked-probe change or additional measurement was attempted.
+
 ## Trial machine-code result
 
 The separate native `Slot::poll` symbols disappear from the trial binary.
