@@ -197,6 +197,9 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 	if string(preface) != http2.ClientPreface {
 		return nil, errors.New("invalid client preface")
 	}
+	if scenario == "admission-recovery" {
+		return serveAdmission(p)
+	}
 	early := scenario == "early-response" || scenario == "early-response-app-cancel"
 	resetDiscardPendingEnd := false
 	resetDiscardRefundBarrier := false
@@ -773,6 +776,7 @@ func run() error {
 		"reset-discard": true, "graceful-close": true,
 		"no-body-data":              true,
 		"early-response-app-cancel": true,
+		"admission-recovery":        true,
 	}
 	if !allowed[*scenario] || *report == "" {
 		return errors.New("server requires a known scenario and report file")
