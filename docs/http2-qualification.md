@@ -8,7 +8,7 @@ The core qualification gates are complete for the recorded scope and snapshots.
 The metadata-admission repair passed independent review, socket qualification, and source-specific measurements.
 Kimojio HTTP/2 wrapper implementation is in progress.
 The native client has focused runtime coverage.
-Independent wrapper interoperability and wrapper performance qualification remain pending.
+Selected wrapper interoperability cases passed. Full interoperability and wrapper performance qualification remain pending.
 
 The current socket qualification covers the direct HTTP/2 engine.
 Separate models cover the HTTP/1 plus HTTP/2 composite.
@@ -200,8 +200,32 @@ That review did not independently inject kernel cancellation races or close fail
 | Shared ownership, native I/O, concurrent client | Implemented with focused runtime tests |
 | Concurrent native server | In progress |
 | Generic established transports | Pending |
-| Independent wrapper socket fixture and peers | Client fixture in progress |
+| Independent wrapper socket fixture and peers | Client fixture implemented, selected cases passed, API gaps remain |
 | Wrapper performance and final review | Pending |
 
 The current core socket results do not qualify the new wrapper.
 The wrapper needs its own fixture, peer runs, and source-specific measurements.
+
+### Initial wrapper client fixture
+
+The client fixture uses the public native wrapper, not the direct core executor.
+Its source is `00005698dcbd2f15d1fed3e2fb0e94b4f3db1862`, with wrapper source `b9bd24458f64ea852bfef633f3202c9aa42eb463`.
+The release binary SHA-256 is `b82bfd11e269bd087c61edb4af1fcdbce1e1dbb100a2068b3a416f0e087b44d6`.
+Local evidence is in `target/http2-program/worktrees/http2-wrapper-fixture/target/wrapper-fixture-evidence/summary.json`.
+
+Seventeen selected flow and protocol cases passed.
+Separate early-200 and early-413 probes received the full upload without application cancellation.
+The nine fixture tests also passed after parent integration.
+These results do not qualify the server or the complete client contract.
+
+The reduced-window upload and canonical early-response cases failed before response delivery.
+The wrapper reported `Error::Send` with `ConnectionFailed`.
+Peer startup synchronization needs investigation before either failure can establish a wrapper protocol defect.
+The fixture does not parse raw SETTINGS frames to reconstruct readiness.
+
+The public API also limits the fixture observations.
+Informational responses are not observable, and send errors can hide the independent retirement outcome.
+A failed `Client::send` exposes neither an admitted stream identity nor a separate retirement handle.
+`HeaderMap` does not preserve global trailer occurrence order across distinct names.
+The fixture rejects unsupported observations instead of inventing successful outcomes.
+The API and peer contract need separate assessment before full qualification.

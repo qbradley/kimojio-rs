@@ -626,6 +626,9 @@ dependencies = [
  "kimojio",
  "kimojio-fsm-http2",
  "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
