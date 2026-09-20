@@ -46,6 +46,7 @@ struct Ledger {
     cancel_acks: usize,
     closed: usize,
     exchanges: usize,
+    exchange_limit: usize,
     file_closes: usize,
     socket_closes: usize,
     terminating: bool,
@@ -72,6 +73,7 @@ impl Ledger {
             cancel_acks: 0,
             closed: 0,
             exchanges: 0,
+            exchange_limit: 1,
             file_closes: 0,
             socket_closes: 0,
             terminating: false,
@@ -253,7 +255,7 @@ impl composite::Ports for Ledger {
     }
     fn exchange_finished(&mut self) -> Option<()> {
         self.exchanges += 1;
-        assert_eq!(self.exchanges, 1);
+        assert!(self.exchanges <= self.exchange_limit);
         self.record(Notice::Exchange)
     }
     fn closed(&mut self, result: http::ConnectionResult) -> Option<()> {
@@ -498,4 +500,281 @@ fn buffered_chunk_work_yields_without_losing_the_ready_obligation() {
     drive(&mut service, &mut ledger);
     assert!(service.settled());
     assert_eq!((ledger.closed, ledger.exchanges), (1, 1));
+}
+
+const FOLLOWING_REQUEST: &[u8] =
+    b"GET /next HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+
+fn persistent_final_write(
+    method: &str,
+    length: u64,
+    pipelined: bool,
+    mask: u64,
+) -> (composite::Service, Ledger) {
+    let mut service = composite::Service::new(1, http::Config::default(), http::Tick(0)).unwrap();
+    let mut ledger = Ledger::new(mask);
+    ledger.exchange_limit = 2;
+    drive(&mut service, &mut ledger);
+    let mut request = format!("{method} /file HTTP/1.1\r\nHost: localhost\r\n\r\n").into_bytes();
+    if pipelined {
+        request.extend_from_slice(FOLLOWING_REQUEST);
+    }
+    let mut read = ledger.read.take().unwrap();
+    read.bytes_mut()[..request.len()].copy_from_slice(&request);
+    service.complete_read(read.complete(Ok(request.len())));
+    drive(&mut service, &mut ledger);
+    ledger.complete_original(&mut service, Stage::Open, 4);
+    drive(&mut service, &mut ledger);
+    let stat = ledger.stat.take().unwrap();
+    service.complete_file(app::Completion::Stat {
+        id: stat.id,
+        result: Ok(app::Metadata {
+            length,
+            regular: true,
+        }),
+    });
+    drive(&mut service, &mut ledger);
+    if method == "GET" && length != 0 {
+        let write = ledger.write.take().unwrap();
+        let bytes = write.slices().concat();
+        assert!(bytes.starts_with(b"HTTP/1.1 200 "));
+        service.complete_write(write.complete(Ok(bytes.len())));
+        drive(&mut service, &mut ledger);
+        ledger.complete_original(&mut service, Stage::Read, 4);
+        drive(&mut service, &mut ledger);
+    }
+    assert!(
+        ledger.write.is_some(),
+        "final response write must remain outstanding"
+    );
+    assert!(
+        ledger.file_close.is_some(),
+        "source completion must permit file close"
+    );
+    assert_eq!((ledger.exchanges, ledger.closed), (0, 0));
+    (service, ledger)
+}
+
+fn retired_close_failure(
+    method: &str,
+    length: u64,
+    pipelined: bool,
+    file_first: bool,
+    mask: u64,
+) -> Vec<Notice> {
+    let (mut service, mut ledger) = persistent_final_write(method, length, pipelined, mask);
+    let start = ledger.trace.len();
+    let close = ledger.file_close.take().unwrap();
+    let write = ledger.write.take().unwrap();
+    let count = write.slices().iter().map(|bytes| bytes.len()).sum();
+    let file = app::Completion::Close {
+        id: close.id,
+        result: Err(app::FileError::Other),
+    };
+    let transport = write.complete(Ok(count));
+    // A CQ batch delivers both originals before any machine can drive.
+    if file_first {
+        service.complete_file(file);
+        service.complete_write(transport);
+    } else {
+        service.complete_write(transport);
+        service.complete_file(file);
+    }
+    drive(&mut service, &mut ledger);
+    if method == "GET" && length != 0 {
+        // Returning the HTTP payload wakes the application before exchange
+        // retirement. This close failure still belongs to a live exchange.
+        let close = ledger
+            .socket_close
+            .take()
+            .expect("accepted source failure closes transport");
+        service.complete_close(close.complete(Ok(())));
+        drive(&mut service, &mut ledger);
+        assert!(service.settled());
+        assert_eq!(
+            (
+                ledger.exchanges,
+                ledger.closed,
+                ledger.socket_closes,
+                ledger.file_closes
+            ),
+            (1, 1, 1, 1)
+        );
+        assert!(ledger.open.is_none() && ledger.read.is_none());
+        let sequence: Vec<_> = ledger.trace[start..]
+            .iter()
+            .filter(|notice| !matches!(notice, Notice::Deadline(_)))
+            .collect();
+        assert!(matches!(
+            sequence.as_slice(),
+            [
+                Notice::Exchange,
+                Notice::SocketClose(_),
+                Notice::Closed(Err(http::Failure::Application)),
+            ]
+        ));
+        return ledger.trace;
+    }
+    assert_eq!(
+        (ledger.exchanges, ledger.closed, ledger.socket_closes),
+        (1, 0, 0),
+        "{method} length={length} pipelined={pipelined} file_first={file_first} trace={:?}",
+        ledger.trace
+    );
+    if !pipelined {
+        let mut read = ledger
+            .read
+            .take()
+            .expect("persistent connection needs another read");
+        read.bytes_mut()[..FOLLOWING_REQUEST.len()].copy_from_slice(FOLLOWING_REQUEST);
+        service.complete_read(read.complete(Ok(FOLLOWING_REQUEST.len())));
+        drive(&mut service, &mut ledger);
+    }
+    let open = ledger
+        .open
+        .as_ref()
+        .expect("following request must reach the application");
+    assert_eq!(open.path, b"next");
+    ledger.complete_original(&mut service, Stage::Open, 4);
+    drive(&mut service, &mut ledger);
+    let stat = ledger.stat.take().unwrap();
+    service.complete_file(app::Completion::Stat {
+        id: stat.id,
+        result: Ok(app::Metadata {
+            length: 0,
+            regular: true,
+        }),
+    });
+    drive(&mut service, &mut ledger);
+    let write = ledger.write.take().expect("following response");
+    let bytes = write.slices().concat();
+    assert!(bytes.starts_with(b"HTTP/1.1 200 "));
+    let close = ledger.file_close.take().expect("following file close");
+    service.complete_file(app::Completion::Close {
+        id: close.id,
+        result: Ok(()),
+    });
+    service.complete_write(write.complete(Ok(bytes.len())));
+    drive(&mut service, &mut ledger);
+    let close = ledger
+        .socket_close
+        .take()
+        .expect("following request requested closure");
+    service.complete_close(close.complete(Ok(())));
+    drive(&mut service, &mut ledger);
+    assert!(service.settled());
+    assert_eq!(
+        (
+            ledger.exchanges,
+            ledger.closed,
+            ledger.socket_closes,
+            ledger.file_closes
+        ),
+        (2, 1, 1, 2)
+    );
+    let sequence: Vec<_> = ledger.trace[start..]
+        .iter()
+        .filter_map(|notice| match notice {
+            Notice::Deadline(_) => None,
+            Notice::Exchange => Some("exchange"),
+            Notice::Read(_) => Some("read"),
+            Notice::Open(_, _) => Some("open"),
+            Notice::Stat(_, _) => Some("stat"),
+            Notice::FileClose(_, _) => Some("file-close"),
+            Notice::Write(_, _) => Some("write"),
+            Notice::SocketClose(_) => Some("close"),
+            Notice::Closed(Ok(())) => Some("closed"),
+            _ => panic!("unexpected post-retirement effect: {notice:?}"),
+        })
+        .collect();
+    let expected = if pipelined {
+        vec![
+            "exchange",
+            "open",
+            "stat",
+            "file-close",
+            "write",
+            "exchange",
+            "close",
+            "closed",
+        ]
+    } else {
+        vec![
+            "exchange",
+            "read",
+            "open",
+            "stat",
+            "file-close",
+            "write",
+            "exchange",
+            "close",
+            "closed",
+        ]
+    };
+    assert_eq!(sequence, expected);
+    ledger.trace
+}
+
+#[test]
+fn persistent_close_failure_batched_with_final_write_preserves_retirement_and_next_request() {
+    for (method, length) in [("HEAD", 4), ("GET", 0), ("GET", 4)] {
+        for pipelined in [false, true] {
+            for file_first in [false, true] {
+                let expected = retired_close_failure(method, length, pipelined, file_first, 0);
+                for mask in [u64::MAX, 0xaaaa_aaaa_aaaa_aaaa] {
+                    assert_eq!(
+                        retired_close_failure(method, length, pipelined, file_first, mask),
+                        expected,
+                        "{method} length={length} pipelined={pipelined} file_first={file_first}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn file_close_failure_before_final_write_retirement_still_fails_the_exchange() {
+    for (method, length) in [("HEAD", 4), ("GET", 0), ("GET", 4)] {
+        for mask in [0, u64::MAX, 0xaaaa_aaaa_aaaa_aaaa] {
+            let (mut service, mut ledger) = persistent_final_write(method, length, true, mask);
+            let close = ledger.file_close.take().unwrap();
+            service.complete_file(app::Completion::Close {
+                id: close.id,
+                result: Err(app::FileError::Other),
+            });
+            ledger.terminating = true;
+            drive(&mut service, &mut ledger);
+            assert_eq!(
+                ledger.cancel_acks, 1,
+                "live write must retain cancellation ownership"
+            );
+            assert!(
+                ledger.socket_close.is_none(),
+                "socket close must wait for original write"
+            );
+            let write = ledger.write.take().unwrap();
+            let count = write.slices().iter().map(|bytes| bytes.len()).sum();
+            service.complete_write(write.complete(Ok(count)));
+            drive(&mut service, &mut ledger);
+            let close = ledger.socket_close.take().unwrap();
+            service.complete_close(close.complete(Ok(())));
+            drive(&mut service, &mut ledger);
+            assert!(service.settled());
+            assert_eq!(
+                (
+                    ledger.exchanges,
+                    ledger.closed,
+                    ledger.socket_closes,
+                    ledger.file_closes
+                ),
+                (1, 1, 1, 1)
+            );
+            assert!(ledger.open.is_none() && ledger.read.is_none());
+            assert_eq!(
+                ledger.trace.last(),
+                Some(&Notice::Closed(Err(http::Failure::Application)))
+            );
+        }
+    }
 }
