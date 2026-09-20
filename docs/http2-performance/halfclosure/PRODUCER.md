@@ -69,8 +69,11 @@ Both frozen CLI modes exit with code 101.
 Diagnostic mode defers the first error assertion but still fails after the causal report.
 Ordinary mode retains its immediate assertion.
 
-The exact `ResourceExhausted` budget is a blocking question sent to the core owner.
-The answer was pending when this report was recorded.
+The core owner later identified the exact exhausted budget as the outbound control-item cap.
+The reported call chain is `release_body → refund → frame(WINDOW_UPDATE) → queue_control → fail(ResourceExhausted)`.
+It is not the inbound frame-rate budget.
+The owner supplied credit-coalescing correction `c08b7333`.
+The frozen diagnostic evidence above predates that correction.
 No larger budget, window change, timer change, or scheduler change forms part of this probe.
 The frame totals alone do not justify a budget repair.
 

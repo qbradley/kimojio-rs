@@ -1,0 +1,100 @@
+0x1a62 {'direct-empty': 9, 'selected-empty': 0, 'direct-empty128': 6, 'direct-1m': 384} {'direct-empty': 707, 'selected-empty': 0, 'direct-empty128': 705, 'direct-1m': 1592} <composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick
+65bb6:	4c 01 e0             	add    %r12,%rax
+65bb9:	48 89 c7             	mov    %rax,%rdi
+65bbc:	4c 89 fe             	mov    %r15,%rsi
+65bbf:	4c 89 ea             	mov    %r13,%rdx
+0x17dc {'direct-empty': 7, 'selected-empty': 0, 'direct-empty128': 11, 'direct-1m': 360} {'direct-empty': 707, 'selected-empty': 0, 'direct-empty128': 705, 'direct-1m': 1592} <composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick
+65930:	4c 01 e0             	add    %r12,%rax
+65933:	48 89 c7             	mov    %rax,%rdi
+65936:	4c 89 fe             	mov    %r15,%rsi
+65939:	4c 89 ea             	mov    %r13,%rdx
+0x69c {'direct-empty': 28, 'selected-empty': 24, 'direct-empty128': 34, 'direct-1m': 52} {'direct-empty': 113, 'selected-empty': 118, 'direct-empty128': 145, 'direct-1m': 184} <kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref
+a302e:	00
+a302f:	48 8d bc 24 e8 01 00 	lea    0x1e8(%rsp),%rdi
+a3036:	00
+a3037:	ba 90 00 00 00       	mov    $0x90,%edx
+0x1ae {'direct-empty': 38, 'selected-empty': 39, 'direct-empty128': 34, 'direct-1m': 2} {'direct-empty': 76, 'selected-empty': 93, 'direct-empty128': 105, 'direct-1m': 2} <hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::insert
+7c759:	49 8d 3c 04          	lea    (%r12,%rax,1),%rdi
+7c75d:	48 81 c7 c4 fe ff ff 	add    $0xfffffffffffffec4,%rdi
+7c764:	48 8d 74 24 1c       	lea    0x1c(%rsp),%rsi
+7c769:	ba 3c 01 00 00       	mov    $0x13c,%edx
+0x148 {'direct-empty': 20, 'selected-empty': 25, 'direct-empty128': 64, 'direct-1m': 1} {'direct-empty': 111, 'selected-empty': 133, 'direct-empty128': 163, 'direct-1m': 42} <kimojio_fsm_http2::engine::Connection<&[u8]>>::maybe_retire
+58fd6:	48 8d bc 24 40 01 00 	lea    0x140(%rsp),%rdi
+58fdd:	00
+58fde:	48 8d 74 24 10       	lea    0x10(%rsp),%rsi
+58fe3:	ba 30 01 00 00       	mov    $0x130,%edx
+0x147 {'direct-empty': 32, 'selected-empty': 20, 'direct-empty128': 44, 'direct-1m': 0} {'direct-empty': 76, 'selected-empty': 93, 'direct-empty128': 105, 'direct-1m': 2} <hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::insert
+7c6f3:	0f 89 bd 00 00 00    	jns    7c7b6 <<hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::insert+0x1f6>
+7c6f9:	48 8d 7c 24 28       	lea    0x28(%rsp),%rdi
+7c6fe:	ba 30 01 00 00       	mov    $0x130,%edx
+7c703:	48 8b 34 24          	mov    (%rsp),%rsi
+0x1c2 {'direct-empty': 27, 'selected-empty': 16, 'direct-empty128': 27, 'direct-1m': 1} {'direct-empty': 100, 'selected-empty': 85, 'direct-empty128': 130, 'direct-1m': 4} kimojio_fsm_http2::server::h2::headers::validate_decoded_header_fields_by::<<kimojio_fsm_http2::engine::Client<&[u8]>>::request_ref::{closure#0}>
+7a3a4:	00
+7a3a5:	48 8d 74 24 18       	lea    0x18(%rsp),%rsi
+7a3aa:	ba d0 00 00 00       	mov    $0xd0,%edx
+7a3af:	4c 89 f7             	mov    %r14,%rdi
+0x188 {'direct-empty': 24, 'selected-empty': 12, 'direct-empty128': 29, 'direct-1m': 1} {'direct-empty': 64, 'selected-empty': 53, 'direct-empty128': 58, 'direct-1m': 3} <hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::remove::<kimojio_fsm_http2::api::StreamId>
+7beb9:	48 83 c7 10          	add    $0x10,%rdi
+7bebd:	ba 20 01 00 00       	mov    $0x120,%edx
+7bec2:	48 89 ce             	mov    %rcx,%rsi
+7bec5:	48 89 c3             	mov    %rax,%rbx
+0x11e {'direct-empty': 19, 'selected-empty': 16, 'direct-empty128': 25, 'direct-1m': 0} {'direct-empty': 108, 'selected-empty': 109, 'direct-empty128': 99, 'direct-1m': 5} kimojio_fsm_http2::server::h2::headers::decode_connection_header_fields::<kimojio_fsm_http2::server::h2::compact_headers::CompactHeaderFields>
+a6722:	00
+a6723:	ba d0 00 00 00       	mov    $0xd0,%edx
+a6728:	48 89 ef             	mov    %rbp,%rdi
+a672b:	4c 89 e6             	mov    %r12,%rsi
+0x1c2 {'direct-empty': 16, 'selected-empty': 16, 'direct-empty128': 19, 'direct-1m': 0} {'direct-empty': 40, 'selected-empty': 71, 'direct-empty128': 44, 'direct-1m': 0} kimojio_fsm_http2::server::h2::headers::validate_decoded_header_fields_by::<<kimojio_fsm_http2::engine::Server<&[u8]>>::respond_ref::{closure#0}>
+7a5b4:	00
+7a5b5:	48 8d 74 24 18       	lea    0x18(%rsp),%rsi
+7a5ba:	ba d0 00 00 00       	mov    $0xd0,%edx
+7a5bf:	4c 89 f7             	mov    %r14,%rdi
+0x1789 {'direct-empty': 8, 'selected-empty': 0, 'direct-empty128': 9, 'direct-1m': 14} {'direct-empty': 707, 'selected-empty': 0, 'direct-empty128': 705, 'direct-1m': 1592} <composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick
+658da:	0f 87 06 0b 00 00    	ja     663e6 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x2286>
+658e0:	48 89 c7             	mov    %rax,%rdi
+658e3:	4c 89 ee             	mov    %r13,%rsi
+658e6:	4c 89 e2             	mov    %r12,%rdx
+0x1a0f {'direct-empty': 4, 'selected-empty': 0, 'direct-empty128': 12, 'direct-1m': 10} {'direct-empty': 707, 'selected-empty': 0, 'direct-empty128': 705, 'direct-1m': 1592} <composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick
+65b60:	0f 87 87 08 00 00    	ja     663ed <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x228d>
+65b66:	48 89 c7             	mov    %rax,%rdi
+65b69:	4c 89 ee             	mov    %r13,%rsi
+65b6c:	4c 89 e2             	mov    %r12,%rdx
+0x177f {'direct-empty': 0, 'selected-empty': 13, 'direct-empty128': 0, 'direct-1m': 0} {'direct-empty': 0, 'selected-empty': 407, 'direct-empty128': 0, 'direct-1m': 0} <composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick
+62590:	0f 87 39 09 00 00    	ja     62ecf <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x20af>
+62596:	48 89 c7             	mov    %rax,%rdi
+62599:	4c 89 ee             	mov    %r13,%rsi
+6259c:	4c 89 e2             	mov    %r12,%rdx
+0x1a79 {'direct-empty': 0, 'selected-empty': 8, 'direct-empty128': 0, 'direct-1m': 0} {'direct-empty': 0, 'selected-empty': 407, 'direct-empty128': 0, 'direct-1m': 0} <composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick
+6288b:	4c 01 e0             	add    %r12,%rax
+6288e:	48 89 c7             	mov    %rax,%rdi
+62891:	48 8b 74 24 10       	mov    0x10(%rsp),%rsi
+62896:	4c 89 ea             	mov    %r13,%rdx
+0x722 {'direct-empty': 2, 'selected-empty': 3, 'direct-empty128': 2, 'direct-1m': 0} {'direct-empty': 113, 'selected-empty': 118, 'direct-empty128': 145, 'direct-1m': 184} <kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref
+a30b2:	48 03 74 24 08       	add    0x8(%rsp),%rsi
+a30b7:	48 89 f7             	mov    %rsi,%rdi
+a30ba:	48 8b 74 24 18       	mov    0x18(%rsp),%rsi
+a30bf:	4c 89 e2             	mov    %r12,%rdx
+0x1a24 {'direct-empty': 0, 'selected-empty': 5, 'direct-empty128': 0, 'direct-1m': 0} {'direct-empty': 0, 'selected-empty': 407, 'direct-empty128': 0, 'direct-1m': 0} <composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick
+62835:	0f 87 9b 06 00 00    	ja     62ed6 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick+0x20b6>
+6283b:	48 89 c7             	mov    %rax,%rdi
+6283e:	4c 89 ee             	mov    %r13,%rsi
+62841:	4c 89 e2             	mov    %r12,%rdx
+0xdc {'direct-empty': 1, 'selected-empty': 1, 'direct-empty128': 2, 'direct-1m': 0} {'direct-empty': 14, 'selected-empty': 11, 'direct-empty128': 9, 'direct-1m': 0} <kimojio_fsm_http2::hpack::DynamicTable>::try_reserve_insertions
+91e8f:	48 c1 e2 05          	shl    $0x5,%rdx
+91e93:	49 89 fe             	mov    %rdi,%r14
+91e96:	48 89 cf             	mov    %rcx,%rdi
+91e99:	48 89 c6             	mov    %rax,%rsi
+0xd4 {'direct-empty': 0, 'selected-empty': 0, 'direct-empty128': 3, 'direct-1m': 0} {'direct-empty': 0, 'selected-empty': 0, 'direct-empty128': 21, 'direct-1m': 0} <alloc::collections::btree::node::BalancingContext<u128, kimojio_fsm_http2::api::StreamId>>::merge_tracking_child_edge::<alloc::alloc::Global>
+47194:	48 c1 e2 04          	shl    $0x4,%rdx
+47198:	4c 89 3c 24          	mov    %r15,(%rsp)
+4719c:	4d 89 cf             	mov    %r9,%r15
+4719f:	4c 89 4c 24 08       	mov    %r9,0x8(%rsp)
+0x17d4 {'direct-empty': 0, 'selected-empty': 3, 'direct-empty128': 0, 'direct-1m': 0} {'direct-empty': 0, 'selected-empty': 407, 'direct-empty128': 0, 'direct-1m': 0} <composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::http::Client<&[u8]>, kimojio_fsm_http2::http::Server<&[u8]>>>::tick
+625e6:	4c 01 e0             	add    %r12,%rax
+625e9:	48 89 c7             	mov    %rax,%rdi
+625ec:	48 8b 74 24 10       	mov    0x10(%rsp),%rsi
+625f1:	4c 89 ea             	mov    %r13,%rdx
+0x16b {'direct-empty': 0, 'selected-empty': 0, 'direct-empty128': 2, 'direct-1m': 0} {'direct-empty': 0, 'selected-empty': 0, 'direct-empty128': 21, 'direct-1m': 0} <alloc::collections::btree::node::BalancingContext<u128, kimojio_fsm_http2::api::StreamId>>::merge_tracking_child_edge::<alloc::alloc::Global>
+47228:	49 8d 3c 86          	lea    (%r14,%rax,4),%rdi
+4722c:	48 81 c7 b8 00 00 00 	add    $0xb8,%rdi
+47233:	42 8d 14 bd 00 00 00 	lea    0x0(,%r15,4),%edx
+4723a:	00

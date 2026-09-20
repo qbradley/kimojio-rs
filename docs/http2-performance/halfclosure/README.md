@@ -1,5 +1,8 @@
 # Corrected-half-closure qualification: resource-progress blocker
 
+[The later credit-coalescing baseline](../credit-coalescing/README.md) reruns these gates on the corrected integration.
+This page retains the earlier resource-failure evidence.
+
 This follow-up measures the corrected core only after its strict prerequisites pass.
 It is **not final core qualification**.
 The large-body prerequisite still fails, so no new timing matrix, profile, or optimization PoC occurred.

@@ -342,6 +342,7 @@ pub struct Connection<B: SendBuffer = Vec<u8>> {
     credit_ready: BTreeMap<u128, StreamId>,
     // Queued control blocks ahead of the next coalesced credit write.
     credit_barrier: usize,
+    data_after_credit: bool,
     deadlines: BTreeMap<(Duration, Deadline), ()>,
     settings_at: Option<Duration>,
     settings_output: SettingsOutput,
@@ -609,6 +610,7 @@ impl<B: SendBuffer> Connection<B> {
             receive_credit: 0,
             credit_ready: BTreeMap::new(),
             credit_barrier: 0,
+            data_after_credit: false,
             protocol,
             config,
             owner: Rc::new(Owner),
@@ -1813,6 +1815,10 @@ impl<B: SendBuffer> Connection<B> {
             std::mem::swap(&mut self.probing, &mut self.blocked);
             self.probe_again = false;
         }
+        let data_turn = self.data_after_credit
+            && self.controls.is_empty()
+            && (!self.ready.is_empty()
+                || (self.protocol.connection_send_available() != 0 && !self.probing.is_empty()));
         let op = if let Some(mut op) = self.pending_write.take() {
             op.token = self.token();
             op
@@ -1834,7 +1840,7 @@ impl<B: SendBuffer> Connection<B> {
                 end,
                 buffer_end: true,
             }
-        } else if self.receive_credit != 0 || !self.credit_ready.is_empty() {
+        } else if (self.receive_credit != 0 || !self.credit_ready.is_empty()) && !data_turn {
             let frames =
                 usize::from(self.receive_credit != 0) + usize::from(!self.credit_ready.is_empty());
             let mut bytes = Vec::with_capacity(WINDOW_UPDATE_BYTES * frames);
@@ -1851,6 +1857,7 @@ impl<B: SendBuffer> Connection<B> {
                 encode_window_update(&mut bytes, id.0, amount);
             }
             self.credit_barrier = self.controls.len();
+            self.data_after_credit = true;
             debug_assert!(
                 self.control_capacity + bytes.capacity() <= self.config.max_outbound_capacity
             );
@@ -1898,6 +1905,7 @@ impl<B: SendBuffer> Connection<B> {
                 self.fail(ConnectionResult::IoFailed);
                 return None;
             }
+            self.data_after_credit = false;
             let state = self.streams.get_mut(&id).expect("ready stream");
             let chunk = state.chunk.take().expect("ready chunk");
             state.writes += 1;

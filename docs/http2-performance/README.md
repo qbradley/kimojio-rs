@@ -1,5 +1,8 @@
 # HTTP/2 CPU qualification
 
+[The latest corrected baseline and isolated PoC](credit-coalescing/README.md) have separate measurements and immutable binaries.
+This page retains the earlier historical result set.
+
 This report measures the direct HTTP/2 core and its protocol selector.
 It does not qualify a Kimojio wrapper or a socket executor.
 The source starts at `5491242b53e60051178870d7a82fb89b29cda463`.

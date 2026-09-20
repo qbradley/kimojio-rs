@@ -1,0 +1,4 @@
+Audit timestamp: 2026-09-20T11:28:08Z
+CPU2 timing lease RELEASED after finalPoC profile.
+No furtherCPU2 work planned. Baseline945stricttrials andPoC108pairedtrials completed.
+PoC notaccepted: hotter232-byteResultcopy andno supported timing improvement.

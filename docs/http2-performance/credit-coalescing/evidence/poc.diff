@@ -1,0 +1,27 @@
+diff --git a/kimojio-fsm-http2/src/server/h2/server.rs b/kimojio-fsm-http2/src/server/h2/server.rs
+index 84d7391b..77f16047 100644
+--- a/kimojio-fsm-http2/src/server/h2/server.rs
++++ b/kimojio-fsm-http2/src/server/h2/server.rs
+@@ -938,15 +938,13 @@ impl H2Server {
+             }
+         };
+         consumed += used;
+-        let mut frame_progress = self.accept_driver_frame_bytes_ref(frame)?;
+-        output.append(&mut frame_progress.output);
+-        Ok(H2ServerDriverProgress {
+-            event: frame_progress.event,
+-            consumed,
+-            output,
+-            handled_protocol_error: frame_progress.handled_protocol_error,
+-            handled_compat_error: frame_progress.handled_compat_error,
+-        })
++        let mut result = self.accept_driver_frame_bytes_ref(frame);
++        if let Ok(progress) = &mut result {
++            output.append(&mut progress.output);
++            progress.consumed = consumed;
++            progress.output = output;
++        }
++        result
+     }
+ 
+     fn accept_driver_frame_bytes_ref<'a>(

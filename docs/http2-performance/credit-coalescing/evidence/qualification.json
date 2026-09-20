@@ -1,0 +1,20 @@
+{
+  "integration": "beb291573508a7f69b081d4ca5c4e3dbeb95dc2a",
+  "baseline_source": "eaac15fa2c52ba9ff86f193784485a7d5e48e035",
+  "poc_source": "525ab23d0ac2e89bc6af24c40bbbe48c65a8c5eb",
+  "baseline_cells": 189,
+  "baseline_successful_trials": 945,
+  "baseline_failed_trials": 0,
+  "poc_successful_trials": 108,
+  "poc_failed_trials": 0,
+  "paired_wire_equivalent_pairs": 54,
+  "baseline_and_poc_tests": {
+    "default_including_docs": 284,
+    "all_features_including_docs": 289,
+    "harness": 7,
+    "ignored": 0
+  },
+  "poc_accepted": false,
+  "reason": "A sampled232-byteResultreturncopy replaces144-byteprogressstaging; allsixpairedintervals include1.0.",
+  "cpu2_lease": "released"
+}

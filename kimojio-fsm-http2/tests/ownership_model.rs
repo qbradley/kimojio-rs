@@ -351,6 +351,7 @@ fn repeated_eight_stream_megabyte_duplex_preserves_bounded_credit_progress() {
         let mut server_returned = [0; 8];
         let mut responded = 0;
         let mut completed = false;
+        let mut overlapped = false;
         for turn in 0..1_000_000 {
             let before = cp.ports.sequence.len() + sp.ports.sequence.len();
             client.next(&mut cp);
@@ -373,6 +374,8 @@ fn repeated_eight_stream_megabyte_duplex_preserves_bounded_credit_progress() {
                 &mut server_returned,
                 &mut server_pool,
             );
+            overlapped |= server_returned.iter().any(|bytes| *bytes != 0)
+                && client_returned.iter().sum::<usize>() < 8 * BODY;
             for index in (responded..sp.ports.heads.len()).rev() {
                 server
                     .respond(sp.ports.heads[index].0, &response(b"200"), false)
@@ -391,6 +394,10 @@ fn repeated_eight_stream_megabyte_duplex_preserves_bounded_credit_progress() {
             );
         }
         assert!(completed);
+        assert!(
+            overlapped,
+            "response DATA must progress before all uploads finish"
+        );
         assert_eq!(client_sent, [BODY; 8]);
         assert_eq!(server_sent, [BODY; 8]);
         assert_eq!(client_received, [BODY; 8]);

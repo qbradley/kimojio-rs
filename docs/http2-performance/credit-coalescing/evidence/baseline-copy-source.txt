@@ -1,0 +1,5 @@
+0x00000000000a303c
+<core::result::Result<kimojio_fsm_http2::server::h2::server::H2ServerDriverProgress, kimojio_fsm_http2::server::error::ServerError> as core::ops::try_trait::Try>::branch
+/workspace/home/qbradley/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:2177
+<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref
+/workspace/kimojio-rs/target/http2-program/worktrees/http2-performance/kimojio-fsm-http2/src/server/h2/server.rs:941
