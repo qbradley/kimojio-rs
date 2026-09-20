@@ -252,6 +252,20 @@ Ordered readiness entries have per-stream removal keys.
 Retirement removes those entries even when an earlier stream retains its permit.
 One-byte connection refunds rotate among blocked siblings without a whole-stream scan.
 
+Released receive credit uses one connection counter and one counter per live receive half.
+One ordered entry per stream records pending stream credit.
+Repeated releases do not allocate one queued WINDOW_UPDATE per fragment.
+The writer emits at most one connection update and one stream update in a credit batch.
+Only that committed output restores the ordinary receive-window balance.
+The counters remain separate from application fragment leases.
+
+Existing queued control blocks precede a new credit batch.
+After each credit batch, the currently queued control blocks receive a turn.
+Partial writes retain their original output before either class can proceed.
+This preserves HPACK block order and prevents control or credit starvation.
+Closing a receive half removes its uncommitted stream credit, but preserves connection credit.
+Terminal connection shutdown can discard uncommitted credit.
+
 | Default limit | Value |
 | --- | --- |
 | Active application records | 100, including records with retained body fragments |
@@ -332,7 +346,7 @@ The pure engine does not create or drive an HTTP/1 parser.
 
 ## Standalone qualification
 
-The all-feature suite contains 213 unit tests, 58 integration tests, and two doctests.
+The all-feature suite contains 213 unit tests, 60 integration tests, and two doctests.
 Eight unit tests cover new direct-engine bounds and defensive state transitions.
 The default suite omits five feature-specific component tests.
 These counts do not include the six Criterion smoke workloads.
@@ -385,6 +399,23 @@ The engine emits one INTERNAL_ERROR reset and removes both private and applicati
 Retirement waits for reset output settlement.
 Late headers produce no application callback, but still update HPACK before a sibling response.
 If reset admission fails, the engine reports aggregate resource exhaustion.
+
+### Concurrent receive-credit regression
+
+The corrected `34ee4b71` integration still failed a concurrent large-duplex workload.
+Its causal trace showed about 512 queued WINDOW_UPDATE frames with one-byte increments.
+The server then emitted GOAWAY with ENHANCE_YOUR_CALM and reported aggregate resource exhaustion.
+This was separate from the earlier send-half defect.
+
+A local negative control reproduced exhaustion after three released bytes with an outbound-item limit of four.
+The corrected case retains the same limit and processes 600 one-byte fragments behind an outstanding write.
+It then emits exactly three updates: connection credit 600, followed by stream credits 200 and 400.
+The same test also uses the default item limit.
+
+A second regression runs ten batches of eight concurrent bidirectional 1 MiB exchanges.
+It uses exact direct transport receipts, yielding body callbacks, immediate fragment release, and fixed supplied time.
+All 160 MiB of payload match the expected bytes, and all streams retire successfully.
+Neither regression increases a capacity limit or accepts a failed stream outcome.
 
 ## Frozen benchmark workload
 

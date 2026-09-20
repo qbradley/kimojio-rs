@@ -14,6 +14,7 @@ use crate::{
 };
 
 const PAGE_SIZE: usize = 32 * 1024;
+const WINDOW_UPDATE_BYTES: usize = 13;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -204,6 +205,8 @@ struct Stream<B> {
     body_limit: Option<usize>,
     response_seen: bool,
     outbound_complete: bool,
+    receive_credit: usize,
+    credit_key: Option<u128>,
 }
 
 impl<B> Stream<B> {
@@ -230,6 +233,8 @@ impl<B> Stream<B> {
             body_limit: None,
             response_seen: false,
             outbound_complete: false,
+            receive_credit: 0,
+            credit_key: None,
         }
     }
     fn can_retire(&self) -> bool {
@@ -333,6 +338,10 @@ pub struct Connection<B: SendBuffer = Vec<u8>> {
     pool: Vec<Rc<Page>>,
     receive_capacity: usize,
     receive_window: usize,
+    receive_credit: usize,
+    credit_ready: BTreeMap<u128, StreamId>,
+    // Queued control blocks ahead of the next coalesced credit write.
+    credit_barrier: usize,
     deadlines: BTreeMap<(Duration, Deadline), ()>,
     settings_at: Option<Duration>,
     settings_output: SettingsOutput,
@@ -597,6 +606,9 @@ impl<B: SendBuffer> Connection<B> {
         protocol.now(now);
         Self {
             receive_window: config.connection_receive_window as usize,
+            receive_credit: 0,
+            credit_ready: BTreeMap::new(),
+            credit_barrier: 0,
             protocol,
             config,
             owner: Rc::new(Owner),
@@ -1066,6 +1078,10 @@ impl<B: SendBuffer> Connection<B> {
             && state.receive_end.is_none()
         {
             state.receive_end = Some(outcome);
+            state.receive_credit = 0;
+            if let Some(key) = state.credit_key.take() {
+                self.credit_ready.remove(&key);
+            }
             if state.outbound_complete
                 && let Some(at) = state.deadline.take()
             {
@@ -1102,6 +1118,9 @@ impl<B: SendBuffer> Connection<B> {
             }
             if let Some(key) = state.ready_key {
                 self.ready.remove(&key);
+            }
+            if let Some(key) = state.credit_key {
+                self.credit_ready.remove(&key);
             }
             if let Some(at) = state.deadline {
                 self.deadlines.remove(&(at, Deadline::Stream(id)));
@@ -1181,6 +1200,7 @@ impl<B: SendBuffer> Connection<B> {
         }
         self.life = Life::Settling(result);
         self.deadlines.clear();
+        self.receive_credit = 0;
         let ids: Vec<_> = self.streams.keys().copied().collect();
         for id in ids {
             self.fail_unsettled_stream(id);
@@ -1229,18 +1249,26 @@ impl<B: SendBuffer> Connection<B> {
         if amount == 0 {
             return Ok(());
         }
-        self.receive_window += amount;
-        self.frame(H2FrameType::WindowUpdate, 0, &(amount as u32).to_be_bytes())?;
+        if self.receive_credit == 0 && self.credit_ready.is_empty() {
+            self.credit_barrier = self.controls.len();
+        }
+        self.receive_credit = self
+            .receive_credit
+            .checked_add(amount)
+            .ok_or(CommandError::Capacity)?;
         if stream_credit
             && let Some(state) = self.streams.get_mut(&id)
             && state.receive_end.is_none()
         {
-            state.receive_window += amount;
-            self.frame(
-                H2FrameType::WindowUpdate,
-                id.0,
-                &(amount as u32).to_be_bytes(),
-            )?;
+            state.receive_credit = state
+                .receive_credit
+                .checked_add(amount)
+                .ok_or(CommandError::Capacity)?;
+            if state.credit_key.is_none() {
+                self.work_sequence += 1;
+                state.credit_key = Some(self.work_sequence);
+                self.credit_ready.insert(self.work_sequence, id);
+            }
         }
         Ok(())
     }
@@ -1595,6 +1623,8 @@ impl<B: SendBuffer> Connection<B> {
         if self.write.is_none()
             && (self.pending_write.is_some()
                 || !self.controls.is_empty()
+                || self.receive_credit != 0
+                || !self.credit_ready.is_empty()
                 || !self.ready.is_empty()
                 || (self.protocol.connection_send_available() != 0
                     && (!self.probing.is_empty() || self.probe_again)))
@@ -1634,6 +1664,7 @@ impl<B: SendBuffer> Connection<B> {
                 Transition::FinishDrain => {
                     self.life = Life::Settling(ConnectionResult::Graceful);
                     self.deadlines.clear();
+                    self.receive_credit = 0;
                     None
                 }
                 Transition::Notice => self.notify(ports),
@@ -1785,7 +1816,15 @@ impl<B: SendBuffer> Connection<B> {
         let op = if let Some(mut op) = self.pending_write.take() {
             op.token = self.token();
             op
-        } else if let Some((bytes, stream, purpose)) = self.controls.pop_front() {
+        } else if !self.controls.is_empty()
+            && (self.credit_barrier != 0
+                || (self.receive_credit == 0 && self.credit_ready.is_empty())
+                || self.control_capacity
+                    > self.config.max_outbound_capacity - 2 * WINDOW_UPDATE_BYTES)
+        {
+            let (bytes, stream, purpose) =
+                self.controls.pop_front().expect("queued control output");
+            self.credit_barrier = self.credit_barrier.saturating_sub(1);
             let end = stream.is_some() && bytes.len() >= 9 && bytes[3] == 1 && bytes[4] & 1 != 0;
             WriteOp {
                 token: self.token(),
@@ -1793,6 +1832,38 @@ impl<B: SendBuffer> Connection<B> {
                 cursor: 0,
                 stream,
                 end,
+                buffer_end: true,
+            }
+        } else if self.receive_credit != 0 || !self.credit_ready.is_empty() {
+            let frames =
+                usize::from(self.receive_credit != 0) + usize::from(!self.credit_ready.is_empty());
+            let mut bytes = Vec::with_capacity(WINDOW_UPDATE_BYTES * frames);
+            let amount = std::mem::take(&mut self.receive_credit);
+            if amount != 0 {
+                self.receive_window += amount;
+                encode_window_update(&mut bytes, 0, amount);
+            }
+            if let Some((_, id)) = self.credit_ready.pop_first() {
+                let state = self.streams.get_mut(&id).expect("pending stream credit");
+                state.credit_key = None;
+                let amount = std::mem::take(&mut state.receive_credit);
+                state.receive_window += amount;
+                encode_window_update(&mut bytes, id.0, amount);
+            }
+            self.credit_barrier = self.controls.len();
+            debug_assert!(
+                self.control_capacity + bytes.capacity() <= self.config.max_outbound_capacity
+            );
+            self.control_capacity += bytes.capacity();
+            WriteOp {
+                token: self.token(),
+                storage: WriteStorage::Control {
+                    bytes,
+                    purpose: ControlPurpose::Ordinary,
+                },
+                cursor: 0,
+                stream: None,
+                end: false,
                 buffer_end: true,
             }
         } else {
@@ -2325,6 +2396,16 @@ impl<B: SendBuffer> Connection<B> {
 
 fn payload_len(bytes: &[u8]) -> usize {
     (usize::from(bytes[0]) << 16) | (usize::from(bytes[1]) << 8) | usize::from(bytes[2])
+}
+
+fn encode_window_update(bytes: &mut Vec<u8>, stream: u32, amount: usize) {
+    assert!(
+        (1..=0x7fff_ffff).contains(&amount),
+        "receive credit fits the configured window"
+    );
+    bytes.extend_from_slice(&[0, 0, 4, 8, 0]);
+    bytes.extend_from_slice(&stream.to_be_bytes());
+    bytes.extend_from_slice(&(amount as u32).to_be_bytes());
 }
 
 #[cfg(test)]
