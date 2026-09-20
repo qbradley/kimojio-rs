@@ -245,3 +245,19 @@ It can send status 200 or 413 while it continues to consume the upload and retur
 RFC 9113 section 8.1 permits a server to send RST_STREAM(NO_ERROR) after a complete response.
 The client must not discard that completed response.
 Explicit application cancellation is another valid policy, but this case does not require an additional fixture action.
+
+### Declared application-cancellation variant
+
+`protocol_suite.py --early-response-policy application-cancel` selects a distinct fixture-application contract.
+It is only for a fixture that explicitly implements cancellation after a complete status-413 response.
+The independent server withholds credit and keeps its socket open.
+It does not send the PING barrier or a reset in this variant.
+The client must send exactly RST_STREAM(CANCEL) for stream 1 after it accepts the completed response.
+That stream reports `ended: true`, `outcome: "reset"`, and actual wire code 8.
+Its sibling must complete, and the connection must close gracefully without error.
+The report records the selected policy.
+
+The default remains `peer-reset`, with strict code-0 and barrier assertions.
+The oracle never accepts either reset code indiscriminately or excuses `connection_failed`.
+This application policy is not inferred by the pure protocol engine.
+The early-200 full-upload probe remains mandatory for either policy.

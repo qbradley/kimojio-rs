@@ -374,6 +374,33 @@ class SocketTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "RST_STREAM\\(NO_ERROR\\)"):
             validate("early-response", report, witness)
 
+    def test_declared_application_policy_is_not_a_loose_reset_exception(self):
+        from protocol_suite import validate
+
+        report = {
+            "schema": 1, "connection": {"closed": True, "error": None, "outcome": "graceful"},
+            "streams": [{
+                "stream_id": stream, "status": 413 if stream == 1 else 200,
+                "content_length": 0 if stream == 1 else 37,
+                "bytes": 0 if stream == 1 else 37,
+                "sha256": digest_for(stream, 0 if stream == 1 else 37),
+                "trailers": [], "informational": [], "ended": True,
+                "outcome": "reset" if stream == 1 else "complete",
+                "error": {"scope": "stream", "code": 8} if stream == 1 else None,
+            } for stream in (1, 3)],
+        }
+        witness = {
+            "peer_eof": True, "requests": 2, "received": {"1": 1024},
+            "request_ended": {"1": False, "3": True}, "window_updates": {},
+            "resets": {"1": 8}, "server_resets": {}, "early_response_barrier": False,
+        }
+        validate("early-response", report, witness, early_policy="application-cancel")
+        with self.assertRaises(AssertionError):
+            validate("early-response", report, witness)
+        report["streams"][0]["outcome"] = "connection_failed"
+        with self.assertRaisesRegex(AssertionError, "terminal outcome"):
+            validate("early-response", report, witness, early_policy="application-cancel")
+
     def test_bounded_process_output_and_timeout(self):
         with self.assertRaisesRegex(AssertionError, "output exceeds"):
             run_command(

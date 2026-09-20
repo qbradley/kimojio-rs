@@ -197,8 +197,9 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 	if string(preface) != http2.ClientPreface {
 		return nil, errors.New("invalid client preface")
 	}
+	early := scenario == "early-response" || scenario == "early-response-app-cancel"
 	window := uint32(65535)
-	if scenario == "early-response" {
+	if early {
 		window = 1024
 	}
 	if err := p.framer.WriteSettings(http2.Setting{ID: http2.SettingInitialWindowSize, Val: window}); err != nil {
@@ -245,7 +246,7 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 					return nil, errors.New("invalid classic CONNECT pseudoheaders")
 				}
 				err = p.headers(stream, []hpack.HeaderField{{Name: ":status", Value: "200"}}, false, false)
-			} else if scenario == "early-response" && stream == 1 {
+			} else if early && stream == 1 {
 				// Wait for upload DATA so the response races a blocked producer.
 			} else if scenario == "reset-discard" {
 				if stream == 1 {
@@ -329,13 +330,13 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 			if scenario == "connect" {
 				err = p.body(frame.StreamID, frame.Data(), frame.StreamEnded())
 				sent[frame.StreamID] = frame.StreamEnded()
-			} else if scenario == "early-response" && !sent[frame.StreamID] {
+			} else if early && !sent[frame.StreamID] {
 				if frame.StreamID != 1 || received[1] > 1024 {
 					return nil, errors.New("upload exceeded withheld credit")
 				}
 				err = p.headers(frame.StreamID, fields("413", 0), true, false)
 				sent[frame.StreamID] = true
-				if err == nil {
+				if err == nil && scenario == "early-response" {
 					err = p.framer.WritePing(false, [8]byte{'e', 'a', 'r', 'l', 'y', 'e', 'n', 'd'})
 				}
 			}
@@ -391,12 +392,13 @@ type request struct {
 }
 
 type spec struct {
-	Host         string    `json:"host"`
-	Port         int       `json:"port"`
-	Requests     []request `json:"requests"`
-	RequestCount int       `json:"request_count"`
-	WireScenario string    `json:"wire_scenario"`
-	Actions      []struct {
+	Host                string    `json:"host"`
+	Port                int       `json:"port"`
+	Requests            []request `json:"requests"`
+	RequestCount        int       `json:"request_count"`
+	WireScenario        string    `json:"wire_scenario"`
+	earlyResponsePolicy string
+	Actions             []struct {
 		Action     string `json:"action"`
 		StreamID   uint32 `json:"stream_id"`
 		AfterBytes int    `json:"after_bytes"`
@@ -527,6 +529,14 @@ func rawClient(input spec) (map[string]any, error) {
 			if frame.StreamEnded() {
 				r.Ended = true
 				markDone(frame.StreamID)
+				if input.earlyResponsePolicy == "application-cancel" &&
+					r.Status != nil && *r.Status == 413 && !requestEnded[frame.StreamID] {
+					if err := p.framer.WriteRSTStream(frame.StreamID, http2.ErrCodeCancel); err != nil {
+						return nil, err
+					}
+					r.Error = map[string]any{"scope": "stream", "code": uint32(http2.ErrCodeCancel)}
+					uploaded[frame.StreamID] = true
+				}
 			}
 		case *http2.DataFrame:
 			r := results[frame.StreamID]
@@ -705,6 +715,7 @@ func run() error {
 	report := flag.String("report", "", "bounded server report file")
 	clientFile := flag.String("client", "", "client request file")
 	resultFile := flag.String("result", "", "client result file")
+	earlyPolicy := flag.String("early-response-policy", "peer-reset", "explicit reference application policy")
 	flag.Parse()
 	if *clientFile != "" {
 		file, err := os.Open(*clientFile)
@@ -723,6 +734,10 @@ func run() error {
 		if err := json.Unmarshal(raw, &input); err != nil {
 			return err
 		}
+		if *earlyPolicy != "peer-reset" && *earlyPolicy != "application-cancel" {
+			return errors.New("unknown early-response policy")
+		}
+		input.earlyResponsePolicy = *earlyPolicy
 		if len(input.Requests) < 1 || len(input.Requests) > 8 || input.RequestCount != len(input.Requests) {
 			return errors.New("invalid reference request count")
 		}
@@ -741,7 +756,8 @@ func run() error {
 		"bad-continuation": true, "push-before-ack": true, "push-after-ack": true,
 		"reset-isolation": true, "content-length": true, "early-response": true,
 		"reset-discard": true, "graceful-close": true,
-		"no-body-data": true,
+		"no-body-data":              true,
+		"early-response-app-cancel": true,
 	}
 	if !allowed[*scenario] || *report == "" {
 		return errors.New("server requires a known scenario and report file")
