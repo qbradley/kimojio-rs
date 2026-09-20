@@ -279,7 +279,7 @@ class SocketTests(unittest.TestCase):
             broken["streams"][0]["outcome"] = outcome
             with self.assertRaisesRegex(AssertionError, "terminal outcome"):
                 validate_results(case, broken)
-        for outcome in ("aborted", "io_failed", "resource_exhausted", "protocol", None):
+        for outcome in ("io_failed", "resource_exhausted", "protocol", "aborted", None):
             broken = json.loads(json.dumps(report))
             broken["connection"]["outcome"] = outcome
             with self.assertRaisesRegex(AssertionError, "connection terminal outcome"):
@@ -360,6 +360,10 @@ class SocketTests(unittest.TestCase):
         }
         validate("early-response", report, witness)
         broken = json.loads(json.dumps(report))
+        broken["connection"]["outcome"] = "aborted"
+        with self.assertRaisesRegex(AssertionError, "connection terminal outcome"):
+            validate("early-response", broken, witness)
+        broken = json.loads(json.dumps(report))
         broken["streams"][0]["outcome"] = "connection_failed"
         with self.assertRaisesRegex(AssertionError, "terminal outcome"):
             validate("early-response", broken, witness)
@@ -373,6 +377,77 @@ class SocketTests(unittest.TestCase):
         witness["server_resets"] = {}
         with self.assertRaisesRegex(AssertionError, "RST_STREAM\\(NO_ERROR\\)"):
             validate("early-response", report, witness)
+
+    def test_declared_application_policy_is_not_a_loose_reset_exception(self):
+        from protocol_suite import validate
+
+        report = {
+            "schema": 1, "connection": {"closed": True, "error": None, "outcome": "graceful"},
+            "streams": [{
+                "stream_id": stream, "status": 413 if stream == 1 else 200,
+                "content_length": 0 if stream == 1 else 37,
+                "bytes": 0 if stream == 1 else 37,
+                "sha256": digest_for(stream, 0 if stream == 1 else 37),
+                "trailers": [], "informational": [], "ended": True,
+                "outcome": "reset" if stream == 1 else "complete",
+                "error": {"scope": "stream", "code": 8} if stream == 1 else None,
+            } for stream in (1, 3)],
+        }
+        witness = {
+            "peer_eof": True, "requests": 2, "received": {"1": 1024},
+            "request_ended": {"1": False, "3": True}, "window_updates": {},
+            "resets": {"1": 8}, "server_resets": {}, "early_response_barrier": False,
+        }
+        validate("early-response", report, witness, early_policy="application-cancel")
+        with self.assertRaises(AssertionError):
+            validate("early-response", report, witness)
+        report["streams"][0]["outcome"] = "connection_failed"
+        with self.assertRaisesRegex(AssertionError, "terminal outcome"):
+            validate("early-response", report, witness, early_policy="application-cancel")
+
+    def test_application_cancellation_requires_a_selected_action(self):
+        from protocol_suite import request
+
+        address = ("127.0.0.1", 8080)
+        self.assertEqual(request("early-response", address)["actions"], [])
+        self.assertEqual(
+            request("early-response", address, early_policy="application-cancel")["actions"],
+            [{"action": "cancel_upload_after_response", "stream_id": 1}],
+        )
+        self.assertEqual(request("connect", address, early_policy="application-cancel")["actions"], [])
+
+    def test_discard_refunds_must_arrive_before_the_sibling_ends(self):
+        from protocol_suite import validate
+
+        report = {
+            "schema": 1, "connection": {"closed": True, "error": None, "outcome": "graceful"},
+            "streams": [{
+                "stream_id": stream, "status": 200,
+                "content_length": 65535 if stream == 1 else 37,
+                "bytes": 1024 if stream == 1 else 37,
+                "sha256": digest_for(stream, 1024 if stream == 1 else 37),
+                "trailers": [], "informational": [], "ended": stream != 1,
+                "outcome": "reset" if stream == 1 else "complete",
+                "error": {"scope": "stream", "code": 8} if stream == 1 else None,
+            } for stream in (1, 3)],
+        }
+        witness = {
+            "peer_eof": True, "requests": 2, "goaway": 0, "resets": {"1": 8},
+            "window_updates": {"0": 33792}, "stream_updates_at_reset": {"1": 0},
+            "reset_discard_refund_barrier": True,
+        }
+        validate("reset-discard", report, witness)
+        witness["reset_discard_refund_barrier"] = False
+        with self.assertRaisesRegex(AssertionError, "refund barrier"):
+            validate("reset-discard", report, witness)
+        witness["reset_discard_refund_barrier"] = True
+        witness["window_updates"]["0"] = 32768
+        with self.assertRaisesRegex(AssertionError, "stranded connection credit"):
+            validate("reset-discard", report, witness)
+        witness["window_updates"]["0"] = 33792
+        witness["window_updates"]["1"] = 1
+        with self.assertRaisesRegex(AssertionError, "reopened stream credit"):
+            validate("reset-discard", report, witness)
 
     def test_bounded_process_output_and_timeout(self):
         with self.assertRaisesRegex(AssertionError, "output exceeds"):

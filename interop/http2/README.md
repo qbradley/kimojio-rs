@@ -7,6 +7,7 @@ The Python server omits its library's default ENABLE_PUSH setting.
 RFC 9113 prohibits servers from sending that setting, including a zero value.
 Each peer advertises its requested stream window in its first SETTINGS frame.
 It does not shrink that window during the handshake while DATA can be in flight.
+This is a stable test setup, not a Python-h2 or production handshake requirement.
 
 **Peer self-tests are not evidence that the Rust engine passes.**
 Every report identifies its command-adapter run or its peer-only run.
@@ -112,6 +113,20 @@ This case requires the observed server reset, stream outcome `reset`, actual wir
 Its sibling must retire as `complete`, and the connection must close normally.
 Global `connection_failed` outcomes cannot satisfy this stream-local termination.
 
+For a fixture with a declared application-cancellation policy, `--early-response-policy application-cancel` selects a separate case contract.
+The request explicitly selects stream 1 with the `cancel_upload_after_response` action.
+The fixture must not cancel an upload based on status 413 alone.
+The peer then sends neither a reset nor a barrier.
+The oracle requires actual client CANCEL8, preserved response END_STREAM, `reset` retirement, successful sibling completion, and graceful connection closure.
+The selected policy appears in the report.
+
+The default `peer-reset` oracle still requires the server barrier and NO_ERROR reset, with no client reset.
+Neither mode accepts `connection_failed` or ignores the actual wire reset code.
+The no-action duplex probes require full uploads for both status 200 and status 413.
+
+The reset-discard case keeps the sibling response open until the peer observes at least 33,792 bytes of connection refunds.
+The connection must refund both the initial DATA and the late discarded DATA before graceful close.
+
 ## Implemented flow and socket checks
 
 The complete flow command runs 48 cases across these roles:
@@ -130,6 +145,10 @@ Nine workloads exercise receive credit in each role:
 | Native defaults, without overrides | 16 MiB + 17 bytes | 600 × 32,768 bytes | 600 × 32,768 bytes |
 
 The sender records actual SETTINGS and connection credit before its first DATA.
+The fixture upload gate avoids the startup-window-reduction race permitted by RFC 9113 section 6.9.3.
+An ungated client can legally send DATA under its current window before it receives server SETTINGS.
+A later reduction can permit a stream FLOW_CONTROL_ERROR reset without a connection error.
+The gate does not prescribe raw-frame parsing in production wrappers.
 The single body must reach twice the larger actual balance plus 17 bytes.
 Each aggregate body must be smaller than its actual stream window.
 The aggregate total must exceed twice the actual connection window.

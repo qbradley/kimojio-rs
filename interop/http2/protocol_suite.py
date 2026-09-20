@@ -18,7 +18,8 @@ SCENARIOS = (
 SERVER_SCENARIOS = ("connect", "request-continuation", "request-hpack-reuse", "request-trailers")
 
 
-def request(scenario, address):
+def request(scenario, address, *, early_policy="peer-reset"):
+    require(early_policy in ("peer-reset", "application-cancel"), "unknown early-response policy")
     two = scenario in ("reset-isolation", "content-length", "early-response", "reset-discard", "no-body-data")
     requests = [{
         "method": "CONNECT" if scenario == "connect" else "POST" if scenario == "early-response" else "GET",
@@ -32,6 +33,8 @@ def request(scenario, address):
         actions = [{"action": "reset", "stream_id": 1, "after_bytes": 1024, "code": 8}]
     if scenario == "graceful-close":
         actions = [{"action": "graceful_close", "after_streams": 1}]
+    if scenario == "early-response" and early_policy == "application-cancel":
+        actions = [{"action": "cancel_upload_after_response", "stream_id": 1}]
     return {
         "schema": 1, "host": address[0], "port": address[1],
         "timeout_ms": 8000,
@@ -41,7 +44,8 @@ def request(scenario, address):
     }
 
 
-def validate(scenario, report, witness):
+def validate(scenario, report, witness, *, early_policy="peer-reset"):
+    require(early_policy in ("peer-reset", "application-cancel"), "unknown early-response policy")
     require(report.get("schema") == 1, "result schema mismatch")
     require(report.get("connection", {}).get("closed") is True, "missing explicit client close")
     require(witness.get("peer_eof") is True, "server did not observe socket close")
@@ -77,7 +81,7 @@ def validate(scenario, report, witness):
             status, length, ended, error = 204, 0, False, {"scope": "stream", "code": 1}
         elif stream == 1 and scenario == "early-response":
             status, length = 413, 0
-            error = {"scope": "stream", "code": 0}
+            error = {"scope": "stream", "code": 8 if early_policy == "application-cancel" else 0}
         if error is not None:
             outcome = "reset"
         require(result.get("status") == status, f"stream {stream}: wrong status")
@@ -108,13 +112,19 @@ def validate(scenario, report, witness):
         require(witness.get("request_ended", {}).get("3") is True, "sibling request did not end")
         require(witness["received"].get("3", 0) == 0, "bodyless sibling sent request DATA")
         require(not witness["window_updates"].get("1"), "unexpected response receive-credit update")
-        require(witness.get("early_response_barrier") is True, "response END_STREAM barrier was not acknowledged")
-        require(witness.get("server_resets") == {"1": 0}, "missing server RST_STREAM(NO_ERROR)")
-        require(not witness["resets"], "client reset before or in response to server NO_ERROR reset")
+        if early_policy == "peer-reset":
+            require(witness.get("early_response_barrier") is True, "response END_STREAM barrier was not acknowledged")
+            require(witness.get("server_resets") == {"1": 0}, "missing server RST_STREAM(NO_ERROR)")
+            require(not witness["resets"], "client reset before or in response to server NO_ERROR reset")
+        else:
+            require(witness.get("early_response_barrier") is False, "application-cancel peer unexpectedly sent a barrier")
+            require(witness.get("server_resets") == {}, "application-cancel peer unexpectedly reset the upload")
+            require(witness["resets"] == {"1": 8}, "missing explicit application CANCEL")
         require(report["connection"]["outcome"] == "graceful", "early response did not close gracefully")
     if scenario == "reset-discard":
         require(witness["resets"].get("1") == 8, "missing client CANCEL")
-        require(witness["window_updates"].get("0", 0) >= 32768, "discarded DATA stranded connection credit")
+        require(witness.get("reset_discard_refund_barrier") is True, "missing open-connection refund barrier")
+        require(witness["window_updates"].get("0", 0) >= 1024 + 32768, "discarded DATA stranded connection credit")
         require(
             witness["window_updates"].get("1", 0) == witness["stream_updates_at_reset"].get("1", 0),
             "discarded DATA reopened stream credit",
@@ -124,14 +134,18 @@ def validate(scenario, report, witness):
         require(witness["goaway_count"] >= 1 and witness["goaway"] == 0, "missing graceful GOAWAY before actual close")
 
 
-def run_case(binary, client_adapter, scenario, directory):
+def run_case(binary, client_adapter, scenario, directory, *, early_policy="peer-reset"):
     directory.mkdir(parents=True)
     witness_file = directory / "peer.json"
+    peer_scenario = (
+        "early-response-app-cancel"
+        if scenario == "early-response" and early_policy == "application-cancel" else scenario
+    )
     with PeerProcess([
-        str(binary), "--scenario", scenario, "--report", str(witness_file),
+        str(binary), "--scenario", peer_scenario, "--report", str(witness_file),
     ], cwd=ROOT) as server:
         request_file, result_file = directory / "request.json", directory / "result.json"
-        write_json(request_file, request(scenario, server.address))
+        write_json(request_file, request(scenario, server.address, early_policy=early_policy))
         completed = run_command(command(client_adapter, request_file, result_file), cwd=ROOT, timeout=12)
         require(completed.returncode == 0, f"client failed: {completed.stderr!r}")
         code = server.process.wait(timeout=3)
@@ -141,8 +155,11 @@ def run_case(binary, client_adapter, scenario, directory):
         require(code == 0, f"Go peer failed: {server.diagnostics()}")
         require(server.output_bytes <= 128 * 1024, "server output exceeds bound")
         result, witness = read_json(result_file), read_json(witness_file)
-        validate(scenario, result, witness)
-    return {"name": scenario, "passed": True}
+        validate(scenario, result, witness, early_policy=early_policy)
+    return {
+        "name": scenario, "passed": True,
+        **({"early_response_policy": early_policy} if scenario == "early-response" else {}),
+    }
 
 
 def server_case(binary, server_adapter, scenario, directory):
@@ -187,6 +204,7 @@ def main():
     parser.add_argument("--client-adapter", type=Path)
     parser.add_argument("--server-adapter", type=Path)
     parser.add_argument("--selftest", action="store_true")
+    parser.add_argument("--early-response-policy", choices=("peer-reset", "application-cancel"), default="peer-reset")
     parser.add_argument("--case", action="append", choices=sorted(set(SCENARIOS + SERVER_SCENARIOS)))
     parser.add_argument("--output", type=Path, default=ROOT / "target" / "http2-protocol" / uuid.uuid4().hex)
     args = parser.parse_args()
@@ -196,7 +214,9 @@ def main():
     require("target" in directory.parts, "reports must reside under target")
     if args.selftest:
         require(not args.client_adapter and not args.server_adapter, "selftest cannot use native adapter")
-        client_adapter = {"command": [str(binary), "--client", "{request_file}", "--result", "{result_file}"]}
+        client_adapter = {"command": [
+            str(binary), "--client", "{request_file}", "--result", "{result_file}",
+        ]}
         server_adapter = None
     else:
         require(args.client_adapter or args.server_adapter, "at least one adapter is required")
@@ -205,13 +225,17 @@ def main():
     directory.mkdir(parents=True)
     report = {
         "schema": 1, "evidence": "Go-Framer-peer-selftest-NOT-core" if args.selftest else "adapter",
+        "early_response_policy": args.early_response_policy,
         "cases": [], "failures": [],
     }
     client_cases = [name for name in args.case if name in SCENARIOS] if args.case else SCENARIOS
     server_cases = [name for name in args.case if name in SERVER_SCENARIOS] if args.case else SERVER_SCENARIOS
     for scenario in client_cases if client_adapter else ():
         try:
-            result = run_case(binary, client_adapter, scenario, directory / "client" / scenario)
+            result = run_case(
+                binary, client_adapter, scenario, directory / "client" / scenario,
+                early_policy=args.early_response_policy,
+            )
             result["role"] = "client"
             report["cases"].append(result)
             print(f"PASS client {scenario}", flush=True)

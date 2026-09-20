@@ -35,9 +35,11 @@ The request file contains:
 ```
 
 The fixture uses one connection for all requests.
-For upload scenarios, the fixture waits for the peer's initial SETTINGS before it starts body DATA.
+For these strict-success upload scenarios, the fixture waits for the peer's initial SETTINGS before it starts body DATA.
 It must not wait for acknowledgment of its own SETTINGS before it sends request headers.
 That distinction permits the legal pre-ACK push scenario.
+This upload gate is a test-scenario choice, not a production handshake requirement or a general Python-h2 requirement.
+It is not a recipe for raw-frame parsing in production wrappers.
 Request array order determines stream IDs: 1, 3, 5, and subsequent odd IDs.
 `concurrency` limits active requests, not lifetime requests.
 Upload bytes repeat the byte `stream_id % 251`.
@@ -47,6 +49,19 @@ The fixture must not retain the complete body.
 Values larger than 65,535 require an initial connection WINDOW_UPDATE.
 An absent key selects the fixture default without an override.
 Default cases use an empty `config` object and measure both actual balances.
+
+### Startup window changes
+
+A client can send request DATA before server SETTINGS, within its current credit.
+When an initial-window reduction affects DATA already in flight, RFC 9113 section 6.9.3 permits a stream FLOW_CONTROL_ERROR reset.
+That stream reset does not, by itself, require a connection error or GOAWAY.
+The sender must retain any negative window balance and remain blocked until new credit makes the balance positive.
+
+The normal flow cases avoid that startup race so they can require complete, successful streams.
+They still measure actual SETTINGS and connection credit.
+No ungated-startup case is currently part of these suites.
+Such a case must distinguish a permitted wire RST_STREAM(3) from successful, credit-compliant delivery.
+It must not label that permitted stream reset as a new protocol defect.
 
 The result file contains:
 
@@ -91,7 +106,11 @@ It remains null until retirement.
 An unexpected producer failure must remain a non-complete outcome, even after a successful response.
 
 `connection.outcome` records the terminal connection result.
-Its values are `graceful`, `aborted`, `peer_closed`, `io_failed`, `protocol`, and `resource_exhausted`.
+Its values are `graceful`, `peer_closed`, `io_failed`, `protocol`, `resource_exhausted`, and `aborted`.
+Explicit application abort reports `aborted`, without an invented wire error code.
+Native timer failures report `io_failed`.
+The suite does not yet execute an explicit-abort scenario.
+
 Normal cases require every stream outcome to be `complete`.
 They also require a `graceful` or `peer_closed` connection outcome and an actual socket close.
 Missing or null terminal outcomes cannot qualify a completed case.
@@ -189,6 +208,7 @@ The native fixture needs each action for the corresponding case.
 * `{"action":"pause","stream_id":1,"until_stream_ended":3}` retains stream 1 body fragments until stream 3 ends.
 * `{"action":"reset","stream_id":1,"after_bytes":1024,"code":8}` cancels stream 1 after that many response bytes.
 * `{"action":"graceful_close","after_streams":2}` starts graceful shutdown after two completed streams.
+* `{"action":"cancel_upload_after_response","stream_id":1}` cancels that unfinished upload after normal receive END_STREAM.
 
 The harness must name every executed case in its report.
 Unsupported actions fail rather than produce a skip.
@@ -198,6 +218,8 @@ The reset case reports status 200, 1,024 delivered bytes, no END_STREAM, and a s
 The peer sends late DATA after reset to exercise connection-credit refunds.
 These late frames remain within the credit that existed before reset.
 The test prohibits stream credit for the discarded DATA.
+The peer withholds the sibling's END_STREAM until connection refunds cover the initial 1,024 bytes and all 32,768 discarded bytes.
+This barrier prevents graceful close from discarding pending refunds before the test observes them.
 
 The graceful-close case requires GOAWAY(NO_ERROR) on the wire before actual socket close.
 The content-length error case sends 37 bytes, then an empty END_STREAM after a PING barrier.
@@ -230,3 +252,23 @@ It can send status 200 or 413 while it continues to consume the upload and retur
 RFC 9113 section 8.1 permits a server to send RST_STREAM(NO_ERROR) after a complete response.
 The client must not discard that completed response.
 Explicit application cancellation is another valid policy, but this case does not require an additional fixture action.
+
+### Declared application-cancellation variant
+
+`protocol_suite.py --early-response-policy application-cancel` selects a distinct fixture-application contract.
+The request includes `{"action":"cancel_upload_after_response","stream_id":1}`.
+After normal receive END_STREAM, the fixture cancels only the selected stream's unfinished upload.
+The action does not depend on response status.
+Without the action, neither status 200 nor status 413 authorizes cancellation.
+
+The independent server withholds credit and keeps its socket open.
+It does not send the PING barrier or a reset in this variant.
+The client must send exactly RST_STREAM(CANCEL) for stream 1 after it accepts the completed response.
+That stream reports `ended: true`, `outcome: "reset"`, and actual wire code 8.
+Its sibling must complete, and the connection must close gracefully without error.
+The report records the selected policy.
+
+The default remains `peer-reset`, with strict code-0 and barrier assertions.
+The oracle never accepts either reset code indiscriminately or excuses `connection_failed`.
+This application policy is not inferred by the pure protocol engine.
+The no-action status-200 and status-413 full-upload probes remain mandatory for either policy.

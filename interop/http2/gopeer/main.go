@@ -197,8 +197,11 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 	if string(preface) != http2.ClientPreface {
 		return nil, errors.New("invalid client preface")
 	}
+	early := scenario == "early-response" || scenario == "early-response-app-cancel"
+	resetDiscardPendingEnd := false
+	resetDiscardRefundBarrier := false
 	window := uint32(65535)
-	if scenario == "early-response" {
+	if early {
 		window = 1024
 	}
 	if err := p.framer.WriteSettings(http2.Setting{ID: http2.SettingInitialWindowSize, Val: window}); err != nil {
@@ -245,7 +248,7 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 					return nil, errors.New("invalid classic CONNECT pseudoheaders")
 				}
 				err = p.headers(stream, []hpack.HeaderField{{Name: ":status", Value: "200"}}, false, false)
-			} else if scenario == "early-response" && stream == 1 {
+			} else if early && stream == 1 {
 				// Wait for upload DATA so the response races a blocked producer.
 			} else if scenario == "reset-discard" {
 				if stream == 1 {
@@ -329,13 +332,13 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 			if scenario == "connect" {
 				err = p.body(frame.StreamID, frame.Data(), frame.StreamEnded())
 				sent[frame.StreamID] = frame.StreamEnded()
-			} else if scenario == "early-response" && !sent[frame.StreamID] {
+			} else if early && !sent[frame.StreamID] {
 				if frame.StreamID != 1 || received[1] > 1024 {
 					return nil, errors.New("upload exceeded withheld credit")
 				}
 				err = p.headers(frame.StreamID, fields("413", 0), true, false)
 				sent[frame.StreamID] = true
-				if err == nil {
+				if err == nil && scenario == "early-response" {
 					err = p.framer.WritePing(false, [8]byte{'e', 'a', 'r', 'l', 'y', 'e', 'n', 'd'})
 				}
 			}
@@ -363,13 +366,23 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 					return nil, err
 				}
 				if err = p.headers(3, fields("200", 37), false, false); err == nil {
-					err = p.body(3, bytes.Repeat([]byte{3}, 37), true)
+					err = p.body(3, bytes.Repeat([]byte{3}, 37), false)
 				}
-				sent[3] = true
+				resetDiscardPendingEnd = true
 			}
 		}
 		if err != nil {
 			return nil, err
+		}
+		// Keep a response open until discarded DATA credit actually returns.
+		// Otherwise graceful close can legitimately discard pending refunds.
+		if resetDiscardPendingEnd && p.updates[0] >= 1024+32768 {
+			if err := p.body(3, nil, true); err != nil {
+				return nil, err
+			}
+			resetDiscardPendingEnd = false
+			resetDiscardRefundBarrier = true
+			sent[3] = true
 		}
 	}
 	return map[string]any{
@@ -379,7 +392,8 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 		"push_disabled": p.pushDisabled, "goaway_count": p.goaways,
 		"stream_updates_at_reset": resetUpdateBaseline,
 		"server_resets":           serverResets, "early_response_barrier": earlyResponseBarrier,
-		"request_ended": requestEnded,
+		"request_ended":                requestEnded,
+		"reset_discard_refund_barrier": resetDiscardRefundBarrier,
 	}, nil
 }
 
@@ -425,6 +439,11 @@ func rawClient(input spec) (map[string]any, error) {
 	for _, action := range input.Actions {
 		switch action.Action {
 		case "reset", "graceful_close":
+		case "cancel_upload_after_response":
+			if action.StreamID == 0 || action.StreamID%2 == 0 ||
+				uint64(action.StreamID/2) >= uint64(len(input.Requests)) {
+				return nil, errors.New("invalid cancellation stream")
+			}
 		default:
 			return nil, fmt.Errorf("unsupported Go protocol action %q", action.Action)
 		}
@@ -617,6 +636,17 @@ func rawClient(input spec) (map[string]any, error) {
 		if connectionError != nil {
 			break
 		}
+		for _, action := range input.Actions {
+			r := results[action.StreamID]
+			if action.Action == "cancel_upload_after_response" && r != nil &&
+				r.Ended && r.Error == nil && !requestEnded[action.StreamID] {
+				if err := p.framer.WriteRSTStream(action.StreamID, http2.ErrCodeCancel); err != nil {
+					return nil, err
+				}
+				r.Error = map[string]any{"scope": "stream", "code": uint32(http2.ErrCodeCancel)}
+				uploaded[action.StreamID] = true
+			}
+		}
 		for {
 			progress := false
 			for index, req := range input.Requests {
@@ -741,7 +771,8 @@ func run() error {
 		"bad-continuation": true, "push-before-ack": true, "push-after-ack": true,
 		"reset-isolation": true, "content-length": true, "early-response": true,
 		"reset-discard": true, "graceful-close": true,
-		"no-body-data": true,
+		"no-body-data":              true,
+		"early-response-app-cancel": true,
 	}
 	if !allowed[*scenario] || *report == "" {
 		return errors.New("server requires a known scenario and report file")
