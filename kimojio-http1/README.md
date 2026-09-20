@@ -130,9 +130,10 @@ A transport future that waits forever outside native cancellation cannot promise
 Abrupt driver destruction uses native resource destructors, not the normal async shutdown sequence.
 Keeping the driver alive through shutdown is part of the API contract.
 
-The current native runtime can panic when a cancellation scope wakes a wrapped `FuturesUnordered` waker.
-The server example uses bounded native tasks instead of that combinator.
-This runtime limitation is separate from the HTTP machine.
+Cancellation scopes support wrapped `FuturesUnordered` wakers.
+Scope cancellation and cleanup release the runtime state borrow before they invoke these wakers.
+The server example still uses bounded native tasks.
+See the [runtime cancellation record](../docs/http1-wrapper-lab/runtime-cancellation.md) for regression evidence and remaining limits.
 
 ## Bounds, scheduling, and costs
 

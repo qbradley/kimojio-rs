@@ -403,6 +403,54 @@ mod test {
     use std::rc::Rc;
 
     #[crate::test]
+    async fn io_scope_drop_settles_borrowed_storage_with_wrapped_waker() {
+        use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
+
+        let (fd, peer) = crate::pipe::bipipe();
+        let event = AsyncEvent::new();
+        let mut buffer = [0; 1];
+        let mut completion = None;
+        let mut pending = FuturesUnordered::new();
+        let mut scope = Box::pin(operations::io_scope(async || {
+            let read = operations::read(&fd, &mut buffer);
+            completion = read.handle.clone();
+            pending.push(read.map(|result| result.map(|_| ())).boxed_local());
+            pending.push(
+                event
+                    .wait()
+                    .map(|result| result.map_err(|_| Errno::CANCELED))
+                    .boxed_local(),
+            );
+            assert!(futures::poll!(pending.next()).is_pending());
+            futures::future::pending::<()>().await;
+        }));
+        assert!(futures::poll!(scope.as_mut()).is_pending());
+        drop(scope);
+
+        // The read future still owns its borrow. Scope cleanup must already
+        // have received its CQE before returning, not just submitted a cancel.
+        let completion = completion.unwrap();
+        completion.state.use_mut(|state| {
+            assert!(matches!(
+                state,
+                crate::CompletionState::Completed {
+                    result: Err(Errno::CANCELED),
+                    ..
+                }
+            ));
+        });
+        assert_eq!(pending.next().await, Some(Err(Errno::CANCELED)));
+        assert_eq!(pending.next().await, Some(Err(Errno::CANCELED)));
+        assert_eq!(pending.next().await, None);
+        drop(pending);
+        buffer.fill(b'x');
+
+        assert_eq!(operations::write(&peer, b"s").await, Ok(1));
+        assert_eq!(operations::read(&fd, &mut buffer).await, Ok(1));
+        assert_eq!(buffer, [b's']);
+    }
+
+    #[crate::test]
     async fn select_test() {
         use futures::select;
         let mut f1 = crate::operations::yield_io();

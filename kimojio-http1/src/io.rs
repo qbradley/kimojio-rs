@@ -319,6 +319,25 @@ mod tests {
     }
 
     #[kimojio::test]
+    async fn wrapped_wakers_settle_positive_write_completions() {
+        use futures::{StreamExt, stream::FuturesUnordered};
+
+        let mut connections = FuturesUnordered::new();
+        for case in [
+            CompletionCase::NextSlice,
+            CompletionCase::PartialWrite,
+            CompletionCase::Complete,
+        ] {
+            connections.push(late_write_completion(case));
+        }
+        let mut completed = 0;
+        while connections.next().await.is_some() {
+            completed += 1;
+        }
+        assert_eq!(completed, 3);
+    }
+
+    #[kimojio::test]
     async fn cancellation_covers_write_all_continuations_after_positive_progress() {
         late_write_completion(CompletionCase::NextSlice).await;
     }
