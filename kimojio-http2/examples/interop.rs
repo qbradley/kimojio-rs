@@ -1,4 +1,4 @@
-//! Client-only independent-peer fixture for the native async HTTP/2 wrapper.
+//! Independent-peer client and server fixture for the native async HTTP/2 wrapper.
 
 mod interop_support;
 

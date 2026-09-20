@@ -1,14 +1,15 @@
 mod schema;
+mod server;
 
 use futures::{
     FutureExt, StreamExt,
     future::{LocalBoxFuture, poll_fn},
     stream::FuturesUnordered,
 };
-use kimojio::{operations, socket_helpers};
+use kimojio::{ReceiverOneshot, SenderOneshot, oneshot, operations, socket_helpers};
 use kimojio_http2::{
-    Client, Error, IncomingBody, IncomingFrame, OutgoingBody, OutgoingFrame, Shutdown,
-    connect_native,
+    Client, Error, IncomingBody, IncomingFrame, OutgoingBody, OutgoingFrame, ReceiveEnd,
+    RequestObserver, Shutdown, StreamId, StreamReport as RetirementReport, connect_native,
     http::{HeaderMap, Request, Response, header},
 };
 use schema::*;
@@ -27,6 +28,54 @@ use std::{
 
 const CHUNK: usize = 16 * 1024;
 type ResponseFuture = LocalBoxFuture<'static, Result<Response<IncomingBody>, Error>>;
+
+struct Observer {
+    context: Context,
+    index: usize,
+    admitted: Rc<Cell<Option<StreamId>>>,
+    retired: Option<SenderOneshot<RetirementReport>>,
+}
+
+impl RequestObserver for Observer {
+    fn admitted(&mut self, id: StreamId) {
+        self.admitted.set(Some(id));
+        {
+            let mut report = self.context.report.borrow_mut();
+            report.streams[self.index].admitted = true;
+            report.streams[self.index].stream_id = id.get();
+        }
+        let expected = self.index as u32 * 2 + 1;
+        if id.get() != expected {
+            self.context.fail(format!(
+                "request submission order changed: expected stream {expected}, got {}",
+                id.get()
+            ));
+            self.context.shutdown.abort();
+        }
+    }
+    fn informational(&mut self, head: Response<()>) {
+        let mut report = self.context.report.borrow_mut();
+        let stream = &mut report.streams[self.index];
+        if stream.informational.len() == 64 {
+            drop(report);
+            self.context
+                .fail("informational responses exceed fixture bound".into());
+            self.context.shutdown.abort();
+        } else {
+            stream.informational.push(head.status().as_u16());
+        }
+    }
+    fn receive_end(&mut self, end: ReceiveEnd) {
+        self.context.report.borrow_mut().streams[self.index].receive(Some(end.outcome));
+        self.context.progress.borrow_mut().finish(end.stream.get());
+    }
+    fn retired(&mut self, report: &RetirementReport) {
+        self.context.report.borrow_mut().streams[self.index].retirement(report);
+        if let Some(sender) = self.retired.take() {
+            let _ = sender.send(report.clone());
+        }
+    }
+}
 
 #[derive(Default)]
 struct Progress {
@@ -115,21 +164,17 @@ impl Drop for Held {
 
 pub fn main() -> Result<(), String> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.first().is_some_and(|arg| arg == "server") {
-        return Err("unsupported: this checkpoint implements wrapper client mode only".into());
+    if args.len() == 2 && args[0] == "server" {
+        let input: ServerInput = read_input(&args[1])?;
+        input.validate()?;
+        return kimojio::run(0, server::run(input))
+            .ok_or("native runtime stopped without a server result")?
+            .map_err(|_| "native runtime panicked")?;
     }
     if args.len() != 3 || args[0] != "client" {
-        return Err("usage: interop client REQUEST_JSON RESULT_JSON".into());
+        return Err("usage: interop client REQUEST_JSON RESULT_JSON | server REQUEST_JSON".into());
     }
-    let file = File::open(&args[1]).map_err(|e| e.to_string())?;
-    let mut bytes = Vec::new();
-    file.take(MAX_INPUT + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_INPUT {
-        return Err("request file exceeds fixture bound".into());
-    }
-    let input: Input = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let input: Input = read_input(&args[1])?;
     input.validate()?;
     let result = kimojio::run(0, execute(input))
         .ok_or("native runtime stopped without a fixture result")?
@@ -139,6 +184,18 @@ pub fn main() -> Result<(), String> {
         Some(error) => Err(error),
         None => Ok(()),
     }
+}
+
+fn read_input<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, String> {
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    file.take(MAX_INPUT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_INPUT {
+        return Err("request file exceeds fixture bound".into());
+    }
+    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
 }
 
 async fn execute(input: Input) -> Result<(Vec<u8>, Option<String>), String> {
@@ -199,6 +256,7 @@ async fn execute(input: Input) -> Result<(Vec<u8>, Option<String>), String> {
             ));
         }
         let mut report = report.borrow_mut();
+        report.streams.retain(|stream| stream.admitted);
         for stream in &mut report.streams {
             stream.finish();
         }
@@ -305,13 +363,23 @@ async fn requests(client: Client, context: Context) {
                 .streams
                 .push(StreamReport::new(next as u32 * 2 + 1));
             let send_client = client.clone();
-            let (first, future) =
-                prime(Box::pin(async move { send_client.send(request).await })).await;
+            let admitted = Rc::new(Cell::new(None));
+            let (retired, retirement) = oneshot();
+            let observer = Observer {
+                context: context.clone(),
+                index: next,
+                admitted: admitted.clone(),
+                retired: Some(retired),
+            };
+            let (first, future) = prime(Box::pin(async move {
+                send_client.send_with_observer(request, observer).await
+            }))
+            .await;
             let future: ResponseFuture = match first {
                 Poll::Ready(result) => futures::future::ready(result).boxed_local(),
                 Poll::Pending => future,
             };
-            active.push(consume(next, future, context.clone()).boxed_local());
+            active.push(consume(next, future, context.clone(), admitted, retirement).boxed_local());
             next += 1;
         }
         let Some(()) = active.next().await else {
@@ -341,16 +409,31 @@ async fn wait_receive(context: &Context, waiting: u32, target: u32) {
     .await
 }
 
-async fn consume(index: usize, future: ResponseFuture, context: Context) {
+async fn consume(
+    index: usize,
+    future: ResponseFuture,
+    context: Context,
+    admitted: Rc<Cell<Option<StreamId>>>,
+    retirement: ReceiverOneshot<RetirementReport>,
+) {
     let id = index as u32 * 2 + 1;
     let response = match future.await {
         Ok(response) => response,
         Err(error) => {
             context.report.borrow_mut().streams[index].note_error(&error);
-            context.fail(format!(
-                "unsupported: request {id} failed before a response ({error:?}); wrapper exposes no admitted stream ID or retirement handle"
-            ));
-            context.progress.borrow_mut().finish(id);
+            if admitted.get().is_some() {
+                match retirement.recv().await {
+                    Ok(report) => context.report.borrow_mut().streams[index].retirement(&report),
+                    Err(error) => context.fail(format!(
+                        "missing retirement after admitted request {id} failed: {error:?}"
+                    )),
+                }
+            } else if !matches!(
+                error,
+                Error::Closed | Error::Connection(_) | Error::Cancelled
+            ) {
+                context.fail(format!("request rejected before admission: {error:?}"));
+            }
             if matches!(error, Error::Closed | Error::Connection(_)) {
                 context.stop_admission.set(true);
             }
@@ -467,10 +550,13 @@ async fn consume(index: usize, future: ResponseFuture, context: Context) {
     context.report.borrow_mut().streams[index].receive(body.receive_outcome());
     context.progress.borrow_mut().finish(id);
     held.clear();
-    let completion = body.completion().await;
-    let result = context.report.borrow_mut().streams[index].completion(completion);
-    if let Err(error) = result {
-        context.fail(error);
+    match body.retirement().await {
+        Ok(report) => context.report.borrow_mut().streams[index].retirement(&report),
+        Err(error) => {
+            context.fail(format!(
+                "missing retirement for response stream {id}: {error:?}"
+            ));
+        }
     }
 }
 
@@ -502,6 +588,72 @@ mod tests {
             }
             assert_eq!(*order.borrow(), [1, 3, 5]);
         });
+    }
+
+    #[kimojio::test]
+    async fn observers_report_preheader_retirement_and_actual_informational_heads() {
+        let input: Input = serde_json::from_str(
+            r#"{"schema":1,"host":"127.0.0.1","port":1234,"timeout_ms":1000,
+            "request_count":2,"concurrency":2,"requests":[
+            {"method":"GET","path":"/reset"},
+            {"method":"GET","path":"/informational/37"}]}"#,
+        )
+        .unwrap();
+        let config = input.config.config().unwrap();
+        let (fd, peer) = kimojio::pipe::bipipe();
+        let (client, driver) = connect_native(fd, config.clone());
+        let context = Context {
+            input: Rc::new(input),
+            report: Rc::new(RefCell::new(Report {
+                schema: 1,
+                streams: Vec::new(),
+                connection: ConnectionReport::pending(),
+                fixture_error: None,
+            })),
+            progress: Rc::default(),
+            held_capacity: Rc::default(),
+            held_count: Rc::default(),
+            metadata: Rc::default(),
+            stop_admission: Rc::default(),
+            shutdown: client.control(),
+        };
+        let server = kimojio_http2::serve_connection_native(peer, config, |request| async {
+            if request.uri().path() == "/reset" {
+                Err(Error::Application("test rejection before headers".into()))
+            } else {
+                server::handle(request).await
+            }
+        });
+        let app = async {
+            requests(client, context.clone()).await;
+            context.shutdown.graceful();
+        };
+        let ((), driver, server) =
+            operations::timeout_at(kimojio::clock_now() + Duration::from_secs(10), async {
+                futures::join!(app, driver.run(), server)
+            })
+            .await
+            .unwrap();
+        driver.unwrap();
+        server.unwrap();
+        let report = context.report.borrow();
+        assert!(report.fixture_error.is_none());
+        assert_eq!(report.streams.len(), 2);
+        let reset = &report.streams[0];
+        assert!(reset.admitted);
+        assert_eq!(reset.stream_id, 1);
+        assert_eq!(reset.status, None);
+        assert_eq!(reset.outcome, Some(Outcome::Reset));
+        assert_eq!(reset.error.as_ref().unwrap().code, 8);
+        assert!(!reset.ended);
+        let complete = &report.streams[1];
+        assert!(complete.admitted);
+        assert_eq!(complete.stream_id, 3);
+        assert_eq!(complete.status, Some(200));
+        assert_eq!(complete.bytes, 37);
+        assert_eq!(complete.informational, [103]);
+        assert_eq!(complete.outcome, Some(Outcome::Complete));
+        assert!(complete.ended);
     }
 
     #[test]

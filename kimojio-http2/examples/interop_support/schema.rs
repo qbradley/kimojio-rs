@@ -1,4 +1,4 @@
-use kimojio_http2::{Config, ConnectionResult, Error, StreamOutcome};
+use kimojio_http2::{Config, ConnectionResult, Error, SendFailure, SendStop, StreamOutcome};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, net::IpAddr, time::Duration};
@@ -86,6 +86,25 @@ pub struct Input {
     pub actions: Vec<Action>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerInput {
+    pub schema: u32,
+    #[serde(default)]
+    pub config: Windows,
+    pub timeout_ms: u64,
+}
+
+impl ServerInput {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema != 1 || !(1..=120_000).contains(&self.timeout_ms) {
+            return Err("invalid server schema or timeout".into());
+        }
+        self.config.config()?;
+        Ok(())
+    }
+}
+
 impl Input {
     pub fn validate(&self) -> Result<(), String> {
         if self.schema != 1
@@ -117,11 +136,6 @@ impl Input {
                     .any(|(n, v)| n.len() + v.len() > 8192)
             {
                 return Err("request exceeds fixture bounds".into());
-            }
-            if request.path.starts_with("/informational/") {
-                return Err(
-                    "unsupported: this wrapper has no informational-response callback".into(),
-                );
             }
         }
         let valid = |id: u32| id % 2 == 1 && id / 2 < self.request_count as u32;
@@ -164,6 +178,38 @@ pub struct WireError {
     pub code: u32,
 }
 
+#[derive(Serialize)]
+pub struct SendReceipt {
+    pub accepted: usize,
+    pub exact: bool,
+    pub reason: &'static str,
+    pub error: Option<WireError>,
+}
+
+impl From<SendFailure> for SendReceipt {
+    fn from(failure: SendFailure) -> Self {
+        let reason = match failure.reason {
+            SendStop::Finished => "finished",
+            SendStop::Reset(_) => "reset",
+            SendStop::Unprocessed => "unprocessed",
+            SendStop::ConnectionFailed => "connection_failed",
+        };
+        let error = match failure.reason {
+            SendStop::Reset(code) => Some(WireError {
+                scope: "stream",
+                code,
+            }),
+            _ => None,
+        };
+        Self {
+            accepted: failure.accepted,
+            exact: failure.exact,
+            reason,
+            error,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -200,9 +246,13 @@ pub struct StreamReport {
     pub outcome: Option<Outcome>,
     pub error: Option<WireError>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_failure: Option<SendReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub wrapper_error: Option<String>,
     #[serde(skip)]
     pub digest: Sha256,
+    #[serde(skip)]
+    pub admitted: bool,
 }
 
 impl StreamReport {
@@ -218,8 +268,10 @@ impl StreamReport {
             ended: false,
             outcome: None,
             error: None,
+            send_failure: None,
             wrapper_error: None,
             digest: Sha256::new(),
+            admitted: false,
         }
     }
     pub fn receive(&mut self, outcome: Option<StreamOutcome>) {
@@ -231,25 +283,36 @@ impl StreamReport {
             });
         }
     }
-    pub fn completion(&mut self, result: Result<StreamOutcome, Error>) -> Result<(), String> {
-        let outcome = match result {
-            Ok(outcome) | Err(Error::Stream(outcome)) => outcome,
-            Err(error) => {
-                self.note_error(&error);
-                return Err(format!(
-                    "unsupported: stream {} completion returned {error:?}, not an observable retirement outcome",
-                    self.stream_id
-                ));
-            }
-        };
+    pub fn retirement(&mut self, report: &kimojio_http2::StreamReport) {
+        self.admitted = true;
+        self.stream_id = report.stream.get();
+        self.retire_fields(
+            report.outcome,
+            report.receive_outcome,
+            report.send_failure,
+            report.error.as_ref(),
+        );
+    }
+    fn retire_fields(
+        &mut self,
+        outcome: StreamOutcome,
+        receive: Option<StreamOutcome>,
+        send: Option<SendFailure>,
+        context: Option<&Error>,
+    ) {
+        self.receive(receive);
         self.outcome = Some(outcome.into());
-        if let StreamOutcome::Reset(code) = outcome {
-            self.error = Some(WireError {
+        self.error = match outcome {
+            StreamOutcome::Reset(code) => Some(WireError {
                 scope: "stream",
                 code,
-            });
+            }),
+            _ => None,
+        };
+        self.send_failure = send.map(Into::into);
+        if let Some(error) = context {
+            self.wrapper_error = Some(format!("{error:?}"));
         }
-        Ok(())
     }
     pub fn note_error(&mut self, error: &Error) {
         self.wrapper_error = Some(format!("{error:?}"));
@@ -333,7 +396,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cli_limits_and_unobservable_information_are_explicit_errors() {
+    fn cli_limits_and_unknown_actions_are_explicit_errors() {
         let parse = || {
             serde_json::from_str::<Input>(
                 r#"{"schema":1,"host":"127.0.0.1","port":1234,"timeout_ms":1000,
@@ -347,7 +410,7 @@ mod tests {
         assert!(input.validate().is_err());
         input = parse();
         input.requests[0].path = "/informational/37".into();
-        assert!(input.validate().unwrap_err().contains("unsupported"));
+        assert!(input.validate().is_ok());
         assert!(
             serde_json::from_str::<Action>(
                 r#"{"action":"cancel_upload_after_response","stream_id":1}"#
@@ -371,18 +434,50 @@ mod tests {
     }
 
     #[test]
-    fn receive_success_cannot_mask_unknown_retirement() {
+    fn server_input_preserves_defaults_and_rejects_invalid_limits() {
+        let mut input: ServerInput =
+            serde_json::from_str(r#"{"schema":1,"timeout_ms":1000}"#).unwrap();
+        assert!(input.validate().is_ok());
+        assert!(input.config.stream_window.is_none());
+        assert!(input.config.connection_window.is_none());
+        input.timeout_ms = 0;
+        assert!(input.validate().is_err());
+        input.timeout_ms = 120_001;
+        assert!(input.validate().is_err());
+        input.timeout_ms = 1000;
+        input.config.connection_window = Some(65534);
+        assert!(input.validate().is_err());
+        assert!(
+            serde_json::from_str::<ServerInput>(r#"{"schema":1,"timeout_ms":1000,"unknown":true}"#)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn source_failure_cannot_replace_authoritative_retirement() {
         let mut report = StreamReport::new(1);
-        report.receive(Some(StreamOutcome::Complete));
-        let result = report.completion(Err(Error::Send {
+        let failure = SendFailure {
             accepted: 1024,
             exact: true,
-            reason: kimojio_http2::SendStop::Reset(0),
-        }));
-        assert!(result.is_err());
+            reason: SendStop::Reset(0),
+        };
+        report.retire_fields(
+            StreamOutcome::Reset(0),
+            Some(StreamOutcome::Complete),
+            Some(failure),
+            Some(&Error::Send {
+                accepted: failure.accepted,
+                exact: failure.exact,
+                reason: failure.reason,
+            }),
+        );
         assert!(report.ended);
-        assert!(report.outcome.is_none());
+        assert_eq!(report.outcome, Some(Outcome::Reset));
         assert_eq!(report.error.unwrap().code, 0);
+        let receipt = report.send_failure.unwrap();
+        assert_eq!(receipt.accepted, 1024);
+        assert!(receipt.exact);
+        assert_eq!(receipt.error.unwrap().code, 0);
         assert!(report.wrapper_error.unwrap().contains("accepted: 1024"));
     }
 
@@ -390,9 +485,12 @@ mod tests {
     fn zero_wire_reset_preserves_completed_response() {
         let mut report = StreamReport::new(1);
         report.receive(Some(StreamOutcome::Complete));
-        report
-            .completion(Err(Error::Stream(StreamOutcome::Reset(0))))
-            .unwrap();
+        report.retire_fields(
+            StreamOutcome::Reset(0),
+            Some(StreamOutcome::Complete),
+            None,
+            None,
+        );
         assert!(report.ended);
         assert_eq!(report.outcome, Some(Outcome::Reset));
         assert_eq!(report.error.unwrap().code, 0);

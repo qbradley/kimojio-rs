@@ -200,7 +200,7 @@ That review did not independently inject kernel cancellation races or close fail
 | Shared ownership, native I/O, concurrent client | Implemented with focused runtime tests |
 | Concurrent native server | Implemented with focused runtime tests |
 | Generic established transports | In progress |
-| Independent wrapper socket fixture and peers | Client/server fixture adaptation and explicit startup profile in progress |
+| Independent wrapper socket fixture and peers | Client/server fixture implemented, full suite and explicit startup profile in progress |
 | Wrapper performance and final review | Pending |
 
 The current core socket results do not qualify the new wrapper.
@@ -224,8 +224,26 @@ Independent source review of `b9bd2445` through `af7d2ad4` found no significant 
 It covered server orchestration, shared-client changes, informational admission and cancellation, observers, retirement reports, and associated tests.
 The reviewer did not independently execute tests or fault-injection schedules.
 This review excludes subsequent generic-transport changes.
-The fixture must adopt the new observation APIs before these repairs have independent peer qualification.
+The native fixture now uses these observation APIs. Full independent peer qualification remains in progress.
 Generic transports, broader fault injection, and wrapper performance remain incomplete.
+
+### Native client/server fixture checkpoint
+
+Fixture source `96e5280595251ec2957a4955e1e51f8668cd2113` uses the native client and server from `af7d2ad4`.
+Its release binary SHA-256 is `4610ada3004603e363f18f4fca65dbc2d162251927df632587710324bc35c2bc`.
+Local provenance and reports are in `target/http2-program/worktrees/http2-wrapper-fixture/target/wrapper-native-checkpoint/summary.json`.
+No known public API gap prevents the current fixture observations.
+
+The fixture owner passed 31 selected socket cases and five additional probes.
+These cover both roles, informational responses, trailers, CONNECT, repeated exchanges, and large bodies.
+The extra probes cover full uploads after early 200/413 responses and server responses before complete uploads.
+A wide-window 200 response followed by reset-zero preserved the response and exposed the actual retirement outcome and failed-buffer receipt.
+This probe does not replace the reduced-window early-response case.
+
+The parent integration passed all 13 fixture tests.
+The separate peer owner will run the full suite against this immutable artifact.
+The reduced-window client cases need an explicit startup profile with distinct coverage claims.
+The older `00005698` artifact remains unchanged.
 
 ### Initial wrapper client fixture
 
