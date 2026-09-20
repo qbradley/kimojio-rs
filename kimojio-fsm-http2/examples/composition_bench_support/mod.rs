@@ -4,6 +4,8 @@ use std::time::{Duration, Instant};
 
 mod diagnostics;
 use diagnostics::Diagnostics;
+#[allow(dead_code, reason = "used only by the separate allocation probe")]
+pub mod allocation;
 #[cfg(test)]
 mod overlap;
 
