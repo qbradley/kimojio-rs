@@ -1,0 +1,6 @@
+
+thread 'main' (260988) panicked at kimojio-fsm-http2/examples/composition_bench_support/mod.rs:207:9:
+assertion `left == right` failed
+  left: Err(ConnectionFailed)
+ right: Ok(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

@@ -5,6 +5,9 @@ It is **not final core qualification**.
 The large-body prerequisite still fails, so no new timing matrix, profile, or optimization PoC occurred.
 The overall core-to-wrapper gate remains blocked.
 
+[The later producer-permission probe](PRODUCER.md) isolates the first unreached public progress boundary.
+It has a separate binary, counters, and source freeze.
+
 ## Frozen identity
 
 - Integration: `7d19cd8551191be92af945a452dd472fdf7d8440`.
