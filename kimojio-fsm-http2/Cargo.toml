@@ -12,3 +12,9 @@ rustc-hash = "2"
 
 [features]
 hpack-test-support = []
+
+[dev-dependencies]
+rustix = { version = "1", features = ["event"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
