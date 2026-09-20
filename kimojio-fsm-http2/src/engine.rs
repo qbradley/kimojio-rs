@@ -1492,7 +1492,11 @@ impl<B: SendBuffer> Connection<B> {
             .is_some_and(|(token, _)| token == &completion.op.token);
         if current {
             self.alarm = None;
-            if completion.now < self.now {
+            let still_scheduled = self
+                .deadlines
+                .first_key_value()
+                .is_some_and(|((at, _), _)| *at == completion.op.deadline);
+            if !still_scheduled || completion.now < self.now {
                 return Ok(());
             }
             if self.advance_time(completion.now).is_err() {
@@ -1677,7 +1681,12 @@ impl<B: SendBuffer> Connection<B> {
                     }
                 }
                 Transition::Alarm => {
-                    if self.wake_tokens.len() >= self.config.max_outbound_items {
+                    if self
+                        .wake_tokens
+                        .len()
+                        .saturating_add(self.cancellations.len())
+                        >= self.config.max_outbound_items
+                    {
                         self.fail(ConnectionResult::ResourceExhausted);
                         continue;
                     }
