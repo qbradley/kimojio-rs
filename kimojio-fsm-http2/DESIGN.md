@@ -65,6 +65,11 @@ The pure path does not instantiate an HTTP/1 parser.
 Some inherited error variants and the HTTP/1 request-count limit remain public compatibility vocabulary.
 They do not select another protocol or constrain the HTTP/2 request count.
 
+A configured stream receive window applies when the stream record begins.
+If that window is smaller than 65,535 bytes, already-in-flight uploads can receive a stream FLOW_CONTROL_ERROR reset.
+The receiver uses a reset rather than retaining negative inbound window debt.
+This policy is separate from signed outbound debt after peer SETTINGS changes.
+
 ## Public API checkpoint
 
 These signatures describe the implemented callback boundary.
@@ -261,6 +266,7 @@ The counters remain separate from application fragment leases.
 
 Existing queued control blocks precede a new credit batch.
 After each credit batch, the currently queued control blocks receive a turn.
+After those blocks, eligible DATA receives a turn before another credit batch.
 Partial writes retain their original output before either class can proceed.
 This preserves HPACK block order and prevents control or credit starvation.
 Closing a receive half removes its uncommitted stream credit, but preserves connection credit.
@@ -415,6 +421,9 @@ The same test also uses the default item limit.
 A second regression runs ten batches of eight concurrent bidirectional 1 MiB exchanges.
 It uses exact direct transport receipts, yielding body callbacks, immediate fragment release, and fixed supplied time.
 All 160 MiB of payload match the expected bytes, and all streams retire successfully.
+Each batch also requires response DATA to progress before all uploads finish.
+Coalescing alone passed the byte totals but failed this directional-progress assertion.
+The writer now alternates eligible DATA with credit batches without weakening ordinary control priority.
 Neither regression increases a capacity limit or accepts a failed stream outcome.
 
 ## Frozen benchmark workload
