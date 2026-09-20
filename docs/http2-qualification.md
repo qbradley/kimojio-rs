@@ -551,7 +551,11 @@ A mixed native/generic wrapper test observed 609 zero-member and 16,786 single-m
 These diagnostics are absent from the final runtime code and do not establish a production traffic distribution.
 
 The implementation owner passed focused runtime, HTTP/1, and HTTP/2 suites in debug and release.
-Independent review, a fixture rebuild, and paired measurements remain in progress.
+Independent review found no significant issues in `a4af94fd` through `cd81114e`.
+From a clean detached checkout, all 35 focused scope/wait tests passed in debug without default features plus virtual clock and release all-features.
+The review covered multi-scope growth, weak ownership, deduplication, generation isolation, migration, reentrant destruction, and pending originals.
+It did not measure performance or force kernel cancellation-acknowledgment order.
+A fixture rebuild and paired measurements remain in progress.
 The new performance and fixture worktrees start from the accepted baseline, without the rejected direct-read change.
 CPU2 is leased only to the measurement owner until this experiment completes.
 No broader registry rewrite or third optimization is part of this bounded follow-up.
