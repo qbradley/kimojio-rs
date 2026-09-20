@@ -1,0 +1,22 @@
+{
+  "pairs": 54,
+  "compared_fields": [
+    "schema",
+    "mode",
+    "case",
+    "phase",
+    "concurrency",
+    "fragment",
+    "batches",
+    "exchanges",
+    "request_bytes",
+    "response_bytes",
+    "wire_bytes",
+    "payload_bytes",
+    "warmup_batches",
+    "payload_storage",
+    "transport",
+    "all_payload_bytes_compared"
+  ],
+  "all_equal": true
+}

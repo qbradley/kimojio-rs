@@ -13,6 +13,7 @@ selected += [("empty", 1, f, "steady") for f in [17, 1024]]
 selected += [(case, 1, f, "steady") for case in ["duplex", "32k", "1m"]
              for f in [17, 1024, 65536]]
 selected += [("duplex", 128, 65536, "steady"), ("32k", 128, 65536, "steady"),
+             ("1m", 8, 65536, "steady"), ("1m", 128, 65536, "steady"),
              ("paused", 128, 17, "steady"), ("paused", 128, 65536, "steady")]
 selected += [("empty", 1, f, "construct") for f in [17, 1024, 65536]]
 lines = [
@@ -35,10 +36,17 @@ for case, c, f, phase in selected:
               for row in rows]
     deltas = [f'{100*(row["median_ns"]/rows[0]["median_ns"]-1):+.1f}%' for row in rows[1:]]
     lines.append("| " + " | ".join([case, str(c), str(f), phase] + values + deltas) + " |")
-lines += ["", "## Blocked direct-core cells", "",
-          "The selected and auto routes fail the same cells.",
-          "No elapsed time from these failures enters the table.", "",
-          "| Case | Concurrency | Fragment |", "|---|---:|---:|"]
+blocked = [row for row in summary if row["blocked"]]
+if blocked:
+    lines += ["", "## Blocked direct-core cells", "",
+              "The complete JSON summary identifies each failed route.",
+              "No elapsed time from these failures enters the table.", "",
+              "| Case | Concurrency | Fragment |", "|---|---:|---:|"]
+else:
+    assert all(row["trials"] == 5 for row in summary)
+    lines += ["", "## Strict matrix completion", "",
+              f'All {len(summary)} matrix cells completed five successful trials.',
+              "No failed case contributes to these timings."]
 for row in summary:
     if row["mode"] == "direct" and row["blocked"]:
         lines.append(f'| {row["case"]} | {row["concurrency"]} | {row["fragment"]} |')

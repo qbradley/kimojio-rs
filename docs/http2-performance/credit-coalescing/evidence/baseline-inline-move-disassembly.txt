@@ -1,0 +1,41 @@
+
+/workspace/kimojio-rs/target/http2-program/build-http2-performance-credit/frozen-eaac15f/composition_bench:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000000656e0 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x1580>:
+   656e0:	48 8b 96 b0 1c 00 00 	mov    0x1cb0(%rsi),%rdx
+   656e7:	48 85 d2             	test   %rdx,%rdx
+   656ea:	0f 84 b5 00 00 00    	je     657a5 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x1645>
+   656f0:	8b 8e e4 1d 00 00    	mov    0x1de4(%rsi),%ecx
+   656f6:	89 8c 24 34 01 00 00 	mov    %ecx,0x134(%rsp)
+   656fd:	0f 10 86 d4 1d 00 00 	movups 0x1dd4(%rsi),%xmm0
+   65704:	0f 11 84 24 24 01 00 	movups %xmm0,0x124(%rsp)
+   6570b:	00 
+   6570c:	0f 10 86 94 1d 00 00 	movups 0x1d94(%rsi),%xmm0
+   65713:	0f 10 8e a4 1d 00 00 	movups 0x1da4(%rsi),%xmm1
+   6571a:	0f 10 96 b4 1d 00 00 	movups 0x1db4(%rsi),%xmm2
+   65721:	0f 10 9e c4 1d 00 00 	movups 0x1dc4(%rsi),%xmm3
+   65728:	0f 11 9c 24 14 01 00 	movups %xmm3,0x114(%rsp)
+   6572f:	00 
+   65730:	0f 11 94 24 04 01 00 	movups %xmm2,0x104(%rsp)
+   65737:	00 
+   65738:	0f 11 8c 24 f4 00 00 	movups %xmm1,0xf4(%rsp)
+   6573f:	00 
+   65740:	0f 11 84 24 e4 00 00 	movups %xmm0,0xe4(%rsp)
+   65747:	00 
+   65748:	c7 86 90 1d 00 00 02 	movl   $0x2,0x1d90(%rsi)
+   6574f:	00 00 00 
+   65752:	89 84 24 e0 00 00 00 	mov    %eax,0xe0(%rsp)
+   65759:	0f 10 86 b8 1c 00 00 	movups 0x1cb8(%rsi),%xmm0
+   65760:	0f 11 84 24 48 01 00 	movups %xmm0,0x148(%rsp)
+   65767:	00 
+   65768:	48 c7 86 b0 1c 00 00 	movq   $0x0,0x1cb0(%rsi)
+   6576f:	00 00 00 00 
+   65773:	48 89 94 24 40 01 00 	mov    %rdx,0x140(%rsp)
+   6577a:	00 
+   6577b:	80                   	.byte 0x80
+   6577c:	bc                   	.byte 0xbc
+   6577d:	24 e8                	and    $0xe8,%al
+	...

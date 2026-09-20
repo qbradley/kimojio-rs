@@ -1,0 +1,14 @@
+{
+  "symbol": "<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick",
+  "offset": "0x15a4",
+  "counts": {
+    "direct-empty": {
+      "near": 5,
+      "parent": 707
+    },
+    "direct-1m": {
+      "near": 8,
+      "parent": 1592
+    }
+  }
+}

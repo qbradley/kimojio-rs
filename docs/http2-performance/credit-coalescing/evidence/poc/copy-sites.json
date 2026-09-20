@@ -1,0 +1,1152 @@
+[
+  {
+    "symbol": "<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick",
+    "address": "0x65bc2",
+    "offset": "0x1a62",
+    "instruction": "65bc2:\tff 15 28 50 09 00    \tcall   *0x95028(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "65ba2:\t4c 89 eb             \tmov    %r13,%rbx",
+      "65ba5:\t4c 01 e3             \tadd    %r12,%rbx",
+      "65ba8:\t0f 82 51 0a 00 00    \tjb     665ff <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x249f>",
+      "65bae:\t84 c9                \ttest   %cl,%cl",
+      "65bb0:\t0f 85 53 0a 00 00    \tjne    66609 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x24a9>",
+      "65bb6:\t4c 01 e0             \tadd    %r12,%rax",
+      "65bb9:\t48 89 c7             \tmov    %rax,%rdi",
+      "65bbc:\t4c 89 fe             \tmov    %r15,%rsi",
+      "65bbf:\t4c 89 ea             \tmov    %r13,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 7,
+      "direct-1m": 358
+    },
+    "parent_samples": {
+      "direct-empty": 668,
+      "direct-1m": 1477
+    }
+  },
+  {
+    "symbol": "<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick",
+    "address": "0x6593c",
+    "offset": "0x17dc",
+    "instruction": "6593c:\tff 15 ae 52 09 00    \tcall   *0x952ae(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "6591c:\t4c 89 eb             \tmov    %r13,%rbx",
+      "6591f:\t4c 01 e3             \tadd    %r12,%rbx",
+      "65922:\t0f 82 b5 0c 00 00    \tjb     665dd <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x247d>",
+      "65928:\t84 c9                \ttest   %cl,%cl",
+      "6592a:\t0f 85 b7 0c 00 00    \tjne    665e7 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x2487>",
+      "65930:\t4c 01 e0             \tadd    %r12,%rax",
+      "65933:\t48 89 c7             \tmov    %rax,%rdi",
+      "65936:\t4c 89 fe             \tmov    %r15,%rsi",
+      "65939:\t4c 89 ea             \tmov    %r13,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 7,
+      "direct-1m": 330
+    },
+    "parent_samples": {
+      "direct-empty": 668,
+      "direct-1m": 1477
+    }
+  },
+  {
+    "symbol": "<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref",
+    "address": "0xa3071",
+    "offset": "0x6d1",
+    "instruction": "a3071:\tff 15 79 7b 05 00    \tcall   *0x57b79(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "a3047:\tff 15 ab 7b 05 00    \tcall   *0x57bab(%rip)        # fabf8 <_DYNAMIC+0x250>",
+      "a304d:\t48 8b 44 24 60       \tmov    0x60(%rsp),%rax",
+      "a3052:\t49 89 46 10          \tmov    %rax,0x10(%r14)",
+      "a3056:\t66 0f 6f 44 24 50    \tmovdqa 0x50(%rsp),%xmm0",
+      "a305c:\tf3 41 0f 7f 06       \tmovdqu %xmm0,(%r14)",
+      "a3061:\t48 8d b4 24 88 00 00 \tlea    0x88(%rsp),%rsi",
+      "a3068:\t00",
+      "a3069:\tba e8 00 00 00       \tmov    $0xe8,%edx",
+      "a306e:\t48 89 df             \tmov    %rbx,%rdi"
+    ],
+    "hits": {
+      "direct-empty": 74,
+      "direct-1m": 55
+    },
+    "parent_samples": {
+      "direct-empty": 152,
+      "direct-1m": 131
+    }
+  },
+  {
+    "symbol": "<hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::insert",
+    "address": "0x7c707",
+    "offset": "0x147",
+    "instruction": "7c707:\tff 15 e3 e4 07 00    \tcall   *0x7e4e3(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "7c6dc:\te9 a7 00 00 00       \tjmp    7c788 <<hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::insert+0x1c8>",
+      "7c6e1:\t44 89 44 24 0c       \tmov    %r8d,0xc(%rsp)",
+      "7c6e6:\t48 89 6c 24 10       \tmov    %rbp,0x10(%rsp)",
+      "7c6eb:\t41 0f b6 2c 1c       \tmovzbl (%r12,%rbx,1),%ebp",
+      "7c6f0:\t40 84 ed             \ttest   %bpl,%bpl",
+      "7c6f3:\t0f 89 bd 00 00 00    \tjns    7c7b6 <<hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::insert+0x1f6>",
+      "7c6f9:\t48 8d 7c 24 28       \tlea    0x28(%rsp),%rdi",
+      "7c6fe:\tba 30 01 00 00       \tmov    $0x130,%edx",
+      "7c703:\t48 8b 34 24          \tmov    (%rsp),%rsi"
+    ],
+    "hits": {
+      "direct-empty": 51,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 113,
+      "direct-1m": 0
+    }
+  },
+  {
+    "symbol": "<hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::insert",
+    "address": "0x7c76e",
+    "offset": "0x1ae",
+    "instruction": "7c76e:\tff 15 7c e4 07 00    \tcall   *0x7e47c(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "7c745:\t48 8d 04 9b          \tlea    (%rbx,%rbx,4),%rax",
+      "7c749:\t48 c1 e0 06          \tshl    $0x6,%rax",
+      "7c74d:\t8b 4c 24 0c          \tmov    0xc(%rsp),%ecx",
+      "7c751:\t41 89 8c 04 c0 fe ff \tmov    %ecx,-0x140(%r12,%rax,1)",
+      "7c758:\tff",
+      "7c759:\t49 8d 3c 04          \tlea    (%r12,%rax,1),%rdi",
+      "7c75d:\t48 81 c7 c4 fe ff ff \tadd    $0xfffffffffffffec4,%rdi",
+      "7c764:\t48 8d 74 24 1c       \tlea    0x1c(%rsp),%rsi",
+      "7c769:\tba 3c 01 00 00       \tmov    $0x13c,%edx"
+    ],
+    "hits": {
+      "direct-empty": 38,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 113,
+      "direct-1m": 0
+    }
+  },
+  {
+    "symbol": "<hashbrown::map::HashMap<kimojio_fsm_http2::api::StreamId, kimojio_fsm_http2::engine::Stream<&[u8]>, rustc_hash::FxBuildHasher>>::remove::<kimojio_fsm_http2::api::StreamId>",
+    "address": "0x7bec8",
+    "offset": "0x188",
+    "instruction": "7bec8:\tff 15 22 ed 07 00    \tcall   *0x7ed22(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "7bea1:\t48 8b b1 d8 fe ff ff \tmov    -0x128(%rcx),%rsi",
+      "7bea8:\t48 81 c1 e0 fe ff ff \tadd    $0xfffffffffffffee0,%rcx",
+      "7beaf:\t48 89 10             \tmov    %rdx,(%rax)",
+      "7beb2:\t48 89 70 08          \tmov    %rsi,0x8(%rax)",
+      "7beb6:\t48 89 c7             \tmov    %rax,%rdi",
+      "7beb9:\t48 83 c7 10          \tadd    $0x10,%rdi",
+      "7bebd:\tba 20 01 00 00       \tmov    $0x120,%edx",
+      "7bec2:\t48 89 ce             \tmov    %rcx,%rsi",
+      "7bec5:\t48 89 c3             \tmov    %rax,%rbx"
+    ],
+    "hits": {
+      "direct-empty": 36,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 67,
+      "direct-1m": 1
+    }
+  },
+  {
+    "symbol": "<kimojio_fsm_http2::engine::Connection<&[u8]>>::maybe_retire",
+    "address": "0x58fe8",
+    "offset": "0x148",
+    "instruction": "58fe8:\tff 15 02 1c 0a 00    \tcall   *0xa1c02(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "58fbf:\t66 0f 74 05 49 b3 fb \tpcmpeqb -0x44cb7(%rip),%xmm0        # 14310 <anon.5b16cba47b89f4631853169f66379f0b.64.llvm.1825723315612329001+0xc0>",
+      "58fc6:\tff",
+      "58fc7:\t66 0f d7 c0          \tpmovmskb %xmm0,%eax",
+      "58fcb:\t3d ff ff 00 00       \tcmp    $0xffff,%eax",
+      "58fd0:\t0f 84 3e 01 00 00    \tje     59114 <<kimojio_fsm_http2::engine::Connection<&[u8]>>::maybe_retire+0x274>",
+      "58fd6:\t48 8d bc 24 40 01 00 \tlea    0x140(%rsp),%rdi",
+      "58fdd:\t00",
+      "58fde:\t48 8d 74 24 10       \tlea    0x10(%rsp),%rsi",
+      "58fe3:\tba 30 01 00 00       \tmov    $0x130,%edx"
+    ],
+    "hits": {
+      "direct-empty": 27,
+      "direct-1m": 1
+    },
+    "parent_samples": {
+      "direct-empty": 123,
+      "direct-1m": 22
+    }
+  },
+  {
+    "symbol": "kimojio_fsm_http2::server::h2::headers::validate_decoded_header_fields_by::<<kimojio_fsm_http2::engine::Client<&[u8]>>::request_ref::{closure#0}>",
+    "address": "0x7a3b2",
+    "offset": "0x1c2",
+    "instruction": "7a3b2:\tff 15 38 08 08 00    \tcall   *0x80838(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "7a38a:\tff 15 88 0c 08 00    \tcall   *0x80c88(%rip)        # fb018 <_DYNAMIC+0x670>",
+      "7a390:\t49 83 c7 28          \tadd    $0x28,%r15",
+      "7a394:\t4d 39 f4             \tcmp    %r14,%r12",
+      "7a397:\t0f 85 63 ff ff ff    \tjne    7a300 <kimojio_fsm_http2::server::h2::headers::validate_decoded_header_fields_by::<<kimojio_fsm_http2::engine::Client<&[u8]>>::request_ref::{closure#0}>+0x110>",
+      "7a39d:\t4c 8d b4 24 e8 00 00 \tlea    0xe8(%rsp),%r14",
+      "7a3a4:\t00",
+      "7a3a5:\t48 8d 74 24 18       \tlea    0x18(%rsp),%rsi",
+      "7a3aa:\tba d0 00 00 00       \tmov    $0xd0,%edx",
+      "7a3af:\t4c 89 f7             \tmov    %r14,%rdi"
+    ],
+    "hits": {
+      "direct-empty": 25,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 114,
+      "direct-1m": 1
+    }
+  },
+  {
+    "symbol": "kimojio_fsm_http2::server::h2::headers::decode_connection_header_fields::<kimojio_fsm_http2::server::h2::compact_headers::CompactHeaderFields>",
+    "address": "0xa65ce",
+    "offset": "0x11e",
+    "instruction": "a65ce:\tff 15 1c 46 05 00    \tcall   *0x5461c(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "a65ad:\t4d 89 e0             \tmov    %r12,%r8",
+      "a65b0:\te8 eb 74 fe ff       \tcall   8daa0 <<kimojio_fsm_http2::hpack::Decoder>::decode_with_visitor_into::<kimojio_fsm_http2::server::h2::compact_headers::CompactHeaderFields, kimojio_fsm_http2::server::h2::headers::H2HeaderValidator>>",
+      "a65b5:\t49 89 c5             \tmov    %rax,%r13",
+      "a65b8:\t49 89 d7             \tmov    %rdx,%r15",
+      "a65bb:\t48 8d ac 24 48 01 00 \tlea    0x148(%rsp),%rbp",
+      "a65c2:\t00",
+      "a65c3:\tba d0 00 00 00       \tmov    $0xd0,%edx",
+      "a65c8:\t48 89 ef             \tmov    %rbp,%rdi",
+      "a65cb:\t4c 89 e6             \tmov    %r12,%rsi"
+    ],
+    "hits": {
+      "direct-empty": 16,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 113,
+      "direct-1m": 2
+    }
+  },
+  {
+    "symbol": "<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick",
+    "address": "0x65b6f",
+    "offset": "0x1a0f",
+    "instruction": "65b6f:\tff 15 7b 50 09 00    \tcall   *0x9507b(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "65b4e:\tc3                   \tret",
+      "65b4f:\t48 8d bc 24 40 01 00 \tlea    0x140(%rsp),%rdi",
+      "65b56:\t00",
+      "65b57:\tff 15 5b 52 09 00    \tcall   *0x9525b(%rip)        # fadb8 <_DYNAMIC+0x410>",
+      "65b5d:\t49 39 d4             \tcmp    %rdx,%r12",
+      "65b60:\t0f 87 87 08 00 00    \tja     663ed <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x228d>",
+      "65b66:\t48 89 c7             \tmov    %rax,%rdi",
+      "65b69:\t4c 89 ee             \tmov    %r13,%rsi",
+      "65b6c:\t4c 89 e2             \tmov    %r12,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 5,
+      "direct-1m": 8
+    },
+    "parent_samples": {
+      "direct-empty": 668,
+      "direct-1m": 1477
+    }
+  },
+  {
+    "symbol": "<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick",
+    "address": "0x658e9",
+    "offset": "0x1789",
+    "instruction": "658e9:\tff 15 01 53 09 00    \tcall   *0x95301(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "658c4:\te9 cc 00 00 00       \tjmp    65995 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x1835>",
+      "658c9:\t48 8d bc 24 40 01 00 \tlea    0x140(%rsp),%rdi",
+      "658d0:\t00",
+      "658d1:\tff 15 e1 54 09 00    \tcall   *0x954e1(%rip)        # fadb8 <_DYNAMIC+0x410>",
+      "658d7:\t49 39 d4             \tcmp    %rdx,%r12",
+      "658da:\t0f 87 06 0b 00 00    \tja     663e6 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x2286>",
+      "658e0:\t48 89 c7             \tmov    %rax,%rdi",
+      "658e3:\t4c 89 ee             \tmov    %r13,%rsi",
+      "658e6:\t4c 89 e2             \tmov    %r12,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 9,
+      "direct-1m": 3
+    },
+    "parent_samples": {
+      "direct-empty": 668,
+      "direct-1m": 1477
+    }
+  },
+  {
+    "symbol": "kimojio_fsm_http2::server::h2::headers::validate_decoded_header_fields_by::<<kimojio_fsm_http2::engine::Server<&[u8]>>::respond_ref::{closure#0}>",
+    "address": "0x7a5c2",
+    "offset": "0x1c2",
+    "instruction": "7a5c2:\tff 15 28 06 08 00    \tcall   *0x80628(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "7a59a:\tff 15 78 0a 08 00    \tcall   *0x80a78(%rip)        # fb018 <_DYNAMIC+0x670>",
+      "7a5a0:\t49 83 c7 28          \tadd    $0x28,%r15",
+      "7a5a4:\t4d 39 f4             \tcmp    %r14,%r12",
+      "7a5a7:\t0f 85 63 ff ff ff    \tjne    7a510 <kimojio_fsm_http2::server::h2::headers::validate_decoded_header_fields_by::<<kimojio_fsm_http2::engine::Server<&[u8]>>::respond_ref::{closure#0}>+0x110>",
+      "7a5ad:\t4c 8d b4 24 e8 00 00 \tlea    0xe8(%rsp),%r14",
+      "7a5b4:\t00",
+      "7a5b5:\t48 8d 74 24 18       \tlea    0x18(%rsp),%rsi",
+      "7a5ba:\tba d0 00 00 00       \tmov    $0xd0,%edx",
+      "7a5bf:\t4c 89 f7             \tmov    %r14,%rdi"
+    ],
+    "hits": {
+      "direct-empty": 9,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 59,
+      "direct-1m": 2
+    }
+  },
+  {
+    "symbol": "<kimojio_fsm_http2::hpack::DynamicTable>::try_reserve_insertions",
+    "address": "0x91e9c",
+    "offset": "0xdc",
+    "instruction": "91e9c:\tff 15 46 8d 06 00    \tcall   *0x68d46(%rip)        # fabe8 <memmove@GLIBC_2.2.5>",
+    "preceding": [
+      "91e7e:\t48 c1 e0 05          \tshl    $0x5,%rax",
+      "91e82:\t48 01 f0             \tadd    %rsi,%rax",
+      "91e85:\t4c 89 f9             \tmov    %r15,%rcx",
+      "91e88:\t48 c1 e1 05          \tshl    $0x5,%rcx",
+      "91e8c:\t48 01 f1             \tadd    %rsi,%rcx",
+      "91e8f:\t48 c1 e2 05          \tshl    $0x5,%rdx",
+      "91e93:\t49 89 fe             \tmov    %rdi,%r14",
+      "91e96:\t48 89 cf             \tmov    %rcx,%rdi",
+      "91e99:\t48 89 c6             \tmov    %rax,%rsi"
+    ],
+    "hits": {
+      "direct-empty": 1,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 13,
+      "direct-1m": 1
+    }
+  },
+  {
+    "symbol": "<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref",
+    "address": "0xa2ffd",
+    "offset": "0x65d",
+    "instruction": "a2ffd:\tff 15 ed 7b 05 00    \tcall   *0x57bed(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "a2fde:\t48 29 f0             \tsub    %rsi,%rax",
+      "a2fe1:\t49 39 c4             \tcmp    %rax,%r12",
+      "a2fe4:\t0f 87 b3 00 00 00    \tja     a309d <<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref+0x6fd>",
+      "a2fea:\t4d 85 e4             \ttest   %r12,%r12",
+      "a2fed:\t74 19                \tje     a3008 <<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref+0x668>",
+      "a2fef:\t48 03 74 24 10       \tadd    0x10(%rsp),%rsi",
+      "a2ff4:\t48 89 f7             \tmov    %rsi,%rdi",
+      "a2ff7:\t4c 89 fe             \tmov    %r15,%rsi",
+      "a2ffa:\t4c 89 e2             \tmov    %r12,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 1
+    },
+    "parent_samples": {
+      "direct-empty": 152,
+      "direct-1m": 131
+    }
+  },
+  {
+    "symbol": "<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u128, kimojio_fsm_http2::api::StreamId, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::Edge>>::insert_recursing::<alloc::alloc::Global, <alloc::collections::btree::map::entry::VacantEntry<u128, kimojio_fsm_http2::api::StreamId>>::insert_entry::{closure#0}>",
+    "address": "0x4978b",
+    "offset": "0xbb",
+    "instruction": "4978b:\tff 15 57 14 0b 00    \tcall   *0xb1457(%rip)        # fabe8 <memmove@GLIBC_2.2.5>",
+    "preceding": [
+      "4976a:\t4c 89 fa             \tmov    %r15,%rdx",
+      "4976d:\t48 c1 e2 04          \tshl    $0x4,%rdx",
+      "49771:\t48 89 74 24 50       \tmov    %rsi,0x50(%rsp)",
+      "49776:\t4c 89 f6             \tmov    %r14,%rsi",
+      "49779:\t48 89 44 24 30       \tmov    %rax,0x30(%rsp)",
+      "4977e:\t44 89 2c 24          \tmov    %r13d,(%rsp)",
+      "49782:\t4d 89 c5             \tmov    %r8,%r13",
+      "49785:\t49 89 ec             \tmov    %rbp,%r12",
+      "49788:\t48 89 cd             \tmov    %rcx,%rbp"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 14,
+      "direct-1m": 29
+    }
+  },
+  {
+    "symbol": "<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u128, kimojio_fsm_http2::api::StreamId, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::Edge>>::insert_recursing::<alloc::alloc::Global, <alloc::collections::btree::map::entry::VacantEntry<u128, kimojio_fsm_http2::api::StreamId>>::insert_entry::{closure#0}>",
+    "address": "0x497bf",
+    "offset": "0xef",
+    "instruction": "497bf:\tff 15 23 14 0b 00    \tcall   *0xb1423(%rip)        # fabe8 <memmove@GLIBC_2.2.5>",
+    "preceding": [
+      "4979d:\t48 8d 34 ad b8 00 00 \tlea    0xb8(,%rbp,4),%rsi",
+      "497a4:\t00",
+      "497a5:\t4c 01 ee             \tadd    %r13,%rsi",
+      "497a8:\t48 8b 44 24 48       \tmov    0x48(%rsp),%rax",
+      "497ad:\t48 8d 3c 85 b8 00 00 \tlea    0xb8(,%rax,4),%rdi",
+      "497b4:\t00",
+      "497b5:\t4c 01 ef             \tadd    %r13,%rdi",
+      "497b8:\t49 c1 e7 02          \tshl    $0x2,%r15",
+      "497bc:\t4c 89 fa             \tmov    %r15,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 14,
+      "direct-1m": 29
+    }
+  },
+  {
+    "symbol": "<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u128, kimojio_fsm_http2::api::StreamId, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::Edge>>::insert_recursing::<alloc::alloc::Global, <alloc::collections::btree::map::entry::VacantEntry<u128, kimojio_fsm_http2::api::StreamId>>::insert_entry::{closure#0}>",
+    "address": "0x49bce",
+    "offset": "0x4fe",
+    "instruction": "49bce:\tff 15 1c 10 0b 00    \tcall   *0xb101c(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "49baa:\t41 39 d6             \tcmp    %edx,%r14d",
+      "49bad:\t0f 85 50 05 00 00    \tjne    4a103 <<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u128, kimojio_fsm_http2::api::StreamId, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::Edge>>::insert_recursing::<alloc::alloc::Global, <alloc::collections::btree::map::entry::VacantEntry<u128, kimojio_fsm_http2::api::StreamId>>::insert_entry::{closure#0}>+0xa33>",
+      "49bb3:\t48 ff 44 24 40       \tincq   0x40(%rsp)",
+      "49bb8:\t49 8d bc 24 f0 00 00 \tlea    0xf0(%r12),%rdi",
+      "49bbf:\t00",
+      "49bc0:\t48 8d 34 dd f8 00 00 \tlea    0xf8(,%rbx,8),%rsi",
+      "49bc7:\t00",
+      "49bc8:\t48 01 ee             \tadd    %rbp,%rsi",
+      "49bcb:\tc1 e2 03             \tshl    $0x3,%edx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 14,
+      "direct-1m": 29
+    }
+  },
+  {
+    "symbol": "<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u128, kimojio_fsm_http2::api::StreamId, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::Edge>>::insert_recursing::<alloc::alloc::Global, <alloc::collections::btree::map::entry::VacantEntry<u128, kimojio_fsm_http2::api::StreamId>>::insert_entry::{closure#0}>",
+    "address": "0x49c58",
+    "offset": "0x588",
+    "instruction": "49c58:\tff 15 8a 0f 0b 00    \tcall   *0xb0f8a(%rip)        # fabe8 <memmove@GLIBC_2.2.5>",
+    "preceding": [
+      "49c3a:\t48 89 ef             \tmov    %rbp,%rdi",
+      "49c3d:\t48 c1 e7 04          \tshl    $0x4,%rdi",
+      "49c41:\t4c 01 e7             \tadd    %r12,%rdi",
+      "49c44:\t41 89 de             \tmov    %ebx,%r14d",
+      "49c47:\t41 29 d6             \tsub    %edx,%r14d",
+      "49c4a:\t44 89 f2             \tmov    %r14d,%edx",
+      "49c4d:\tc1 e2 04             \tshl    $0x4,%edx",
+      "49c50:\t4c 89 ee             \tmov    %r13,%rsi",
+      "49c53:\t4c 89 44 24 20       \tmov    %r8,0x20(%rsp)"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 14,
+      "direct-1m": 29
+    }
+  },
+  {
+    "symbol": "<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u128, kimojio_fsm_http2::api::StreamId, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::Edge>>::insert_recursing::<alloc::alloc::Global, <alloc::collections::btree::map::entry::VacantEntry<u128, kimojio_fsm_http2::api::StreamId>>::insert_entry::{closure#0}>",
+    "address": "0x49f21",
+    "offset": "0x851",
+    "instruction": "49f21:\tff 15 c1 0c 0b 00    \tcall   *0xb0cc1(%rip)        # fabe8 <memmove@GLIBC_2.2.5>",
+    "preceding": [
+      "49f02:\t48 01 ef             \tadd    %rbp,%rdi",
+      "49f05:\t4c 8b 7c 24 20       \tmov    0x20(%rsp),%r15",
+      "49f0a:\t49 29 df             \tsub    %rbx,%r15",
+      "49f0d:\t49 89 de             \tmov    %rbx,%r14",
+      "49f10:\t4c 89 fa             \tmov    %r15,%rdx",
+      "49f13:\t48 c1 e2 04          \tshl    $0x4,%rdx",
+      "49f17:\t89 74 24 10          \tmov    %esi,0x10(%rsp)",
+      "49f1b:\t4c 89 e6             \tmov    %r12,%rsi",
+      "49f1e:\t4c 89 c3             \tmov    %r8,%rbx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 14,
+      "direct-1m": 29
+    }
+  },
+  {
+    "symbol": "<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u128, kimojio_fsm_http2::api::StreamId, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::remove_leaf_kv::<<alloc::collections::btree::map::entry::OccupiedEntry<u128, kimojio_fsm_http2::api::StreamId>>::remove_kv::{closure#0}, alloc::alloc::Global>",
+    "address": "0x4b311",
+    "offset": "0x471",
+    "instruction": "4b311:\tff 15 d9 f8 0a 00    \tcall   *0xaf8d9(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "4b2f2:\t00",
+      "4b2f3:\t41 0f 29 04 06       \tmovaps %xmm0,(%r14,%rax,1)",
+      "4b2f8:\t48 8b 7c 24 08       \tmov    0x8(%rsp),%rdi",
+      "4b2fd:\tc1 e7 04             \tshl    $0x4,%edi",
+      "4b300:\t4c 01 f7             \tadd    %r14,%rdi",
+      "4b303:\t4c 8b 6c 24 38       \tmov    0x38(%rsp),%r13",
+      "4b308:\t44 89 ea             \tmov    %r13d,%edx",
+      "4b30b:\tc1 e2 04             \tshl    $0x4,%edx",
+      "4b30e:\t4c 89 fe             \tmov    %r15,%rsi"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 48,
+      "direct-1m": 94
+    }
+  },
+  {
+    "symbol": "<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u128, kimojio_fsm_http2::api::StreamId, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::remove_leaf_kv::<<alloc::collections::btree::map::entry::OccupiedEntry<u128, kimojio_fsm_http2::api::StreamId>>::remove_kv::{closure#0}, alloc::alloc::Global>",
+    "address": "0x4b344",
+    "offset": "0x4a4",
+    "instruction": "4b344:\tff 15 9e f8 0a 00    \tcall   *0xaf89e(%rip)        # fabe8 <memmove@GLIBC_2.2.5>",
+    "preceding": [
+      "4b317:\t4a 8d 3c a3          \tlea    (%rbx,%r12,4),%rdi",
+      "4b31b:\t48 81 c7 b8 00 00 00 \tadd    $0xb8,%rdi",
+      "4b322:\t42 8b 84 a3 b8 00 00 \tmov    0xb8(%rbx,%r12,4),%eax",
+      "4b329:\t00",
+      "4b32a:\t89 84 24 80 00 00 00 \tmov    %eax,0x80(%rsp)",
+      "4b331:\t4a 8d 34 a3          \tlea    (%rbx,%r12,4),%rsi",
+      "4b335:\t48 81 c6 bc 00 00 00 \tadd    $0xbc,%rsi",
+      "4b33c:\t48 8d 14 ad 00 00 00 \tlea    0x0(,%rbp,4),%rdx",
+      "4b343:\t00"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 48,
+      "direct-1m": 94
+    }
+  },
+  {
+    "symbol": "<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u128, kimojio_fsm_http2::api::StreamId, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::remove_leaf_kv::<<alloc::collections::btree::map::entry::OccupiedEntry<u128, kimojio_fsm_http2::api::StreamId>>::remove_kv::{closure#0}, alloc::alloc::Global>",
+    "address": "0x4b385",
+    "offset": "0x4e5",
+    "instruction": "4b385:\tff 15 65 f8 0a 00    \tcall   *0xaf865(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "4b35d:\t00",
+      "4b35e:\t4c 89 bc 24 80 00 00 \tmov    %r15,0x80(%rsp)",
+      "4b365:\t00",
+      "4b366:\t49 8d b7 b8 00 00 00 \tlea    0xb8(%r15),%rsi",
+      "4b36d:\t48 8b 44 24 08       \tmov    0x8(%rsp),%rax",
+      "4b372:\t49 8d 3c 86          \tlea    (%r14,%rax,4),%rdi",
+      "4b376:\t48 81 c7 b8 00 00 00 \tadd    $0xb8,%rdi",
+      "4b37d:\t42 8d 14 ad 00 00 00 \tlea    0x0(,%r13,4),%edx",
+      "4b384:\t00"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 48,
+      "direct-1m": 94
+    }
+  },
+  {
+    "symbol": "<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u128, kimojio_fsm_http2::api::StreamId, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::remove_leaf_kv::<<alloc::collections::btree::map::entry::OccupiedEntry<u128, kimojio_fsm_http2::api::StreamId>>::remove_kv::{closure#0}, alloc::alloc::Global>",
+    "address": "0x4b3ad",
+    "offset": "0x50d",
+    "instruction": "4b3ad:\tff 15 35 f8 0a 00    \tcall   *0xaf835(%rip)        # fabe8 <memmove@GLIBC_2.2.5>",
+    "preceding": [
+      "4b384:\t00",
+      "4b385:\tff 15 65 f8 0a 00    \tcall   *0xaf865(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+      "4b38b:\t4d 8d 7c 24 01       \tlea    0x1(%r12),%r15",
+      "4b390:\t4a 8d 3c e3          \tlea    (%rbx,%r12,8),%rdi",
+      "4b394:\t48 81 c7 f8 00 00 00 \tadd    $0xf8,%rdi",
+      "4b39b:\t4a 8d 34 e3          \tlea    (%rbx,%r12,8),%rsi",
+      "4b39f:\t48 81 c6 00 01 00 00 \tadd    $0x100,%rsi",
+      "4b3a6:\t48 c1 e5 03          \tshl    $0x3,%rbp",
+      "4b3aa:\t48 89 ea             \tmov    %rbp,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 48,
+      "direct-1m": 94
+    }
+  },
+  {
+    "symbol": "<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u128, kimojio_fsm_http2::api::StreamId, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::remove_leaf_kv::<<alloc::collections::btree::map::entry::OccupiedEntry<u128, kimojio_fsm_http2::api::StreamId>>::remove_kv::{closure#0}, alloc::alloc::Global>",
+    "address": "0x4b4eb",
+    "offset": "0x64b",
+    "instruction": "4b4eb:\tff 15 ff f6 0a 00    \tcall   *0xaf6ff(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "4b4c0:\t48 39 c2             \tcmp    %rax,%rdx",
+      "4b4c3:\t0f 85 5d 01 00 00    \tjne    4b626 <<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u128, kimojio_fsm_http2::api::StreamId, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::remove_leaf_kv::<<alloc::collections::btree::map::entry::OccupiedEntry<u128, kimojio_fsm_http2::api::StreamId>>::remove_kv::{closure#0}, alloc::alloc::Global>+0x786>",
+      "4b4c9:\t49 8d 86 f0 00 00 00 \tlea    0xf0(%r14),%rax",
+      "4b4d0:\t4c 8b 6c 24 08       \tmov    0x8(%rsp),%r13",
+      "4b4d5:\t4a 8d 3c e8          \tlea    (%rax,%r13,8),%rdi",
+      "4b4d9:\t48 8b 84 24 80 00 00 \tmov    0x80(%rsp),%rax",
+      "4b4e0:\t00",
+      "4b4e1:\t48 8d b0 f0 00 00 00 \tlea    0xf0(%rax),%rsi",
+      "4b4e8:\tc1 e2 03             \tshl    $0x3,%edx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 48,
+      "direct-1m": 94
+    }
+  },
+  {
+    "symbol": "<kimojio_fsm_http2::engine::Connection<&[u8]>>::next::<composition_bench::composition_bench_support::Ports>",
+    "address": "0x54eda",
+    "offset": "0x17aa",
+    "instruction": "54eda:\tff 15 10 5d 0a 00    \tcall   *0xa5d10(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "54eb4:\t49 89 c7             \tmov    %rax,%r15",
+      "54eb7:\t49 01 f7             \tadd    %rsi,%r15",
+      "54eba:\t0f 82 88 0d 00 00    \tjb     55c48 <<kimojio_fsm_http2::engine::Connection<&[u8]>>::next::<composition_bench::composition_bench_support::Ports>+0x2518>",
+      "54ec0:\t49 39 d7             \tcmp    %rdx,%r15",
+      "54ec3:\t0f 87 7f 0d 00 00    \tja     55c48 <<kimojio_fsm_http2::engine::Connection<&[u8]>>::next::<composition_bench::composition_bench_support::Ports>+0x2518>",
+      "54ec9:\t48 8b 4c 24 70       \tmov    0x70(%rsp),%rcx",
+      "54ece:\t48 03 79 10          \tadd    0x10(%rcx),%rdi",
+      "54ed2:\t49 03 74 24 10       \tadd    0x10(%r12),%rsi",
+      "54ed7:\t48 89 c2             \tmov    %rax,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 579,
+      "direct-1m": 673
+    }
+  },
+  {
+    "symbol": "<kimojio_fsm_http2::engine::Connection<&[u8]>>::next::<composition_bench::composition_bench_support::Ports>",
+    "address": "0x551f0",
+    "offset": "0x1ac0",
+    "instruction": "551f0:\tff 15 fa 59 0a 00    \tcall   *0xa59fa(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "551c8:\t0f 85 63 0b 00 00    \tjne    55d31 <<kimojio_fsm_http2::engine::Connection<&[u8]>>::next::<composition_bench::composition_bench_support::Ports>+0x2601>",
+      "551ce:\t49 83 7d 00 01       \tcmpq   $0x1,0x0(%r13)",
+      "551d3:\t0f 85 58 0b 00 00    \tjne    55d31 <<kimojio_fsm_http2::engine::Connection<&[u8]>>::next::<composition_bench::composition_bench_support::Ports>+0x2601>",
+      "551d9:\t49 8b 55 18          \tmov    0x18(%r13),%rdx",
+      "551dd:\t49 39 d7             \tcmp    %rdx,%r15",
+      "551e0:\t0f 87 69 0b 00 00    \tja     55d4f <<kimojio_fsm_http2::engine::Connection<&[u8]>>::next::<composition_bench::composition_bench_support::Ports>+0x261f>",
+      "551e6:\t49 8b 7d 10          \tmov    0x10(%r13),%rdi",
+      "551ea:\t48 89 ee             \tmov    %rbp,%rsi",
+      "551ed:\t4c 89 fa             \tmov    %r15,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 579,
+      "direct-1m": 673
+    }
+  },
+  {
+    "symbol": "<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick",
+    "address": "0x65559",
+    "offset": "0x13f9",
+    "instruction": "65559:\tff 15 91 56 09 00    \tcall   *0x95691(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "65533:\t0f 84 90 03 00 00    \tje     658c9 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x1769>",
+      "65539:\t48 8d bc 24 40 01 00 \tlea    0x140(%rsp),%rdi",
+      "65540:\t00",
+      "65541:\tff 15 71 58 09 00    \tcall   *0x95871(%rip)        # fadb8 <_DYNAMIC+0x410>",
+      "65547:\t49 39 d4             \tcmp    %rdx,%r12",
+      "6554a:\t0f 87 96 0e 00 00    \tja     663e6 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x2286>",
+      "65550:\t48 89 c7             \tmov    %rax,%rdi",
+      "65553:\t4c 89 ee             \tmov    %r13,%rsi",
+      "65556:\t4c 89 e2             \tmov    %r12,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 668,
+      "direct-1m": 1477
+    }
+  },
+  {
+    "symbol": "<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick",
+    "address": "0x655ba",
+    "offset": "0x145a",
+    "instruction": "655ba:\tff 15 30 56 09 00    \tcall   *0x95630(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "6559a:\t4c 89 eb             \tmov    %r13,%rbx",
+      "6559d:\t4c 01 e3             \tadd    %r12,%rbx",
+      "655a0:\t0f 82 4e 0e 00 00    \tjb     663f4 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x2294>",
+      "655a6:\t84 c9                \ttest   %cl,%cl",
+      "655a8:\t0f 85 39 10 00 00    \tjne    665e7 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x2487>",
+      "655ae:\t4c 01 e0             \tadd    %r12,%rax",
+      "655b1:\t48 89 c7             \tmov    %rax,%rdi",
+      "655b4:\t4c 89 fe             \tmov    %r15,%rsi",
+      "655b7:\t4c 89 ea             \tmov    %r13,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 668,
+      "direct-1m": 1477
+    }
+  },
+  {
+    "symbol": "<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick",
+    "address": "0x659d1",
+    "offset": "0x1871",
+    "instruction": "659d1:\tff 15 19 52 09 00    \tcall   *0x95219(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "659ab:\t0f 84 9e 01 00 00    \tje     65b4f <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x19ef>",
+      "659b1:\t48 8d bc 24 40 01 00 \tlea    0x140(%rsp),%rdi",
+      "659b8:\t00",
+      "659b9:\tff 15 f9 53 09 00    \tcall   *0x953f9(%rip)        # fadb8 <_DYNAMIC+0x410>",
+      "659bf:\t49 39 d4             \tcmp    %rdx,%r12",
+      "659c2:\t0f 87 25 0a 00 00    \tja     663ed <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x228d>",
+      "659c8:\t48 89 c7             \tmov    %rax,%rdi",
+      "659cb:\t4c 89 ee             \tmov    %r13,%rsi",
+      "659ce:\t4c 89 e2             \tmov    %r12,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 668,
+      "direct-1m": 1477
+    }
+  },
+  {
+    "symbol": "<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick",
+    "address": "0x65a32",
+    "offset": "0x18d2",
+    "instruction": "65a32:\tff 15 b8 51 09 00    \tcall   *0x951b8(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "65a12:\t4c 89 eb             \tmov    %r13,%rbx",
+      "65a15:\t4c 01 e3             \tadd    %r12,%rbx",
+      "65a18:\t0f 82 e5 09 00 00    \tjb     66403 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x22a3>",
+      "65a1e:\t84 c9                \ttest   %cl,%cl",
+      "65a20:\t0f 85 e3 0b 00 00    \tjne    66609 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x24a9>",
+      "65a26:\t4c 01 e0             \tadd    %r12,%rax",
+      "65a29:\t48 89 c7             \tmov    %rax,%rdi",
+      "65a2c:\t4c 89 fe             \tmov    %r15,%rsi",
+      "65a2f:\t4c 89 ea             \tmov    %r13,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 668,
+      "direct-1m": 1477
+    }
+  },
+  {
+    "symbol": "<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick",
+    "address": "0x6604a",
+    "offset": "0x1eea",
+    "instruction": "6604a:\tff 15 a0 4b 09 00    \tcall   *0x94ba0(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "66023:\tff 15 ff 4b 09 00    \tcall   *0x94bff(%rip)        # fac28 <_DYNAMIC+0x280>",
+      "66029:\t4c 89 ef             \tmov    %r13,%rdi",
+      "6602c:\t4c 89 fe             \tmov    %r15,%rsi",
+      "6602f:\tff 15 93 4d 09 00    \tcall   *0x94d93(%rip)        # fadc8 <_DYNAMIC+0x420>",
+      "66035:\t48 8d 5c 24 30       \tlea    0x30(%rsp),%rbx",
+      "6603a:\t48 8d b4 24 58 01 00 \tlea    0x158(%rsp),%rsi",
+      "66041:\t00",
+      "66042:\tba a8 00 00 00       \tmov    $0xa8,%edx",
+      "66047:\t48 89 df             \tmov    %rbx,%rdi"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 668,
+      "direct-1m": 1477
+    }
+  },
+  {
+    "symbol": "<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick",
+    "address": "0x66118",
+    "offset": "0x1fb8",
+    "instruction": "66118:\tff 15 d2 4a 09 00    \tcall   *0x94ad2(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "660ee:\t48 8d 54 24 30       \tlea    0x30(%rsp),%rdx",
+      "660f3:\tbe 2b 00 00 00       \tmov    $0x2b,%esi",
+      "660f8:\tff 15 ba 4b 09 00    \tcall   *0x94bba(%rip)        # facb8 <_DYNAMIC+0x310>",
+      "660fe:\te9 58 05 00 00       \tjmp    6665b <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x24fb>",
+      "66103:\t48 8d 5c 24 30       \tlea    0x30(%rsp),%rbx",
+      "66108:\t48 8d b4 24 58 01 00 \tlea    0x158(%rsp),%rsi",
+      "6610f:\t00",
+      "66110:\tba a8 00 00 00       \tmov    $0xa8,%edx",
+      "66115:\t48 89 df             \tmov    %rbx,%rdi"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 668,
+      "direct-1m": 1477
+    }
+  },
+  {
+    "symbol": "<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick",
+    "address": "0x66479",
+    "offset": "0x2319",
+    "instruction": "66479:\tff 15 71 47 09 00    \tcall   *0x94771(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "66454:\te9 02 02 00 00       \tjmp    6665b <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x24fb>",
+      "66459:\t4d 89 fd             \tmov    %r15,%r13",
+      "6645c:\t48 89 c6             \tmov    %rax,%rsi",
+      "6645f:\te9 ee 01 00 00       \tjmp    66652 <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x24f2>",
+      "66464:\t48 8d 5c 24 30       \tlea    0x30(%rsp),%rbx",
+      "66469:\t48 8d b4 24 58 01 00 \tlea    0x158(%rsp),%rsi",
+      "66470:\t00",
+      "66471:\tba a8 00 00 00       \tmov    $0xa8,%edx",
+      "66476:\t48 89 df             \tmov    %rbx,%rdi"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 668,
+      "direct-1m": 1477
+    }
+  },
+  {
+    "symbol": "<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick",
+    "address": "0x66537",
+    "offset": "0x23d7",
+    "instruction": "66537:\tff 15 b3 46 09 00    \tcall   *0x946b3(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "6650d:\t48 8d 54 24 30       \tlea    0x30(%rsp),%rdx",
+      "66512:\tbe 2b 00 00 00       \tmov    $0x2b,%esi",
+      "66517:\tff 15 9b 47 09 00    \tcall   *0x9479b(%rip)        # facb8 <_DYNAMIC+0x310>",
+      "6651d:\te9 39 01 00 00       \tjmp    6665b <<composition_bench::composition_bench_support::Pair<kimojio_fsm_http2::engine::Client<&[u8]>, kimojio_fsm_http2::engine::Server<&[u8]>>>::tick+0x24fb>",
+      "66522:\t48 8d 5c 24 30       \tlea    0x30(%rsp),%rbx",
+      "66527:\t48 8d b4 24 58 01 00 \tlea    0x158(%rsp),%rsi",
+      "6652e:\t00",
+      "6652f:\tba a8 00 00 00       \tmov    $0xa8,%edx",
+      "66534:\t48 89 df             \tmov    %rbx,%rdi"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 668,
+      "direct-1m": 1477
+    }
+  },
+  {
+    "symbol": "composition_bench::composition_bench_support::run",
+    "address": "0x67a0c",
+    "offset": "0x72c",
+    "instruction": "67a0c:\tff 15 de 31 09 00    \tcall   *0x931de(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "679eb:\t48 89 df             \tmov    %rbx,%rdi",
+      "679ee:\tff 15 1c 32 09 00    \tcall   *0x9321c(%rip)        # fac10 <_DYNAMIC+0x268>",
+      "679f4:\tbf 01 00 00 00       \tmov    $0x1,%edi",
+      "679f9:\t48 85 c0             \ttest   %rax,%rax",
+      "679fc:\t74 ca                \tje     679c8 <composition_bench::composition_bench_support::run+0x6e8>",
+      "679fe:\t49 89 c7             \tmov    %rax,%r15",
+      "67a01:\t48 89 c7             \tmov    %rax,%rdi",
+      "67a04:\t48 8b 74 24 58       \tmov    0x58(%rsp),%rsi",
+      "67a09:\t48 89 da             \tmov    %rbx,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 1,
+      "direct-1m": 0
+    }
+  },
+  {
+    "symbol": "composition_bench::composition_bench_support::run",
+    "address": "0x67b1e",
+    "offset": "0x83e",
+    "instruction": "67b1e:\tff 15 cc 30 09 00    \tcall   *0x930cc(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "67afd:\tff 15 0d 31 09 00    \tcall   *0x9310d(%rip)        # fac10 <_DYNAMIC+0x268>",
+      "67b03:\t48 8b 94 24 e0 3d 00 \tmov    0x3de0(%rsp),%rdx",
+      "67b0a:\t00",
+      "67b0b:\t48 85 c0             \ttest   %rax,%rax",
+      "67b0e:\t74 bd                \tje     67acd <composition_bench::composition_bench_support::run+0x7ed>",
+      "67b10:\t48 89 c3             \tmov    %rax,%rbx",
+      "67b13:\t48 89 c7             \tmov    %rax,%rdi",
+      "67b16:\t48 8b b4 24 d8 3d 00 \tmov    0x3dd8(%rsp),%rsi",
+      "67b1d:\t00"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 1,
+      "direct-1m": 0
+    }
+  },
+  {
+    "symbol": "composition_bench::composition_bench_support::run",
+    "address": "0x67c9e",
+    "offset": "0x9be",
+    "instruction": "67c9e:\tff 15 4c 2f 09 00    \tcall   *0x92f4c(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "67c7d:\t48 89 df             \tmov    %rbx,%rdi",
+      "67c80:\tff 15 8a 2f 09 00    \tcall   *0x92f8a(%rip)        # fac10 <_DYNAMIC+0x268>",
+      "67c86:\tbf 01 00 00 00       \tmov    $0x1,%edi",
+      "67c8b:\t48 85 c0             \ttest   %rax,%rax",
+      "67c8e:\t74 ca                \tje     67c5a <composition_bench::composition_bench_support::run+0x97a>",
+      "67c90:\t49 89 c7             \tmov    %rax,%r15",
+      "67c93:\t48 89 c7             \tmov    %rax,%rdi",
+      "67c96:\t48 8b 74 24 58       \tmov    0x58(%rsp),%rsi",
+      "67c9b:\t48 89 da             \tmov    %rbx,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 1,
+      "direct-1m": 0
+    }
+  },
+  {
+    "symbol": "composition_bench::composition_bench_support::run",
+    "address": "0x67db0",
+    "offset": "0xad0",
+    "instruction": "67db0:\tff 15 3a 2e 09 00    \tcall   *0x92e3a(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "67d8f:\tff 15 7b 2e 09 00    \tcall   *0x92e7b(%rip)        # fac10 <_DYNAMIC+0x268>",
+      "67d95:\t48 8b 94 24 e0 3d 00 \tmov    0x3de0(%rsp),%rdx",
+      "67d9c:\t00",
+      "67d9d:\t48 85 c0             \ttest   %rax,%rax",
+      "67da0:\t74 bd                \tje     67d5f <composition_bench::composition_bench_support::run+0xa7f>",
+      "67da2:\t48 89 c3             \tmov    %rax,%rbx",
+      "67da5:\t48 89 c7             \tmov    %rax,%rdi",
+      "67da8:\t48 8b b4 24 d8 3d 00 \tmov    0x3dd8(%rsp),%rsi",
+      "67daf:\t00"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 1,
+      "direct-1m": 0
+    }
+  },
+  {
+    "symbol": "<kimojio_fsm_http2::hpack::DynamicTable>::try_reserve_insertions",
+    "address": "0x91e6c",
+    "offset": "0xac",
+    "instruction": "91e6c:\tff 15 7e 8d 06 00    \tcall   *0x68d7e(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "91e4f:\t48 39 ce             \tcmp    %rcx,%rsi",
+      "91e52:\t72 23                \tjb     91e77 <<kimojio_fsm_http2::hpack::DynamicTable>::try_reserve_insertions+0xb7>",
+      "91e54:\t48 8b 77 08          \tmov    0x8(%rdi),%rsi",
+      "91e58:\t49 c1 e6 05          \tshl    $0x5,%r14",
+      "91e5c:\t49 01 f6             \tadd    %rsi,%r14",
+      "91e5f:\t48 c1 e1 05          \tshl    $0x5,%rcx",
+      "91e63:\t49 89 ff             \tmov    %rdi,%r15",
+      "91e66:\t4c 89 f7             \tmov    %r14,%rdi",
+      "91e69:\t48 89 ca             \tmov    %rcx,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 13,
+      "direct-1m": 1
+    }
+  },
+  {
+    "symbol": "<kimojio_fsm_http2::server::h2::endpoint::H2OutboundQueue>::reserve_commit",
+    "address": "0x98251",
+    "offset": "0xe1",
+    "instruction": "98251:\tff 15 91 29 06 00    \tcall   *0x62991(%rip)        # fabe8 <memmove@GLIBC_2.2.5>",
+    "preceding": [
+      "98233:\t48 29 c3             \tsub    %rax,%rbx",
+      "98236:\t48 c1 e2 05          \tshl    $0x5,%rdx",
+      "9823a:\t48 01 f2             \tadd    %rsi,%rdx",
+      "9823d:\t48 89 df             \tmov    %rbx,%rdi",
+      "98240:\t48 c1 e7 05          \tshl    $0x5,%rdi",
+      "98244:\t48 01 f7             \tadd    %rsi,%rdi",
+      "98247:\t48 c1 e0 05          \tshl    $0x5,%rax",
+      "9824b:\t48 89 d6             \tmov    %rdx,%rsi",
+      "9824e:\t48 89 c2             \tmov    %rax,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 2,
+      "direct-1m": 0
+    }
+  },
+  {
+    "symbol": "<kimojio_fsm_http2::server::h2::endpoint::H2OutboundQueue>::reserve_commit",
+    "address": "0x9826b",
+    "offset": "0xfb",
+    "instruction": "9826b:\tff 15 7f 29 06 00    \tcall   *0x6297f(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "9824b:\t48 89 d6             \tmov    %rdx,%rsi",
+      "9824e:\t48 89 c2             \tmov    %rax,%rdx",
+      "98251:\tff 15 91 29 06 00    \tcall   *0x62991(%rip)        # fabe8 <memmove@GLIBC_2.2.5>",
+      "98257:\t49 89 5d 10          \tmov    %rbx,0x10(%r13)",
+      "9825b:\teb 14                \tjmp    98271 <<kimojio_fsm_http2::server::h2::endpoint::H2OutboundQueue>::reserve_commit+0x101>",
+      "9825d:\t49 c1 e6 05          \tshl    $0x5,%r14",
+      "98261:\t49 01 f6             \tadd    %rsi,%r14",
+      "98264:\t48 c1 e2 05          \tshl    $0x5,%rdx",
+      "98268:\t4c 89 f7             \tmov    %r14,%rdi"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 2,
+      "direct-1m": 0
+    }
+  },
+  {
+    "symbol": "kimojio_fsm_http2::server::h2::endpoint::accept_header_frame_for_connection",
+    "address": "0x9a38d",
+    "offset": "0x56d",
+    "instruction": "9a38d:\tff 15 5d 08 06 00    \tcall   *0x6085d(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "9a36a:\t48 39 f2             \tcmp    %rsi,%rdx",
+      "9a36d:\t0f 87 38 01 00 00    \tja     9a4ab <kimojio_fsm_http2::server::h2::endpoint::accept_header_frame_for_connection+0x68b>",
+      "9a373:\t48 85 d2             \ttest   %rdx,%rdx",
+      "9a376:\t74 23                \tje     9a39b <kimojio_fsm_http2::server::h2::endpoint::accept_header_frame_for_connection+0x57b>",
+      "9a378:\t4c 89 4c 24 50       \tmov    %r9,0x50(%rsp)",
+      "9a37d:\t48 8b 7c 24 10       \tmov    0x10(%rsp),%rdi",
+      "9a382:\t4c 01 cf             \tadd    %r9,%rdi",
+      "9a385:\t48 8b 74 24 58       \tmov    0x58(%rsp),%rsi",
+      "9a38a:\t49 89 d5             \tmov    %rdx,%r13"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 21,
+      "direct-1m": 0
+    }
+  },
+  {
+    "symbol": "kimojio_fsm_http2::server::h2::endpoint::accept_header_frame_for_connection",
+    "address": "0x9a44b",
+    "offset": "0x62b",
+    "instruction": "9a44b:\tff 15 9f 07 06 00    \tcall   *0x6079f(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "9a429:\t4c 8b 7c 24 48       \tmov    0x48(%rsp),%r15",
+      "9a42e:\t4c 29 f8             \tsub    %r15,%rax",
+      "9a431:\t49 39 c5             \tcmp    %rax,%r13",
+      "9a434:\t4c 89 ea             \tmov    %r13,%rdx",
+      "9a437:\t0f 87 96 00 00 00    \tja     9a4d3 <kimojio_fsm_http2::server::h2::endpoint::accept_header_frame_for_connection+0x6b3>",
+      "9a43d:\t48 8b 7c 24 40       \tmov    0x40(%rsp),%rdi",
+      "9a442:\t4c 01 ff             \tadd    %r15,%rdi",
+      "9a445:\t48 89 ee             \tmov    %rbp,%rsi",
+      "9a448:\t49 89 d4             \tmov    %rdx,%r12"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 21,
+      "direct-1m": 0
+    }
+  },
+  {
+    "symbol": "<kimojio_fsm_http2::server::h2::client::H2Client>::accept_driver_bytes_ref",
+    "address": "0x9c543",
+    "offset": "0x4e3",
+    "instruction": "9c543:\tff 15 a7 e6 05 00    \tcall   *0x5e6a7(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "9c522:\t48 29 ee             \tsub    %rbp,%rsi",
+      "9c525:\t49 39 f4             \tcmp    %rsi,%r12",
+      "9c528:\t0f 87 8a 05 00 00    \tja     9cab8 <<kimojio_fsm_http2::server::h2::client::H2Client>::accept_driver_bytes_ref+0xa58>",
+      "9c52e:\t4d 85 e4             \ttest   %r12,%r12",
+      "9c531:\t48 8b 74 24 08       \tmov    0x8(%rsp),%rsi",
+      "9c536:\t74 11                \tje     9c549 <<kimojio_fsm_http2::server::h2::client::H2Client>::accept_driver_bytes_ref+0x4e9>",
+      "9c538:\t48 8b 7c 24 50       \tmov    0x50(%rsp),%rdi",
+      "9c53d:\t48 01 ef             \tadd    %rbp,%rdi",
+      "9c540:\t4c 89 e2             \tmov    %r12,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 65,
+      "direct-1m": 216
+    }
+  },
+  {
+    "symbol": "<kimojio_fsm_http2::server::h2::client::H2Client>::accept_driver_bytes_ref",
+    "address": "0x9ca48",
+    "offset": "0x9e8",
+    "instruction": "9ca48:\tff 15 a2 e1 05 00    \tcall   *0x5e1a2(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "9ca25:\t48 89 44 24 10       \tmov    %rax,0x10(%rsp)",
+      "9ca2a:\t83 7c 24 20 01       \tcmpl   $0x1,0x20(%rsp)",
+      "9ca2f:\t0f 84 ad 00 00 00    \tje     9cae2 <<kimojio_fsm_http2::server::h2::client::H2Client>::accept_driver_bytes_ref+0xa82>",
+      "9ca35:\t4c 8b 64 24 30       \tmov    0x30(%rsp),%r12",
+      "9ca3a:\t48 85 ed             \ttest   %rbp,%rbp",
+      "9ca3d:\t74 0f                \tje     9ca4e <<kimojio_fsm_http2::server::h2::client::H2Client>::accept_driver_bytes_ref+0x9ee>",
+      "9ca3f:\t4c 89 e7             \tmov    %r12,%rdi",
+      "9ca42:\t4c 89 ee             \tmov    %r13,%rsi",
+      "9ca45:\t48 89 ea             \tmov    %rbp,%rdx"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 65,
+      "direct-1m": 216
+    }
+  },
+  {
+    "symbol": "<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref",
+    "address": "0xa2fab",
+    "offset": "0x60b",
+    "instruction": "a2fab:\tff 15 3f 7c 05 00    \tcall   *0x57c3f(%rip)        # fabf0 <memcpy@GLIBC_2.14>",
+    "preceding": [
+      "a2f87:\t48 8d 54 24 70       \tlea    0x70(%rsp),%rdx",
+      "a2f8c:\te8 9f 01 00 00       \tcall   a3130 <<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_frame_bytes_ref>",
+      "a2f91:\t83 bc 24 88 00 00 00 \tcmpl   $0xfffffffe,0x88(%rsp)",
+      "a2f98:\tfe",
+      "a2f99:\t75 29                \tjne    a2fc4 <<kimojio_fsm_http2::server::h2::server::H2Server>::accept_driver_event_bytes_ref+0x624>",
+      "a2f9b:\t48 8d b4 24 88 00 00 \tlea    0x88(%rsp),%rsi",
+      "a2fa2:\t00",
+      "a2fa3:\tba e8 00 00 00       \tmov    $0xe8,%edx",
+      "a2fa8:\t48 89 df             \tmov    %rbx,%rdi"
+    ],
+    "hits": {
+      "direct-empty": 0,
+      "direct-1m": 0
+    },
+    "parent_samples": {
+      "direct-empty": 152,
+      "direct-1m": 131
+    }
+  }
+]

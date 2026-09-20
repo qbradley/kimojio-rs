@@ -6,7 +6,7 @@ import pathlib
 import re
 import sys
 
-text = re.sub(r"\[[0-9a-f]{16}\]", "", pathlib.Path(sys.argv[1]).read_text())
+text = re.sub(r"\[[0-9a-f]{1,16}\]", "", pathlib.Path(sys.argv[1]).read_text())
 samples = []
 for block in text.split("\n\n"):
     frames = []
