@@ -1,0 +1,15 @@
+   Compiling kimojio-http2 v0.17.0 (/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio-http2)
+    Finished `release` profile [optimized + debuginfo] target(s) in 3.48s
+     Running benches/harness_tests.rs (/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/release/deps/harness_tests-a5c443b47eb9a805)
+
+running 7 tests
+test allocation::tests::alignment_zeroing_reallocation_and_origin_survive_boundary ... ok
+test allocation::tests::disjoint_origin_peaks_are_not_added ... ok
+test allocation::tests::free_before_window_and_zero_growth_do_not_hide_activity ... ok
+test options_and_payload_negative_controls ... ok
+test corrupted_payload_cannot_report_success ... ok
+test real_socket_modes_streaming_and_retirement ... ok
+test cold_owned_buffers_and_concurrency_bounds ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

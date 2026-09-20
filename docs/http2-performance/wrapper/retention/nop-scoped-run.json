@@ -1,0 +1,19 @@
+{
+  "command": [
+    "taskset",
+    "-c",
+    "8-31",
+    "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/retention-frozen/controls"
+  ],
+  "environment": {
+    "KIMOJIO_RETENTION_CONTROL": "nop-scoped",
+    "KIMOJIO_RETENTION_OUTPUT": "/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/docs/http2-performance/wrapper/retention/nop-scoped.jsonl"
+  },
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "",
+  "binary_sha256": "a5bc0260cdd341889fea6b3673c76d5a75c391d423203a193eb21f84acf46039",
+  "address_space_limit_bytes": 536870912,
+  "cpu_limit_seconds": 100,
+  "wall_limit_seconds": 110
+}

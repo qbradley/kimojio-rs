@@ -1,0 +1,2 @@
+    Checking kimojio-http2 v0.17.0 (/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio-http2)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.24s

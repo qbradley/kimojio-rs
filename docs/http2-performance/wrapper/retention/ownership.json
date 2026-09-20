@@ -1,0 +1,496 @@
+[
+  {
+    "backend": "native",
+    "label": "pre_runtime",
+    "cohort_field": 0,
+    "allocations": 3,
+    "reallocations": 0,
+    "deallocations": 0,
+    "requested_live_bytes": 690,
+    "attributed_live_bytes": 0,
+    "groups": {}
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 1,
+    "allocations": 17239,
+    "reallocations": 162,
+    "deallocations": 3754,
+    "requested_live_bytes": 1691032,
+    "attributed_live_bytes": 1690484,
+    "groups": {
+      "other runtime": {
+        "bytes": 36240,
+        "objects": 17
+      },
+      "harness": {
+        "bytes": 3752,
+        "objects": 35
+      },
+      "wrapper": {
+        "bytes": 45084,
+        "objects": 26
+      },
+      "runtime Completion Rc": {
+        "bytes": 559776,
+        "objects": 4116
+      },
+      "core/protocol": {
+        "bytes": 185440,
+        "objects": 68
+      },
+      "runtime scope completions Vec": {
+        "bytes": 65536,
+        "objects": 2
+      },
+      "runtime WaitData Rc": {
+        "bytes": 663552,
+        "objects": 9216
+      },
+      "runtime scope waits Vec": {
+        "bytes": 131072,
+        "objects": 2
+      },
+      "runtime completion pool Vec": {
+        "bytes": 32,
+        "objects": 1
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 2,
+    "allocations": 35441,
+    "reallocations": 263,
+    "deallocations": 7437,
+    "requested_live_bytes": 3161712,
+    "attributed_live_bytes": 3161164,
+    "groups": {
+      "other runtime": {
+        "bytes": 36240,
+        "objects": 17
+      },
+      "harness": {
+        "bytes": 3752,
+        "objects": 35
+      },
+      "wrapper": {
+        "bytes": 45084,
+        "objects": 26
+      },
+      "runtime Completion Rc": {
+        "bytes": 1114656,
+        "objects": 8196
+      },
+      "core/protocol": {
+        "bytes": 185792,
+        "objects": 68
+      },
+      "runtime scope completions Vec": {
+        "bytes": 98304,
+        "objects": 2
+      },
+      "runtime WaitData Rc": {
+        "bytes": 1415160,
+        "objects": 19655
+      },
+      "runtime scope waits Vec": {
+        "bytes": 262144,
+        "objects": 2
+      },
+      "runtime completion pool Vec": {
+        "bytes": 32,
+        "objects": 1
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 8,
+    "allocations": 139087,
+    "reallocations": 853,
+    "deallocations": 29509,
+    "requested_live_bytes": 11690656,
+    "attributed_live_bytes": 11690108,
+    "groups": {
+      "other runtime": {
+        "bytes": 36752,
+        "objects": 17
+      },
+      "harness": {
+        "bytes": 3752,
+        "objects": 35
+      },
+      "wrapper": {
+        "bytes": 45084,
+        "objects": 26
+      },
+      "runtime Completion Rc": {
+        "bytes": 4454408,
+        "objects": 32753
+      },
+      "core/protocol": {
+        "bytes": 187904,
+        "objects": 68
+      },
+      "runtime scope completions Vec": {
+        "bytes": 393216,
+        "objects": 2
+      },
+      "runtime WaitData Rc": {
+        "bytes": 5520384,
+        "objects": 76672
+      },
+      "runtime scope waits Vec": {
+        "bytes": 1048576,
+        "objects": 2
+      },
+      "runtime completion pool Vec": {
+        "bytes": 32,
+        "objects": 1
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "connection_live",
+    "cohort_field": 32,
+    "allocations": 556667,
+    "reallocations": 3169,
+    "deallocations": 117789,
+    "requested_live_bytes": 46063760,
+    "attributed_live_bytes": 46063212,
+    "groups": {
+      "other runtime": {
+        "bytes": 36752,
+        "objects": 17
+      },
+      "harness": {
+        "bytes": 3752,
+        "objects": 35
+      },
+      "wrapper": {
+        "bytes": 45084,
+        "objects": 26
+      },
+      "runtime Completion Rc": {
+        "bytes": 17835584,
+        "objects": 131144
+      },
+      "core/protocol": {
+        "bytes": 229152,
+        "objects": 70
+      },
+      "runtime scope completions Vec": {
+        "bytes": 1572864,
+        "objects": 2
+      },
+      "runtime WaitData Rc": {
+        "bytes": 22145688,
+        "objects": 307579
+      },
+      "runtime scope waits Vec": {
+        "bytes": 4194304,
+        "objects": 2
+      },
+      "runtime completion pool Vec": {
+        "bytes": 32,
+        "objects": 1
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "post_driver_close",
+    "cohort_field": 256,
+    "allocations": 556752,
+    "reallocations": 3182,
+    "deallocations": 552596,
+    "requested_live_bytes": 627572,
+    "attributed_live_bytes": 627024,
+    "groups": {
+      "other runtime": {
+        "bytes": 33480,
+        "objects": 11
+      },
+      "harness": {
+        "bytes": 3448,
+        "objects": 44
+      },
+      "runtime Completion Rc": {
+        "bytes": 557328,
+        "objects": 4098
+      },
+      "runtime completion pool Vec": {
+        "bytes": 32768,
+        "objects": 1
+      }
+    }
+  },
+  {
+    "backend": "native",
+    "label": "post_runtime_cleanup",
+    "cohort_field": 0,
+    "allocations": 556834,
+    "reallocations": 3182,
+    "deallocations": 556831,
+    "requested_live_bytes": 1572,
+    "attributed_live_bytes": 1024,
+    "groups": {
+      "harness": {
+        "bytes": 1024,
+        "objects": 1
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "pre_runtime",
+    "cohort_field": 0,
+    "allocations": 3,
+    "reallocations": 0,
+    "deallocations": 0,
+    "requested_live_bytes": 691,
+    "attributed_live_bytes": 0,
+    "groups": {}
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 1,
+    "allocations": 18478,
+    "reallocations": 143,
+    "deallocations": 7920,
+    "requested_live_bytes": 1296813,
+    "attributed_live_bytes": 1296265,
+    "groups": {
+      "other runtime": {
+        "bytes": 36240,
+        "objects": 17
+      },
+      "harness": {
+        "bytes": 3753,
+        "objects": 35
+      },
+      "wrapper": {
+        "bytes": 124928,
+        "objects": 29
+      },
+      "runtime Completion Rc": {
+        "bytes": 952,
+        "objects": 7
+      },
+      "core/protocol": {
+        "bytes": 251040,
+        "objects": 72
+      },
+      "runtime scope completions Vec": {
+        "bytes": 64,
+        "objects": 2
+      },
+      "runtime WaitData Rc": {
+        "bytes": 748152,
+        "objects": 10391
+      },
+      "runtime scope waits Vec": {
+        "bytes": 131072,
+        "objects": 2
+      },
+      "runtime completion pool Vec": {
+        "bytes": 64,
+        "objects": 1
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 2,
+    "allocations": 35091,
+    "reallocations": 245,
+    "deallocations": 15741,
+    "requested_live_bytes": 2126669,
+    "attributed_live_bytes": 2126121,
+    "groups": {
+      "other runtime": {
+        "bytes": 36304,
+        "objects": 17
+      },
+      "harness": {
+        "bytes": 3753,
+        "objects": 35
+      },
+      "wrapper": {
+        "bytes": 124928,
+        "objects": 29
+      },
+      "runtime Completion Rc": {
+        "bytes": 952,
+        "objects": 7
+      },
+      "core/protocol": {
+        "bytes": 317024,
+        "objects": 76
+      },
+      "runtime scope completions Vec": {
+        "bytes": 64,
+        "objects": 2
+      },
+      "runtime WaitData Rc": {
+        "bytes": 1380888,
+        "objects": 19179
+      },
+      "runtime scope waits Vec": {
+        "bytes": 262144,
+        "objects": 2
+      },
+      "runtime completion pool Vec": {
+        "bytes": 64,
+        "objects": 1
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 8,
+    "allocations": 136690,
+    "reallocations": 830,
+    "deallocations": 62748,
+    "requested_live_bytes": 6846285,
+    "attributed_live_bytes": 6845737,
+    "groups": {
+      "other runtime": {
+        "bytes": 36752,
+        "objects": 17
+      },
+      "harness": {
+        "bytes": 3753,
+        "objects": 35
+      },
+      "wrapper": {
+        "bytes": 124928,
+        "objects": 29
+      },
+      "runtime Completion Rc": {
+        "bytes": 952,
+        "objects": 7
+      },
+      "core/protocol": {
+        "bytes": 319136,
+        "objects": 76
+      },
+      "runtime scope completions Vec": {
+        "bytes": 64,
+        "objects": 2
+      },
+      "runtime WaitData Rc": {
+        "bytes": 5311512,
+        "objects": 73771
+      },
+      "runtime scope waits Vec": {
+        "bytes": 1048576,
+        "objects": 2
+      },
+      "runtime completion pool Vec": {
+        "bytes": 64,
+        "objects": 1
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "connection_live",
+    "cohort_field": 32,
+    "allocations": 546854,
+    "reallocations": 3142,
+    "deallocations": 250809,
+    "requested_live_bytes": 25991877,
+    "attributed_live_bytes": 25991329,
+    "groups": {
+      "other runtime": {
+        "bytes": 36752,
+        "objects": 17
+      },
+      "harness": {
+        "bytes": 3753,
+        "objects": 35
+      },
+      "wrapper": {
+        "bytes": 124928,
+        "objects": 29
+      },
+      "runtime Completion Rc": {
+        "bytes": 952,
+        "objects": 7
+      },
+      "core/protocol": {
+        "bytes": 327584,
+        "objects": 76
+      },
+      "runtime scope completions Vec": {
+        "bytes": 64,
+        "objects": 2
+      },
+      "runtime WaitData Rc": {
+        "bytes": 21302928,
+        "objects": 295874
+      },
+      "runtime scope waits Vec": {
+        "bytes": 4194304,
+        "objects": 2
+      },
+      "runtime completion pool Vec": {
+        "bytes": 64,
+        "objects": 1
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "post_driver_close",
+    "cohort_field": 256,
+    "allocations": 546939,
+    "reallocations": 3145,
+    "deallocations": 546874,
+    "requested_live_bytes": 38493,
+    "attributed_live_bytes": 37945,
+    "groups": {
+      "other runtime": {
+        "bytes": 33480,
+        "objects": 11
+      },
+      "harness": {
+        "bytes": 3449,
+        "objects": 44
+      },
+      "runtime Completion Rc": {
+        "bytes": 952,
+        "objects": 7
+      },
+      "runtime completion pool Vec": {
+        "bytes": 64,
+        "objects": 1
+      }
+    }
+  },
+  {
+    "backend": "generic",
+    "label": "post_runtime_cleanup",
+    "cohort_field": 0,
+    "allocations": 547021,
+    "reallocations": 3145,
+    "deallocations": 547018,
+    "requested_live_bytes": 1572,
+    "attributed_live_bytes": 1024,
+    "groups": {
+      "harness": {
+        "bytes": 1024,
+        "objects": 1
+      }
+    }
+  }
+]

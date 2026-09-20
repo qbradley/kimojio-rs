@@ -43,6 +43,7 @@ pub enum Tag {
 }
 
 pub trait Meter: Copy + 'static {
+    fn checkpoint(self, _label: &str, _cohort: usize) {}
     fn begin(self);
     fn end(self) -> Value;
     fn cancel(self);
@@ -593,14 +594,27 @@ async fn drive<M: Meter>(
     let app = async {
         let result = async {
             if options.phase == "steady" {
-                for _ in 0..options.warmup {
+                for index in 0..options.warmup {
                     cohort(&client, &shared, options, meter).await?;
+                    if [1, 2, 8, 32].contains(&(index + 1)) {
+                        meter.checkpoint("connection_live", index + 1);
+                    }
                 }
                 meter.begin();
             }
             let start = Start::now();
-            for _ in 0..options.cohorts {
+            for index in 0..options.cohorts {
                 cohort(&client, &shared, options, meter).await?;
+                let total = index
+                    + 1
+                    + if options.phase == "steady" {
+                        options.warmup
+                    } else {
+                        0
+                    };
+                if [1, 2, 8, 32].contains(&total) {
+                    meter.checkpoint("connection_live", total);
+                }
             }
             let measurement = (options.phase == "steady").then(|| start.end(meter));
             Ok::<_, Error>(measurement)
@@ -740,6 +754,7 @@ async fn run_pair<M: Meter>(options: Options, meter: M) -> Result<Value, Error> 
         return Err(failure("final retirement or overlap count mismatch"));
     }
     drop(shared);
+    meter.checkpoint("post_driver_close", total);
     let measurement = match result? {
         Some(measurement) => measurement,
         None => cold.end(meter),

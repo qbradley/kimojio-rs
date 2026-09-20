@@ -1,0 +1,26 @@
+{
+  "integration_revision": "c8f6014aa3128279690834f38a82373d3d31e4c2",
+  "wrapper_revision": "d8ca94b6c6ba8439085609b289ff1ddbd6698357",
+  "freezes": [
+    {
+      "binary": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/retention-frozen/allocations",
+      "sha256": "e02f48e5d54da1b1b99b3ac83cbfb17f12fba34c7bb7e027e941b55acebd2b48",
+      "source_revision": "3a7362e8b1198739f5ad21e11fdaddef1d7ebb30",
+      "git_tree": "5696e886372bdb45f3d3622757f200a70ccc0416",
+      "source_manifest_sha256": "f2ca938c3c44a90d9026b6f9de709709bae8c2952f7500b18a883e0f96b7ca51"
+    },
+    {
+      "binary": "/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance/retention-frozen/controls",
+      "sha256": "a5bc0260cdd341889fea6b3673c76d5a75c391d423203a193eb21f84acf46039",
+      "source_revision": "15a3ebed4e5420fd0a7b66b9ee714a709f0ef289",
+      "git_tree": "1203527b8d53f0a255e415f27ee498082e15153c",
+      "source_manifest_sha256": "54056bae1f9fc03d34b7ee3254f9e0b29211594a8f7a26ebf6f69c9ea71b09ba"
+    }
+  ],
+  "build": "CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http2-program/build-http2-wrapper-performance CARGO_PROFILE_RELEASE_DEBUG=2 taskset -c 8-31 cargo build --release -p kimojio-http2 --bench allocations",
+  "rustflags": "",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "all_execution_cpus": "8-31",
+  "cpu2_lease": false,
+  "statistical_performance_claim": false
+}

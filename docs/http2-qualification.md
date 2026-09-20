@@ -9,7 +9,8 @@ The metadata-admission repair passed independent review, socket qualification, a
 Kimojio HTTP/2 wrapper implementation is in progress.
 The native client and server have focused runtime coverage.
 The explicit wrapper interoperability profile passed for native and generic transports.
-Lifecycle evidence is recorded with explicit limits. Wrapper retention attribution and performance qualification remain in progress.
+Lifecycle evidence is recorded with explicit limits.
+Runtime scope registries retain completed work for a connection's lifetime. That defect blocks performance qualification.
 
 The current socket qualification covers the direct HTTP/2 engine.
 Separate models cover the HTTP/1 plus HTTP/2 composite.
@@ -202,7 +203,7 @@ That review did not independently inject kernel cancellation races or close fail
 | Concurrent native server | Implemented with focused runtime tests |
 | Generic established transports | Implemented with focused runtime tests |
 | Independent wrapper socket fixture and peers | All 65 wrapper-profile cases passed per transport on `b3789dc6` |
-| Wrapper performance and final review | Harness implemented; retention attribution blocks statistical runs |
+| Wrapper performance and final review | Runtime scope-retention defect blocks statistical runs |
 
 The current core socket results do not qualify the new wrapper.
 The wrapper needs its own fixture, peer runs, and source-specific measurements.
@@ -354,8 +355,36 @@ Requested live storage increased during short warmed allocation windows.
 For static 1 MiB duplex bodies at concurrency eight, native storage increased from 1,691,064 to 4,549,080 bytes.
 The corresponding generic window increased from 1,296,845 to 2,892,885 bytes.
 These values describe requested bytes, not RSS, and do not establish a leak or a plateau.
-Bounded retention attribution now blocks long statistical runs.
-The investigation must distinguish harness, runtime, wrapper, and protocol ownership before any optimization or memory-bound claim.
+The following attribution identifies the runtime registry defect that now blocks long statistical runs.
+
+### Runtime scope-retention defect
+
+Attribution checkpoint `598dad5164c667fba4a50127b05a69c3227dcd6b` includes allocation-site traces and runtime-only controls.
+The [retention report](http2-performance/wrapper/retention/) records immutable binaries, exact boundaries, resource limits, and resolved allocation stacks.
+No production source changed in that checkpoint.
+
+Both wrappers keep an `io_scope` open for the connection lifetime.
+Its registries retain obsolete event waiters and completed I/O objects until scope exit.
+The retained storage grows with operation history rather than live work.
+Payload, overlap, stream retirement, and actual close assertions still pass, so those assertions alone missed this defect.
+
+| Boundary, C8 duplex | Native requested live bytes | Generic requested live bytes |
+| --- | ---: | ---: |
+| Cohort 1 | 1,691,032 | 1,296,813 |
+| Cohort 32 | 46,063,760 | 25,991,877 |
+| After both drivers close | 627,572 | 38,493 |
+| After runtime cleanup | 1,572 | 1,572 |
+
+Runtime-only scoped NOP and event-wait controls reproduce the growth.
+Equivalent unscoped controls remain flat.
+Harness and wrapper allocation-site totals remain constant across the socket cohorts.
+Core storage does not account for the large growth.
+Runtime destruction releases the retained objects, so this is connection-lifetime retention rather than a permanent post-runtime leak.
+
+The assigned correction must retire obsolete registrations while retaining genuine pending I/O and active waiters.
+It must preserve nested scopes, cancellation, borrowed-buffer safety, and reentrant waker destruction.
+Removing the connection scope or increasing limits is not an acceptable repair.
+Independent review and repeated retention measurements must precede timing claims.
 
 ### Initial wrapper client fixture
 

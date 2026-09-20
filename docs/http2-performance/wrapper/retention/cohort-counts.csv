@@ -1,0 +1,15 @@
+backend,label,cohort_field,allocations,reallocations,deallocations,requested_live_bytes,attributed_live_bytes
+native,pre_runtime,0,3,0,0,690,0
+native,connection_live,1,17239,162,3754,1691032,1690484
+native,connection_live,2,35441,263,7437,3161712,3161164
+native,connection_live,8,139087,853,29509,11690656,11690108
+native,connection_live,32,556667,3169,117789,46063760,46063212
+native,post_driver_close,256,556752,3182,552596,627572,627024
+native,post_runtime_cleanup,0,556834,3182,556831,1572,1024
+generic,pre_runtime,0,3,0,0,691,0
+generic,connection_live,1,18478,143,7920,1296813,1296265
+generic,connection_live,2,35091,245,15741,2126669,2126121
+generic,connection_live,8,136690,830,62748,6846285,6845737
+generic,connection_live,32,546854,3142,250809,25991877,25991329
+generic,post_driver_close,256,546939,3145,546874,38493,37945
+generic,post_runtime_cleanup,0,547021,3145,547018,1572,1024

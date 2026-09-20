@@ -7,6 +7,8 @@ use std::{
 
 use crate::support::{Meter, Tag};
 use serde_json::{Value, json};
+#[path = "retention.rs"]
+mod retention;
 
 thread_local! {
     static CONTEXT: Cell<usize> = const { Cell::new(0) };
@@ -46,6 +48,7 @@ pub struct CountingAllocator(Mutex<State>);
 #[repr(C)]
 struct Header {
     origin: usize,
+    site: usize,
 }
 
 fn storage(layout: Layout) -> Option<(Layout, usize)> {
@@ -56,6 +59,49 @@ fn storage(layout: Layout) -> Option<(Layout, usize)> {
 }
 
 impl CountingAllocator {
+    pub fn retention_enable(&self, path: &str) {
+        retention::enable(path);
+        self.snapshot("pre_runtime", 0);
+    }
+
+    pub fn snapshot(&self, label: &str, cohort: usize) {
+        let counts = self.0.lock().unwrap_or_else(|e| e.into_inner()).counts;
+        retention::snapshot(label, cohort, &counts);
+    }
+
+    pub async fn retention_control(&'static self, kind: String) {
+        assert!(
+            ["wait-scoped", "wait-unscoped", "nop-scoped", "nop-unscoped"].contains(&kind.as_str())
+        );
+        let scoped = kind.ends_with("-scoped");
+        let waits = kind.starts_with("wait-");
+        let work = async {
+            for count in 1..=4096 {
+                if waits {
+                    let event = kimojio::AsyncEvent::new();
+                    let wait = event.wait();
+                    let mut wait = std::pin::pin!(wait);
+                    futures::future::poll_fn(|cx| {
+                        assert!(std::future::Future::poll(wait.as_mut(), cx).is_pending());
+                        std::task::Poll::Ready(())
+                    })
+                    .await;
+                } else {
+                    kimojio::operations::nop().await.unwrap();
+                }
+                if [1, 2, 8, 32, 128, 512, 4096].contains(&count) {
+                    self.snapshot("control_live", count);
+                }
+            }
+        };
+        if scoped {
+            kimojio::operations::io_scope(async move || work.await).await;
+        } else {
+            work.await;
+        }
+        self.snapshot("control_finished", 4096);
+    }
+
     pub const fn new() -> Self {
         const ZERO: Counts = Counts {
             allocations: 0,
@@ -150,7 +196,10 @@ unsafe impl GlobalAlloc for CountingAllocator {
             return base;
         }
         unsafe {
-            base.cast::<Header>().write(Header { origin });
+            base.cast::<Header>().write(Header {
+                origin,
+                site: retention::allocated(layout.size()),
+            });
         }
         Self::record(&mut state, origin, 0, layout.size(), 0);
         unsafe { base.add(offset) }
@@ -167,7 +216,10 @@ unsafe impl GlobalAlloc for CountingAllocator {
             return base;
         }
         unsafe {
-            base.cast::<Header>().write(Header { origin });
+            base.cast::<Header>().write(Header {
+                origin,
+                site: retention::allocated(layout.size()),
+            });
         }
         Self::record(&mut state, origin, 0, layout.size(), 0);
         unsafe { base.add(offset) }
@@ -179,6 +231,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
         };
         let base = unsafe { pointer.sub(offset) };
         let origin = unsafe { (*base.cast::<Header>()).origin };
+        retention::freed(unsafe { (*base.cast::<Header>()).site }, layout.size());
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             System.dealloc(base, backing);
@@ -201,11 +254,13 @@ unsafe impl GlobalAlloc for CountingAllocator {
         }
         let base = unsafe { pointer.sub(offset) };
         let origin = unsafe { (*base.cast::<Header>()).origin };
+        let site = unsafe { (*base.cast::<Header>()).site };
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let next = unsafe { System.realloc(base, old, new.size()) };
         if next.is_null() {
             return next;
         }
+        retention::resized(site, layout.size(), size);
         Self::record(&mut state, origin, layout.size(), size, 1);
         unsafe { next.add(offset) }
     }
@@ -215,6 +270,9 @@ unsafe impl GlobalAlloc for CountingAllocator {
 pub struct AllocationMeter(pub &'static CountingAllocator);
 
 impl Meter for AllocationMeter {
+    fn checkpoint(self, label: &str, cohort: usize) {
+        self.0.snapshot(label, cohort);
+    }
     fn begin(self) {
         self.0.begin();
     }

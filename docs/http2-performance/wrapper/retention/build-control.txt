@@ -1,0 +1,2 @@
+   Compiling kimojio-http2 v0.17.0 (/workspace/kimojio-rs/target/http2-program/worktrees/http2-wrapper-performance/kimojio-http2)
+    Finished `release` profile [optimized + debuginfo] target(s) in 3.65s
