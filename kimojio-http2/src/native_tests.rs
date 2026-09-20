@@ -1072,7 +1072,15 @@ async fn settings_timeout_uses_virtual_clock_and_closes_descriptor() {
         operations::close(peer).await.unwrap();
     };
     let (result, ()) = futures::join!(connection.run(), control);
-    assert!(matches!(result, Err(Error::Connection(_))), "{result:?}");
+    assert!(
+        matches!(
+            result,
+            Err(Error::Connection(core::ConnectionResult::Protocol(error)))
+                if error.code == core::H2ErrorCode::SettingsTimeout
+        ),
+        "{result:?}"
+    );
+    assert_eq!(operations::virtual_clock_pending_timers(), 0);
     operations::virtual_clock_enable(false);
 }
 
@@ -1111,6 +1119,7 @@ async fn reset_zero_retirement_is_independent_of_a_failed_buffer_receipt() {
             let receipt = report.send_failure.unwrap();
             assert_eq!(receipt.reason, core::SendStop::Reset(0));
             assert!(receipt.exact);
+            assert!(receipt.accepted > 0);
             assert!(receipt.accepted < 65536);
             assert!(response.body_mut().frame().await.unwrap().is_none());
             let mut sibling = client

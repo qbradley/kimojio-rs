@@ -223,6 +223,10 @@ async fn paused_generic_consumer_bounds_production_and_preserves_sibling_progres
 struct Probe {
     reading: Cell<bool>,
     writing: Cell<bool>,
+    read_limit: Cell<usize>,
+    read_calls: Cell<usize>,
+    read_bytes: Cell<usize>,
+    write_calls: Cell<usize>,
     reader_dropped: Cell<bool>,
     closed: Cell<bool>,
     payload_calls: Cell<usize>,
@@ -262,9 +266,20 @@ impl AsyncStreamRead for Reader {
         if let Some(error) = self.1.fail_read.take() {
             return Err(error);
         }
+        let limit = self.1.read_limit.get();
+        let length = if limit == 0 {
+            buffer.len()
+        } else {
+            buffer.len().min(limit)
+        };
         self.1.reading.set(true);
-        let result = operations::read_with_deadline(self.0.as_ref(), buffer, deadline).await;
+        self.1.read_calls.set(self.1.read_calls.get() + 1);
+        let result =
+            operations::read_with_deadline(self.0.as_ref(), &mut buffer[..length], deadline).await;
         self.1.reading.set(false);
+        if let Ok(amount) = result {
+            self.1.read_bytes.set(self.1.read_bytes.get() + amount);
+        }
         result
     }
 
@@ -286,6 +301,7 @@ impl AsyncStreamRead for Reader {
 
 impl AsyncStreamWrite for Writer {
     async fn write(&mut self, mut buffer: &[u8], deadline: Option<Instant>) -> Result<(), Errno> {
+        self.1.write_calls.set(self.1.write_calls.get() + 1);
         let payload = buffer.len() >= 16 && buffer.iter().all(|byte| *byte == 0xa5);
         if payload {
             self.1.payload_calls.set(self.1.payload_calls.get() + 1);
@@ -337,6 +353,162 @@ impl AsyncStreamWrite for Writer {
         self.1.closed.set(true);
         self.1.fail_close.get().map_or(Ok(()), Err)
     }
+}
+
+#[kimojio::test]
+async fn receive_page_exhaustion_is_terminal_not_release_backpressure() {
+    let (fd, peer) = kimojio::pipe::bipipe();
+    let probe = Rc::new(Probe::default());
+    probe.read_limit.set(1024);
+    let mut config = Config::default();
+    config.protocol.connection_receive_window = 65535;
+    config.protocol.max_receive_capacity = 128 * 1024;
+    let (client, driver) = connect(Transport(fd, probe.clone()), config);
+    let server = serve_connection(
+        OwnedFdStream::new(peer),
+        Config::default(),
+        |_request| async { Ok(Response::new(OutgoingBody::full(vec![0xa5; 65536]))) },
+    );
+    let app = async {
+        let mut response = client
+            .send(request("/capacity", OutgoingBody::empty()))
+            .await
+            .unwrap();
+        let mut held = Vec::new();
+        loop {
+            match response.body_mut().frame().await {
+                Ok(Some(IncomingFrame::Data(chunk))) => held.push(chunk),
+                Err(Error::Stream(StreamOutcome::ConnectionFailed)) => break,
+                other => panic!("expected terminal resource failure: {other:?}"),
+            }
+        }
+        assert!(!held.is_empty());
+        while !probe.closed.get() {
+            operations::yield_io().await;
+        }
+        assert!(response.body_mut().retirement().now_or_never().is_none());
+        for chunk in &held {
+            assert!(chunk.iter().all(|byte| *byte == 0xa5));
+        }
+        drop(held);
+        assert_eq!(
+            response.body_mut().retirement().await.unwrap().outcome,
+            StreamOutcome::ConnectionFailed
+        );
+    };
+    bounded(async {
+        let ((), client, server) = futures::join!(app, driver.run(), server);
+        assert_eq!(
+            client,
+            Err(Error::Connection(
+                kimojio_http2::ConnectionResult::ResourceExhausted
+            ))
+        );
+        assert!(server.is_err());
+    })
+    .await;
+    assert!(probe.closed.get());
+}
+
+#[kimojio::test]
+async fn lease_release_alone_wakes_blocked_admission_without_new_read_completion() {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct TransportState {
+        read_bytes: usize,
+        read_calls: usize,
+        write_calls: usize,
+        reading: bool,
+    }
+    impl TransportState {
+        fn capture(probe: &Probe) -> Self {
+            Self {
+                read_bytes: probe.read_bytes.get(),
+                read_calls: probe.read_calls.get(),
+                write_calls: probe.write_calls.get(),
+                reading: probe.reading.get(),
+            }
+        }
+    }
+    struct Admission {
+        probe: Rc<Probe>,
+        at_admission: Rc<Cell<Option<TransportState>>>,
+    }
+    impl RequestObserver for Admission {
+        fn admitted(&mut self, _: kimojio_http2::StreamId) {
+            self.at_admission
+                .set(Some(TransportState::capture(&self.probe)));
+        }
+    }
+    let (fd, peer) = kimojio::pipe::bipipe();
+    let probe = Rc::new(Probe::default());
+    let mut config = Config::default();
+    config.protocol.http = config.protocol.http.set_max_active_streams(1);
+    let (client, driver) = connect(Transport(fd, probe.clone()), config);
+    let paths = Rc::new(RefCell::new(Vec::new()));
+    let server = serve_connection(OwnedFdStream::new(peer), Config::default(), {
+        let paths = paths.clone();
+        move |request| {
+            paths.borrow_mut().push(request.uri().path().to_owned());
+            async move { Ok(Response::new(OutgoingBody::from_static(b"retained"))) }
+        }
+    });
+    let admitted = Rc::new(Cell::new(None));
+    let app = async {
+        let mut first = client
+            .send(request("/held", OutgoingBody::empty()))
+            .await
+            .unwrap();
+        let Some(IncomingFrame::Data(held)) = first.body_mut().frame().await.unwrap() else {
+            panic!("held DATA")
+        };
+        assert!(first.body_mut().frame().await.unwrap().is_none());
+        assert!(first.body_mut().retirement().now_or_never().is_none());
+        let mut next = Box::pin(client.send_with_observer(
+            request("/blocked", OutgoingBody::empty()),
+            Admission {
+                probe: probe.clone(),
+                at_admission: admitted.clone(),
+            },
+        ));
+        assert!(next.as_mut().now_or_never().is_none());
+        for _ in 0..8 {
+            operations::yield_io().await;
+        }
+        assert_eq!(*paths.borrow(), ["/held"]);
+        assert_eq!(admitted.get(), None);
+        assert!(
+            probe.reading.get(),
+            "idle original read is the only transport wait"
+        );
+        assert!(!probe.writing.get());
+        let before = TransportState::capture(&probe);
+        // The second command is already blocked. Only this release wakes it.
+        drop(held);
+        let mut next = next.await.unwrap();
+        assert_eq!(
+            admitted.get(),
+            Some(before),
+            "admission needed new transport progress"
+        );
+        assert_eq!(next.body_mut().collect(16).await.unwrap(), b"retained");
+        assert_eq!(
+            first.body_mut().retirement().await.unwrap().outcome,
+            StreamOutcome::Complete
+        );
+        assert_eq!(
+            next.body_mut().retirement().await.unwrap().outcome,
+            StreamOutcome::Complete
+        );
+        assert_eq!(*paths.borrow(), ["/held", "/blocked"]);
+        client.control().graceful();
+    };
+    bounded(async {
+        let ((), client, server) = futures::join!(app, driver.run(), server);
+        client.unwrap();
+        server.unwrap();
+    })
+    .await;
+    assert!(probe.closed.get());
 }
 
 #[kimojio::test]

@@ -9,7 +9,7 @@ The metadata-admission repair passed independent review, socket qualification, a
 Kimojio HTTP/2 wrapper implementation is in progress.
 The native client and server have focused runtime coverage.
 The explicit wrapper interoperability profile passed for native and generic transports.
-Lifecycle evidence and wrapper performance qualification remain in progress.
+Lifecycle evidence is recorded with explicit limits. Wrapper retention attribution and performance qualification remain in progress.
 
 The current socket qualification covers the direct HTTP/2 engine.
 Separate models cover the HTTP/1 plus HTTP/2 composite.
@@ -319,7 +319,25 @@ The parent integration passed 41 Python tests, Go tests, and Go vet.
 The earlier native-only `96e52805` report remains separate.
 
 These results do not qualify ambiguous split/I/O/close error observations or every native cancellation race.
-The lifecycle evidence matrix and performance measurements remain separate acceptance work.
+The lifecycle evidence matrix and performance measurements provide separate acceptance evidence.
+
+### Lifecycle contract evidence
+
+Checkpoint `59d32b778a3a1b48b6a89a65a7ddb6d88bc350b3` adds tests and a [12-contract matrix](../kimojio-http2/tests/CONTRACTS.md).
+It changes no production wrapper, core, runtime, peer fixture, or benchmark behavior.
+The parent integration passed 74 tests and five doctests in both debug and release all-feature configurations.
+Formatting and both Clippy configurations also passed.
+
+New cases cover nine response-EOF/drop schedules, full-budget queued cancellation, permanent metadata rejection, and cross-connection duplex forwarding.
+Other cases cover release-only admission, terminal receive-page exhaustion, and virtual application deadlines.
+Release-only progress restores stream-admission capacity.
+It does not resume a connection after terminal receive-page exhaustion.
+The independent peer suite separately covers zero-to-positive peer concurrency for both wrapper transports.
+
+The matrix records exact tests, observable sequences, and limits rather than marking every broader contract complete.
+Native close-failure injection, arbitrary kernel cancellation races, and externally scheduled cancellation-acknowledgment orders remain unqualified.
+Other limits include internal HPACK equality, exact lease peaks, core deadline/error ties, and generic cross-connection forwarding.
+No claim of exhaustive lifecycle proof follows from these results.
 
 ### Runtime benchmark preparation
 

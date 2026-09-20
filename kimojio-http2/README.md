@@ -453,6 +453,8 @@ Client and server use the same body ownership, transport adapters, event schedul
 
 ## Qualification boundary
 
+The [wrapper contract matrix](tests/CONTRACTS.md) lists exact tests, observable sequences, and remaining qualification gaps.
+
 The native suite uses real Kimojio socket operations between the public client and server APIs.
 A separate client suite uses a small direct-core server fixture.
 It covers repeated and concurrent requests, traffic beyond actual windows, trailers, classic CONNECT, forwarding, and early final responses.
