@@ -1110,6 +1110,10 @@ where
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
     let mut turns = 0usize;
+    let shutdown = state.shutdown.clone();
+    let graceful = shutdown.graceful.cancelled().fuse();
+    let abort = shutdown.abort.cancelled().fuse();
+    futures::pin_mut!(graceful, abort);
     loop {
         if let Err(error) = state.observe() {
             state.fail(error);
@@ -1135,7 +1139,15 @@ where
             turns = 0;
             operations::yield_cpu().await;
         }
-        if let Some(input) = next_input(&mut state, requests, runnable).await {
+        if let Some(input) = next_input(
+            &mut state,
+            requests,
+            runnable,
+            graceful.as_mut(),
+            abort.as_mut(),
+        )
+        .await
+        {
             if let Err(error) = state.observe_time() {
                 state.fail(error);
             }
@@ -1150,14 +1162,14 @@ async fn next_input(
     state: &mut State,
     requests: &Receiver<SendRequest>,
     runnable: bool,
+    mut graceful: Pin<&mut impl Future<Output = Result<(), kimojio::CanceledError>>>,
+    mut abort: Pin<&mut impl Future<Output = Result<(), kimojio::CanceledError>>>,
 ) -> Option<Input> {
     let read = state.read_done.recv();
     let write = state.write_done.recv();
     let release = state.released.recv();
     let demand = state.demands.0.recv();
     let request = requests.recv();
-    let graceful = state.shutdown.graceful.cancelled();
-    let abort = state.shutdown.abort.cancelled();
     let active_cancel = state.active.as_ref().map(|active| active.cancel.clone());
     let cancelled = async {
         if let Some(cancel) = &active_cancel {
@@ -1166,70 +1178,64 @@ async fn next_input(
             std::future::pending::<()>().await;
         }
     };
-    futures::pin_mut!(
-        read, write, release, demand, request, graceful, abort, cancelled
-    );
+    futures::pin_mut!(read, write, release, demand, request, cancelled);
     futures::future::poll_fn(|cx| {
-        // Probe every input before registering waits on channels that might stay idle.
-        for probe in [true, false] {
-            for offset in 0..10 {
-                let index = (state.rotation + offset) % 10;
-                let ready = match index {
-                    0 if state.read_send.is_some() => {
-                        poll_receive(&state.read_done, read.as_mut(), cx, probe)
-                            .map(|r| r.ok().map(Input::Read))
-                    }
-                    1 => poll_receive(&state.write_done, write.as_mut(), cx, probe)
-                        .map(|r| r.ok().map(Input::Write)),
-                    2 => poll_receive(&state.released, release.as_mut(), cx, probe)
-                        .map(|r| r.ok().map(Input::Release)),
-                    3 if !state.server
-                        && state.active.is_none()
-                        && !state.graceful_applied
-                        && !state.abort_applied =>
-                    {
-                        poll_receive(requests, request.as_mut(), cx, probe)
-                            .map(|r| Some(Input::Request(r)))
-                    }
-                    // Drain notifications that can revoke previously advertised capacity.
-                    4 if !runnable && probe => poll_source(&mut state.active, cx),
-                    5 if probe => poll_handler(&mut state.active, cx),
-                    6 if !state.graceful_applied
-                        && (!probe || state.shutdown.graceful.is_cancelled()) =>
-                    {
-                        graceful.as_mut().poll(cx).map(|_| Some(Input::Wake))
-                    }
-                    7 if !state.abort_applied
-                        && (!probe || state.shutdown.abort.is_cancelled()) =>
-                    {
-                        abort.as_mut().poll(cx).map(|_| Some(Input::Wake))
-                    }
-                    8 if probe => match state.timer.as_mut().map(|timer| timer.as_mut().poll(cx)) {
-                        Some(Poll::Ready(result)) => {
-                            state.timer.take();
-                            Poll::Ready(Some(Input::Timer(result)))
-                        }
-                        _ => Poll::Pending,
-                    },
-                    9 => poll_receive(&state.demands.0, demand.as_mut(), cx, probe)
-                        .map(|r| r.ok().map(Input::Demand)),
-                    _ => Poll::Pending,
-                };
-                if let Poll::Ready(Some(input)) = ready {
-                    state.rotation = (index + 1) % 10;
-                    return Poll::Ready(Some(input));
+        let probe = runnable;
+        for offset in 0..10 {
+            let index = (state.rotation + offset) % 10;
+            let ready = match index {
+                0 if state.read_send.is_some() => {
+                    poll_receive(&state.read_done, read.as_mut(), cx, probe)
+                        .map(|r| r.ok().map(Input::Read))
                 }
+                1 => poll_receive(&state.write_done, write.as_mut(), cx, probe)
+                    .map(|r| r.ok().map(Input::Write)),
+                2 => poll_receive(&state.released, release.as_mut(), cx, probe)
+                    .map(|r| r.ok().map(Input::Release)),
+                3 if !state.server
+                    && state.active.is_none()
+                    && !state.graceful_applied
+                    && !state.abort_applied =>
+                {
+                    poll_receive(requests, request.as_mut(), cx, probe)
+                        .map(|r| Some(Input::Request(r)))
+                }
+                // Drain notifications that can revoke previously advertised capacity.
+                4 if !runnable => poll_source(&mut state.active, cx),
+                5 => poll_handler(&mut state.active, cx),
+                6 if !state.graceful_applied
+                    && (!probe || state.shutdown.graceful.is_cancelled()) =>
+                {
+                    graceful.as_mut().poll(cx).map(|_| Some(Input::Wake))
+                }
+                7 if !state.abort_applied && (!probe || state.shutdown.abort.is_cancelled()) => {
+                    abort.as_mut().poll(cx).map(|_| Some(Input::Wake))
+                }
+                8 => match state.timer.as_mut().map(|timer| timer.as_mut().poll(cx)) {
+                    Some(Poll::Ready(result)) => {
+                        state.timer.take();
+                        Poll::Ready(Some(Input::Timer(result)))
+                    }
+                    _ => Poll::Pending,
+                },
+                9 => poll_receive(&state.demands.0, demand.as_mut(), cx, probe)
+                    .map(|r| r.ok().map(Input::Demand)),
+                _ => Poll::Pending,
+            };
+            if let Poll::Ready(Some(input)) = ready {
+                state.rotation = (index + 1) % 10;
+                return Poll::Ready(Some(input));
             }
-            if let Some(active) = &state.active
-                && !active.cancellation_applied
-                && (!probe || active.cancel.is_cancelled())
-                && cancelled.as_mut().poll(cx).is_ready()
-            {
-                return Poll::Ready(Some(Input::Wake));
-            }
-            if runnable {
-                return Poll::Ready(None);
-            }
+        }
+        if let Some(active) = &state.active
+            && !active.cancellation_applied
+            && (!probe || active.cancel.is_cancelled())
+            && cancelled.as_mut().poll(cx).is_ready()
+        {
+            return Poll::Ready(Some(Input::Wake));
+        }
+        if runnable {
+            return Poll::Ready(None);
         }
         Poll::Pending
     })

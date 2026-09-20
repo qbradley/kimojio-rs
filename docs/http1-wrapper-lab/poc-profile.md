@@ -290,3 +290,58 @@ The second hypothesis concerns a blocked core with an already-populated completi
 Candidate 1 can register unrelated waits before its rotation reaches that ready channel.
 A ready-probe pass before the blocking registration pass can avoid those short-lived registrations.
 Handler, source, and timer futures must not receive duplicate polls in the second pass.
+
+## Candidate 2: ready probes before blocked registration
+
+Commit `831c1513` implements the two-pass hypothesis.
+The binary SHA-256 is `3893743afb5fe167b9a9ecc7b021577c705bd424bdd12b3977d85a4058c7da62`.
+The allocation slope decreased from 152.9345 to 151.6985 calls per exchange.
+That is less than one percent.
+
+The shared runner compared candidates 1 and 2 across five trials:
+
+```sh
+python3 perf/wrapper-lab/compare.py \
+  --manifest target/profile-artifacts/manifest2.json \
+  --output target/profile-artifacts/comparison2.json --trials 5 --cpu 2
+```
+
+All 60 runs passed.
+Medians in microseconds:
+
+| Workload | Candidate 1 | Candidate 2 |
+| --- | ---: | ---: |
+| Empty | 24.767 | 25.280 |
+| Small | 37.904 | 37.150 |
+| POST small | 45.299 | 46.888 |
+| Large | 120.683 | 121.889 |
+| Chunked | 1887.895 | 1853.326 |
+| Fragmented | 315.827 | 316.888 |
+
+The second pass does not produce a consistent timing improvement.
+Some trial ranges overlap substantially.
+Candidate 2 adds a second scan on blocked turns for very little allocation reduction.
+The next candidate removes the two-pass scan.
+Its regression test remains useful: a ready probe can consume a message after a registered wait without losing channel credit.
+
+Candidate 2 passed formatting, both required clippy commands, and all-feature wrapper/core tests.
+Only the previously listed lint warnings occurred.
+
+## Candidate 3: connection-long shutdown waits
+
+The candidate 1 profile still attributes 5.94% to event waits.
+The shutdown tokens live for the complete connection, unlike the active-exchange token.
+Candidate 3 retains their futures across `next_input` calls on the driver's stack.
+This introduces no heap allocation and no changes to active bodies or transport workers.
+The futures use `fuse` to make repeated polls after completion safe.
+The original single-pass rotation remains.
+
+A preliminary allocation run, before the final `fuse` addition, measured 135.1695 calls per exchange.
+The previous candidate 1 slope was 152.9345.
+The final fused binary requires its own allocation and timing evidence.
+
+Persistent receive streams remain a separate option.
+Safe `unfold` streams can own each receive future without per-message boxes.
+However, their lifetimes require separation of receiver ownership from mutable `State`.
+That change is larger than retaining the two stable shutdown waits.
+This experiment first measures the smaller lifetime change.
