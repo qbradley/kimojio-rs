@@ -1,13 +1,21 @@
-# Native wrapper socket fixture
+# Wrapper socket fixture
 
-This fixture uses `kimojio_http2::Client`, `NativeConnection::run`, and `serve_connection_native_with_shutdown`.
+Native modes use `kimojio_http2::Client`, `NativeConnection::run`, and `serve_connection_native_with_shutdown`.
 It does not drive the core or implement socket reads and writes.
 Both roles use native Kimojio descriptors and I/O scopes.
 
 ```text
 interop client REQUEST_JSON RESULT_JSON
 interop server REQUEST_JSON
+interop client-generic REQUEST_JSON RESULT_JSON
+interop server-generic REQUEST_JSON
 ```
+
+The `client` and `server` names retain their native behavior.
+Generic modes wrap the established descriptor in `OwnedFdStream`.
+They call `connect` with `Connection::run`, or `serve_connection_with_shutdown`.
+Both transports share the JSON interface, application logic, routes, bounds, and result rules.
+The generic adapter is part of the wrapper, not a fixture socket executor.
 
 The JSON interface follows `interop/http2/ADAPTER.md`.
 The server request contains `schema: 1`, `timeout_ms`, and an optional `config` object.
@@ -37,11 +45,25 @@ An optional `wrapper_error` preserves additional error context.
 Neither field replaces the authoritative retirement outcome.
 A reset with wire code zero remains a reset, even after normal response END_STREAM.
 
-`NativeConnection::run` remains active alongside the application.
+The selected connection driver remains active alongside the application.
 The report records a confirmed close only after the driver returns a documented terminal connection result.
 A watchdog requests abort and permits three seconds for driver settlement.
 A missing close result stays unconfirmed.
 An admitted stream without a retirement report causes an explicit fixture error.
+
+## Generic transport errors
+
+A successful generic write covers its complete offered range.
+A failed started write can preserve only a lower-bound receipt, with `exact: false`.
+The fixture preserves that distinction and does not replay the failed buffer.
+Cancellation does not settle an original operation or release its buffers early.
+
+The generic driver drops its settled read half before it awaits the full transport `close`.
+The fixture does not substitute write-side shutdown for full close.
+`Error::Transport` can represent a split, I/O, or close error without a separate terminal connection report.
+`Error::TransportAndClose` preserves both errors but does not establish successful close.
+These errors produce a nonzero fixture result, with the diagnostic intact and closure unconfirmed.
+The fixture does not infer a terminal core outcome or confirmed close from an errno.
 
 ## Server routes
 

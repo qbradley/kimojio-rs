@@ -6,10 +6,12 @@ use futures::{
     future::{LocalBoxFuture, poll_fn},
     stream::FuturesUnordered,
 };
-use kimojio::{ReceiverOneshot, SenderOneshot, oneshot, operations, socket_helpers};
+use kimojio::{
+    OwnedFd, OwnedFdStream, ReceiverOneshot, SenderOneshot, oneshot, operations, socket_helpers,
+};
 use kimojio_http2::{
-    Client, Error, IncomingBody, IncomingFrame, OutgoingBody, OutgoingFrame, ReceiveEnd,
-    RequestObserver, Shutdown, StreamId, StreamReport as RetirementReport, connect_native,
+    Client, Config, Error, IncomingBody, IncomingFrame, OutgoingBody, OutgoingFrame, ReceiveEnd,
+    RequestObserver, Shutdown, StreamId, StreamReport as RetirementReport, connect, connect_native,
     http::{HeaderMap, Request, Response, header},
 };
 use schema::*;
@@ -28,6 +30,49 @@ use std::{
 
 const CHUNK: usize = 16 * 1024;
 type ResponseFuture = LocalBoxFuture<'static, Result<Response<IncomingBody>, Error>>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Transport {
+    Native,
+    Generic,
+}
+
+impl Transport {
+    fn connect(
+        self,
+        fd: OwnedFd,
+        config: Config,
+    ) -> (Client, LocalBoxFuture<'static, Result<(), Error>>) {
+        match self {
+            Self::Native => {
+                let (client, connection) = connect_native(fd, config);
+                (client, connection.run().boxed_local())
+            }
+            Self::Generic => {
+                let (client, connection) = connect(OwnedFdStream::new(fd), config);
+                (client, connection.run().boxed_local())
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    Client(Transport),
+    Server(Transport),
+}
+
+impl Mode {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "client" => Some(Self::Client(Transport::Native)),
+            "server" => Some(Self::Server(Transport::Native)),
+            "client-generic" => Some(Self::Client(Transport::Generic)),
+            "server-generic" => Some(Self::Server(Transport::Generic)),
+            _ => None,
+        }
+    }
+}
 
 struct Observer {
     context: Context,
@@ -164,19 +209,21 @@ impl Drop for Held {
 
 pub fn main() -> Result<(), String> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.len() == 2 && args[0] == "server" {
+    let mode = args.first().and_then(|value| Mode::parse(value));
+    if let (Some(Mode::Server(transport)), 2) = (mode, args.len()) {
         let input: ServerInput = read_input(&args[1])?;
         input.validate()?;
-        return kimojio::run(0, server::run(input))
+        return kimojio::run(0, server::run(input, transport))
             .ok_or("native runtime stopped without a server result")?
             .map_err(|_| "native runtime panicked")?;
     }
-    if args.len() != 3 || args[0] != "client" {
-        return Err("usage: interop client REQUEST_JSON RESULT_JSON | server REQUEST_JSON".into());
-    }
+    let transport = match (mode, args.len()) {
+        (Some(Mode::Client(transport)), 3) => transport,
+        _ => return Err("usage: interop client|client-generic REQUEST_JSON RESULT_JSON | server|server-generic REQUEST_JSON".into()),
+    };
     let input: Input = read_input(&args[1])?;
     input.validate()?;
-    let result = kimojio::run(0, execute(input))
+    let result = kimojio::run(0, execute(input, transport))
         .ok_or("native runtime stopped without a fixture result")?
         .map_err(|_| "native runtime panicked")??;
     std::fs::write(&args[2], &result.0).map_err(|e| e.to_string())?;
@@ -198,7 +245,7 @@ fn read_input<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, String> {
     serde_json::from_slice(&bytes).map_err(|e| e.to_string())
 }
 
-async fn execute(input: Input) -> Result<(Vec<u8>, Option<String>), String> {
+async fn execute(input: Input, transport: Transport) -> Result<(Vec<u8>, Option<String>), String> {
     operations::io_scope(async move || {
         let timeout = Duration::from_millis(input.timeout_ms);
         let address = SocketAddr::new(input.host.parse().map_err(|e| format!("{e}"))?, input.port);
@@ -209,7 +256,7 @@ async fn execute(input: Input) -> Result<(Vec<u8>, Option<String>), String> {
         .await
         .map_err(|e| format!("native connect deadline: {e:?}"))?
         .map_err(|e| format!("native connect: {e}"))?;
-        let (client, connection) = connect_native(socket, input.config.config()?);
+        let (client, connection) = transport.connect(socket, input.config.config()?);
         let control = client.control();
         let report = Rc::new(RefCell::new(Report {
             schema: 1,
@@ -240,7 +287,7 @@ async fn execute(input: Input) -> Result<(Vec<u8>, Option<String>), String> {
         };
         let driver_report = report.clone();
         let driver = async move {
-            match ConnectionReport::driver(connection.run().await) {
+            match ConnectionReport::driver(connection.await) {
                 Ok(closed) => driver_report.borrow_mut().connection = closed,
                 Err(error) => driver_report.borrow_mut().fixture_error = Some(error),
             }
@@ -565,6 +612,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn transport_modes_are_explicit_and_native_names_keep_their_meaning() {
+        assert_eq!(Mode::parse("client"), Some(Mode::Client(Transport::Native)));
+        assert_eq!(Mode::parse("server"), Some(Mode::Server(Transport::Native)));
+        assert_eq!(
+            Mode::parse("client-generic"),
+            Some(Mode::Client(Transport::Generic))
+        );
+        assert_eq!(
+            Mode::parse("server-generic"),
+            Some(Mode::Server(Transport::Generic))
+        );
+        for invalid in ["generic", "client-native", "server-native", "CLIENT", ""] {
+            assert_eq!(Mode::parse(invalid), None);
+        }
+    }
+
+    #[test]
     fn generator_allocation_does_not_grow_with_upload_length() {
         assert_eq!(production_size(16 * 1024 * 1024 + 17), CHUNK);
         assert_eq!(production_size(17), 17);
@@ -592,6 +656,15 @@ mod tests {
 
     #[kimojio::test]
     async fn observers_report_preheader_retirement_and_actual_informational_heads() {
+        observer_case(Transport::Native).await;
+    }
+
+    #[kimojio::test]
+    async fn generic_observers_report_preheader_retirement_and_actual_informational_heads() {
+        observer_case(Transport::Generic).await;
+    }
+
+    async fn observer_case(transport: Transport) {
         let input: Input = serde_json::from_str(
             r#"{"schema":1,"host":"127.0.0.1","port":1234,"timeout_ms":1000,
             "request_count":2,"concurrency":2,"requests":[
@@ -601,7 +674,7 @@ mod tests {
         .unwrap();
         let config = input.config.config().unwrap();
         let (fd, peer) = kimojio::pipe::bipipe();
-        let (client, driver) = connect_native(fd, config.clone());
+        let (client, driver) = transport.connect(fd, config.clone());
         let context = Context {
             input: Rc::new(input),
             report: Rc::new(RefCell::new(Report {
@@ -617,20 +690,29 @@ mod tests {
             stop_admission: Rc::default(),
             shutdown: client.control(),
         };
-        let server = kimojio_http2::serve_connection_native(peer, config, |request| async {
+        let handler = |request: Request<IncomingBody>| async {
             if request.uri().path() == "/reset" {
                 Err(Error::Application("test rejection before headers".into()))
             } else {
                 server::handle(request).await
             }
-        });
+        };
+        let server = match transport {
+            Transport::Native => {
+                kimojio_http2::serve_connection_native(peer, config, handler).boxed_local()
+            }
+            Transport::Generic => {
+                kimojio_http2::serve_connection(OwnedFdStream::new(peer), config, handler)
+                    .boxed_local()
+            }
+        };
         let app = async {
             requests(client, context.clone()).await;
             context.shutdown.graceful();
         };
         let ((), driver, server) =
             operations::timeout_at(kimojio::clock_now() + Duration::from_secs(10), async {
-                futures::join!(app, driver.run(), server)
+                futures::join!(app, driver, server)
             })
             .await
             .unwrap();

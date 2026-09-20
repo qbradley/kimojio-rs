@@ -1,15 +1,15 @@
-use super::{outgoing, schema::*};
+use super::{Transport, outgoing, schema::*};
 use futures::{FutureExt, future::Either};
-use kimojio::{operations, socket_helpers};
+use kimojio::{OwnedFdStream, operations, socket_helpers};
 use kimojio_http2::{
     Config, ConnectionResult, Error, IncomingBody, IncomingFrame, OutgoingBody, OutgoingFrame,
     Shutdown,
     http::{HeaderMap, Method, Request, Response, header},
-    serve_connection_native_with_shutdown,
+    serve_connection_native_with_shutdown, serve_connection_with_shutdown,
 };
 use std::{io::Write, net::SocketAddr, time::Duration};
 
-pub async fn run(input: ServerInput) -> Result<(), String> {
+pub(super) async fn run(input: ServerInput, transport: Transport) -> Result<(), String> {
     operations::io_scope(async move || {
         let config = input.config.config()?;
         let listener = operations::socket(
@@ -41,6 +41,7 @@ pub async fn run(input: ServerInput) -> Result<(), String> {
                 socket,
                 config.clone(),
                 Duration::from_millis(input.timeout_ms),
+                transport,
             )
             .await;
             match result {
@@ -55,12 +56,27 @@ pub async fn run(input: ServerInput) -> Result<(), String> {
     .await
 }
 
-async fn serve(fd: kimojio::OwnedFd, config: Config, timeout: Duration) -> Result<(), Error> {
+async fn serve(
+    fd: kimojio::OwnedFd,
+    config: Config,
+    timeout: Duration,
+    transport: Transport,
+) -> Result<(), Error> {
     operations::io_scope(async move || {
         let shutdown = Shutdown::default();
-        let connection =
-            serve_connection_native_with_shutdown(fd, config, shutdown.clone(), handle)
-                .boxed_local();
+        let connection = match transport {
+            Transport::Native => {
+                serve_connection_native_with_shutdown(fd, config, shutdown.clone(), handle)
+                    .boxed_local()
+            }
+            Transport::Generic => serve_connection_with_shutdown(
+                OwnedFdStream::new(fd),
+                config,
+                shutdown.clone(),
+                handle,
+            )
+            .boxed_local(),
+        };
         let alarm = operations::sleep(timeout).boxed_local();
         match futures::future::select(connection, alarm).await {
             Either::Left((result, _alarm)) => result,

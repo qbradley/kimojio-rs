@@ -246,7 +246,7 @@ The reviewer also ran eight focused tests from existing compiled binaries.
 Those executions covered partial-write errors, cancellation, late completion, close errors, held body leases, and virtual time.
 The reviewer did not rebuild those binaries from the frozen revision, so those runs have weaker source provenance.
 Independent TLS qualification and exhaustive custom-transport cancellation remain outside this review.
-Generic socket fixture implementation remains in progress.
+The generic socket fixture is implemented. Full dual-transport qualification remains in progress.
 
 Fragmented forwarding can exhaust a retained-page bound without exceeding the wire window.
 The fragmented duplex test uses a 2 MiB per-stream receive-capacity bound and unchanged receive windows.
@@ -270,6 +270,24 @@ The parent integration passed all 13 fixture tests.
 The separate peer owner will run the full suite against this immutable artifact.
 The reduced-window client cases need an explicit startup profile with distinct coverage claims.
 The older `00005698` artifact remains unchanged.
+
+### Unified native/generic fixture checkpoint
+
+Fixture source `b3789dc6a1ec91efb1f295e9931d373946477852` uses wrapper source `d8ca94b6`.
+Its release binary SHA-256 is `0e51d7c774196f398a0e88eb1c9ddcd79580667d0fa112abe4a304052e728fc0`.
+It adds explicit `client-generic` and `server-generic` modes over established `OwnedFdStream` transports.
+Native mode names remain unchanged.
+Local provenance and reports are in `target/http2-program/worktrees/http2-wrapper-fixture/target/wrapper-generic-checkpoint/summary.json`.
+
+The fixture owner passed 22 selected generic socket cases and two full-upload probes.
+The parent integration passed all 17 fixture tests.
+The independent peer assignment includes both native and generic modes on this artifact after the earlier native report.
+This sequence keeps results for different source revisions separate.
+
+Generic transport errors do not always expose a separate terminal connection outcome or close result.
+For such errors, the fixture returns a failure with unknown outcome rather than inferred closure or success.
+Per-stream retirement and inexact failed-write receipts remain observable.
+Full peer qualification must distinguish a missing observation from a demonstrated protocol failure.
 
 ### Initial wrapper client fixture
 

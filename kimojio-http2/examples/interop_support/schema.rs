@@ -354,7 +354,7 @@ impl ConnectionReport {
             Err(Error::Connection(outcome)) => outcome,
             Err(error) => {
                 return Err(format!(
-                    "native driver did not expose confirmed close and connection outcome: {error:?}"
+                    "wrapper driver did not expose confirmed close and connection outcome: {error:?}"
                 ));
             }
         };
@@ -505,6 +505,43 @@ mod tests {
         assert!(failed.error.is_none());
         assert_eq!(failed.outcome, Some("io_failed"));
         assert!(ConnectionReport::driver(Err(Error::Closed)).is_err());
+    }
+
+    #[test]
+    fn generic_transport_and_close_errors_do_not_fabricate_a_terminal_report() {
+        for error in [
+            Error::Transport(kimojio::Errno::IO),
+            Error::TransportAndClose {
+                transport: kimojio::Errno::PIPE,
+                close: kimojio::Errno::IO,
+            },
+        ] {
+            let diagnostic = ConnectionReport::driver(Err(error.clone())).err().unwrap();
+            assert!(diagnostic.contains(&format!("{error:?}")));
+        }
+    }
+
+    #[test]
+    fn generic_failed_write_preserves_the_inexact_buffer_receipt() {
+        let mut report = StreamReport::new(1);
+        report.retire_fields(
+            StreamOutcome::ConnectionFailed,
+            Some(StreamOutcome::Complete),
+            Some(SendFailure {
+                accepted: 17,
+                exact: false,
+                reason: SendStop::ConnectionFailed,
+            }),
+            Some(&Error::Transport(kimojio::Errno::IO)),
+        );
+        assert!(report.ended);
+        assert_eq!(report.outcome, Some(Outcome::ConnectionFailed));
+        assert!(report.error.is_none());
+        let receipt = report.send_failure.unwrap();
+        assert_eq!(receipt.accepted, 17);
+        assert!(!receipt.exact);
+        assert_eq!(receipt.reason, "connection_failed");
+        assert!(receipt.error.is_none());
     }
 
     #[test]
