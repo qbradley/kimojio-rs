@@ -10,6 +10,38 @@ enum Output {
 
 struct SourceCapture;
 
+#[test]
+fn eager_source_ends_before_combined_write_but_receipt_waits_for_settlement() {
+    let mut server = support::server(config());
+    let id = support::feed_server(&mut server, b"GET / HTTP/1.1\r\nHost: a\r\n\r\n");
+    server.respond(id, response(BodyLength::Known(3))).unwrap();
+    server
+        .send_body_eager(SendBody {
+            exchange: id,
+            buffer: b"abc".to_vec(),
+            range: 0..3,
+            end: true,
+        })
+        .unwrap();
+    assert!(matches!(next(&mut server), Some(Output::SourceFinished(exchange)) if exchange == id));
+    let Some(Output::Core(Event::Write(op))) = next(&mut server) else {
+        panic!()
+    };
+    assert_eq!(op.slices()[1], b"abc");
+    assert!(matches!(
+        next(&mut server),
+        Some(Output::Core(Event::Incoming(_)))
+    ));
+    assert!(next(&mut server).is_none());
+    server.complete_write(finish_write(op)).unwrap();
+    assert!(
+        matches!(next(&mut server), Some(Output::Core(Event::Sent(receipt))) if receipt.accepted == 3)
+    );
+    assert!(
+        matches!(next(&mut server), Some(Output::Core(Event::Finished(result))) if result.reusable)
+    );
+}
+
 macro_rules! forward {
     ($name:ident, $ty:ty) => {
         fn $name(&mut self, value: $ty) -> Option<Output> {

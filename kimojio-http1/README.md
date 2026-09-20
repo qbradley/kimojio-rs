@@ -76,6 +76,8 @@ Native close waits for the read worker to release its descriptor owner, then awa
 This backend supplies neither TLS nor a user-space readiness retry loop.
 Unexpected native `EAGAIN` is terminal.
 The `client` and `server` examples select this backend with `--native`.
+Both examples accept `--coalesce-full-bodies` for the explicit full-body coalescing policy.
+The client example uses ready storage for bounded known-length bodies and stream sources for larger or chunked bodies.
 See the [raw transport record](../docs/http1-wrapper-lab/raw-transport.md) for ownership details, tests, and benchmark integration.
 
 ## Server
@@ -111,6 +113,21 @@ The application must continue to poll the server future until shutdown completes
 - `full(bytes)` owns a complete, fixed-length body.
 - `from_stream(length, stream)` polls a fallible source directly.
 - `from_incoming(body)` forwards data leases and trailers with streaming framing.
+
+This experimental build retains `full` bytes directly instead of boxing a one-item stream.
+By default, it preserves separate metadata and payload writes through the normal demand path.
+`Config::coalesce_full_bodies` defaults to `false`.
+When this option is `true`, the wrapper asks the core to attach eligible full payloads through `send_body_eager`.
+The transport borrows separate head and payload slices from one owned write operation.
+Suppression, continue gates, and unavailable capacity return the payload to the normal demand path.
+Custom streams and forwarded leases retain their existing demand-driven path.
+
+Coalescing changes completion and deadline boundaries.
+The client upload deadline starts at eager admission and includes metadata.
+A generic write-all transport also hides separate metadata progress from the server's body-deadline refresh.
+Thus, an opted-in full body can time out where separate writes succeed.
+The default preserves both client and server boundaries without restoring the boxed full-body source.
+The [interface PoC report](../docs/http1-wrapper-lab/poc-interface.md) describes the experiment and validation limits.
 
 The direct source needs no producer task or channel.
 `Some(length)` declares a fixed length.

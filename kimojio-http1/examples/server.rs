@@ -67,15 +67,16 @@ async fn handle(request: Request<IncomingBody>) -> Result<Response<OutgoingBody>
     }
 }
 
-async fn serve(socket: OwnedFd, slot: u64, native: bool) {
+async fn serve(socket: OwnedFd, slot: u64, native: bool, coalesce_full_bodies: bool) {
     if let Err(error) = kimojio::socket_helpers::update_accept_socket(&socket) {
         eprintln!("connection {slot}: {error}");
         return;
     }
-    let config = Config::new(ConnectionId {
+    let mut config = Config::new(ConnectionId {
         slot,
         generation: 1,
     });
+    config.coalesce_full_bodies = coalesce_full_bodies;
     let result = if native {
         serve_connection_native(socket, config, handle).await
     } else {
@@ -92,10 +93,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut bind = "127.0.0.1:0".to_owned();
     let mut connections = None;
     let mut native = false;
+    let mut coalesce_full_bodies = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--native" => native = true,
+            "--coalesce-full-bodies" => coalesce_full_bodies = true,
             "--bind" => bind = args.next().ok_or("missing --bind value")?,
             "--connections" => {
                 connections = Some(
@@ -118,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let socket = operations::accept(&listener).await?;
         slot = slot.checked_add(1).ok_or("connection identity exhausted")?;
         let task = pool
-            .spawn_task(serve(socket, slot, native))
+            .spawn_task(serve(socket, slot, native, coalesce_full_bodies))
             .await
             .map_err(|_| "connection admission cancelled")?;
         live.retain(|handle: &operations::TaskHandle<()>| !handle.is_complete());

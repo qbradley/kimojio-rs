@@ -29,6 +29,7 @@ struct Options {
     native: bool,
     duplex: bool,
     copy_forward: bool,
+    coalesce_full_bodies: bool,
     timeout_seconds: u64,
     output: Option<PathBuf>,
 }
@@ -45,6 +46,7 @@ impl Default for Options {
             native: false,
             duplex: false,
             copy_forward: false,
+            coalesce_full_bodies: false,
             timeout_seconds: 60,
             output: None,
         }
@@ -71,6 +73,10 @@ impl Options {
                 }
                 "--copy-forward" => {
                     options.copy_forward = true;
+                    continue;
+                }
+                "--coalesce-full-bodies" => {
+                    options.coalesce_full_bodies = true;
                     continue;
                 }
                 _ => {}
@@ -120,6 +126,7 @@ fn config(slot: u64, options: &Options) -> Config {
     config.protocol.max_buffer_bytes = BUFFER_BYTES;
     config.protocol.max_chunk_metadata_bytes = 256 * 1024 * 1024;
     config.protocol.max_body_bytes = MAX_PAYLOAD as u64;
+    config.coalesce_full_bodies = options.coalesce_full_bodies;
     config
 }
 
@@ -337,6 +344,7 @@ async fn run_pair(options: Rc<Options>) -> Result<Value, Error> {
         "backend": if options.native { "native" } else { "stream" },
         "duplex": options.duplex,
         "forwarding": if options.duplex { if options.copy_forward { "copy" } else { "lease" } } else { "none" },
+        "coalesce_full_bodies": options.coalesce_full_bodies,
         "connections_created": 1,
         "reconnects": 0,
         "warmup_exchanges": options.warmup,
@@ -380,6 +388,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "Backend: --native. Reusable echo: --duplex [--copy-forward], with equal body sizes."
         );
+        println!("Optional combined metadata/payload writes: --coalesce-full-bodies.");
         return Ok(());
     }
     let options = Rc::new(Options::parse(args)?);
@@ -432,6 +441,15 @@ mod tests {
         assert_eq!(offset, 6);
     }
 
+    #[test]
+    fn parses_explicit_backend_and_coalescing_policy() {
+        assert!(!Options::default().coalesce_full_bodies);
+        let options =
+            Options::parse(["--native", "--coalesce-full-bodies"].map(str::to_owned)).unwrap();
+        assert!(options.native);
+        assert!(options.coalesce_full_bodies);
+    }
+
     #[kimojio::test]
     async fn reuses_one_connection_for_fixed_and_chunked_round_trips() {
         for (native, chunked) in [(false, false), (false, true), (true, false), (true, true)] {
@@ -478,6 +496,27 @@ mod tests {
                 assert_eq!(report["duplex"], true);
                 assert_eq!(report["validated_payload_bytes"], 8 * 2 * 65_537);
             }
+        }
+    }
+
+    #[kimojio::test]
+    async fn reuses_one_connection_with_explicit_full_body_coalescing() {
+        for native in [false, true] {
+            let report = run(Rc::new(Options {
+                iterations: 32,
+                warmup: 3,
+                request_bytes: 128,
+                response_bytes: 128,
+                native,
+                coalesce_full_bodies: true,
+                ..Options::default()
+            }))
+            .await
+            .unwrap();
+            assert_eq!(report["coalesce_full_bodies"], true);
+            assert_eq!(report["server_exchanges"], 35);
+            assert_eq!(report["reconnects"], 0);
+            assert_eq!(report["validated_payload_bytes"], 32 * 256);
         }
     }
 }

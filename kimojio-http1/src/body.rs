@@ -1,4 +1,11 @@
-use std::{cell::Cell, fmt, ops::Deref, rc::Rc};
+use std::{
+    cell::Cell,
+    fmt,
+    ops::Deref,
+    pin::Pin,
+    rc::Rc,
+    task::{Context, Poll},
+};
 
 use futures::{Stream, StreamExt, stream::LocalBoxStream};
 use http::HeaderMap;
@@ -56,8 +63,26 @@ impl AsRef<[u8]> for OutgoingData {
 /// the source; trailers require a streaming (chunked) body.
 pub struct OutgoingBody {
     pub(crate) length: BodyLength,
-    pub(crate) source: LocalBoxStream<'static, Result<OutgoingFrame, Error>>,
+    pub(crate) source: OutgoingSource,
     pub(crate) continue_request: bool,
+}
+
+pub(crate) enum OutgoingSource {
+    Ready(Option<Vec<u8>>),
+    Stream(LocalBoxStream<'static, Result<OutgoingFrame, Error>>),
+}
+
+impl Stream for OutgoingSource {
+    type Item = Result<OutgoingFrame, Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match &mut *self {
+            Self::Ready(bytes) => {
+                Poll::Ready(bytes.take().map(|bytes| Ok(OutgoingFrame::Data(bytes))))
+            }
+            Self::Stream(source) => source.as_mut().poll_next(cx),
+        }
+    }
 }
 
 impl fmt::Debug for OutgoingBody {
@@ -79,7 +104,7 @@ impl OutgoingBody {
     pub fn empty() -> Self {
         Self {
             length: BodyLength::Empty,
-            source: futures::stream::empty().boxed_local(),
+            source: OutgoingSource::Ready(None),
             continue_request: false,
         }
     }
@@ -91,7 +116,7 @@ impl OutgoingBody {
         }
         Self {
             length: BodyLength::Known(bytes.len() as u64),
-            source: futures::stream::once(async { Ok(OutgoingFrame::Data(bytes)) }).boxed_local(),
+            source: OutgoingSource::Ready(Some(bytes)),
             continue_request: false,
         }
     }
@@ -103,7 +128,7 @@ impl OutgoingBody {
     {
         Self {
             length: length.map_or(BodyLength::Streaming, BodyLength::Known),
-            source: source.boxed_local(),
+            source: OutgoingSource::Stream(source.boxed_local()),
             continue_request: false,
         }
     }
@@ -330,6 +355,7 @@ mod tests {
         futures::executor::block_on(async {
             assert!(OutgoingBody::empty().source.next().await.is_none());
             let mut full = OutgoingBody::full(b"payload");
+            assert!(matches!(full.source, OutgoingSource::Ready(Some(_))));
             assert_eq!(full.length, BodyLength::Known(7));
             let Some(Ok(OutgoingFrame::Data(bytes))) = full.source.next().await else {
                 panic!("missing full-body data");
@@ -340,6 +366,7 @@ mod tests {
                 None,
                 futures::stream::iter([Err(Error::Application("failure".into()))]),
             );
+            assert!(matches!(fallible.source, OutgoingSource::Stream(_)));
             assert!(matches!(
                 fallible.source.next().await,
                 Some(Err(Error::Application(_)))

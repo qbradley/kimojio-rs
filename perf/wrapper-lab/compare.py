@@ -63,7 +63,7 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def validate_result(result, case, warmup, backend="stream"):
+def validate_result(result, case, warmup, backend="stream", coalesce_full_bodies=False):
     expected = {
         "schema": 1,
         "valid": True,
@@ -87,6 +87,7 @@ def validate_result(result, case, warmup, backend="stream"):
             raise ValueError(f"{key}: expected {value!r}, got {result.get(key)!r}")
     modes = {
         "backend": (backend, "stream"),
+        "coalesce_full_bodies": (coalesce_full_bodies, False),
         "duplex": (case.get("duplex", False), False),
         "forwarding": (
             ("copy" if case.get("copy_forward") else "lease") if case.get("duplex") else "none",
@@ -149,11 +150,16 @@ def main():
         candidate["binary"] = str(Path(candidate["binary"]).resolve())
         candidate["binary_sha256"] = digest(Path(candidate["binary"]))
         arguments = candidate.get("arguments", [])
-        if not isinstance(arguments, list) or any(arg != "--native" for arg in arguments):
-            parser.error("candidate arguments can contain only --native")
+        if not isinstance(arguments, list) or any(
+            arg not in ("--native", "--coalesce-full-bodies") for arg in arguments
+        ):
+            parser.error("candidate arguments can contain only --native and --coalesce-full-bodies")
         candidate.setdefault("backend", "native" if "--native" in arguments else "stream")
+        candidate.setdefault("coalesce_full_bodies", "--coalesce-full-bodies" in arguments)
         if candidate["backend"] not in ("stream", "native"):
             parser.error("candidate backend must be stream or native")
+        if not isinstance(candidate["coalesce_full_bodies"], bool):
+            parser.error("candidate coalesce_full_bodies must be boolean")
     cases = [
         case for case in CASES
         if (case["name"] in args.case if args.case else not case.get("duplex"))
@@ -212,7 +218,9 @@ def main():
                 if process.returncode != 0:
                     raise ValueError(f"benchmark exited {process.returncode}")
                 result = json.loads(output.read_text())
-                validate_result(result, case, warmup, candidate["backend"])
+                validate_result(
+                    result, case, warmup, candidate["backend"], candidate["coalesce_full_bodies"]
+                )
                 if digest(Path(candidate["binary"])) != candidate["binary_sha256"]:
                     raise ValueError("binary changed during comparison")
                 row["result"] = result
