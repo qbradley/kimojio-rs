@@ -145,7 +145,7 @@ impl h2::Ports<Buffer> for Ports {
     }
     fn body(&mut self, op: h2::BodyOp) -> Option<()> {
         // Compare all bytes, not merely the length or a sampled byte.
-        assert!(op.bytes().iter().all(|byte| *byte == 0x5a));
+        assert_eq!(op.bytes(), &PAYLOAD[..op.bytes().len()]);
         self.slot(op.stream()).received += op.bytes().len();
         self.bodies.push(op);
         self.event();
