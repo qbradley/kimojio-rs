@@ -13,14 +13,14 @@ from suite import ROOT, adapter, command, read_json, write_json
 SCENARIOS = (
     "connect", "goaway", "continuation", "bad-continuation", "push-before-ack",
     "push-after-ack", "reset-isolation", "content-length", "early-response",
-    "reset-discard", "graceful-close", "no-body-data",
+    "reset-discard", "graceful-close", "no-body-data", "admission-recovery",
 )
 SERVER_SCENARIOS = ("connect", "request-continuation", "request-hpack-reuse", "request-trailers")
 
 
 def request(scenario, address, *, early_policy="peer-reset"):
     require(early_policy in ("peer-reset", "application-cancel"), "unknown early-response policy")
-    two = scenario in ("reset-isolation", "content-length", "early-response", "reset-discard", "no-body-data")
+    two = scenario in ("reset-isolation", "content-length", "early-response", "reset-discard", "no-body-data", "admission-recovery")
     requests = [{
         "method": "CONNECT" if scenario == "connect" else "POST" if scenario == "early-response" else "GET",
         "path": "/protocol", "body_bytes": 37 if scenario == "connect" else 131087 if scenario == "early-response" else 0,
@@ -40,7 +40,8 @@ def request(scenario, address, *, early_policy="peer-reset"):
         "timeout_ms": 8000,
         "config": {"stream_window": 65535, "connection_window": 65535} if scenario == "reset-discard" else {},
         "request_count": len(requests),
-        "concurrency": len(requests), "requests": requests, "actions": actions,
+        "concurrency": 1 if scenario == "admission-recovery" else len(requests),
+        "requests": requests, "actions": actions,
     }
 
 
@@ -59,7 +60,7 @@ def validate(scenario, report, witness, *, early_policy="peer-reset"):
         ),
         "wrong connection terminal outcome",
     )
-    count = 2 if scenario in ("reset-isolation", "content-length", "early-response", "reset-discard", "no-body-data") else 1
+    count = 2 if scenario in ("reset-isolation", "content-length", "early-response", "reset-discard", "no-body-data", "admission-recovery") else 1
     require(witness["requests"] == count, "wire request count mismatch")
     results = report.get("streams", [])
     require(len(results) == count, "wrong result count")
@@ -67,6 +68,8 @@ def validate(scenario, report, witness, *, early_policy="peer-reset"):
     for result in results:
         stream = result["stream_id"]
         status, length, ended, error, outcome = 200, 37, True, None, "complete"
+        if scenario == "admission-recovery":
+            length = 0
         if connection_error:
             status, length, ended = None, 0, False
             outcome = "connection_failed"
@@ -132,6 +135,14 @@ def validate(scenario, report, witness, *, early_policy="peer-reset"):
     if scenario == "graceful-close":
         require(report["connection"]["outcome"] == "graceful", "graceful close did not finish gracefully")
         require(witness["goaway_count"] >= 1 and witness["goaway"] == 0, "missing graceful GOAWAY before actual close")
+    if scenario == "admission-recovery":
+        require(witness.get("admission_events") == [
+            "request-1", "settings-zero", "zero-ping-ack", "response-1-end",
+            "retirement-ping-ack", "settings-one", "positive-settings-ack",
+            "request-3", "response-3-end",
+        ], "missing ordered zero-admission and retirement barriers")
+        require(witness.get("request_ended") == {"1": True, "3": True}, "admission requests did not end")
+        require(not witness["resets"] and witness["goaway"] == 0, "admission recovery reset or failed")
 
 
 def run_case(binary, client_adapter, scenario, directory, *, early_policy="peer-reset"):
@@ -146,7 +157,16 @@ def run_case(binary, client_adapter, scenario, directory, *, early_policy="peer-
     ], cwd=ROOT) as server:
         request_file, result_file = directory / "request.json", directory / "result.json"
         write_json(request_file, request(scenario, server.address, early_policy=early_policy))
-        completed = run_command(command(client_adapter, request_file, result_file), cwd=ROOT, timeout=12)
+        client_command = command(client_adapter, request_file, result_file)
+        if scenario == "admission-recovery":
+            client_command = ["env", "H2_FIXTURE_TRACE=1", *client_command]
+        completed = run_command(client_command, cwd=ROOT, timeout=12)
+        if scenario == "admission-recovery":
+            write_json(directory / "client-trace.json", {
+                "exit_code": completed.returncode,
+                "stdout": completed.stdout.decode(errors="replace"),
+                "stderr": completed.stderr.decode(errors="replace"),
+            })
         require(completed.returncode == 0, f"client failed: {completed.stderr!r}")
         code = server.process.wait(timeout=3)
         for thread in server._threads:
@@ -232,8 +252,14 @@ def main():
     server_cases = [name for name in args.case if name in SERVER_SCENARIOS] if args.case else SERVER_SCENARIOS
     for scenario in client_cases if client_adapter else ():
         try:
+            case_adapter = client_adapter
+            if args.selftest and scenario == "admission-recovery":
+                case_adapter = {"command": [
+                    sys.executable, str(Path(__file__).with_name("reference.py")),
+                    "client", "{request_file}", "{result_file}",
+                ]}
             result = run_case(
-                binary, client_adapter, scenario, directory / "client" / scenario,
+                binary, case_adapter, scenario, directory / "client" / scenario,
                 early_policy=args.early_response_policy,
             )
             result["role"] = "client"

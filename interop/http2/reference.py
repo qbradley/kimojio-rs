@@ -34,7 +34,9 @@ def client(spec):
         receive_initial = peer.connection.inbound_flow_control_window
         for _ in range(1_000_000):
             ended = sum(result["ended"] for result in channel.results.values())
-            while issued < len(spec["requests"]) and issued - ended < spec["concurrency"]:
+            while issued < len(spec["requests"]) and issued - ended < min(
+                spec["concurrency"], peer.connection.remote_settings.max_concurrent_streams,
+            ):
                 if any(
                     stream < issued * 2 + 1
                     and (stream not in peer.received or peer.received[stream].payload == 0)

@@ -416,6 +416,38 @@ class SocketTests(unittest.TestCase):
         )
         self.assertEqual(request("connect", address, early_policy="application-cancel")["actions"], [])
 
+    def test_admission_requires_barriers_and_both_retirements(self):
+        from protocol_suite import request, validate
+
+        spec = request("admission-recovery", ("127.0.0.1", 1))
+        self.assertEqual((spec["request_count"], spec["concurrency"], spec["actions"]), (2, 1, []))
+        report = {
+            "schema": 1, "connection": {"closed": True, "error": None, "outcome": "graceful"},
+            "streams": [{
+                "stream_id": stream, "status": 200, "content_length": 0,
+                "bytes": 0, "sha256": digest_for(stream, 0), "trailers": [],
+                "informational": [], "ended": True, "outcome": "complete", "error": None,
+            } for stream in (1, 3)],
+        }
+        events = [
+            "request-1", "settings-zero", "zero-ping-ack", "response-1-end",
+            "retirement-ping-ack", "settings-one", "positive-settings-ack",
+            "request-3", "response-3-end",
+        ]
+        witness = {
+            "requests": 2, "peer_eof": True, "goaway": 0, "resets": {},
+            "request_ended": {"1": True, "3": True}, "admission_events": events,
+        }
+        validate("admission-recovery", report, witness)
+        for index in (2, 4, 5, 6):
+            witness["admission_events"] = events[:index] + events[index + 1:]
+            with self.assertRaisesRegex(AssertionError, "barriers"):
+                validate("admission-recovery", report, witness)
+        witness["admission_events"] = events
+        report["streams"][1]["outcome"] = "connection_failed"
+        with self.assertRaisesRegex(AssertionError, "terminal outcome"):
+            validate("admission-recovery", report, witness)
+
     def test_discard_refunds_must_arrive_before_the_sibling_ends(self):
         from protocol_suite import validate
 

@@ -201,7 +201,7 @@ Reports distinguish `bounded-stream-rejection` from complete delivery.
 
 ## Implemented protocol checks
 
-The complete protocol command runs 16 cases.
+The complete protocol command runs 17 cases.
 The Go peer avoids python-h2 limitations around classic CONNECT, pre-ACK push, and DATA after GOAWAY.
 
 Against a command-driven client, it exercises:
@@ -218,6 +218,23 @@ Against a command-driven client, it exercises:
 * An early response while a 1,024-byte upload window blocks its producer.
 * Late DATA after reset, with connection refunds and no new stream refunds.
 * GOAWAY(NO_ERROR) before an explicit graceful socket close.
+* Queued admission after `SETTINGS_MAX_CONCURRENT_STREAMS` changes from zero to one.
+
+The `admission-recovery` case uses two bodyless requests with application concurrency one.
+After request 1, the Go peer advertises a zero stream limit and sends a PING.
+After its acknowledgment, the peer completes response 1 and sends a second PING while the limit remains zero.
+Only after the second acknowledgment does the peer advertise a limit of one.
+Any new request HEADERS before that advertisement fail the case.
+Both requests must finish with status 200, zero response bytes, and `complete` retirement.
+
+The witness records the exact order of both barriers, both advertisements, and both requests.
+Request 2 must follow the positive SETTINGS acknowledgment, excluding HEADERS queued before the client receives the new limit.
+The case saves bounded fixture trace output separately from its required wire evidence.
+Independent Go socket controls reject premature HEADERS before either barrier.
+Another control sends HEADERS after the second PING acknowledgment but before the positive SETTINGS acknowledgment.
+They also reject a client that drops the queued request after admission reopens.
+
+The selftest pairs this Go server with the Python-h2 client, which respects the current remote stream limit.
 
 The late-DATA case deliberately sends frames after reset.
 It retains the credit limits that existed before reset.

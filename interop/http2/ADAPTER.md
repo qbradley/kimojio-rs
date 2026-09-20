@@ -214,6 +214,19 @@ The harness must name every executed case in its report.
 Unsupported actions fail rather than produce a skip.
 Further protocol cases can use fixed independent-peer scenarios without new fixture routes.
 
+The `admission-recovery` scenario requires `request_count: 2`, `concurrency: 1`, and no actions.
+Both GET requests have zero body bytes and expect bodyless status-200 responses.
+The independent peer reduces `SETTINGS_MAX_CONCURRENT_STREAMS` to zero after the first request.
+It requires a PING acknowledgment before response 1, then another acknowledgment after response 1 ends.
+Only then does it advertise a limit of one and accept request 2.
+The fixture must preserve the queued request across temporary admission blockage.
+
+The fixture needs no raw SETTINGS parser or new adapter action for this scenario.
+Premature request HEADERS, failed retirement, dropped queued requests, and recovery timeouts fail the case.
+The peer report records the ordered barriers instead of relying only on final request totals.
+Request 2 must also follow the acknowledgment of the positive SETTINGS.
+This requirement rejects HEADERS that the client queues after the second PING acknowledgment but before it receives the positive limit.
+
 The reset case reports status 200, 1,024 delivered bytes, no END_STREAM, and a stream error with code 8.
 The peer sends late DATA after reset to exercise connection-credit refunds.
 These late frames remain within the credit that existed before reset.
