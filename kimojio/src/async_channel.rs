@@ -63,6 +63,28 @@ impl<T> SenderUnbounded<T> {
     pub fn len(&self) -> usize {
         self.inner.len()
     }
+
+    /// Returns the modeled bytes of shared channel storage.
+    ///
+    /// This includes the channel state, retained queue capacity, and the current
+    /// standard-library `Rc` representation (two reference counts and padding).
+    /// It excludes allocator overhead, sender/receiver handles, allocations owned
+    /// by messages, and wait registrations owned by receive futures.
+    ///
+    /// Clones share this storage. Count it once per channel, not once per handle.
+    /// Sending beyond the retained capacity can increase this value.
+    pub fn storage_bytes(&self) -> usize {
+        let allocation = std::alloc::Layout::new::<[usize; 2]>()
+            .extend(std::alloc::Layout::new::<AsyncChannelUnbounded<T>>())
+            .expect("channel allocation layout fits address space")
+            .0
+            .pad_to_align();
+        allocation.size()
+            + self
+                .inner
+                .queue
+                .use_mut(|queue| queue.items.capacity() * size_of::<T>())
+    }
 }
 
 impl<T> Clone for SenderUnbounded<T> {
@@ -409,6 +431,59 @@ mod test {
         async_channel_unbounded_with_capacity,
     };
     use crate::operations;
+
+    #[test]
+    fn unbounded_storage_tracks_retained_capacity() {
+        let (tx, rx) = async_channel_unbounded_with_capacity::<u64>(3);
+        let initial = tx.storage_bytes();
+        let capacity = tx.inner.queue.use_mut(|queue| queue.items.capacity());
+        let state = initial - capacity * size_of::<u64>();
+        assert!(state >= size_of::<super::AsyncChannelUnbounded<u64>>() + 2 * size_of::<usize>());
+        let clone = tx.clone();
+        assert_eq!(clone.storage_bytes(), initial);
+        for value in 0..capacity {
+            tx.send(value as u64).unwrap();
+        }
+        assert_eq!(tx.storage_bytes(), initial);
+        tx.send(capacity as u64).unwrap();
+        let grown_capacity = tx.inner.queue.use_mut(|queue| queue.items.capacity());
+        assert!(grown_capacity > capacity);
+        let grown = state + grown_capacity * size_of::<u64>();
+        assert_eq!(tx.storage_bytes(), grown);
+        for value in 0..=capacity {
+            assert_eq!(rx.try_recv().unwrap(), Some(value as u64));
+        }
+        assert_eq!(clone.storage_bytes(), grown);
+        tx.close();
+        assert_eq!(tx.storage_bytes(), grown);
+        assert_eq!(rx.try_recv(), Err(ChannelError::Closed));
+    }
+
+    #[test]
+    fn unbounded_storage_handles_zero_sized_and_aligned_messages() {
+        let (zero, _) = async_channel_unbounded_with_capacity::<()>(usize::MAX);
+        let empty_bytes = zero.storage_bytes();
+        zero.send(()).unwrap();
+        assert_eq!(zero.storage_bytes(), empty_bytes);
+
+        #[repr(align(256))]
+        struct Aligned;
+        let (aligned, _) = async_channel_unbounded_with_capacity::<Aligned>(17);
+        assert_eq!(aligned.storage_bytes(), empty_bytes);
+
+        #[repr(align(256))]
+        struct Payload([u8; 3]);
+        let (payload, received) = async_channel_unbounded_with_capacity::<Payload>(3);
+        let capacity = payload.inner.queue.use_mut(|queue| queue.items.capacity());
+        assert_eq!(
+            payload.storage_bytes(),
+            empty_bytes + capacity * size_of::<Payload>()
+        );
+        payload
+            .send(Payload([1, 2, 3]))
+            .unwrap_or_else(|_| panic!("open channel"));
+        assert_eq!(received.try_recv().unwrap().unwrap().0, [1, 2, 3]);
+    }
 
     #[derive(Default)]
     struct AsyncBiChannel<T> {
