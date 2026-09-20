@@ -101,20 +101,51 @@ fn unexpected_planner_failure_resets_all_stream_layers_before_retirement() {
 
 #[test]
 fn stream_identifier_exhaustion_does_not_wrap_or_reuse() {
-    let mut client = Client::<Vec<u8>>::new(Config::default(), Duration::ZERO).unwrap();
+    let mut client = Client::<Vec<u8>>::new(
+        Config {
+            http: HttpLimits::new().set_max_active_streams(1),
+            ..Config::default()
+        },
+        Duration::ZERO,
+    )
+    .unwrap();
     let Protocol::Client(role) = &mut client.0.protocol else {
         unreachable!()
     };
     role.next_stream_id = 0x7fff_ffff;
+    role.endpoint.settings.max_concurrent_streams = 0;
+    assert_eq!(
+        client.request(&request(b"GET"), true),
+        Err(CommandError::Blocked)
+    );
+    let Protocol::Client(role) = &mut client.0.protocol else {
+        unreachable!()
+    };
+    role.endpoint.settings.max_concurrent_streams = 1;
     let last = client.request(&request(b"GET"), true).unwrap();
     assert_eq!(last.get(), 0x7fff_ffff);
     let pending = client.controls.len();
-    assert!(client.request(&request(b"GET"), true).is_err());
+    assert_eq!(
+        client.request(&request(b"GET"), true),
+        Err(CommandError::SequenceExhausted),
+        "terminal exhaustion precedes the full local stream limit"
+    );
     assert_eq!(client.controls.len(), pending);
     let Protocol::Client(role) = &client.0.protocol else {
         unreachable!()
     };
     assert_eq!(role.next_stream_id, 0x8000_0001);
+    let mut ports = MemoryPorts::default();
+    client.next(&mut ports);
+    assert_eq!(ports.admissions, 1);
+    for _ in 0..32 {
+        assert_eq!(
+            client.request(&request(b"GET"), true),
+            Err(CommandError::SequenceExhausted)
+        );
+        client.next(&mut ports);
+    }
+    assert_eq!(ports.admissions, 1);
 }
 
 #[test]

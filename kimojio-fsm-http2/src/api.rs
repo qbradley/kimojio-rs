@@ -73,6 +73,8 @@ impl Token {
 pub enum CommandError {
     InvalidState,
     InvalidCompletion,
+    /// Metadata admission is temporarily unavailable. Retry after `admission_changed`.
+    Blocked,
     Capacity,
     SequenceExhausted,
     TimeReversed,
@@ -485,6 +487,12 @@ impl CloseCompletion {
 
 pub trait Ports<B: SendBuffer> {
     type Output;
+    /// A blocked metadata command can be rechecked, but admission is not guaranteed.
+    ///
+    /// Coalesced and one-shot: another `Blocked` command arms the next notification.
+    fn admission_changed(&mut self) -> Option<Self::Output> {
+        None
+    }
     fn read(&mut self, op: ReadOp) -> Option<Self::Output>;
     fn write(&mut self, op: WriteOp<B>) -> Option<Self::Output>;
     fn headers(&mut self, head: Head<'_>) -> Option<Self::Output>;

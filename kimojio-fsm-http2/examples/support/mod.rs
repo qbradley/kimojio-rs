@@ -20,10 +20,17 @@ pub struct MemoryPorts {
     pub close: Option<CloseOp>,
     pub closed: Vec<ConnectionResult>,
     pub sequence: Vec<&'static str>,
+    pub admissions: usize,
+    pub yield_admission: bool,
 }
 
 impl Ports<Vec<u8>> for MemoryPorts {
     type Output = ();
+    fn admission_changed(&mut self) -> Option<()> {
+        self.admissions += 1;
+        self.sequence.push("admission_changed");
+        self.yield_admission.then_some(())
+    }
     fn read(&mut self, op: ReadOp) -> Option<()> {
         assert!(self.read.replace(op).is_none());
         self.sequence.push("read");
