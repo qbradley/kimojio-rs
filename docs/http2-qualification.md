@@ -220,7 +220,10 @@ The synchronized 200/413 reset-zero regression covers response preservation, sib
 
 The parent integration passed 53 all-feature tests, four doctests, and the nine existing client fixture tests.
 The implementation owner also passed default and release suites and both Clippy configurations.
-Independent review of the native server and observer changes remains in progress.
+Independent source review of `b9bd2445` through `af7d2ad4` found no significant issues.
+It covered server orchestration, shared-client changes, informational admission and cancellation, observers, retirement reports, and associated tests.
+The reviewer did not independently execute tests or fault-injection schedules.
+This review excludes subsequent generic-transport changes.
 The fixture must adopt the new observation APIs before these repairs have independent peer qualification.
 Generic transports, broader fault injection, and wrapper performance remain incomplete.
 
