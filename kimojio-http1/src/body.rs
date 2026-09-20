@@ -57,12 +57,14 @@ impl AsRef<[u8]> for OutgoingData {
 pub struct OutgoingBody {
     pub(crate) length: BodyLength,
     pub(crate) source: LocalBoxStream<'static, Result<OutgoingFrame, Error>>,
+    pub(crate) continue_request: bool,
 }
 
 impl fmt::Debug for OutgoingBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OutgoingBody")
             .field("length", &self.length)
+            .field("continue_request", &self.continue_request)
             .finish_non_exhaustive()
     }
 }
@@ -78,6 +80,7 @@ impl OutgoingBody {
         Self {
             length: BodyLength::Empty,
             source: futures::stream::empty().boxed_local(),
+            continue_request: false,
         }
     }
 
@@ -89,6 +92,7 @@ impl OutgoingBody {
         Self {
             length: BodyLength::Known(bytes.len() as u64),
             source: futures::stream::once(async { Ok(OutgoingFrame::Data(bytes)) }).boxed_local(),
+            continue_request: false,
         }
     }
 
@@ -100,7 +104,19 @@ impl OutgoingBody {
         Self {
             length: length.map_or(BodyLength::Streaming, BodyLength::Known),
             source: source.boxed_local(),
+            continue_request: false,
         }
+    }
+
+    /// Keeps request input active after this server response starts or finishes.
+    ///
+    /// The application must consume the request or drop its incoming body to
+    /// cancel the exchange. Reuse still requires complete input and settled
+    /// transport operations. Client request bodies reject this response-only
+    /// policy with `Error::InvalidMetadata`.
+    pub fn continue_request_body(mut self) -> Self {
+        self.continue_request = true;
+        self
     }
 
     /// Forwards data leases and trailers with streaming framing.
@@ -187,8 +203,10 @@ pub enum IncomingFrame {
 
 /// A bounded response or request body.
 ///
-/// Dropping a client body cancels its unfinished exchange. The server discards
-/// further request data that the core permits it to receive.
+/// Dropping a client body cancels its unfinished exchange. The server normally
+/// discards further permitted request data. With `continue_request_body`, it
+/// cancels incomplete input after outstanding leases return and core
+/// completion notifications drain.
 pub struct IncomingBody {
     pub(crate) data: Receiver<BodyChunk>,
     pub(crate) terminal: Option<ReceiverOneshot<Result<HeaderMap, Error>>>,

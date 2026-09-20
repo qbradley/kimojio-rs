@@ -57,6 +57,28 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(summary["max_ns"], 30)
         self.assertEqual(summary["trials"], 3)
 
+    def test_native_backend_must_be_explicit_in_result(self):
+        result = self.result()
+        with self.assertRaises(ValueError):
+            validate_result(result, self.case(), 10, "native")
+        result["backend"] = "native"
+        validate_result(result, self.case(), 10, "native")
+        with self.assertRaises(ValueError):
+            validate_result(result, self.case(), 10)
+
+    def test_duplex_and_copy_modes_cannot_silently_use_the_baseline(self):
+        case = self.case() | {"duplex": True}
+        result = self.result()
+        with self.assertRaises(ValueError):
+            validate_result(result, case, 10)
+        result.update(duplex=True, forwarding="lease", response_chunked=True)
+        validate_result(result, case, 10)
+        case["copy_forward"] = True
+        with self.assertRaises(ValueError):
+            validate_result(result, case, 10)
+        result["forwarding"] = "copy"
+        validate_result(result, case, 10)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,7 @@ use crate::{
     BodyChunk, Error, IncomingBody, OutgoingBody, OutgoingFrame,
     io::{self, Pending, WriteAction, WriteResult},
     metadata,
+    transport::{NativeTransport, StreamTransport, Transport},
 };
 
 #[derive(Clone, Debug)]
@@ -152,6 +153,22 @@ pub struct Connection<S> {
 
 /// Wraps an established transport. No I/O occurs until the driver is polled.
 pub fn connect<S: SplittableStream>(stream: S, config: Config) -> (Client, Connection<S>) {
+    connection(stream, config)
+}
+
+/// Caller-owned driver for one-shot native socket operations.
+pub struct NativeConnection(Connection<NativeTransport>);
+
+/// Takes ownership of an established socket without a buffered stream adapter.
+///
+/// Native reads use the core's receive storage directly. Each native write
+/// reports the exact byte count from one writev completion.
+pub fn connect_native(fd: kimojio::OwnedFd, config: Config) -> (Client, NativeConnection) {
+    let (client, connection) = connection(NativeTransport(fd), config);
+    (client, NativeConnection(connection))
+}
+
+fn connection<S>(stream: S, config: Config) -> (Client, Connection<S>) {
     let (send, requests) = async_channel();
     let (done, receive) = oneshot();
     let shutdown = Shutdown::default();
@@ -173,8 +190,24 @@ pub fn connect<S: SplittableStream>(stream: S, config: Config) -> (Client, Conne
 
 impl<S: SplittableStream> Connection<S> {
     pub async fn run(self) -> Result<(), Error> {
+        self.run_transport(StreamTransport).await
+    }
+}
+
+impl NativeConnection {
+    /// Poll this driver concurrently with the client and through shutdown.
+    pub async fn run(self) -> Result<(), Error> {
+        self.0.run_transport(|stream| *stream).await
+    }
+}
+
+impl<S> Connection<S> {
+    async fn run_transport<T: Transport>(
+        self,
+        transport: impl FnOnce(Box<S>) -> T,
+    ) -> Result<(), Error> {
         let result = Box::pin(run(
-            self.stream,
+            transport(self.stream),
             self.config,
             false,
             &self.requests.0,
@@ -212,11 +245,49 @@ where
     H: FnMut(Request<IncomingBody>) -> F,
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
-    let stream = Box::new(stream);
-    async move {
-        let (_keep_open, requests) = async_channel();
-        Box::pin(run(stream, config, true, &requests, shutdown, handler)).await
-    }
+    serve_transport(StreamTransport(Box::new(stream)), config, shutdown, handler)
+}
+
+/// Serves an established socket through exact one-shot native operations.
+pub fn serve_connection_native<H, F>(
+    fd: kimojio::OwnedFd,
+    config: Config,
+    handler: H,
+) -> impl Future<Output = Result<(), Error>>
+where
+    H: FnMut(Request<IncomingBody>) -> F,
+    F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
+{
+    serve_connection_native_with_shutdown(fd, config, Shutdown::default(), handler)
+}
+
+/// Serves a native socket and settles its operations before explicit close.
+pub fn serve_connection_native_with_shutdown<H, F>(
+    fd: kimojio::OwnedFd,
+    config: Config,
+    shutdown: Shutdown,
+    handler: H,
+) -> impl Future<Output = Result<(), Error>>
+where
+    H: FnMut(Request<IncomingBody>) -> F,
+    F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
+{
+    serve_transport(NativeTransport(fd), config, shutdown, handler)
+}
+
+async fn serve_transport<T, H, F>(
+    transport: T,
+    config: Config,
+    shutdown: Shutdown,
+    handler: H,
+) -> Result<(), Error>
+where
+    T: Transport,
+    H: FnMut(Request<IncomingBody>) -> F,
+    F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
+{
+    let (_keep_open, requests) = async_channel();
+    Box::pin(run(transport, config, true, &requests, shutdown, handler)).await
 }
 
 enum Machine {
@@ -354,6 +425,9 @@ struct Active {
     id: core::ExchangeId,
     cancel: Rc<CancellationToken>,
     cancellation_applied: bool,
+    duplex: bool,
+    incoming_lease: bool,
+    abandonment_applied: bool,
     credit_started: bool,
     source: Option<OutgoingBody>,
     capacity: usize,
@@ -388,6 +462,9 @@ impl Active {
             id,
             cancel,
             cancellation_applied: false,
+            duplex: false,
+            incoming_lease: false,
+            abandonment_applied: false,
             credit_started: false,
             source: None,
             capacity: 0,
@@ -426,7 +503,7 @@ enum Input {
 struct State {
     machine: Machine,
     active: Option<Active>,
-    read_send: Sender<Pending<core::ReadOp<Vec<u8>>>>,
+    read_send: Option<Sender<Pending<core::ReadOp<Vec<u8>>>>>,
     write_send: Sender<WriteAction>,
     read_done: Receiver<core::ReadCompletion<Vec<u8>>>,
     write_done: Receiver<WriteResult>,
@@ -528,6 +605,25 @@ impl State {
         }
     }
 
+    fn cancel_abandoned_duplex(&mut self) -> bool {
+        let Some(active) = self.active.as_mut() else {
+            return false;
+        };
+        if active.duplex
+            && active.cancellation_applied
+            && !active.abandonment_applied
+            && !active.incoming_lease
+            && !active.incoming_finished.get()
+        {
+            active.abandonment_applied = true;
+            if let Machine::Server(server) = &mut self.machine {
+                let _ = server.cancel_exchange(active.id);
+            }
+            return true;
+        }
+        false
+    }
+
     fn start_request(&mut self, command: SendRequest) {
         if command.cancel.is_cancelled() {
             return;
@@ -537,6 +633,9 @@ impl State {
             let Machine::Client(client) = &mut self.machine else {
                 return Err(Error::Closed);
             };
+            if body.continue_request {
+                return Err(Error::InvalidMetadata);
+            }
             if parts.headers.len() > self.max_headers {
                 return Err(Error::Limit);
             }
@@ -585,15 +684,18 @@ impl State {
         let Machine::Server(server) = &mut self.machine else {
             return Err(Error::Closed);
         };
-        server.respond(
-            active.id,
-            core::Response::new(
-                parts.status.as_u16(),
-                parts.status.canonical_reason().unwrap_or(""),
-                &headers,
-                body.length,
-            ),
-        )?;
+        let response = core::Response::new(
+            parts.status.as_u16(),
+            parts.status.canonical_reason().unwrap_or(""),
+            &headers,
+            body.length,
+        );
+        if body.continue_request {
+            server.respond_duplex(active.id, response)?;
+            active.duplex = true;
+        } else {
+            server.respond(active.id, response)?;
+        }
         active.source = Some(body);
         Ok(())
     }
@@ -687,10 +789,19 @@ impl State {
                     Machine::Server(inner) => inner.release_body(op.release(consumed)),
                 };
                 if result.is_ok() {
-                    let _ = match &mut self.machine {
-                        Machine::Client(inner) => inner.grant_body_credit(id, consumed),
-                        Machine::Server(inner) => inner.grant_body_credit(id, consumed),
-                    };
+                    let mut abandoned = false;
+                    if let Some(active) = &mut self.active
+                        && active.id == id
+                    {
+                        active.incoming_lease = false;
+                        abandoned = active.duplex && active.cancel.is_cancelled();
+                    }
+                    if !abandoned {
+                        let _ = match &mut self.machine {
+                            Machine::Client(inner) => inner.grant_body_credit(id, consumed),
+                            Machine::Server(inner) => inner.grant_body_credit(id, consumed),
+                        };
+                    }
                 }
             }
             Input::Demand(demand) => {
@@ -733,6 +844,7 @@ impl State {
             && self.pending_write.is_none()
             && let Some(close) = self.pending_close.take()
         {
+            self.read_send.take();
             self.write_send
                 .try_send(WriteAction::Close(close))
                 .map_err(|_| Error::Closed)?;
@@ -754,6 +866,8 @@ impl State {
                 let cancel = Rc::new(CancellationToken::new());
                 self.pending_read = Some((op.id(), cancel.clone()));
                 self.read_send
+                    .as_ref()
+                    .ok_or(Error::Closed)?
                     .try_send(Pending { op, cancel })
                     .map_err(|_| Error::Closed)?;
             }
@@ -791,6 +905,15 @@ impl State {
             }
             Event::Body(op) => {
                 let active = self.active.as_mut().ok_or(Error::Closed)?;
+                active.incoming_lease = true;
+                if active.duplex && active.cancel.is_cancelled() {
+                    // A new delivery proves that the abandoned request was not complete.
+                    active.abandonment_applied = true;
+                    active.data.take();
+                    if let Machine::Server(server) = &mut self.machine {
+                        let _ = server.cancel_exchange(active.id);
+                    }
+                }
                 let chunk = BodyChunk {
                     op: Some(op),
                     release: self.release_send.clone(),
@@ -901,8 +1024,8 @@ impl State {
     }
 }
 
-async fn run<S, H, F>(
-    stream: Box<S>,
+async fn run<T, H, F>(
+    transport: T,
     config: Config,
     server: bool,
     requests: &Receiver<SendRequest>,
@@ -910,7 +1033,7 @@ async fn run<S, H, F>(
     mut handler: H,
 ) -> Result<(), Error>
 where
-    S: SplittableStream,
+    T: Transport,
     H: FnMut(Request<IncomingBody>) -> F,
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
@@ -933,7 +1056,7 @@ where
             core::Tick(0),
         )?)
     };
-    let (reader, writer) = Box::pin((*stream).split())
+    let (reader, writer) = Box::pin(transport.split())
         .await
         .map_err(Error::Transport)?;
     let (read_send, reads) = async_channel();
@@ -945,7 +1068,7 @@ where
     let state = State {
         machine,
         active: None,
-        read_send,
+        read_send: Some(read_send),
         write_send,
         read_done,
         write_done,
@@ -995,13 +1118,17 @@ where
             Machine::Client(inner) => inner.next(&mut Ports),
             Machine::Server(inner) => inner.next(&mut Ports),
         };
-        let runnable = event.is_some();
+        let mut runnable = event.is_some();
         if let Some(event) = event {
             match state.event(event, handler) {
                 Ok(Some(result)) => return result,
                 Ok(None) => {}
                 Err(error) => state.fail(error),
             }
+        } else if state.cancel_abandoned_duplex() {
+            // Source termination can drop the consumer before its last lease
+            // returns. Only a drained core can distinguish that from abandonment.
+            runnable = true;
         }
         turns += 1;
         if turns == budget {
@@ -1046,7 +1173,9 @@ async fn next_input(
         for offset in 0..10 {
             let index = (state.rotation + offset) % 10;
             let ready = match index {
-                0 => read.as_mut().poll(cx).map(|r| r.ok().map(Input::Read)),
+                0 if state.read_send.is_some() => {
+                    read.as_mut().poll(cx).map(|r| r.ok().map(Input::Read))
+                }
                 1 => write.as_mut().poll(cx).map(|r| r.ok().map(Input::Write)),
                 2 => release
                     .as_mut()

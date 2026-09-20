@@ -5,12 +5,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures::FutureExt;
 use kimojio::{OwnedFdStream, operations};
 use kimojio_http1::{
     Client, Config, ConnectionId, Error, IncomingBody, IncomingFrame, OutgoingBody, OutgoingFrame,
-    connect,
+    connect, connect_native,
     http::{Request, Response, StatusCode},
-    serve_connection,
+    serve_connection, serve_connection_native,
 };
 use serde_json::{Value, json};
 
@@ -25,6 +26,9 @@ struct Options {
     response_bytes: usize,
     chunk_bytes: usize,
     chunked: bool,
+    native: bool,
+    duplex: bool,
+    copy_forward: bool,
     timeout_seconds: u64,
     output: Option<PathBuf>,
 }
@@ -38,6 +42,9 @@ impl Default for Options {
             response_bytes: 128,
             chunk_bytes: BUFFER_BYTES,
             chunked: false,
+            native: false,
+            duplex: false,
+            copy_forward: false,
             timeout_seconds: 60,
             output: None,
         }
@@ -49,9 +56,24 @@ impl Options {
         let mut options = Self::default();
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
-            if arg == "--chunked" {
-                options.chunked = true;
-                continue;
+            match arg.as_str() {
+                "--chunked" => {
+                    options.chunked = true;
+                    continue;
+                }
+                "--native" => {
+                    options.native = true;
+                    continue;
+                }
+                "--duplex" => {
+                    options.duplex = true;
+                    continue;
+                }
+                "--copy-forward" => {
+                    options.copy_forward = true;
+                    continue;
+                }
+                _ => {}
             }
             let value = args
                 .next()
@@ -78,6 +100,12 @@ impl Options {
             || options.timeout_seconds > 3600
         {
             return Err("benchmark option is outside its documented bound".into());
+        }
+        if options.duplex && options.request_bytes != options.response_bytes {
+            return Err("duplex echo requires equal request and response sizes".into());
+        }
+        if options.copy_forward && !options.duplex {
+            return Err("--copy-forward requires --duplex".into());
         }
         Ok(options)
     }
@@ -139,6 +167,44 @@ async fn receive(body: &mut IncomingBody, expected: &[u8]) -> Result<(), Error> 
     Ok(())
 }
 
+fn forward(
+    incoming: IncomingBody,
+    expected: Rc<[u8]>,
+    requests: Rc<Cell<u64>>,
+    copy: bool,
+) -> OutgoingBody {
+    let source = futures::stream::try_unfold(
+        (incoming, expected, requests, 0usize),
+        move |(mut incoming, expected, requests, mut offset)| async move {
+            loop {
+                match incoming.frame().await? {
+                    Some(IncomingFrame::Data(chunk)) => {
+                        compare_chunk(&expected, &chunk, &mut offset)?;
+                        let frame = if copy {
+                            OutgoingFrame::Data(chunk.to_vec())
+                        } else {
+                            OutgoingFrame::Forward(chunk)
+                        };
+                        return Ok(Some((frame, (incoming, expected, requests, offset))));
+                    }
+                    Some(IncomingFrame::Trailers(headers)) if headers.is_empty() => {}
+                    Some(IncomingFrame::Trailers(_)) => {
+                        return Err(Error::Application("unexpected benchmark trailers".into()));
+                    }
+                    None => {
+                        if offset != expected.len() {
+                            return Err(Error::Application("incomplete benchmark upload".into()));
+                        }
+                        requests.set(requests.get() + 1);
+                        return Ok(None);
+                    }
+                }
+            }
+        },
+    );
+    OutgoingBody::from_stream(None, source).continue_request_body()
+}
+
 async fn exchange(
     client: &mut Client,
     options: &Options,
@@ -170,35 +236,57 @@ async fn run_pair(options: Rc<Options>) -> Result<Value, Error> {
         None,
     )
     .map_err(Error::Transport)?;
-    let (mut client, driver) = connect(OwnedFdStream::new(client_fd), config(1, &options));
+    let (mut client, driver) = if options.native {
+        let (client, connection) = connect_native(client_fd, config(1, &options));
+        (client, connection.run().boxed_local())
+    } else {
+        let (client, connection) = connect(OwnedFdStream::new(client_fd), config(1, &options));
+        (client, connection.run().boxed_local())
+    };
     let requests = Rc::new(Cell::new(0u64));
     let start = Rc::new(Cell::new(None));
     let request_bytes: Rc<[u8]> = (0..options.request_bytes)
         .map(|index| (index % 251) as u8)
         .collect();
-    let response_bytes: Rc<[u8]> = (0..options.response_bytes)
-        .map(|index| (250 - index % 251) as u8)
-        .collect();
+    let response_bytes: Rc<[u8]> = if options.duplex {
+        request_bytes.clone()
+    } else {
+        (0..options.response_bytes)
+            .map(|index| (250 - index % 251) as u8)
+            .collect()
+    };
     let server = {
+        let server_config = config(2, &options);
+        let native = options.native;
         let requests = requests.clone();
         let options = options.clone();
         let request_bytes = request_bytes.clone();
         let response_bytes = response_bytes.clone();
-        serve_connection(
-            OwnedFdStream::new(server_fd),
-            config(2, &options),
-            move |mut request| {
-                let requests = requests.clone();
-                let options = options.clone();
-                let request_bytes = request_bytes.clone();
-                let response_bytes = response_bytes.clone();
-                async move {
-                    receive(request.body_mut(), &request_bytes).await?;
-                    requests.set(requests.get() + 1);
-                    Ok(Response::new(source(response_bytes, &options)))
+        let handler = move |mut request: Request<IncomingBody>| {
+            let requests = requests.clone();
+            let options = options.clone();
+            let request_bytes = request_bytes.clone();
+            let response_bytes = response_bytes.clone();
+            async move {
+                if options.duplex {
+                    request.body_mut().accept().await?;
+                    return Ok(Response::new(forward(
+                        request.into_body(),
+                        request_bytes,
+                        requests,
+                        options.copy_forward,
+                    )));
                 }
-            },
-        )
+                receive(request.body_mut(), &request_bytes).await?;
+                requests.set(requests.get() + 1);
+                Ok(Response::new(source(response_bytes, &options)))
+            }
+        };
+        if native {
+            serve_connection_native(server_fd, server_config, handler).boxed_local()
+        } else {
+            serve_connection(OwnedFdStream::new(server_fd), server_config, handler).boxed_local()
+        }
     };
     let application = {
         let start = start.clone();
@@ -226,7 +314,7 @@ async fn run_pair(options: Rc<Options>) -> Result<Value, Error> {
             client.shutdown().await
         }
     };
-    let (application, driver, server) = futures::join!(application, driver.run(), server);
+    let (application, driver, server) = futures::join!(application, driver, server);
     let cpu_end = cpu_seconds();
     let end = Instant::now();
     application?;
@@ -246,6 +334,9 @@ async fn run_pair(options: Rc<Options>) -> Result<Value, Error> {
         "schema": 1,
         "valid": true,
         "transport": "unix_socketpair",
+        "backend": if options.native { "native" } else { "stream" },
+        "duplex": options.duplex,
+        "forwarding": if options.duplex { if options.copy_forward { "copy" } else { "lease" } } else { "none" },
         "connections_created": 1,
         "reconnects": 0,
         "warmup_exchanges": options.warmup,
@@ -255,6 +346,7 @@ async fn run_pair(options: Rc<Options>) -> Result<Value, Error> {
         "response_bytes": options.response_bytes,
         "chunk_bytes": options.chunk_bytes,
         "chunked": options.chunked,
+        "response_chunked": options.duplex || options.chunked,
         "validated_payload_bytes": options.iterations
             * (options.request_bytes as u64 + options.response_bytes as u64),
         "elapsed_seconds": elapsed,
@@ -284,6 +376,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "keepalive_bench [--iterations 1..10000000] [--warmup 0..1000000] \
              [--request-bytes 0..16777216] [--response-bytes 0..16777216] \
              [--chunk-bytes 1..16384] [--chunked] [--timeout-seconds 1..3600] [--json FILE]"
+        );
+        println!(
+            "Backend: --native. Reusable echo: --duplex [--copy-forward], with equal body sizes."
         );
         return Ok(());
     }
@@ -321,6 +416,8 @@ mod tests {
         ] {
             assert!(Options::parse(args.map(str::to_owned)).is_err());
         }
+        assert!(Options::parse(["--duplex".to_owned()]).is_err());
+        assert!(Options::parse(["--copy-forward".to_owned()]).is_err());
     }
 
     #[test]
@@ -337,7 +434,7 @@ mod tests {
 
     #[kimojio::test]
     async fn reuses_one_connection_for_fixed_and_chunked_round_trips() {
-        for chunked in [false, true] {
+        for (native, chunked) in [(false, false), (false, true), (true, false), (true, true)] {
             let report = run(Rc::new(Options {
                 iterations: 32,
                 warmup: 3,
@@ -345,6 +442,7 @@ mod tests {
                 response_bytes: 32_769,
                 chunk_bytes: 4096,
                 chunked,
+                native,
                 ..Options::default()
             }))
             .await
@@ -354,6 +452,32 @@ mod tests {
             assert_eq!(report["connections_created"], 1);
             assert_eq!(report["reconnects"], 0);
             assert_eq!(report["validated_payload_bytes"], 32 * (257 + 32_769));
+        }
+    }
+
+    #[kimojio::test]
+    async fn reuses_one_connection_for_duplex_forwarding() {
+        for native in [false, true] {
+            for (chunked, copy_forward) in [(false, false), (true, false), (true, true)] {
+                let report = run(Rc::new(Options {
+                    iterations: 8,
+                    warmup: 2,
+                    request_bytes: 65_537,
+                    response_bytes: 65_537,
+                    chunk_bytes: 4096,
+                    chunked,
+                    native,
+                    duplex: true,
+                    copy_forward,
+                    ..Options::default()
+                }))
+                .await
+                .unwrap();
+                assert_eq!(report["server_exchanges"], 10);
+                assert_eq!(report["reconnects"], 0);
+                assert_eq!(report["duplex"], true);
+                assert_eq!(report["validated_payload_bytes"], 8 * 2 * 65_537);
+            }
         }
     }
 }

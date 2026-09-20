@@ -10,13 +10,29 @@ There is no reconnect path, pool, retry, or second connection.
 Each request and response contains a deterministic binary payload.
 Both endpoints compare every received byte with the expected slice.
 The server counts every exchange, including warmup.
-The client checks status, complete framing, payload length, and the absence of unexpected trailers.
+The client requires the expected status, complete framing, payload length, and no unexpected trailers.
 The final count must equal warmup plus measured exchanges.
 
-The initial server consumes the request before it returns the response.
+The default server consumes the request before it returns the response.
 This permits persistent connections under the original conservative response policy.
-A later duplex workload will exercise concurrent input and output explicitly.
-That workload must not be confused with this request-then-response baseline.
+The requests use `GET /keepalive`, including requests with bodies.
+The case name `post-small` identifies its bidirectional payload, not a different HTTP method.
+
+With `--native`, both endpoints use the exact one-shot descriptor backend.
+Without that flag, both endpoints use `OwnedFdStream`.
+Both modes box the connection futures once during setup, outside the measured interval.
+The `backend` result identifies the selected backend.
+
+With `--duplex`, the server returns an explicit duplex response before request consumption completes.
+Its source compares each incoming chunk and forwards its receive lease.
+The request and response sizes must match.
+The server increments its count only after complete request consumption.
+The response uses chunked framing, regardless of request framing.
+The `chunked` result describes the request, while `response_chunked` describes the response.
+
+With `--duplex --copy-forward`, the same source produces a vector copy instead of a forwarded lease.
+Both paths preserve the source lifetime, payload comparison, framing, and completion count.
+The `duplex` and `forwarding` results distinguish these workloads from the request-then-response baseline.
 
 The measured interval starts after warmup on the established connection.
 It ends after all measured exchanges and successful shutdown of the application, client driver, and server.
@@ -55,6 +71,9 @@ taskset -c 2 target/wrapper-lab/build-original/release/examples/keepalive_bench 
   --response-bytes 1048576 --chunked --json target/wrapper-lab/chunked.json
 ```
 
+For the native duplex workload, add `--native --duplex` to the large sample.
+For its vector-copy control, also add `--copy-forward`.
+
 The JSON file contains one machine-readable result.
 Runtime diagnostics can also appear on stdout.
 A failed exchange, incorrect count, payload mismatch, or watchdog expiration invalidates the run.
@@ -84,6 +103,16 @@ All executions remain sequential and use one selected CPU.
 The result retains every trial, command, failure, and workload count.
 Summaries contain medians, ranges, and population standard deviations, not confidence intervals.
 Any failed row invalidates the comparison.
+An optional candidate field, `"arguments": ["--native"]`, selects the native backend.
+A native-only executable can instead declare `"backend": "native"`.
+Its result must also report the native backend.
+Candidate arguments cannot override workload counts or payload sizes.
+
+By default, the runner uses the original six request-then-response cases.
+Explicit `--case duplex-fixed`, `--case duplex-chunked`, and `--case duplex-copy` arguments select the additional duplex cases.
+These cases require capable binaries for every candidate in that comparison.
+The runner does not skip unsupported candidates or accept a different workload mode.
+The frozen original binary remains usable for the original six cases.
 
 ```sh
 python3 -B perf/wrapper-lab/compare.py \

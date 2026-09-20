@@ -32,6 +32,30 @@ CASES = [
         "chunked": True,
         "iterations": 2_000,
     },
+    {
+        "name": "duplex-fixed",
+        "request_bytes": 65_536,
+        "response_bytes": 65_536,
+        "duplex": True,
+        "iterations": 2_000,
+    },
+    {
+        "name": "duplex-chunked",
+        "request_bytes": 1_048_576,
+        "response_bytes": 1_048_576,
+        "chunked": True,
+        "duplex": True,
+        "iterations": 200,
+    },
+    {
+        "name": "duplex-copy",
+        "request_bytes": 1_048_576,
+        "response_bytes": 1_048_576,
+        "chunked": True,
+        "duplex": True,
+        "copy_forward": True,
+        "iterations": 200,
+    },
 ]
 
 
@@ -39,7 +63,7 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def validate_result(result, case, warmup):
+def validate_result(result, case, warmup, backend="stream"):
     expected = {
         "valid": True,
         "connections_created": 1,
@@ -57,6 +81,21 @@ def validate_result(result, case, warmup):
     for key, value in expected.items():
         if result.get(key) != value:
             raise ValueError(f"{key}: expected {value!r}, got {result.get(key)!r}")
+    modes = {
+        "backend": (backend, "stream"),
+        "duplex": (case.get("duplex", False), False),
+        "forwarding": (
+            ("copy" if case.get("copy_forward") else "lease") if case.get("duplex") else "none",
+            "none",
+        ),
+        "response_chunked": (
+            case.get("duplex", False) or case.get("chunked", False),
+            result["chunked"],
+        ),
+    }
+    for key, (expected_mode, legacy_default) in modes.items():
+        if result.get(key, legacy_default) != expected_mode:
+            raise ValueError(f"{key}: expected {expected_mode!r}, got {result.get(key)!r}")
     elapsed = result["elapsed_seconds"]
     latency = result["nanoseconds_per_exchange"]
     if not math.isfinite(elapsed) or elapsed <= 0 or not math.isfinite(latency) or latency <= 0:
@@ -105,7 +144,16 @@ def main():
             parser.error("every candidate needs its revision and build command")
         candidate["binary"] = str(Path(candidate["binary"]).resolve())
         candidate["binary_sha256"] = digest(Path(candidate["binary"]))
-    cases = [case for case in CASES if not args.case or case["name"] in args.case]
+        arguments = candidate.get("arguments", [])
+        if not isinstance(arguments, list) or any(arg != "--native" for arg in arguments):
+            parser.error("candidate arguments can contain only --native")
+        candidate.setdefault("backend", "native" if "--native" in arguments else "stream")
+        if candidate["backend"] not in ("stream", "native"):
+            parser.error("candidate backend must be stream or native")
+    cases = [
+        case for case in CASES
+        if (case["name"] in args.case if args.case else not case.get("duplex"))
+    ]
     artifacts = args.output.with_suffix("")
     artifacts.mkdir(parents=True, exist_ok=True)
     report = {
@@ -137,6 +185,11 @@ def main():
             ]
             if case.get("chunked"):
                 command.append("--chunked")
+            if case.get("duplex"):
+                command.append("--duplex")
+            if case.get("copy_forward"):
+                command.append("--copy-forward")
+            command.extend(candidate.get("arguments", []))
             row = {
                 "candidate": candidate["name"],
                 "case": case["name"],
@@ -154,7 +207,7 @@ def main():
                 if process.returncode != 0:
                     raise ValueError(f"benchmark exited {process.returncode}")
                 result = json.loads(output.read_text())
-                validate_result(result, case, warmup)
+                validate_result(result, case, warmup, candidate["backend"])
                 if digest(Path(candidate["binary"])) != candidate["binary_sha256"]:
                     raise ValueError("binary changed during comparison")
                 row["result"] = result
