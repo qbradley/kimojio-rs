@@ -1,0 +1,13 @@
+[package]
+name = "kimojio-fsm-http2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Synchronous sans-I/O HTTP/2 protocol engine"
+
+[dependencies]
+rustc-hash = "2"
+
+[features]
+hpack-test-support = []
