@@ -1,0 +1,11 @@
+{
+  "directory": "/workspace/kimojio-rs/target/http2-program/build-http2-admission-performance/frozen-b3c6484b",
+  "sha256": {
+    "composition_bench": "80d578b012ab4a5d9d165c6174e7b12fd4e776d20f53a50b0cf72201773de850",
+    "allocation_probe": "b723d7f62743de86f954be3a131ed53f61ac4765a5349210caacfbd8f3479c7c",
+    "direct-empty.data": "b167718d8c84b6714d0b1d6990cf386602f69cea310a9d7c68c599c9335667dc",
+    "selected-empty.data": "13c03ec84c0c2f36396d234b3c54f9a3962dc64e3725216a265995a954ee8170",
+    "direct-empty128.data": "d5a0c051d07cef8eb908190ac189db4fdc6266e751e731d717fc26d2373d8f4f",
+    "direct-1m.data": "db5719a04f77b804d045b2ee165c18455c1fe323ae4850996433f98023dca47c"
+  }
+}

@@ -1,0 +1,1 @@
+{"schema": 1, "binary": "/workspace/kimojio-rs/target/http2-program/build-http2-admission-performance/frozen-b3c6484b/allocation_probe", "binary_sha256": "b723d7f62743de86f954be3a131ed53f61ac4765a5349210caacfbd8f3479c7c", "cells": 108, "successful_runs": 324, "failed_runs": 0, "repetitions": 3, "all_repetitions_identical": true}

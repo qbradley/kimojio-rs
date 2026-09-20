@@ -1,0 +1,5 @@
+trial 1: 189 rows, 0 blocked cases
+trial 2: 378 rows, 0 blocked cases
+trial 3: 567 rows, 0 blocked cases
+trial 4: 756 rows, 0 blocked cases
+trial 5: 945 rows, 0 blocked cases

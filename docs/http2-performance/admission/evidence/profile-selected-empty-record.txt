@@ -1,0 +1,2 @@
+[ perf record: Woken up 203 times to write data ]
+[ perf record: Captured and wrote 50.555 MB ../../build-http2-admission-performance/frozen-b3c6484b/selected-empty.data (6280 samples) ]

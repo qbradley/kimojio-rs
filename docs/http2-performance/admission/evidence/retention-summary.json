@@ -1,0 +1,10 @@
+{
+  "source_commit": "b3c6484b1cb664dca76b5c35399d2e7d1367ce87",
+  "passed": 12,
+  "failed": 0,
+  "total_exchanges": 6030000,
+  "same_connection_cohorts": 10000,
+  "harness_unchanged_after_cohort8": true,
+  "live_plateau_at_2000_5000_10000": true,
+  "all_teardown_deltas_zero": true
+}
