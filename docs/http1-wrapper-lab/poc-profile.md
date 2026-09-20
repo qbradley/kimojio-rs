@@ -124,3 +124,77 @@ It will use the final common base and a private build directory.
 CPU affinity for compilation and tests is `8-31`.
 Timing and new profiles require an exclusive slot from the experiment coordinator.
 No new timing run occurred during this initial analysis.
+
+## Candidate 1: synchronous receive probes on runnable turns
+
+The first code candidate uses prerequisite base `90b7ff60`.
+`poll_receive` calls `try_recv` during a runnable turn.
+It polls the original receive future only on a turn that can suspend.
+Cancellation waits follow the same rule.
+Already-cancelled tokens remain immediately observable.
+
+The selector retains all ten input classes and its rotating priority.
+Handler and timer polling remain unchanged.
+Source polling still requires a non-runnable core.
+Thus protocol notifications can revoke source capacity before the next source poll.
+Receive futures still exist on the stack, but runnable probes do not allocate their wait registrations.
+
+The change does not modify body storage, lease settlement, transport constructors, or I/O workers.
+Two new tests cover the synchronous probe and the transition to a registered wait.
+The latter test sends after a cooperative yield and requires the waiting receive to resume.
+
+### Functional and lint results
+
+All commands ran from the isolated profile worktree.
+Cargo used `CARGO_TARGET_DIR=/workspace/kimojio-rs/target/wrapper-lab/build-profile-poc`.
+
+```sh
+taskset -c 8-31 cargo fmt
+taskset -c 8-31 cargo test --offline -p kimojio-http1 -p kimojio-fsm-http1
+taskset -c 8-31 cargo clippy --offline
+taskset -c 8-31 cargo clippy --offline --all-targets --all-features
+```
+
+The wrapper/core suites passed 144 tests, including four documentation tests.
+Both clippy commands succeeded.
+The pre-existing warnings are `question_mark` at `examples/http1-static/src/app.rs:413` and two `byte_char_slices` warnings at `kimojio/src/pipe.rs:64-65`.
+The candidate introduced no clippy warning.
+
+### Allocation experiment
+
+The existing `alloc-http1-keepalive` binary includes the unchanged benchmark application.
+The following commands are allocation experiments, not timing evidence:
+
+```sh
+CARGO_PROFILE_RELEASE_DEBUG=2 taskset -c 8-31 cargo build --release --offline \
+  -p fsm-allocation-probes --bin alloc-http1-keepalive
+taskset -c 8-31 BUILD/release/alloc-http1-keepalive \
+  --iterations 1000 --warmup 100 --response-bytes 128
+taskset -c 8-31 BUILD/release/alloc-http1-keepalive \
+  --iterations 3000 --warmup 100 --response-bytes 128
+```
+
+`BUILD` is the Cargo target directory stated above.
+An initial invocation used unsupported `--output` and exited before the workload.
+The corrected commands use standard output and completed all benchmark assertions.
+
+| Iterations | Allocations | Zeroed allocations | Reallocations |
+| --- | ---: | ---: | ---: |
+| 1,000 | 162,828 | 2 | 5,564 |
+| 3,000 | 458,593 | 2 | 15,668 |
+
+The slope is 152.9345 allocator calls per exchange.
+The frozen original slope is approximately 329.76.
+That comparison spans prerequisite changes, so it does not isolate this scheduler delta.
+A same-base allocation control and final-common-base timing remain necessary.
+
+### Review and next decision
+
+A runnable turn returns immediately even after an empty probe.
+It cannot sleep without a registered wake source because it cannot sleep at all.
+A subsequent non-runnable turn uses the original receive futures, which probe their channels before registration.
+No await occurs between that channel probe and its registration.
+
+This candidate deliberately does not retain completed receive futures across inputs.
+It avoids the lifetime and terminal-state complexity of persistent waits.
+The next profile will determine whether remaining registration costs justify that additional state.

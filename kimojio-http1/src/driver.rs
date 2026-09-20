@@ -1174,27 +1174,32 @@ async fn next_input(
             let index = (state.rotation + offset) % 10;
             let ready = match index {
                 0 if state.read_send.is_some() => {
-                    read.as_mut().poll(cx).map(|r| r.ok().map(Input::Read))
+                    poll_receive(&state.read_done, read.as_mut(), cx, runnable)
+                        .map(|r| r.ok().map(Input::Read))
                 }
-                1 => write.as_mut().poll(cx).map(|r| r.ok().map(Input::Write)),
-                2 => release
-                    .as_mut()
-                    .poll(cx)
+                1 => poll_receive(&state.write_done, write.as_mut(), cx, runnable)
+                    .map(|r| r.ok().map(Input::Write)),
+                2 => poll_receive(&state.released, release.as_mut(), cx, runnable)
                     .map(|r| r.ok().map(Input::Release)),
                 3 if !state.server
                     && state.active.is_none()
                     && !state.graceful_applied
                     && !state.abort_applied =>
                 {
-                    request.as_mut().poll(cx).map(|r| Some(Input::Request(r)))
+                    poll_receive(requests, request.as_mut(), cx, runnable)
+                        .map(|r| Some(Input::Request(r)))
                 }
                 // Drain notifications that can revoke previously advertised capacity.
                 4 if !runnable => poll_source(&mut state.active, cx),
                 5 => poll_handler(&mut state.active, cx),
-                6 if !state.graceful_applied => {
+                6 if !state.graceful_applied
+                    && (!runnable || state.shutdown.graceful.is_cancelled()) =>
+                {
                     graceful.as_mut().poll(cx).map(|_| Some(Input::Wake))
                 }
-                7 if !state.abort_applied => abort.as_mut().poll(cx).map(|_| Some(Input::Wake)),
+                7 if !state.abort_applied && (!runnable || state.shutdown.abort.is_cancelled()) => {
+                    abort.as_mut().poll(cx).map(|_| Some(Input::Wake))
+                }
                 8 => match state.timer.as_mut().map(|timer| timer.as_mut().poll(cx)) {
                     Some(Poll::Ready(result)) => {
                         state.timer.take();
@@ -1202,7 +1207,8 @@ async fn next_input(
                     }
                     _ => Poll::Pending,
                 },
-                9 => demand.as_mut().poll(cx).map(|r| r.ok().map(Input::Demand)),
+                9 => poll_receive(&state.demands.0, demand.as_mut(), cx, runnable)
+                    .map(|r| r.ok().map(Input::Demand)),
                 _ => Poll::Pending,
             };
             if let Poll::Ready(Some(input)) = ready {
@@ -1212,6 +1218,7 @@ async fn next_input(
         }
         if let Some(active) = &state.active
             && !active.cancellation_applied
+            && (!runnable || active.cancel.is_cancelled())
             && cancelled.as_mut().poll(cx).is_ready()
         {
             return Poll::Ready(Some(Input::Wake));
@@ -1223,6 +1230,23 @@ async fn next_input(
         }
     })
     .await
+}
+
+fn poll_receive<T>(
+    receiver: &Receiver<T>,
+    wait: Pin<&mut impl Future<Output = Result<T, kimojio::ChannelError>>>,
+    cx: &mut Context<'_>,
+    runnable: bool,
+) -> Poll<Result<T, kimojio::ChannelError>> {
+    if !runnable {
+        return wait.poll(cx);
+    }
+    // A runnable turn cannot suspend, so an empty channel needs no wake registration.
+    match receiver.try_recv() {
+        Ok(Some(value)) => Poll::Ready(Ok(value)),
+        Ok(None) => Poll::Pending,
+        Err(error) => Poll::Ready(Err(error)),
+    }
 }
 
 fn poll_source(active: &mut Option<Active>, cx: &mut Context<'_>) -> Poll<Option<Input>> {
@@ -1256,6 +1280,47 @@ mod forwarding_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runnable_receive_does_not_poll_the_wait_future() {
+        let (sender, receiver) = async_channel();
+        let mut wait = std::pin::pin!(std::future::poll_fn(
+            |_| -> Poll<Result<usize, kimojio::ChannelError>> {
+                panic!("a runnable turn registered a wait");
+            }
+        ));
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(poll_receive(&receiver, wait.as_mut(), &mut cx, true).is_pending());
+        sender.try_send(17).unwrap();
+        assert!(matches!(
+            poll_receive(&receiver, wait.as_mut(), &mut cx, true),
+            Poll::Ready(Ok(17))
+        ));
+        drop(sender);
+        assert!(matches!(
+            poll_receive(&receiver, wait.as_mut(), &mut cx, true),
+            Poll::Ready(Err(_))
+        ));
+    }
+
+    #[kimojio::test]
+    async fn suspended_receive_registers_a_wake_after_a_runnable_probe() {
+        let (sender, receiver) = async_channel();
+        let mut wait = std::pin::pin!(receiver.recv());
+        futures::future::poll_fn(|cx| {
+            assert!(poll_receive(&receiver, wait.as_mut(), cx, true).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        let (received, ()) = futures::join!(
+            futures::future::poll_fn(|cx| poll_receive(&receiver, wait.as_mut(), cx, false)),
+            async {
+                operations::yield_cpu().await;
+                sender.try_send(29).unwrap();
+            },
+        );
+        assert_eq!(received.unwrap(), 29);
+    }
 
     #[test]
     fn revoked_admission_returns_the_payload_without_aborting_the_response() {
