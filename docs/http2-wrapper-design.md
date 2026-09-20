@@ -3,7 +3,8 @@
 This document defines the wrapper boundary, not a completed implementation.
 The core correctness and performance gates in [the composition design](http2-composition.md) precede implementation.
 Those core gates are complete for the snapshots in the [qualification ledger](http2-qualification.md).
-The shared runtime foundation and native client are the first implementation phase.
+The shared runtime foundation, native client, and native server are implemented.
+Generic transports and complete wrapper qualification remain in progress.
 
 ## Connection-level API
 
@@ -121,6 +122,16 @@ The wrapper preserves protocol, transport, deadline, application, and retryabili
 Receive completion and full stream outcome remain observable separately.
 A valid response followed by an upload failure must not become an unqualified full-stream success.
 Conversely, a later reset must not erase an already complete valid response.
+
+`IncomingBody::retirement()` returns the authoritative `StreamReport`, separate from the convenience completion result.
+The report preserves the core outcome, receive outcome, failed-buffer receipt, and contextual error.
+Optional `RequestObserver` callbacks expose admission and retirement even when a request fails before final response headers.
+Ordinary requests do not require an observer queue.
+
+Optional client callbacks expose received informational heads.
+The server obtains an informational sender from the request body.
+Its send result means metadata acceptance, not transport acknowledgment.
+Informational metadata must precede final metadata without an extra queue for ordinary requests.
 
 The driver uses `kimojio::clock_now` for its clock domain.
 It must not mix that clock with wall-clock `Instant::now` when virtual time is active.

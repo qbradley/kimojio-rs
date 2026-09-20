@@ -6,7 +6,7 @@ use kimojio::{ReceiverOneshot, ReceiverUnbounded, SenderUnbounded};
 use kimojio_fsm_http2::{self as core, SendBuffer};
 
 use crate::{
-    Error,
+    Error, InformationalSender, StreamReport,
     driver::{Event, RequestControl},
 };
 
@@ -204,12 +204,13 @@ pub struct IncomingBody {
     pub(crate) close: SenderUnbounded<Delivery>,
     pub(crate) events: SenderUnbounded<Event>,
     pub(crate) received: Rc<Cell<Option<core::StreamOutcome>>>,
-    pub(crate) completion: Option<ReceiverOneshot<Result<core::StreamOutcome, Error>>>,
+    pub(crate) completion: Option<ReceiverOneshot<Result<StreamReport, Error>>>,
     pub(crate) completion_wait:
-        Option<futures::future::LocalBoxFuture<'static, Result<core::StreamOutcome, Error>>>,
-    pub(crate) completed: Option<Result<core::StreamOutcome, Error>>,
+        Option<futures::future::LocalBoxFuture<'static, Result<StreamReport, Error>>>,
+    pub(crate) completed: Option<Result<StreamReport, Error>>,
     pub(crate) eof: bool,
     pub(crate) control: Rc<RequestControl>,
+    pub(crate) abandon_on_drop: bool,
 }
 
 impl fmt::Debug for IncomingBody {
@@ -222,6 +223,22 @@ impl fmt::Debug for IncomingBody {
 }
 
 impl IncomingBody {
+    /// Creates optional informational-response control for a server request.
+    ///
+    /// Client response bodies return `None`. Ordinary requests do not allocate
+    /// this control unless the handler asks for it.
+    pub fn informational_sender(&self) -> Option<InformationalSender> {
+        if self.abandon_on_drop {
+            None
+        } else {
+            Some(InformationalSender::new(
+                self.stream,
+                self.control.clone(),
+                self.events.clone(),
+            ))
+        }
+    }
+
     pub fn stream_id(&self) -> core::StreamId {
         self.stream
     }
@@ -261,24 +278,42 @@ impl IncomingBody {
     /// Waits for both stream halves and all body leases to settle.
     ///
     /// Consume the receive body and drop its chunks before awaiting this.
+    /// Contextual failures take precedence here. Use `retirement` to inspect the
+    /// actual core outcome separately from a failed DATA-buffer receipt.
     pub async fn completion(&mut self) -> Result<core::StreamOutcome, Error> {
-        if let Some(result) = &self.completed {
-            return result.clone();
+        self.wait_retirement().await?.completion_result()
+    }
+
+    /// Returns the actual core retirement independently of contextual errors.
+    ///
+    /// A reset is an `Ok(StreamReport)` with a reset outcome, not a send receipt
+    /// inferred as retirement. `Error::Closed` means no retirement was delivered.
+    /// Consume the body and release its chunks before awaiting this method.
+    pub async fn retirement(&mut self) -> Result<StreamReport, Error> {
+        self.wait_retirement().await.cloned()
+    }
+
+    async fn wait_retirement(&mut self) -> Result<&StreamReport, Error> {
+        if self.completed.is_none() {
+            if self.completion_wait.is_none() {
+                let receive = self.completion.take().ok_or(Error::Closed)?;
+                self.completion_wait = Some(Box::pin(async move {
+                    receive.recv().await.map_err(|_| Error::Closed)?
+                }));
+            }
+            let result = self
+                .completion_wait
+                .as_mut()
+                .expect("completion waiter")
+                .await;
+            self.completion_wait.take();
+            self.completed = Some(result);
         }
-        if self.completion_wait.is_none() {
-            let receive = self.completion.take().ok_or(Error::Closed)?;
-            self.completion_wait = Some(Box::pin(async move {
-                receive.recv().await.map_err(|_| Error::Closed)?
-            }));
-        }
-        let result = self
-            .completion_wait
-            .as_mut()
-            .expect("completion waiter")
-            .await;
-        self.completion_wait.take();
-        self.completed = Some(result.clone());
-        result
+        self.completed
+            .as_ref()
+            .expect("retirement result")
+            .as_ref()
+            .map_err(Clone::clone)
     }
 
     pub async fn collect(&mut self, limit: usize) -> Result<Vec<u8>, Error> {
@@ -302,7 +337,8 @@ impl Drop for IncomingBody {
         while let Ok(Some(delivery)) = self.frames.try_recv() {
             drop(delivery);
         }
-        if self.received.get().is_none()
+        if self.abandon_on_drop
+            && self.received.get().is_none()
             && !self.control.cancelled.get()
             && !self.control.retired.get()
         {

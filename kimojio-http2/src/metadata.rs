@@ -1,7 +1,72 @@
-use http::{HeaderMap, HeaderName, HeaderValue, Method, Request};
+use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, Uri};
 use kimojio_fsm_http2::{H2HeaderField, H2RawHeaderRef, Head};
 
-use crate::{Error, OutgoingBody};
+use crate::{Error, IncomingBody, OutgoingBody};
+
+pub(crate) fn incoming_request(
+    head: Head<'_>,
+    body: IncomingBody,
+) -> Result<Request<IncomingBody>, Error> {
+    let get = |name: &[u8]| {
+        head.fields()
+            .find(|field| field.name == name)
+            .map(|field| field.value)
+    };
+    let method = Method::from_bytes(get(b":method").ok_or(Error::InvalidMetadata)?)
+        .map_err(|_| Error::InvalidMetadata)?;
+    let headers = headers(head)?;
+    let text = |value| std::str::from_utf8(value).map_err(|_| Error::InvalidMetadata);
+    let authority =
+        get(b":authority").or_else(|| headers.get(http::header::HOST).map(HeaderValue::as_bytes));
+    let uri = if method == Method::CONNECT {
+        Uri::builder()
+            .authority(text(authority.ok_or(Error::InvalidMetadata)?)?)
+            .build()
+            .map_err(|_| Error::InvalidMetadata)?
+    } else {
+        let path = text(get(b":path").ok_or(Error::InvalidMetadata)?)?;
+        if let Some(authority) = authority {
+            Uri::builder()
+                .scheme(text(get(b":scheme").ok_or(Error::InvalidMetadata)?)?)
+                .authority(text(authority)?)
+                .path_and_query(path)
+                .build()
+                .map_err(|_| Error::InvalidMetadata)?
+        } else {
+            path.parse().map_err(|_| Error::InvalidMetadata)?
+        }
+    };
+    let mut request = Request::new(body);
+    *request.method_mut() = method;
+    *request.uri_mut() = uri;
+    *request.version_mut() = http::Version::HTTP_2;
+    *request.headers_mut() = headers;
+    Ok(request)
+}
+
+pub(crate) fn response(
+    response: Response<OutgoingBody>,
+) -> Result<(Vec<H2HeaderField>, OutgoingBody), Error> {
+    let (parts, body) = response.into_parts();
+    if parts.status.is_informational() {
+        return Err(Error::InvalidMetadata);
+    }
+    let mut fields = trailers(parts.headers);
+    fields.insert(0, field(b":status", parts.status.as_str().as_bytes()));
+    Ok((fields, body))
+}
+
+pub(crate) fn informational(response: Response<()>) -> Result<Vec<H2HeaderField>, Error> {
+    if !response.status().is_informational()
+        || response.status() == http::StatusCode::SWITCHING_PROTOCOLS
+    {
+        return Err(Error::InvalidMetadata);
+    }
+    let (parts, ()) = response.into_parts();
+    let mut fields = trailers(parts.headers);
+    fields.insert(0, field(b":status", parts.status.as_str().as_bytes()));
+    Ok(fields)
+}
 
 pub(crate) fn request(
     request: Request<OutgoingBody>,

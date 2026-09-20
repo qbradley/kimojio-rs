@@ -7,7 +7,7 @@ It does not claim an exhaustive RFC proof.
 The core qualification gates are complete for the recorded scope and snapshots.
 The metadata-admission repair passed independent review, socket qualification, and source-specific measurements.
 Kimojio HTTP/2 wrapper implementation is in progress.
-The native client has focused runtime coverage.
+The native client and server have focused runtime coverage.
 Selected wrapper interoperability cases passed. Full interoperability and wrapper performance qualification remain pending.
 
 The current socket qualification covers the direct HTTP/2 engine.
@@ -198,13 +198,31 @@ That review did not independently inject kernel cancellation races or close fail
 | Wrapper phase | State |
 | --- | --- |
 | Shared ownership, native I/O, concurrent client | Implemented with focused runtime tests |
-| Concurrent native server | In progress |
-| Generic established transports | Pending |
-| Independent wrapper socket fixture and peers | Client fixture implemented, selected cases passed, API gaps remain |
+| Concurrent native server | Implemented with focused runtime tests |
+| Generic established transports | In progress |
+| Independent wrapper socket fixture and peers | Client/server fixture adaptation and explicit startup profile in progress |
 | Wrapper performance and final review | Pending |
 
 The current core socket results do not qualify the new wrapper.
 The wrapper needs its own fixture, peer runs, and source-specific measurements.
+
+### Native server and observation checkpoint
+
+Native checkpoint `af7d2ad48f9a87e8c37abf75dd5b2a4c29307377` adds concurrent handlers, optional informational responses, and independent retirement reports.
+Its separate implementation commits are `09b23260`, `8b08c240`, `41fdd37d`, and `af7d2ad4`.
+The server drains unread request bodies without an implicit response reset.
+Both roles share body ownership, metadata admission, scoped tasks, and native I/O.
+
+`IncomingBody::retirement()` exposes the actual core outcome independently of a failed send receipt.
+Optional `RequestObserver` callbacks expose admitted stream identities and retirement after failures before final response headers.
+Client callbacks expose actual informational heads, and the server can submit informational heads before its final response.
+The synchronized 200/413 reset-zero regression covers response preservation, sibling progress, and graceful close.
+
+The parent integration passed 53 all-feature tests, four doctests, and the nine existing client fixture tests.
+The implementation owner also passed default and release suites and both Clippy configurations.
+Independent review of the native server and observer changes remains in progress.
+The fixture must adopt the new observation APIs before these repairs have independent peer qualification.
+Generic transports, broader fault injection, and wrapper performance remain incomplete.
 
 ### Initial wrapper client fixture
 

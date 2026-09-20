@@ -179,8 +179,18 @@ async fn reference(fd: kimojio::OwnedFd, stats: Rc<RefCell<Stats>>) {
                         _ => machine
                             .respond_ref(
                                 id,
-                                &[core::H2RawHeaderRef::new(b":status", b"200")],
-                                matches!(path.as_str(), "/empty" | "/early-empty" | "/noerror"),
+                                &[core::H2RawHeaderRef::new(
+                                    b":status",
+                                    if path == "/noerror-413" {
+                                        b"413"
+                                    } else {
+                                        b"200"
+                                    },
+                                )],
+                                matches!(
+                                    path.as_str(),
+                                    "/empty" | "/early-empty" | "/noerror" | "/noerror-413"
+                                ),
                             )
                             .unwrap(),
                     }
@@ -194,11 +204,9 @@ async fn reference(fd: kimojio::OwnedFd, stats: Rc<RefCell<Stats>>) {
                     }
                     let id = op.stream();
                     machine.release_body(op.release()).unwrap();
-                    if peer
-                        .streams
-                        .get(&id)
-                        .is_some_and(|reply| reply.path == "/noerror")
-                    {
+                    if peer.streams.get(&id).is_some_and(|reply| {
+                        matches!(reply.path.as_str(), "/noerror" | "/noerror-413")
+                    }) {
                         machine.reset(id, core::H2ErrorCode::NoError).unwrap();
                     }
                 }
@@ -1066,4 +1074,60 @@ async fn settings_timeout_uses_virtual_clock_and_closes_descriptor() {
     let (result, ()) = futures::join!(connection.run(), control);
     assert!(matches!(result, Err(Error::Connection(_))), "{result:?}");
     operations::virtual_clock_enable(false);
+}
+
+#[kimojio::test]
+async fn reset_zero_retirement_is_independent_of_a_failed_buffer_receipt() {
+    for (path, status) in [("/noerror", 200), ("/noerror-413", 413)] {
+        let (fd, peer) = kimojio::pipe::bipipe();
+        let (client, connection) = connect_native(fd, Config::default());
+        let stats = Rc::new(RefCell::new(Stats::default()));
+        let (upload, receive) = kimojio::oneshot();
+        let app = async {
+            let source = futures::stream::once(async move {
+                receive.recv().await.unwrap();
+                Ok(OutgoingFrame::Data(vec![42; 65536]))
+            });
+            let mut response = client
+                .send(request(path, OutgoingBody::from_stream(source)))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            assert!(response.body_mut().frame().await.unwrap().is_none());
+            upload.send(()).unwrap();
+            let contextual = response.body_mut().completion().await.unwrap_err();
+            assert!(matches!(
+                contextual,
+                Error::Send {
+                    reason: core::SendStop::Reset(0),
+                    ..
+                }
+            ));
+            let report = response.body_mut().retirement().await.unwrap();
+            assert_eq!(report.stream, response.body().stream_id());
+            assert_eq!(report.outcome, StreamOutcome::Reset(0));
+            assert_eq!(report.receive_outcome, Some(StreamOutcome::Complete));
+            assert_eq!(report.error, Some(contextual));
+            let receipt = report.send_failure.unwrap();
+            assert_eq!(receipt.reason, core::SendStop::Reset(0));
+            assert!(receipt.exact);
+            assert!(receipt.accepted < 65536);
+            assert!(response.body_mut().frame().await.unwrap().is_none());
+            let mut sibling = client
+                .send(request("/echo", OutgoingBody::full(b"sibling")))
+                .await
+                .unwrap();
+            assert_eq!(sibling.body_mut().collect(32).await.unwrap(), b"sibling");
+            assert_eq!(
+                sibling.body_mut().retirement().await.unwrap().outcome,
+                StreamOutcome::Complete
+            );
+            client.control().graceful();
+        };
+        bounded(async {
+            let ((), result, ()) = futures::join!(app, connection.run(), reference(peer, stats));
+            result.unwrap();
+        })
+        .await;
+    }
 }
