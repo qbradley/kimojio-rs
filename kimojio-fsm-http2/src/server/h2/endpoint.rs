@@ -211,8 +211,8 @@ impl H2ConnectionCodecs {
 /// methods must keep role-neutral decisions here and directional decisions on
 /// the concrete endpoint.
 ///
-/// SETTINGS preparation changes outbound HPACK before role-specific window
-/// preflight. DATA commit stays concrete because server and client error-side
+/// SETTINGS preparation leaves outbound HPACK unchanged until window preflight
+/// succeeds. DATA commit stays concrete because server and client error-side
 /// effects use different mutation orders.
 pub(crate) struct H2Endpoint<Stream> {
     pub(crate) now: Duration,
@@ -220,6 +220,7 @@ pub(crate) struct H2Endpoint<Stream> {
     pub(crate) settings: H2Settings,
     pub(crate) local_initial_window_size: u32,
     pub(crate) local_connection_window_size: u32,
+    pub(crate) local_enable_push: Option<bool>,
     pub(crate) header_codecs: Option<H2ConnectionCodecs>,
     pub(crate) outbound_queue: Box<H2OutboundQueue>,
     #[cfg(feature = "hpack-test-support")]
@@ -252,6 +253,7 @@ impl<Stream> Default for H2Endpoint<Stream> {
             settings: H2Settings::default(),
             local_initial_window_size: H2Settings::default().initial_window_size,
             local_connection_window_size: H2Settings::default().initial_window_size,
+            local_enable_push: None,
             header_codecs: Some(H2ConnectionCodecs::new()),
             outbound_queue: Box::default(),
             #[cfg(feature = "hpack-test-support")]
@@ -284,6 +286,7 @@ impl<Stream> Default for H2Endpoint<Stream> {
 pub(crate) struct H2PreparedSettings {
     settings: H2Settings,
     previous_initial_window_size: u32,
+    table_sizes: Vec<usize>,
 }
 
 impl H2PreparedSettings {
@@ -1083,18 +1086,15 @@ impl<Stream> H2Endpoint<Stream> {
         }
         let mut settings = self.settings;
         settings.apply_all(&decoded)?;
-        // HPACK capacity advances before role-specific window preflight,
-        // preserving the peer SETTINGS side-effect order on rejection.
-        for setting in &decoded {
-            if setting.id == H2SettingId::HeaderTableSize
-                && let Some(codecs) = self.header_codecs.as_mut()
-            {
-                codecs.outbound.set_max_table_size(setting.value as usize);
-            }
-        }
+        let table_sizes = decoded
+            .iter()
+            .filter(|setting| setting.id == H2SettingId::HeaderTableSize)
+            .map(|setting| setting.value as usize)
+            .collect();
         Ok(H2PreparedSettings {
             settings,
             previous_initial_window_size,
+            table_sizes,
         })
     }
 
@@ -1103,6 +1103,11 @@ impl<Stream> H2Endpoint<Stream> {
         prepared: H2PreparedSettings,
     ) -> Option<H2InitialWindowSizeChange> {
         let change = prepared.initial_window_change();
+        if let Some(codecs) = self.header_codecs.as_mut() {
+            for size in prepared.table_sizes {
+                codecs.outbound.set_max_table_size(size);
+            }
+        }
         self.settings = prepared.settings;
         change
     }
@@ -1149,6 +1154,9 @@ impl<Stream> H2Endpoint<Stream> {
         self.local_settings_ack_debt.note_sent();
         let mut payload = Vec::new();
         let mut settings = Vec::new();
+        if let Some(enabled) = self.local_enable_push {
+            settings.push(H2Setting::new(H2SettingId::EnablePush, u32::from(enabled)));
+        }
         if self.limits.max_header_table_size != H2Settings::default().header_table_size as usize {
             settings.push(H2Setting::new(
                 H2SettingId::HeaderTableSize,

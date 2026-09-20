@@ -130,7 +130,9 @@ pub(crate) fn project_h2_request_head_from_validated(
     let request = section.request.ok_or(ServerError::InvalidHeader)?;
     if section.first_regular_index > fields.len()
         || request.method_index >= fields.len()
-        || request.path_index >= fields.len()
+        || request
+            .path_index
+            .is_some_and(|index| index >= fields.len())
         || request
             .scheme_index
             .is_some_and(|index| index >= fields.len())
@@ -144,10 +146,9 @@ pub(crate) fn project_h2_request_head_from_validated(
         .get(request.method_index)
         .ok_or(ServerError::InvalidHeader)?
         .value;
-    let path = fields
-        .get(request.path_index)
-        .ok_or(ServerError::InvalidHeader)?
-        .value;
+    let path = request.path_index.map_or(b"".as_slice(), |index| {
+        fields.get(index).expect("validated path index").value
+    });
     let authority = request
         .authority_index
         .and_then(|index| fields.get(index))
@@ -317,7 +318,9 @@ fn request_head_from_section<'a>(
             .scheme_index
             .map(|index| fields[index].value.as_slice()),
         authority,
-        path: &fields[request.path_index].value,
+        path: request
+            .path_index
+            .map_or(b"".as_slice(), |index| fields[index].value.as_slice()),
         fields: &fields[section.first_regular_index..],
         effective_host: if request.has_host { None } else { authority },
         content_length: section.content_length,
