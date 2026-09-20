@@ -1,0 +1,13 @@
+   Compiling kimojio-fsm-http2 v0.17.0 (/workspace/kimojio-rs/target/http2-program/worktrees/http2-allocation/kimojio-fsm-http2)
+    Finished `release` profile [optimized + debuginfo] target(s) in 10.37s
+     Running unittests src/lib.rs (/workspace/kimojio-rs/target/http2-program/build-http2-retention/release/deps/kimojio_fsm_http2-da52a7175a295818)
+
+running 5 tests
+test server::tests::h2_connection::h2_client_stream_record_keeps_halves_and_tombstones_disjoint ... ok
+test server::tests::h2_connection::h2_closed_stream_tombstones_are_bounded ... ok
+test server::tests::h2_connection::h2_rst_stream_cancels_response_active_stream_after_tombstone_eviction ... ok
+test server::tests::h2_connection::h2_zero_tombstone_capacity_does_not_retain_reset_tolerance ... ok
+test server::tests::h2_connection::h2_server_stream_record_keeps_halves_and_tombstones_disjoint ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 207 filtered out; finished in 0.00s
+

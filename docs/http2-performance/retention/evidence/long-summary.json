@@ -1,0 +1,14 @@
+{
+  "source_commit": "974a48d2ad760455e541638592eef7b69f81af44",
+  "binary": "/workspace/kimojio-rs/target/http2-program/build-http2-retention/frozen-974a48d2/allocation_probe",
+  "binary_sha256": "18707e28efa492624a1fda298cede06773b52cfdace6a2522aba401cab972b41",
+  "successful_runs": 12,
+  "failed_runs": 0,
+  "total_exchanges": 6030000,
+  "total_payload_bytes": 771840000,
+  "same_connection_cohorts_per_run": 10000,
+  "harness_unchanged_after_cohort8": true,
+  "live_bytes_equal_at_2000_5000_10000": true,
+  "zero_reallocations_after_cohort2000": true,
+  "all_teardown_deltas_zero": true
+}
