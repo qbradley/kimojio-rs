@@ -127,6 +127,8 @@ fn complete_wake(&mut self, completion: WakeCompletion)
 fn complete_close(&mut self, completion: CloseCompletion)
     -> Result<(), Rejected<CloseCompletion>>;
 fn shutdown(&mut self) -> Result<(), CommandError>;
+fn abort(&mut self);
+fn abort_with_cause(&mut self, cause: ConnectionResult);
 fn set_deadline(&mut self, stream: StreamId, deadline: Option<Duration>)
     -> Result<(), CommandError>;
 
@@ -188,6 +190,8 @@ Release consumes a whole fragment, not the whole connection buffer.
 
 Every operation carries an unforgeable machine identity and a nonwrapping sequence.
 Cancellation acknowledgment does not settle the original operation.
+`CancelOp::complete()` means that the driver accepted the cancellation request.
+It does not mean that the kernel released the original buffer or that the original operation stopped.
 No callback has a silent default implementation.
 `reschedule` means that the drive budget ended with runnable work.
 
@@ -342,6 +346,36 @@ The role wrappers expose shared commands through `Deref<Target = Connection<B>>`
 The shared type has no public constructor and no role-specific request or response command.
 This arrangement avoids duplicate forwarding code without a universal operation interface.
 
+## Hard abort and native alarm failure
+
+`abort()` initiates hard teardown with `ConnectionResult::Aborted`.
+`abort_with_cause(cause)` accepts an explicit connection result, including `IoFailed`.
+Both methods return `()` and are idempotent.
+They abandon unsent output and request cancellation through the normal ports.
+They do not fabricate read, write, or timer completions.
+No graceful PING wait or shutdown deadline delays these cancellation requests.
+
+The first non-graceful connection result remains primary.
+A hard abort can escalate graceful drain, including a pending close operation.
+Abort after close completion has no effect.
+A close failure changes an otherwise graceful result to `IoFailed`, but does not replace an established non-graceful result.
+Original operations and cancellation acknowledgments still gate close.
+Already successful exchanges retain their outcomes.
+
+`WakeOp::complete(now)` remains the successful alarm input.
+`WakeOp::failed(error)` reports `IoFailure` without a time sample.
+`WakeOutcome` contains `Fired(Duration)` and `Failed(IoFailure)`.
+`WakeCompletion::token()` and `outcome()` expose read-only routing information.
+`WakeCompletion::into_parts()` now returns `(WakeOp, WakeOutcome)`, not `(WakeOp, Duration)`.
+This is a deliberate completion-shape change for adapters.
+
+An active alarm failure hard-aborts with `IoFailed`.
+Cancellation is expected only after the core dispatched cancellation for that alarm.
+Its subsequent `Failed(Cancelled)` completion settles the original without advancing time or changing the primary result.
+Other alarm failures remain explicit I/O failures, even when the alarm is obsolete.
+Obsolete successful wakeups still settle without advancing time.
+An adapter must not substitute the requested deadline for a failed native timer.
+
 ## Executable API example
 
 `examples/memory.rs` drives both roles with seven-byte I/O completions.
@@ -352,7 +386,7 @@ The pure engine does not create or drive an HTTP/1 parser.
 
 ## Standalone qualification
 
-The all-feature suite contains 213 unit tests, 60 integration tests, and two doctests.
+The all-feature suite contains 213 unit tests, 67 integration tests, and two doctests.
 Eight unit tests cover new direct-engine bounds and defensive state transitions.
 The default suite omits five feature-specific component tests.
 These counts do not include the six Criterion smoke workloads.
@@ -367,6 +401,10 @@ Another 48 schedules place response END_STREAM and RST_STREAM(NO_ERROR) in one r
 They cover HEADERS, DATA, and trailer endings, four callback policies, two release orders, and two write cuts.
 An upload remains outstanding throughout response processing.
 Assertions preserve the complete response and require sibling completion.
+The hard-abort model adds 8,640 schedules.
+It explores all 720 orders of three original operations and three cancellation acknowledgments.
+Four callback policies and three write outcomes cover cancellation, partial acceptance, and a fully successful race.
+Close requires all six obligations, and each original send buffer returns exactly once.
 
 The sustained-credit cases send 9 MiB plus 17 bytes in each direction with the message-body limit raised.
 The advertised flow windows retain their defaults.

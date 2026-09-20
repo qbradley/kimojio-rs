@@ -21,11 +21,19 @@ fn rejected_wake_recovers_original_alarm_and_early_completion_rearms_it() {
         .complete_wake(alarm.complete(Duration::from_secs(4)))
         .unwrap_err();
     assert_eq!(rejected.error, CommandError::InvalidCompletion);
-    let (alarm, time) = rejected.value.into_parts();
+    assert_eq!(rejected.value.token(), &token);
+    assert_eq!(
+        rejected.value.outcome(),
+        WakeOutcome::Fired(Duration::from_secs(4))
+    );
+    let (alarm, outcome) = rejected.value.into_parts();
     assert_eq!(alarm.token(), &token);
     assert_eq!(alarm.deadline(), Duration::from_secs(5));
-    assert_eq!(time, Duration::from_secs(4));
-    pair.client.complete_wake(alarm.complete(time)).unwrap();
+    assert_eq!(outcome, WakeOutcome::Fired(Duration::from_secs(4)));
+    let WakeOutcome::Fired(now) = outcome else {
+        unreachable!()
+    };
+    pair.client.complete_wake(alarm.complete(now)).unwrap();
     pair.client.next(&mut pair.client_ports);
     let replacement = pair.client_ports.alarms.pop().unwrap();
     assert_ne!(replacement.token(), &token);

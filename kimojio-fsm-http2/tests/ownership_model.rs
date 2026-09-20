@@ -169,6 +169,139 @@ fn completed_response_survives_no_error_reset_in_the_same_read_batch() {
     }
 }
 
+#[test]
+fn hard_abort_joins_every_original_and_cancellation_ack_order() {
+    for mask in [0, u16::MAX, 0x5555, 0xaaaa] {
+        for receipt in 0..3 {
+            for order in permutations::<6>() {
+                let mut pair = Pair::new(Config::default());
+                let id = pair.client.request(&request(b"POST"), false).unwrap();
+                pair.pump(32_768);
+                pair.client
+                    .set_deadline(id, Some(Duration::from_secs(5)))
+                    .unwrap();
+                let buffer = vec![9; 100];
+                let pointer = buffer.as_ptr();
+                pair.client
+                    .send(
+                        pair.client_ports.permits.pop_front().unwrap(),
+                        buffer,
+                        false,
+                    )
+                    .unwrap();
+                pair.client.next(&mut pair.client_ports);
+                let mut read = pair.client_ports.read.take();
+                let mut write = pair.client_ports.write.take();
+                let mut alarm = pair.client_ports.alarms.pop();
+                assert!(read.is_some() && write.is_some() && alarm.is_some());
+                let mut ports = Selective {
+                    ports: pair.client_ports,
+                    mask,
+                };
+                pair.client.abort();
+                drive(&mut pair.client, &mut ports);
+                assert_eq!(ports.ports.cancels.len(), 3);
+                let mut cancel_read = None;
+                let mut cancel_write = None;
+                let mut cancel_alarm = None;
+                for cancel in ports.ports.cancels.drain(..) {
+                    if cancel.original() == read.as_ref().unwrap().token() {
+                        cancel_read = Some(cancel);
+                    } else if cancel.original() == write.as_ref().unwrap().token() {
+                        cancel_write = Some(cancel);
+                    } else {
+                        assert_eq!(cancel.original(), alarm.as_ref().unwrap().token());
+                        cancel_alarm = Some(cancel);
+                    }
+                }
+                let mut settled = [false; 6];
+                for action in order {
+                    match action {
+                        0 => pair
+                            .client
+                            .complete_read(
+                                read.take()
+                                    .unwrap()
+                                    .complete(ReadOutcome::Failed(IoFailure::Cancelled)),
+                            )
+                            .unwrap(),
+                        1 => {
+                            let outcome = match receipt {
+                                0 => WriteOutcome::Failed {
+                                    progress: Progress::Exact(0),
+                                    error: IoFailure::Cancelled,
+                                },
+                                1 => WriteOutcome::Written(10),
+                                2 => WriteOutcome::Written(109),
+                                _ => unreachable!(),
+                            };
+                            pair.client
+                                .complete_write(write.take().unwrap().complete(outcome))
+                                .unwrap();
+                        }
+                        2 => {
+                            pair.client
+                                .complete_wake(alarm.take().unwrap().failed(IoFailure::Cancelled))
+                                .unwrap();
+                            pair.client.advance_time(Duration::ZERO).unwrap();
+                        }
+                        3 => pair
+                            .client
+                            .complete_cancel(cancel_read.take().unwrap().complete())
+                            .unwrap(),
+                        4 => pair
+                            .client
+                            .complete_cancel(cancel_write.take().unwrap().complete())
+                            .unwrap(),
+                        5 => pair
+                            .client
+                            .complete_cancel(cancel_alarm.take().unwrap().complete())
+                            .unwrap(),
+                        _ => unreachable!(),
+                    }
+                    settled[action] = true;
+                    drive(&mut pair.client, &mut ports);
+                    assert_eq!(
+                        ports.ports.close.is_some(),
+                        settled.iter().all(|value| *value),
+                        "mask={mask}, receipt={receipt}, order={order:?}, action={action}"
+                    );
+                    assert!(ports.ports.closed.is_empty());
+                    assert!(
+                        ports.ports.write.is_none(),
+                        "no continuation after hard abort"
+                    );
+                    assert!(ports.ports.cancels.is_empty());
+                }
+                assert_eq!(ports.ports.sent.len(), 1);
+                let sent = &ports.ports.sent[0];
+                assert_eq!(sent.stream, id);
+                assert_eq!(sent.buffer.as_ptr(), pointer);
+                assert_eq!(sent.buffer, [9; 100]);
+                assert_eq!(sent.accepted, [0, 1, 100][receipt]);
+                assert!(sent.exact);
+                assert_eq!(sent.result.is_ok(), receipt == 2);
+                assert_eq!(
+                    ports.ports.retired,
+                    [StreamResult {
+                        stream: id,
+                        outcome: StreamOutcome::ConnectionFailed
+                    }]
+                );
+                pair.client
+                    .complete_close(ports.ports.close.take().unwrap().complete(Ok(())))
+                    .unwrap();
+                drive(&mut pair.client, &mut ports);
+                assert_eq!(ports.ports.closed, [ConnectionResult::Aborted]);
+                let count = ports.ports.sequence.len();
+                pair.client.abort_with_cause(ConnectionResult::IoFailed);
+                drive(&mut pair.client, &mut ports);
+                assert_eq!(ports.ports.sequence.len(), count);
+            }
+        }
+    }
+}
+
 struct Selective {
     ports: MemoryPorts,
     mask: u16,
@@ -268,7 +401,13 @@ fn repeated_eight_stream_megabyte_duplex_preserves_bounded_credit_progress() {
                 .position(|alarm| alarm.token() == cancel.original())
                 .expect("only completed-handshake alarms need cancellation");
             connection
-                .complete_wake(ports.ports.alarms.remove(index).complete(Duration::ZERO))
+                .complete_wake(
+                    ports
+                        .ports
+                        .alarms
+                        .remove(index)
+                        .failed(IoFailure::Cancelled),
+                )
                 .unwrap();
             connection.complete_cancel(cancel.complete()).unwrap();
         }

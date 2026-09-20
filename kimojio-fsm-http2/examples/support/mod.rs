@@ -160,7 +160,7 @@ pub fn step(
         {
             let alarm = ports.alarms.remove(index);
             connection
-                .complete_wake(alarm.complete(Duration::ZERO))
+                .complete_wake(alarm.failed(IoFailure::Cancelled))
                 .unwrap();
         }
         connection.complete_cancel(cancel.complete()).unwrap();

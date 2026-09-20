@@ -123,7 +123,9 @@ fn transport(
             .position(|wake| wake.token() == cancellation.original())
             .expect("only SETTINGS alarms need cancellation in these workloads");
         let wake = executor.wakes.remove(index);
-        engine.complete_wake(wake.complete(Duration::ZERO)).unwrap();
+        engine
+            .complete_wake(wake.failed(IoFailure::Cancelled))
+            .unwrap();
         engine.complete_cancel(cancellation.complete()).unwrap();
     }
 }
