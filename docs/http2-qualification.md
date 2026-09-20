@@ -7,7 +7,8 @@ It does not claim an exhaustive RFC proof.
 The core qualification gates are complete for the recorded scope and snapshots.
 The metadata-admission repair passed independent review, socket qualification, and source-specific measurements.
 Kimojio HTTP/2 wrapper implementation is in progress.
-No wrapper qualification or performance result is claimed yet.
+The native client has focused runtime coverage.
+Independent wrapper interoperability and wrapper performance qualification remain pending.
 
 The current socket qualification covers the direct HTTP/2 engine.
 Separate models cover the HTTP/1 plus HTTP/2 composite.
@@ -181,3 +182,26 @@ Old failures remain negative controls rather than evidence against repaired code
 The runtime wrapper work now starts from the measured admission-aware baseline.
 The small measured regression remains explicit rather than hidden by a claim of unchanged cost.
 Runtime wrappers need their own ownership, cancellation, interoperability, and performance evidence.
+
+## Runtime wrapper progress
+
+The native client and shared runtime foundation are implemented in `b9bd24458f64ea852bfef633f3202c9aa42eb463`.
+Integration `c9e213ec` includes that separate implementation change.
+The [crate documentation](../kimojio-http2/README.md) records its API, bounds, completion distinctions, and current exclusions.
+
+The phase-one suite passed 22 tests and one doctest in default and release configurations.
+All-feature configurations passed 23 tests and one doctest, including virtual time.
+The parent integration also passed the all-feature suite.
+A separate source review found no significant issues.
+That review did not independently inject kernel cancellation races or close failures.
+
+| Wrapper phase | State |
+| --- | --- |
+| Shared ownership, native I/O, concurrent client | Implemented with focused runtime tests |
+| Concurrent native server | In progress |
+| Generic established transports | Pending |
+| Independent wrapper socket fixture and peers | Client fixture in progress |
+| Wrapper performance and final review | Pending |
+
+The current core socket results do not qualify the new wrapper.
+The wrapper needs its own fixture, peer runs, and source-specific measurements.
