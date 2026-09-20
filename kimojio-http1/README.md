@@ -71,7 +71,10 @@ Each native write submits one `writev` and reports its exact completed byte coun
 The protocol machine, not a transport write-all cursor, decides the next write after partial progress.
 Native cancellation targets the original operation and awaits its result.
 A late success retains its exact byte count.
-Native close waits for the read worker to release its descriptor owner, then awaits an actual close operation.
+Native connections use reusable pinned operation slots instead of transport workers and channels.
+Native close waits for both original-operation slots to settle, then awaits an actual close operation.
+The generic stream backend retains its workers.
+See the [overhead PoC record](../docs/http1-wrapper-lab/poc-overhead.md) for the experiment and allocation evidence.
 
 This backend supplies neither TLS nor a user-space readiness retry loop.
 Unexpected native `EAGAIN` is terminal.
@@ -114,9 +117,9 @@ The application must continue to poll the server future until shutdown completes
 - `from_stream(length, stream)` polls a fallible source directly.
 - `from_incoming(body)` forwards data leases and trailers with streaming framing.
 
-This experimental build retains `full` bytes directly instead of boxing a one-item stream.
+`empty` and `full` retain their state directly instead of boxing a body stream.
 By default, it preserves separate metadata and payload writes through the normal demand path.
-`Config::coalesce_full_bodies` defaults to `false`.
+`Config::coalesce_full_bodies` defaults to `false` for both client and server connections.
 When this option is `true`, the wrapper asks the core to attach eligible full payloads through `send_body_eager`.
 The transport borrows separate head and payload slices from one owned write operation.
 Suppression, continue gates, and unavailable capacity return the payload to the normal demand path.
@@ -198,9 +201,10 @@ Informational responses do not reach the application API.
 ## Transport and cancellation
 
 One reader and one writer operate concurrently.
-Each worker owns its half and its current operation.
+Each generic worker owns its half and its current operation.
 Neither transport future borrows the HTTP machine.
-Native single-slot channels connect workers to the driver.
+Single-slot channels connect generic workers to the driver.
+Native slots retain the original futures directly and reuse their pinned allocations.
 The wrapper creates no transport task for each frame.
 
 In the generic stream backend, a write-all success reports the complete offered length.
@@ -218,9 +222,9 @@ This covers write-all continuations after a positive partial completion.
 A concurrent success remains a success.
 Exchange completion does not imply complete input.
 If the core retires an exchange without `incoming_finished`, its input body returns cancellation.
-The driver settles reads and stops the read worker before it requests writer close.
+The generic driver settles reads and stops the read worker before it requests writer close.
 The read worker drops its half, because `AsyncStreamRead` has no close method.
-Native close also waits for that destructor before it consumes the shared descriptor.
+Native close requires empty read and write slots before it consumes the shared descriptor.
 
 Custom transports must cooperate with Kimojio cancellation.
 A transport future that waits forever outside native cancellation cannot promise bounded shutdown.
@@ -241,6 +245,10 @@ The wrapper rejects an oversized data frame after the source returns it.
 It cannot prevent the source itself from allocating excessive memory.
 
 Input selection rotates between ready work sources.
+On runnable turns, channel and cancellation probes do not register temporary waits.
+Native slots still poll the original I/O futures directly.
+Before suspension, ordinary channel and cancellation futures register wake sources.
+
 The driver drains core notifications before it polls an outgoing source.
 This prevents stale capacity from admitting source output after the core revokes it.
 If the core rejects a late data frame after revocation, the wrapper drops its unadmitted buffer and producer.
@@ -252,12 +260,14 @@ It records current time before each command or completion.
 The `virtual-clock` feature preserves the runtime's virtual time domain.
 
 The wrapper is not allocation-free.
-It allocates channels, metadata, per-operation cancellation tokens, and boxed handler or body sources.
+It allocates application channels, metadata, and boxed handler or body sources.
+The generic backend also allocates transport channels and per-operation cancellation tokens.
+The native backend retains two cancellation flags and two pinned operation slots per connection instead.
 Connection-level boxes keep large native transport buffers out of caller future frames.
 The generic `OwnedFdStream` also copies received bytes through its own 16-KiB buffer.
 The explicit native backend omits that buffer and copy.
 These costs belong in adapter measurements, separate from core measurements.
-No throughput or allocation improvement is claimed here.
+The [wrapper assessment](../docs/http1-wrapper-lab/REPORT.md) records measured costs, independent peer results, and remaining limits.
 
 ## Runnable examples
 
@@ -276,6 +286,7 @@ Socket creation and binding are synchronous setup operations.
 | --- | --- |
 | `/` | `hello from kimojio-http1\n` |
 | `/echo` | Request data and request trailers, streamed directly |
+| `/duplex` | The same lease forwarding with explicit reusable duplex policy |
 | `/trailers` | `first\nsecond\n`, then `x-finished: yes` |
 | `/early` | Status 413 with an empty body |
 | `/bytes/N` | N bytes of `x`, up to 16 MiB |

@@ -3,7 +3,7 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 use futures::FutureExt;
 use kimojio::{AsyncStreamRead, AsyncStreamWrite, Errno, OwnedFdStream, operations};
 use kimojio_http1::{
-    Config, ConnectionId, Error, IncomingBody, IncomingFrame, OutgoingBody, connect,
+    Config, ConnectionId, Error, IncomingBody, IncomingFrame, OutgoingBody, OutgoingFrame, connect,
     connect_native,
     http::{Method, Request, Response},
     serve_connection, serve_connection_native,
@@ -17,6 +17,85 @@ fn config(slot: u64) -> Config {
     config.protocol.max_buffer_bytes = 16 * 1024;
     config.coalesce_full_bodies = true;
     config
+}
+
+#[kimojio::test]
+async fn ready_full_response_remains_fair_with_a_runnable_source_and_small_budget() {
+    struct SourceLifetime(Rc<Cell<bool>>);
+    impl Drop for SourceLifetime {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
+
+    for native in [false, true] {
+        for coalesce in [false, true] {
+            let (client_fd, server_fd) = kimojio::pipe::bipipe();
+            rustix::net::sockopt::set_socket_send_buffer_size(&server_fd, 4096).unwrap();
+            let mut client_config = config(20);
+            client_config.turn_budget = 1;
+            client_config.coalesce_full_bodies = coalesce;
+            let mut server_config = client_config.clone();
+            server_config.connection_id.slot = 21;
+            let (mut client, driver) = if native {
+                let (client, driver) = connect_native(client_fd, client_config);
+                (client, driver.run().boxed_local())
+            } else {
+                let (client, driver) = connect(OwnedFdStream::new(client_fd), client_config);
+                (client, driver.run().boxed_local())
+            };
+            let polls = Rc::new(Cell::new(0));
+            let source_polls = polls.clone();
+            let dropped = Rc::new(Cell::new(false));
+            let lifetime = SourceLifetime(dropped.clone());
+            let source = futures::stream::repeat_with(move || {
+                let _lifetime = &lifetime;
+                source_polls.set(source_polls.get() + 1);
+                Ok(OutgoingFrame::Data(Vec::new()))
+            });
+            let handler = |_| async {
+                operations::yield_io().await;
+                Ok(Response::builder()
+                    .status(413)
+                    .body(OutgoingBody::full(vec![0x57; 8192]))
+                    .unwrap())
+            };
+            let server = if native {
+                serve_connection_native(server_fd, server_config, handler).boxed_local()
+            } else {
+                serve_connection(OwnedFdStream::new(server_fd), server_config, handler)
+                    .boxed_local()
+            };
+            let app = async {
+                let mut response = client
+                    .send(
+                        Request::builder()
+                            .method(Method::POST)
+                            .uri("/")
+                            .header("host", "test")
+                            .body(OutgoingBody::from_stream(None, source))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), 413);
+                assert_eq!(
+                    response.body_mut().collect(8192).await.unwrap(),
+                    [0x57; 8192]
+                );
+                client.shutdown().await.unwrap();
+            };
+            operations::timeout_at(kimojio::clock_now() + Duration::from_secs(3), async {
+                let ((), client, server) = futures::join!(app, driver, server);
+                client.unwrap();
+                server.unwrap();
+            })
+            .await
+            .unwrap();
+            assert!(polls.get() > 0);
+            assert!(dropped.get());
+        }
+    }
 }
 
 async fn response_head(peer: &mut OwnedFdStream) {
