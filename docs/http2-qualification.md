@@ -539,7 +539,21 @@ Those costs are smaller than the complete waiter path and do not include all reg
 
 The experiment starts from accepted runtime repair `a4af94fd`, without the rejected direct-read change.
 It must preserve weak ownership, cancellation generations, deduplication, migration, and destruction outside runtime borrows.
-Object-size and fallback behavior need explicit evidence before paired performance acceptance.
+Candidate `cd81114e8dd8596ca709106271bfbd21bb542e74` implements empty, inline-one, and vector-backed multiple memberships.
+It remains separate from the accepted integration and excludes the rejected direct-read change.
+Retirement detaches the membership storage before callbacks.
+Hashing, scope creation, completion settlement, and cancellation-target ownership remain unchanged.
+
+On the measured x86_64 target, the new enum and old vector both occupy 24 bytes.
+Waiter and completion object sizes remain unchanged in debug and release configurations.
+Controlled scope/wait tests observed zero/one/two memberships in 27/4,623/1 retired waiter generations.
+A mixed native/generic wrapper test observed 609 zero-member and 16,786 single-member generations.
+These diagnostics are absent from the final runtime code and do not establish a production traffic distribution.
+
+The implementation owner passed focused runtime, HTTP/1, and HTTP/2 suites in debug and release.
+Independent review, a fixture rebuild, and paired measurements remain in progress.
+The new performance and fixture worktrees start from the accepted baseline, without the rejected direct-read change.
+CPU2 is leased only to the measurement owner until this experiment completes.
 No broader registry rewrite or third optimization is part of this bounded follow-up.
 
 ### Initial wrapper client fixture
