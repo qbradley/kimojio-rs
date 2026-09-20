@@ -1,5 +1,15 @@
 # Profile-guided wrapper experiment
 
+## Current result
+
+The final-base PoC retains synchronous channel probes only on runnable driver turns.
+Its production source is `12e58e137245628c11c92bd05e7cad8462fcff71`, based on common prerequisite `0bd3e950f4b0aedb552fbfd8fab96139ef399bb9`.
+All public APIs and prerequisite ownership rules remain unchanged.
+Two further scheduler candidates were measured and rejected.
+The final comparison passed 180 runs across generic/native backends and nine workloads.
+Detailed final-base evidence appears at the end of this report.
+Earlier sections describe separate experiments on older prerequisites.
+
 ## Frozen baseline
 
 The original binary and this worktree have different source revisions.
@@ -453,3 +463,178 @@ The full-file hashes differ because the binaries also contain source/debug infor
 
 The exclusive measurement slot is released after this series.
 All binary manifests, comparisons, profiles, and functional logs remain under this worktree's `target/profile-artifacts/`.
+
+## Final-common-base integration
+
+The coordinator renewed the exclusive CPU2 slot for the final-base series.
+The exact common base is `0bd3e950f4b0aedb552fbfd8fab96139ef399bb9`.
+The rebased candidate source is `12e58e137245628c11c92bd05e7cad8462fcff71`.
+The rebase preserves the full experiment history.
+
+The only conflicts involved the input selector.
+The resolution retains `state.read_send.is_some()` before any read-channel probe or poll.
+Thus the raw backend's stopped read channel remains disabled.
+The net production diff does not touch `State::observe`, source-abandonment gates, or lease-return ordering.
+It also leaves native/generic constructors and I/O workers unchanged.
+
+The net driver diff is 94 added lines and nine removed lines.
+It includes three tests, a synchronous receive helper, and changes to the existing selector.
+The common benchmark and shared runner have no PoC modifications.
+
+### Final build identities
+
+Final builds use a fresh target directory and isolated package selection:
+
+```sh
+CARGO_PROFILE_RELEASE_DEBUG=2 \
+CARGO_TARGET_DIR=/workspace/kimojio-rs/target/wrapper-lab/build-profile-final \
+taskset -c 8-31 cargo build --release --offline \
+  -p kimojio-http1 --example keepalive_bench
+```
+
+Both binaries were built from this worktree at their exact revisions.
+The control build temporarily selected the common-base commit, then the worktree returned to the candidate.
+Each binary supports both `--native` and the default generic backend.
+
+The artifact root is `/workspace/kimojio-rs/target/wrapper-lab/worktrees/profile/target/profile-final-artifacts`.
+
+| Relative binary path | Revision | SHA-256 |
+| --- | --- | --- |
+| `frozen/common-final` | `0bd3e950` | `698f451234fbdc6865fbaa06e3b630329f0cbb8044c2fb86f0eb0d6f362539af` |
+| `frozen/profile-final` | `12e58e13` | `09c2a547c03f44d84f40b926c822f45e66e0baeba0730ba146c933de835273c7` |
+
+### Final functional evidence
+
+The final target directory applies to every Cargo command:
+
+```sh
+taskset -c 8-31 cargo fmt
+taskset -c 8-31 cargo test --offline -p kimojio-http1 -p kimojio-fsm-http1
+taskset -c 8-31 cargo test --offline -p kimojio-http1 -p kimojio-fsm-http1 --all-features
+taskset -c 8-31 cargo clippy --offline
+taskset -c 8-31 cargo clippy --offline --all-targets --all-features
+taskset -c 8-31 cargo test --offline -p kimojio --lib io_scope
+python3 -m unittest discover -s perf/wrapper-lab -p 'test_compare.py'
+```
+
+The default suites passed 163 tests.
+The all-feature suites passed 165 tests.
+The runner suite passed six tests.
+The I/O-scope suite passed 12 tests, including wrapped-waker settlement and sibling cancellation isolation.
+Formatting and both clippy commands succeeded.
+Only the previously listed `question_mark` and two `byte_char_slices` warnings remain.
+
+The wrapper suites include duplex, forwarding, native transport, reusable connections, cancellation, source settlement, and custom transports.
+They preserve the common base's body lease and unknown-progress write guarantees.
+The added tests cover empty/ready/closed probes, wake registration before suspension, and credit after a registered wait.
+
+### Final timing results
+
+```sh
+python3 perf/wrapper-lab/compare.py \
+  --manifest target/profile-final-artifacts/manifest.json \
+  --output target/profile-final-artifacts/comparison.json --trials 5 --cpu 2 \
+  --case empty --case small --case post-small --case large \
+  --case chunked --case fragmented --case duplex-fixed \
+  --case duplex-chunked --case duplex-copy
+```
+
+The manifest compares both binaries in both backend modes.
+All 180 runs passed the unchanged byte, connection-count, backend, and exchange-count requirements.
+The default seed is `20260920`.
+The table gives medians in microseconds per complete exchange.
+
+| Workload | Common generic | PoC generic | Common native | PoC native |
+| --- | ---: | ---: | ---: | ---: |
+| Empty | 32.904 | 25.489 | 28.302 | 24.928 |
+| Small | 43.240 | 37.719 | 41.553 | 36.386 |
+| POST small | 57.449 | 46.008 | 52.117 | 47.309 |
+| Large | 139.922 | 123.626 | 130.975 | 114.446 |
+| Chunked | 2131.441 | 1870.602 | 1999.802 | 1763.227 |
+| Fragmented | 376.359 | 322.052 | 357.513 | 311.367 |
+| Duplex fixed | 159.024 | 141.872 | 148.882 | 132.879 |
+| Duplex chunked, lease | 2640.826 | 2623.591 | 2462.493 | 2143.162 |
+| Duplex chunked, copy | 2506.202 | 2182.398 | 2393.694 | 2143.450 |
+
+Each ordinary workload improves in both backend median comparisons.
+The generic duplex-chunked result is effectively inconclusive: its approximately 0.65% median difference is smaller than trial variation.
+Its PoC range spans 2318.653–3013.681 microseconds.
+Other wide ranges include PoC native POST (44.076–63.736) and PoC generic small (37.029–50.510).
+The JSON report retains every trial, command, range, and population standard deviation.
+No confidence interval or external server QPS claim follows from these results.
+
+The final benchmark equally boxes connection futures at setup.
+Thus earlier `90b7ff60` and original `58e304d8` timings are distinct experiments, not direct final-base controls.
+
+### Final allocation results
+
+Allocation builds select only `-p fsm-allocation-probes --bin alloc-http1-keepalive`.
+Both revisions therefore use the same allocator-package features.
+Each backend runs 1,000 and 3,000 iterations with warmup 100 and response size 128 on CPUs8-31.
+These are functional allocation runs, not timing evidence.
+
+| Backend | Common calls/exchange | PoC calls/exchange | Common requested bytes/exchange | PoC requested bytes/exchange |
+| --- | ---: | ---: | ---: | ---: |
+| Generic | 329.7575 | 152.9345 | 22837.204 | 10105.948 |
+| Native | 317.7055 | 140.8825 | 22449.876 | 9718.620 |
+
+Both backends remove 176.823 allocator calls per complete exchange.
+The count includes client, server, and runtime allocations.
+It measures wait-registration churn separately from payload copies.
+
+### Final profiles and copy inventory
+
+Both final profiles use the frozen candidate binary and this command shape:
+
+```sh
+perf record -q -o ARTIFACT_ROOT/BACKEND.perf.data \
+  -e cpu-clock:u -F 999 --call-graph dwarf,16384 --delay 300 -- \
+  taskset -c 2 ARTIFACT_ROOT/frozen/profile-final BACKEND_FLAG \
+  --iterations 100000 --warmup 5000 --response-bytes 128 \
+  --json ARTIFACT_ROOT/BACKEND-profile.json
+```
+
+`BACKEND_FLAG` is absent for `stream` and is `--native` for `native`.
+The profiles contain 2,639 generic samples and 2,479 native samples, with zero lost samples.
+
+| Shared leaf | Generic self time | Native self time |
+| --- | ---: | ---: |
+| Input poll | 9.32% | 11.62% |
+| `Core::next` | 7.54% | 7.14% |
+| Event wait poll | 6.71% | 7.10% |
+| `next_input` async body | 5.99% | 5.45% |
+| `malloc` | 3.18% | 2.46% |
+
+Conservative ancestor attribution gives generic client/server/shared counts of 165/194/2280.
+The native counts are 147/189/2143.
+Ambiguous, truncated, or mixed stacks remain shared.
+The hottest identified endpoint leaf is `Core::receive_metadata`.
+Its generic client/server counts are 27/43, and native counts are 16/45.
+The shared inline input-poll leaf has 195 generic samples and 235 native samples.
+No shared leaf is charged to one endpoint without ancestors.
+
+`nm -C -S` locates the final input poll at `0x791c0`, size `0x88f`.
+`objdump -d -C --start-address=0x791c0 --stop-address=0x79a4f` exposes three directly annotated `memcpy` calls.
+The `edx` values give the copy sizes.
+Symbol-relative sample offsets identify nearby hits without an ASLR assumption.
+The parent appears in 256 generic and 301 native stacks.
+
+| Input-poll site | Size | Generic/native hits within `0x18` | Kind | Necessary |
+| --- | ---: | ---: | --- | --- |
+| `+0x874` | 288 | 6/12 | move of selected input | Ownership transfer required, staging not inherently required |
+| `+0x60d` | 280 | 6/5 | move of selected input | Same |
+| `+0x2ae` | 280 | 0/1 | move of selected input | Same, cold in generic profile |
+
+These sites refer to `next_input` in `kimojio-http1/src/driver.rs` at revision `12e58e13`.
+Nearby hits are not a measurement of total time inside libc.
+Unresolved libc leaves can also contain copies.
+The inventory therefore does not claim that all copies are identified.
+No payload-copy change was necessary for the retained scheduling result.
+
+### Final limits and decision
+
+This PoC is ready for comparison with the other wrapper experiments.
+It is not selected for production.
+Remaining wait costs are visible, but two measured extensions did not justify retention.
+Persistent receive streams require a separate experiment if future profiles justify their larger lifetime changes.
+The final-base series is complete, and the exclusive CPU2 slot is released.
