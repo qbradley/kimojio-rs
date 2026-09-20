@@ -241,7 +241,12 @@ Held body leases remain independent of transport closure.
 
 The parent integration passed 67 all-feature tests, five doctests, and 13 native fixture tests.
 The implementation owner also passed default and release suites and both Clippy configurations.
-Independent review of this delta and generic socket fixture implementation remain in progress.
+Independent source review of `af7d2ad4` through `d8ca94b6` found no significant issues.
+The reviewer also ran eight focused tests from existing compiled binaries.
+Those executions covered partial-write errors, cancellation, late completion, close errors, held body leases, and virtual time.
+The reviewer did not rebuild those binaries from the frozen revision, so those runs have weaker source provenance.
+Independent TLS qualification and exhaustive custom-transport cancellation remain outside this review.
+Generic socket fixture implementation remains in progress.
 
 Fragmented forwarding can exhaust a retained-page bound without exceeding the wire window.
 The fragmented duplex test uses a 2 MiB per-stream receive-capacity bound and unchanged receive windows.
