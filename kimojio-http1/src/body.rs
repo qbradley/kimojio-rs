@@ -16,7 +16,37 @@ pub(crate) struct BodyDemand {
 #[derive(Debug)]
 pub enum OutgoingFrame {
     Data(Vec<u8>),
+    /// Transfers a receive lease without copying its payload.
+    ///
+    /// After admission, the lease returns with the outgoing body receipt, not
+    /// when its source ends or cancellation is requested. Its entire receive
+    /// allocation must fit the destination's `Config::protocol.max_buffer_bytes`.
+    Forward(BodyChunk),
     Trailers(HeaderMap),
+}
+
+#[derive(Debug)]
+pub(crate) enum OutgoingData {
+    Owned(Vec<u8>),
+    Forward(BodyChunk),
+}
+
+impl OutgoingData {
+    pub(crate) fn retained_capacity(&self) -> usize {
+        match self {
+            Self::Owned(bytes) => bytes.capacity(),
+            Self::Forward(chunk) => chunk.retained_capacity(),
+        }
+    }
+}
+
+impl AsRef<[u8]> for OutgoingData {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Owned(bytes) => bytes,
+            Self::Forward(chunk) => chunk,
+        }
+    }
 }
 
 /// A body polled directly by the connection, without a producer task.
@@ -72,6 +102,29 @@ impl OutgoingBody {
             source: source.boxed_local(),
         }
     }
+
+    /// Forwards data leases and trailers with streaming framing.
+    ///
+    /// Both connection drivers must remain polled for cross-connection
+    /// forwarding. For a same-connection response, call `IncomingBody::accept`
+    /// before returning the response. The core still controls early-response
+    /// policy and connection reuse.
+    pub fn from_incoming(incoming: IncomingBody) -> Self {
+        Self::from_stream(
+            None,
+            futures::stream::try_unfold(incoming, |mut incoming| async move {
+                Ok(match incoming.frame().await? {
+                    Some(IncomingFrame::Data(chunk)) => {
+                        Some((OutgoingFrame::Forward(chunk), incoming))
+                    }
+                    Some(IncomingFrame::Trailers(headers)) => {
+                        Some((OutgoingFrame::Trailers(headers), incoming))
+                    }
+                    None => None,
+                })
+            }),
+        )
+    }
 }
 
 /// An exclusive receive-buffer lease. Dropping it releases its entire chunk.
@@ -80,6 +133,17 @@ impl OutgoingBody {
 pub struct BodyChunk {
     pub(crate) op: Option<BodyOp<Vec<u8>>>,
     pub(crate) release: Sender<BodyCompletion<Vec<u8>>>,
+    pub(crate) retained_capacity: usize,
+}
+
+impl BodyChunk {
+    /// Capacity of the complete receive allocation retained by this lease.
+    ///
+    /// This can exceed the visible payload length. Forwarding checks this
+    /// capacity against the destination's buffer limit without copying.
+    pub fn retained_capacity(&self) -> usize {
+        self.retained_capacity
+    }
 }
 
 impl Deref for BodyChunk {
@@ -100,6 +164,7 @@ impl fmt::Debug for BodyChunk {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BodyChunk")
             .field("len", &self.len())
+            .field("retained_capacity", &self.retained_capacity)
             .finish()
     }
 }

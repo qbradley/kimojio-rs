@@ -6,18 +6,28 @@ use kimojio_fsm_http1::{
     WriteCompletion, WriteOp,
 };
 
+use crate::body::OutgoingData;
+
 pub(crate) struct Pending<T> {
     pub op: T,
     pub cancel: Rc<CancellationToken>,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The single-slot channel keeps operations inline instead of allocating per write."
+)]
 pub(crate) enum WriteAction {
-    Write(Pending<WriteOp<Vec<u8>>>),
+    Write(Pending<WriteOp<OutgoingData>>),
     Close(CloseOp),
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The single-slot channel returns the inline operation without a per-receipt allocation."
+)]
 pub(crate) enum WriteResult {
-    Write(WriteCompletion<Vec<u8>>),
+    Write(WriteCompletion<OutgoingData>),
     Close(CloseCompletion),
 }
 

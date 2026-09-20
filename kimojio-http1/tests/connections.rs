@@ -466,12 +466,19 @@ async fn echo_streams_when_upload_waits_for_final_response_headers() {
         let (a, b) = pair();
         let (mut client, driver) = connect(a, config(if expect { 42 } else { 40 }));
         let (begin_upload, permitted) = kimojio::oneshot();
+        let mut trailers = HeaderMap::new();
+        trailers.insert("x-echo", "forwarded".parse().unwrap());
         let body = OutgoingBody::from_stream(
             None,
             futures::stream::once(async move {
                 permitted.recv().await.map_err(|_| Error::Closed)?;
                 Ok(OutgoingFrame::Data(b"gated upload".to_vec()))
-            }),
+            })
+            .chain(futures::stream::iter([
+                Ok(OutgoingFrame::Data(Vec::new())),
+                Ok(OutgoingFrame::Data(vec![0xfe; 16 * 1024])),
+                Ok(OutgoingFrame::Trailers(trailers)),
+            ])),
         );
         let mut request = request("/echo", body);
         if expect {
@@ -485,28 +492,26 @@ async fn echo_streams_when_upload_waits_for_final_response_headers() {
             |request: Request<IncomingBody>| async move {
                 let mut incoming = request.into_body();
                 incoming.accept().await?;
-                let source = futures::stream::try_unfold(incoming, |mut incoming| async move {
-                    Ok(match incoming.frame().await? {
-                        Some(IncomingFrame::Data(chunk)) => {
-                            Some((OutgoingFrame::Data(chunk.to_vec()), incoming))
-                        }
-                        Some(IncomingFrame::Trailers(headers)) => {
-                            Some((OutgoingFrame::Trailers(headers), incoming))
-                        }
-                        None => None,
-                    })
-                });
-                Ok(Response::new(OutgoingBody::from_stream(None, source)))
+                Ok(Response::new(OutgoingBody::from_incoming(incoming)))
             },
         );
         let app = async {
             let mut response = client.send(request).await.unwrap();
             assert_eq!(response.status(), 200);
+            assert_eq!(response.headers()["connection"], "close");
             begin_upload.send(()).unwrap();
-            assert_eq!(
-                response.body_mut().collect(100).await.unwrap(),
-                b"gated upload"
-            );
+            let mut bytes = Vec::new();
+            let mut trailers = None;
+            while let Some(frame) = response.body_mut().frame().await.unwrap() {
+                match frame {
+                    IncomingFrame::Data(chunk) => bytes.extend_from_slice(&chunk),
+                    IncomingFrame::Trailers(headers) => trailers = Some(headers),
+                }
+            }
+            let mut expected = b"gated upload".to_vec();
+            expected.extend_from_slice(&[0xfe; 16 * 1024]);
+            assert_eq!(bytes, expected);
+            assert_eq!(trailers.unwrap()["x-echo"], "forwarded");
             client.shutdown().await.unwrap();
         };
         operations::timeout_at(kimojio::clock_now() + Duration::from_secs(3), async {

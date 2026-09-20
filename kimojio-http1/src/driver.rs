@@ -15,7 +15,7 @@ use kimojio::{
 };
 use kimojio_fsm_http1 as core;
 
-use crate::body::BodyDemand;
+use crate::body::{BodyDemand, OutgoingData};
 use crate::{
     BodyChunk, Error, IncomingBody, OutgoingBody, OutgoingFrame,
     io::{self, Pending, WriteAction, WriteResult},
@@ -220,12 +220,12 @@ where
 }
 
 enum Machine {
-    Client(core::Client<Vec<u8>>),
-    Server(core::Server<Vec<u8>>),
+    Client(core::Client<Vec<u8>, OutgoingData>),
+    Server(core::Server<Vec<u8>, OutgoingData>),
 }
 
 fn source_admitted(
-    result: Result<core::BodyId, core::Rejected<core::SendBody<Vec<u8>>>>,
+    result: Result<core::BodyId, core::Rejected<core::SendBody<OutgoingData>>>,
 ) -> Result<bool, Error> {
     match result {
         Ok(_) => Ok(true),
@@ -237,7 +237,7 @@ fn source_admitted(
 
 enum Event {
     Read(core::ReadOp<Vec<u8>>),
-    Write(core::WriteOp<Vec<u8>>),
+    Write(core::WriteOp<OutgoingData>),
     Readiness(core::ReadinessOp),
     Cancel(core::CancelOp),
     Close(core::CloseOp),
@@ -246,7 +246,7 @@ enum Event {
     IncomingFinished(core::ExchangeId),
     SendReady(core::ExchangeId, usize),
     SourceFinished(core::ExchangeId),
-    BodySent(core::BodySent<Vec<u8>>),
+    BodySent(core::BodySent<OutgoingData>),
     ExchangeFinished(core::ExchangeFinished),
     Deadline(Option<core::Deadline>),
     Upgrade,
@@ -257,14 +257,14 @@ enum Event {
 
 struct Ports;
 
-impl core::Ports<Vec<u8>> for Ports {
+impl core::Ports<Vec<u8>, OutgoingData> for Ports {
     type Output = Event;
 
     fn read(&mut self, value: core::ReadOp<Vec<u8>>) -> Option<Event> {
         Some(Event::Read(value))
     }
 
-    fn write(&mut self, value: core::WriteOp<Vec<u8>>) -> Option<Event> {
+    fn write(&mut self, value: core::WriteOp<OutgoingData>) -> Option<Event> {
         Some(Event::Write(value))
     }
 
@@ -292,7 +292,7 @@ impl core::Ports<Vec<u8>> for Ports {
         Some(Event::SourceFinished(value))
     }
 
-    fn body_sent(&mut self, value: core::BodySent<Vec<u8>>) -> Option<Event> {
+    fn body_sent(&mut self, value: core::BodySent<OutgoingData>) -> Option<Event> {
         Some(Event::BodySent(value))
     }
 
@@ -325,7 +325,7 @@ impl core::Ports<Vec<u8>> for Ports {
     }
 }
 
-impl core::ServerPorts<Vec<u8>> for Ports {
+impl core::ServerPorts<Vec<u8>, OutgoingData> for Ports {
     fn request(
         &mut self,
         exchange: core::ExchangeId,
@@ -335,7 +335,7 @@ impl core::ServerPorts<Vec<u8>> for Ports {
     }
 }
 
-impl core::ClientPorts<Vec<u8>> for Ports {
+impl core::ClientPorts<Vec<u8>, OutgoingData> for Ports {
     fn response(
         &mut self,
         exchange: core::ExchangeId,
@@ -445,6 +445,7 @@ struct State {
     abort_applied: bool,
     server: bool,
     max_buffer: usize,
+    receive_capacity: usize,
     max_headers: usize,
     rotation: usize,
 }
@@ -603,16 +604,22 @@ impl State {
         active.capacity = 0;
         active.source_ready = false;
         match frame.transpose()? {
-            Some(OutgoingFrame::Data(buffer)) => {
-                if buffer.capacity() > self.max_buffer || buffer.len() > capacity {
+            Some(frame @ (OutgoingFrame::Data(_) | OutgoingFrame::Forward(_))) => {
+                let buffer = match frame {
+                    OutgoingFrame::Data(bytes) => OutgoingData::Owned(bytes),
+                    OutgoingFrame::Forward(chunk) => OutgoingData::Forward(chunk),
+                    OutgoingFrame::Trailers(_) => unreachable!(),
+                };
+                if buffer.retained_capacity() > self.max_buffer || buffer.as_ref().len() > capacity
+                {
                     return Err(Error::Limit);
                 }
-                if buffer.is_empty() {
+                if buffer.as_ref().is_empty() {
                     active.capacity = capacity;
                     active.source_ready = true;
                     return Ok(());
                 }
-                let len = buffer.len();
+                let len = buffer.as_ref().len();
                 let command = core::SendBody {
                     exchange: active.id,
                     buffer,
@@ -632,7 +639,7 @@ impl State {
                 let trailers = match trailers {
                     Some(OutgoingFrame::Trailers(trailers)) => trailers,
                     None => HeaderMap::new(),
-                    Some(OutgoingFrame::Data(_)) => unreachable!(),
+                    Some(OutgoingFrame::Data(_) | OutgoingFrame::Forward(_)) => unreachable!(),
                 };
                 if trailers.len() > self.max_headers {
                     return Err(Error::Limit);
@@ -787,6 +794,7 @@ impl State {
                 let chunk = BodyChunk {
                     op: Some(op),
                     release: self.release_send.clone(),
+                    retained_capacity: self.receive_capacity,
                 };
                 if let Some(data) = &active.data {
                     let _ = data.try_send(chunk);
@@ -907,17 +915,18 @@ where
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
     let buffer = vec![0; config.protocol.max_buffer_bytes];
+    let receive_capacity = buffer.capacity();
     let max_buffer = config.protocol.max_buffer_bytes;
     let max_headers = config.protocol.max_headers;
     let machine = if server {
-        Machine::Server(core::Server::new(
+        Machine::Server(core::Server::with_output_type(
             config.connection_id,
             config.protocol,
             buffer,
             core::Tick(0),
         )?)
     } else {
-        Machine::Client(core::Client::new(
+        Machine::Client(core::Client::with_output_type(
             config.connection_id,
             config.protocol,
             buffer,
@@ -955,6 +964,7 @@ where
         abort_applied: false,
         server,
         max_buffer,
+        receive_capacity,
         max_headers,
         rotation: 0,
     };
@@ -1111,6 +1121,10 @@ fn poll_handler(active: &mut Option<Active>, cx: &mut Context<'_>) -> Poll<Optio
 }
 
 #[cfg(test)]
+#[path = "forwarding_tests.rs"]
+mod forwarding_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1118,7 +1132,7 @@ mod tests {
     fn revoked_admission_returns_the_payload_without_aborting_the_response() {
         let config = core::Config::default();
         let buffer = vec![0; config.max_buffer_bytes];
-        let mut client = core::Client::new(
+        let mut client = core::Client::with_output_type(
             core::ConnectionId {
                 slot: 95,
                 generation: 1,
@@ -1173,12 +1187,12 @@ mod tests {
                         .send_body(core::SendBody {
                             exchange: id,
                             range: 0..buffer.len(),
-                            buffer,
+                            buffer: OutgoingData::Owned(buffer),
                             end: false,
                         })
                         .unwrap_err();
                     assert_eq!(rejection.reason, core::RejectReason::InvalidState);
-                    assert_eq!(rejection.value.buffer.as_ptr(), original);
+                    assert_eq!(rejection.value.buffer.as_ref().as_ptr(), original);
                     assert!(!source_admitted(Err(rejection)).unwrap());
                     rejected = true;
                     client.grant_body_credit(id, 64).unwrap();
