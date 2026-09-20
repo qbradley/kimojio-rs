@@ -114,11 +114,18 @@ Its sibling must retire as `complete`, and the connection must close normally.
 Global `connection_failed` outcomes cannot satisfy this stream-local termination.
 
 For a fixture with a declared application-cancellation policy, `--early-response-policy application-cancel` selects a separate case contract.
+The request explicitly selects stream 1 with the `cancel_upload_after_response` action.
+The fixture must not cancel an upload based on status 413 alone.
 The peer then sends neither a reset nor a barrier.
 The oracle requires actual client CANCEL8, preserved response END_STREAM, `reset` retirement, successful sibling completion, and graceful connection closure.
 The selected policy appears in the report.
+
 The default `peer-reset` oracle still requires the server barrier and NO_ERROR reset, with no client reset.
 Neither mode accepts `connection_failed` or ignores the actual wire reset code.
+The no-action duplex probes require full uploads for both status 200 and status 413.
+
+The reset-discard case keeps the sibling response open until the peer observes at least 33,792 bytes of connection refunds.
+The connection must refund both the initial DATA and the late discarded DATA before graceful close.
 
 ## Implemented flow and socket checks
 

@@ -204,6 +204,7 @@ The native fixture needs each action for the corresponding case.
 * `{"action":"pause","stream_id":1,"until_stream_ended":3}` retains stream 1 body fragments until stream 3 ends.
 * `{"action":"reset","stream_id":1,"after_bytes":1024,"code":8}` cancels stream 1 after that many response bytes.
 * `{"action":"graceful_close","after_streams":2}` starts graceful shutdown after two completed streams.
+* `{"action":"cancel_upload_after_response","stream_id":1}` cancels that unfinished upload after normal receive END_STREAM.
 
 The harness must name every executed case in its report.
 Unsupported actions fail rather than produce a skip.
@@ -213,6 +214,8 @@ The reset case reports status 200, 1,024 delivered bytes, no END_STREAM, and a s
 The peer sends late DATA after reset to exercise connection-credit refunds.
 These late frames remain within the credit that existed before reset.
 The test prohibits stream credit for the discarded DATA.
+The peer withholds the sibling's END_STREAM until connection refunds cover the initial 1,024 bytes and all 32,768 discarded bytes.
+This barrier prevents graceful close from discarding pending refunds before the test observes them.
 
 The graceful-close case requires GOAWAY(NO_ERROR) on the wire before actual socket close.
 The content-length error case sends 37 bytes, then an empty END_STREAM after a PING barrier.
@@ -249,7 +252,11 @@ Explicit application cancellation is another valid policy, but this case does no
 ### Declared application-cancellation variant
 
 `protocol_suite.py --early-response-policy application-cancel` selects a distinct fixture-application contract.
-It is only for a fixture that explicitly implements cancellation after a complete status-413 response.
+The request includes `{"action":"cancel_upload_after_response","stream_id":1}`.
+After normal receive END_STREAM, the fixture cancels only the selected stream's unfinished upload.
+The action does not depend on response status.
+Without the action, neither status 200 nor status 413 authorizes cancellation.
+
 The independent server withholds credit and keeps its socket open.
 It does not send the PING barrier or a reset in this variant.
 The client must send exactly RST_STREAM(CANCEL) for stream 1 after it accepts the completed response.
@@ -260,4 +267,4 @@ The report records the selected policy.
 The default remains `peer-reset`, with strict code-0 and barrier assertions.
 The oracle never accepts either reset code indiscriminately or excuses `connection_failed`.
 This application policy is not inferred by the pure protocol engine.
-The early-200 full-upload probe remains mandatory for either policy.
+The no-action status-200 and status-413 full-upload probes remain mandatory for either policy.

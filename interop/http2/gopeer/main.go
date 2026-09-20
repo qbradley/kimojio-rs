@@ -198,6 +198,8 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 		return nil, errors.New("invalid client preface")
 	}
 	early := scenario == "early-response" || scenario == "early-response-app-cancel"
+	resetDiscardPendingEnd := false
+	resetDiscardRefundBarrier := false
 	window := uint32(65535)
 	if early {
 		window = 1024
@@ -364,13 +366,23 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 					return nil, err
 				}
 				if err = p.headers(3, fields("200", 37), false, false); err == nil {
-					err = p.body(3, bytes.Repeat([]byte{3}, 37), true)
+					err = p.body(3, bytes.Repeat([]byte{3}, 37), false)
 				}
-				sent[3] = true
+				resetDiscardPendingEnd = true
 			}
 		}
 		if err != nil {
 			return nil, err
+		}
+		// Keep a response open until discarded DATA credit actually returns.
+		// Otherwise graceful close can legitimately discard pending refunds.
+		if resetDiscardPendingEnd && p.updates[0] >= 1024+32768 {
+			if err := p.body(3, nil, true); err != nil {
+				return nil, err
+			}
+			resetDiscardPendingEnd = false
+			resetDiscardRefundBarrier = true
+			sent[3] = true
 		}
 	}
 	return map[string]any{
@@ -380,7 +392,8 @@ func serve(conn net.Conn, scenario string) (map[string]any, error) {
 		"push_disabled": p.pushDisabled, "goaway_count": p.goaways,
 		"stream_updates_at_reset": resetUpdateBaseline,
 		"server_resets":           serverResets, "early_response_barrier": earlyResponseBarrier,
-		"request_ended": requestEnded,
+		"request_ended":                requestEnded,
+		"reset_discard_refund_barrier": resetDiscardRefundBarrier,
 	}, nil
 }
 
@@ -392,13 +405,12 @@ type request struct {
 }
 
 type spec struct {
-	Host                string    `json:"host"`
-	Port                int       `json:"port"`
-	Requests            []request `json:"requests"`
-	RequestCount        int       `json:"request_count"`
-	WireScenario        string    `json:"wire_scenario"`
-	earlyResponsePolicy string
-	Actions             []struct {
+	Host         string    `json:"host"`
+	Port         int       `json:"port"`
+	Requests     []request `json:"requests"`
+	RequestCount int       `json:"request_count"`
+	WireScenario string    `json:"wire_scenario"`
+	Actions      []struct {
 		Action     string `json:"action"`
 		StreamID   uint32 `json:"stream_id"`
 		AfterBytes int    `json:"after_bytes"`
@@ -427,6 +439,11 @@ func rawClient(input spec) (map[string]any, error) {
 	for _, action := range input.Actions {
 		switch action.Action {
 		case "reset", "graceful_close":
+		case "cancel_upload_after_response":
+			if action.StreamID == 0 || action.StreamID%2 == 0 ||
+				uint64(action.StreamID/2) >= uint64(len(input.Requests)) {
+				return nil, errors.New("invalid cancellation stream")
+			}
 		default:
 			return nil, fmt.Errorf("unsupported Go protocol action %q", action.Action)
 		}
@@ -529,14 +546,6 @@ func rawClient(input spec) (map[string]any, error) {
 			if frame.StreamEnded() {
 				r.Ended = true
 				markDone(frame.StreamID)
-				if input.earlyResponsePolicy == "application-cancel" &&
-					r.Status != nil && *r.Status == 413 && !requestEnded[frame.StreamID] {
-					if err := p.framer.WriteRSTStream(frame.StreamID, http2.ErrCodeCancel); err != nil {
-						return nil, err
-					}
-					r.Error = map[string]any{"scope": "stream", "code": uint32(http2.ErrCodeCancel)}
-					uploaded[frame.StreamID] = true
-				}
 			}
 		case *http2.DataFrame:
 			r := results[frame.StreamID]
@@ -627,6 +636,17 @@ func rawClient(input spec) (map[string]any, error) {
 		if connectionError != nil {
 			break
 		}
+		for _, action := range input.Actions {
+			r := results[action.StreamID]
+			if action.Action == "cancel_upload_after_response" && r != nil &&
+				r.Ended && r.Error == nil && !requestEnded[action.StreamID] {
+				if err := p.framer.WriteRSTStream(action.StreamID, http2.ErrCodeCancel); err != nil {
+					return nil, err
+				}
+				r.Error = map[string]any{"scope": "stream", "code": uint32(http2.ErrCodeCancel)}
+				uploaded[action.StreamID] = true
+			}
+		}
 		for {
 			progress := false
 			for index, req := range input.Requests {
@@ -715,7 +735,6 @@ func run() error {
 	report := flag.String("report", "", "bounded server report file")
 	clientFile := flag.String("client", "", "client request file")
 	resultFile := flag.String("result", "", "client result file")
-	earlyPolicy := flag.String("early-response-policy", "peer-reset", "explicit reference application policy")
 	flag.Parse()
 	if *clientFile != "" {
 		file, err := os.Open(*clientFile)
@@ -734,10 +753,6 @@ func run() error {
 		if err := json.Unmarshal(raw, &input); err != nil {
 			return err
 		}
-		if *earlyPolicy != "peer-reset" && *earlyPolicy != "application-cancel" {
-			return errors.New("unknown early-response policy")
-		}
-		input.earlyResponsePolicy = *earlyPolicy
 		if len(input.Requests) < 1 || len(input.Requests) > 8 || input.RequestCount != len(input.Requests) {
 			return errors.New("invalid reference request count")
 		}

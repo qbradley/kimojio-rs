@@ -18,7 +18,8 @@ SCENARIOS = (
 SERVER_SCENARIOS = ("connect", "request-continuation", "request-hpack-reuse", "request-trailers")
 
 
-def request(scenario, address):
+def request(scenario, address, *, early_policy="peer-reset"):
+    require(early_policy in ("peer-reset", "application-cancel"), "unknown early-response policy")
     two = scenario in ("reset-isolation", "content-length", "early-response", "reset-discard", "no-body-data")
     requests = [{
         "method": "CONNECT" if scenario == "connect" else "POST" if scenario == "early-response" else "GET",
@@ -32,6 +33,8 @@ def request(scenario, address):
         actions = [{"action": "reset", "stream_id": 1, "after_bytes": 1024, "code": 8}]
     if scenario == "graceful-close":
         actions = [{"action": "graceful_close", "after_streams": 1}]
+    if scenario == "early-response" and early_policy == "application-cancel":
+        actions = [{"action": "cancel_upload_after_response", "stream_id": 1}]
     return {
         "schema": 1, "host": address[0], "port": address[1],
         "timeout_ms": 8000,
@@ -120,7 +123,8 @@ def validate(scenario, report, witness, *, early_policy="peer-reset"):
         require(report["connection"]["outcome"] == "graceful", "early response did not close gracefully")
     if scenario == "reset-discard":
         require(witness["resets"].get("1") == 8, "missing client CANCEL")
-        require(witness["window_updates"].get("0", 0) >= 32768, "discarded DATA stranded connection credit")
+        require(witness.get("reset_discard_refund_barrier") is True, "missing open-connection refund barrier")
+        require(witness["window_updates"].get("0", 0) >= 1024 + 32768, "discarded DATA stranded connection credit")
         require(
             witness["window_updates"].get("1", 0) == witness["stream_updates_at_reset"].get("1", 0),
             "discarded DATA reopened stream credit",
@@ -141,7 +145,7 @@ def run_case(binary, client_adapter, scenario, directory, *, early_policy="peer-
         str(binary), "--scenario", peer_scenario, "--report", str(witness_file),
     ], cwd=ROOT) as server:
         request_file, result_file = directory / "request.json", directory / "result.json"
-        write_json(request_file, request(scenario, server.address))
+        write_json(request_file, request(scenario, server.address, early_policy=early_policy))
         completed = run_command(command(client_adapter, request_file, result_file), cwd=ROOT, timeout=12)
         require(completed.returncode == 0, f"client failed: {completed.stderr!r}")
         code = server.process.wait(timeout=3)
@@ -212,7 +216,6 @@ def main():
         require(not args.client_adapter and not args.server_adapter, "selftest cannot use native adapter")
         client_adapter = {"command": [
             str(binary), "--client", "{request_file}", "--result", "{result_file}",
-            "--early-response-policy", args.early_response_policy,
         ]}
         server_adapter = None
     else:
