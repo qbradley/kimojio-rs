@@ -1,6 +1,6 @@
 # HTTP/2 CPU qualification
 
-This report qualifies the direct HTTP/2 core and its protocol selector.
+This report measures the direct HTTP/2 core and its protocol selector.
 It does not qualify a Kimojio wrapper or a socket executor.
 The source starts at `5491242b53e60051178870d7a82fb89b29cda463`.
 The final Rust harness commit is `d4bc8694c24225be5c0a6a7ddbdf3baaa387a8fd`.
