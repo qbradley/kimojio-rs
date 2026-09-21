@@ -37,3 +37,41 @@ rustc --edition=2024 -C opt-level=3 -C codegen-units=1 -A dead_code \
 
 Run each OUTPUT and compare `size` and `nm -S --size-sort --demangle`.
 The common probe must use the same benchmark support source for both builds.
+
+Follow-up: inline counter helper and unconditional logging
+
+Baseline: cd4e960964598f461ef4fb186523efae5abce5dc
+Simplified implementation: jj change lkknxsky
+Compiler and probe flags are unchanged.
+Each build used a separate target directory.
+
+                                      Baseline off  Baseline logs  Simplified
+Client<Vec<u8>, &[u8]> bytes                    1040           1048        1048
+Server<Vec<u8>, &[u8]> bytes                    1040           1048        1048
+Executable text bytes                       457027         459539      459539
+Executable data bytes                        19040          19232       19232
+Executable bss bytes                          1072           2464        2464
+
+All three builds disable metrics. "Baseline logs" enables the old diagnostics
+feature. The simplified implementation has no diagnostics feature.
+The common probe uses the default no-op log callback.
+All client/server fixed/chunked roundtrips passed.
+
+The simplified implementation and logging-enabled baseline have identical
+emitted connection-symbol addresses and sizes. All 12 emitted Core functions
+have identical instruction sequences after normalization of compiler-generated
+symbol disambiguators and labels. Empty counter-helper calls add no code in
+this optimized probe. The whole assembly differs in unrelated function order
+and source metadata, so this is not a byte-identical executable claim.
+
+The once-only primary-failure delivery flag remains in connection state.
+Its retention explains the 8-byte layout increase over the fully disabled
+baseline. Default callback elimination does not eliminate all bookkeeping.
+The wrapper also retains a runtime check for its optional observation handle.
+This probe does not measure wrapper throughput or an installed logger.
+
+Measured simplified source SHA-256:
+  connection.rs  9a6fe6773c30763185e06f37c2b342c4a1fae03e01eed3d0b542e35770608663
+  coordinator.rs b3d626a65107e83ec5ee6b187fa029e72d1813df99d401c0556c55ec81c40deb
+  observation.rs 2b7d96624b105e17b342e78ddb98d0d5564d5060affae17cb3e811387baea2ce
+  lib.rs         d65d72f4738762124ef5518890d95ab5b2d00c40a311da0ca81d467ff6b3b32f

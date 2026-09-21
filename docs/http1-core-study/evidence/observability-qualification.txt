@@ -46,3 +46,17 @@ The snapshots and logs cover HTTP/1, including its use inside the composite.
 They do not cover the direct HTTP/2 engine.
 Diagnostic delivery requires a subsequent drive transition.
 Enabled-feature throughput was not measured.
+
+Follow-up: unconditional logs and centralized metrics gates
+
+The diagnostics and http1-diagnostics features are removed.
+Core, wrapper, composition, and WebSocket tests and doctests now pass with:
+  Default features: 563 passed, 0 failed, 0 ignored.
+  All features:     588 passed, 0 failed, 0 ignored.
+
+All diagnostic ordering and forwarding regressions now run without a feature.
+The all-feature tests preserve exact counter accounting and snapshot lifetimes.
+Formatting and both required Clippy modes pass with the same unrelated warnings.
+The no-op counter helper and default logger probe is recorded in
+observability-disabled.txt. Historical feature commands earlier in this file
+apply only to the original observability implementation.

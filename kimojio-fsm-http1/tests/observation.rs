@@ -1,5 +1,3 @@
-#![cfg(any(feature = "metrics", feature = "diagnostics"))]
-
 mod support;
 use kimojio_fsm_http1::*;
 use support::*;
@@ -156,20 +154,17 @@ fn expiry_and_cancellation_count_once_and_originals_still_settle() {
     ));
 }
 
-#[cfg(feature = "diagnostics")]
 #[derive(Default)]
 struct Recorder {
     logs: Vec<LogEvent>,
 }
 
-#[cfg(feature = "diagnostics")]
 impl Recorder {
     fn expect(&self, event: LogEvent) {
         assert_eq!(self.logs.last(), Some(&event));
     }
 }
 
-#[cfg(feature = "diagnostics")]
 impl Ports<B> for Recorder {
     type Output = Event;
     fn log(&mut self, connection: ConnectionId, _: Tick, event: LogEvent) {
@@ -257,7 +252,6 @@ impl Ports<B> for Recorder {
     }
 }
 
-#[cfg(feature = "diagnostics")]
 impl ServerPorts<B> for Recorder {
     fn request(&mut self, exchange: ExchangeId, head: RequestHead<'_>) -> Option<Event> {
         self.expect(LogEvent::RequestReceived {
@@ -268,7 +262,6 @@ impl ServerPorts<B> for Recorder {
     }
 }
 
-#[cfg(feature = "diagnostics")]
 impl ClientPorts<B> for Recorder {
     fn response(
         &mut self,
@@ -285,7 +278,6 @@ impl ClientPorts<B> for Recorder {
     }
 }
 
-#[cfg(feature = "diagnostics")]
 #[test]
 fn client_logs_informational_final_and_readiness_boundaries() {
     let mut machine = Client::new(
@@ -372,7 +364,6 @@ fn client_logs_informational_final_and_readiness_boundaries() {
     );
 }
 
-#[cfg(feature = "diagnostics")]
 #[test]
 fn diagnostics_are_drive_boundaries_not_an_api_attempt_queue() {
     let mut machine = server(Config {
@@ -409,7 +400,6 @@ fn diagnostics_are_drive_boundaries_not_an_api_attempt_queue() {
     );
 }
 
-#[cfg(feature = "diagnostics")]
 #[test]
 fn logs_precede_matching_callbacks_without_adding_yields() {
     let mut machine = server(config());

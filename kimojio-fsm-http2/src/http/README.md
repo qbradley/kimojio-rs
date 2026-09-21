@@ -104,24 +104,25 @@ Those operations have different ownership and protocol meanings.
 
 ## Optional HTTP/1 observations
 
-The independent crate features `http1-metrics` and `http1-diagnostics` enable observations for the HTTP/1 child.
-Both features are disabled by default.
-They do not add HTTP/2 metrics or diagnostics.
+The optional crate feature `http1-metrics` enables metrics for the HTTP/1 child.
+Typed HTTP/1 logging is always available.
+These interfaces do not add HTTP/2 metrics or diagnostics.
 
 With `http1-metrics`, composite clients and servers expose `http1_metrics()`.
 This read-only getter returns `Some(snapshot)` for a selected HTTP/1 child, including prefetched-input replay.
 It returns `None` during detection or for HTTP/2.
 The getter does not drive the child or change protocol selection.
 
-With `http1-diagnostics`, the replay adapter forwards `http1::Ports::log` directly to the outer ports.
+The replay adapter always forwards `http1::Ports::log` directly to the outer ports.
 Normal selected-child drive calls use the same callback.
+The default callback does nothing.
 There is no queue, formatting, or additional suspension.
 The [HTTP/1 observation contract](../../../../kimojio-fsm-http1/README.md#optional-observations) defines event ordering and counter semantics.
 
 HTTP/1 counters and operation logs describe child operations.
 They include logical reads that replay detector input, not only physical transport reads.
 Detection operations still belong to the detector and do not appear as HTTP/1 events.
-Callers must enable these forwarding features on the composite crate, not only the corresponding features on the HTTP/1 dependency.
+Metrics require the forwarding feature on the composite crate, not only the feature on the HTTP/1 dependency.
 
 ## Evidence boundary
 

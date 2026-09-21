@@ -6,14 +6,12 @@
 
 mod codec;
 mod connection;
-#[cfg(any(feature = "metrics", feature = "diagnostics"))]
 mod observation;
 mod operations;
 mod state;
 mod types;
 
 pub use connection::{Client, Server};
-#[cfg(any(feature = "metrics", feature = "diagnostics"))]
 pub use observation::*;
 pub use operations::*;
 pub use types::*;
@@ -40,7 +38,6 @@ pub trait Ports<B: Buffer, W: AsRef<[u8]> = B> {
     /// Observes a committed drive boundary without suspending protocol progress.
     ///
     /// This callback must return promptly and must not reenter the machine.
-    #[cfg(feature = "diagnostics")]
     fn log(&mut self, _connection: ConnectionId, _now: Tick, _event: LogEvent) {}
     fn read(&mut self, op: ReadOp<B>) -> Option<Self::Output>;
     fn write(&mut self, op: WriteOp<W>) -> Option<Self::Output>;

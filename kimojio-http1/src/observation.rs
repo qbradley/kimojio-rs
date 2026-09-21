@@ -11,13 +11,11 @@ use kimojio::{CancellationToken, Receiver, Sender, SenderOneshot, async_channel,
 use crate::Error;
 #[cfg(feature = "metrics")]
 use crate::MetricsSnapshot;
-#[cfg(feature = "diagnostics")]
 use crate::{ConnectionId, LogEvent, Tick};
 
 #[cfg(feature = "metrics")]
 pub(crate) type SnapshotRequest = SenderOneshot<Result<MetricsSnapshot, Error>>;
 
-#[cfg(feature = "diagnostics")]
 type Logger = Box<dyn Fn(ConnectionId, Tick, LogEvent)>;
 
 struct Inner {
@@ -31,7 +29,6 @@ struct Inner {
     final_snapshot: Cell<Option<MetricsSnapshot>>,
     #[cfg(feature = "metrics")]
     stopped: CancellationToken,
-    #[cfg(feature = "diagnostics")]
     logger: Option<Logger>,
 }
 
@@ -60,22 +57,18 @@ impl Default for Observation {
 impl Observation {
     /// Creates a handle without a diagnostic logger.
     pub fn new() -> Self {
-        Self::create(
-            #[cfg(feature = "diagnostics")]
-            None,
-        )
+        Self::create(None)
     }
 
     /// Calls `logger` synchronously at each core diagnostic boundary.
     ///
     /// The callback must not block or panic. Use caller-owned `Cell` or
     /// `RefCell` storage if it needs mutable state. Events are never queued.
-    #[cfg(feature = "diagnostics")]
     pub fn with_logger(logger: impl Fn(ConnectionId, Tick, LogEvent) + 'static) -> Self {
         Self::create(Some(Box::new(logger)))
     }
 
-    fn create(#[cfg(feature = "diagnostics")] logger: Option<Logger>) -> Self {
+    fn create(logger: Option<Logger>) -> Self {
         #[cfg(feature = "metrics")]
         let (requests, receiver) = async_channel();
         Self(Rc::new(Inner {
@@ -89,7 +82,6 @@ impl Observation {
             final_snapshot: Cell::new(None),
             #[cfg(feature = "metrics")]
             stopped: CancellationToken::new(),
-            #[cfg(feature = "diagnostics")]
             logger,
         }))
     }
@@ -145,7 +137,6 @@ impl Observation {
         })
     }
 
-    #[cfg(feature = "diagnostics")]
     pub(crate) fn log(&self, connection: ConnectionId, now: Tick, event: LogEvent) {
         if let Some(logger) = &self.0.logger {
             logger(connection, now, event);

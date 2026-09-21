@@ -13,7 +13,6 @@ httparse.workspace = true
 
 [features]
 metrics = []
-diagnostics = []
 
 [dev-dependencies]
 criterion.workspace = true

@@ -1,5 +1,3 @@
-#![cfg(any(feature = "metrics", feature = "diagnostics"))]
-
 use futures::{FutureExt, future::LocalBoxFuture};
 use kimojio::{OwnedFdStream, SplittableStream, operations};
 use kimojio_http1::{
@@ -87,7 +85,6 @@ async fn duplicate_binding_precedes_core_validation_and_transport_split() {
     drop(first);
 }
 
-#[cfg(feature = "diagnostics")]
 #[kimojio::test]
 async fn instrumented_core_logs_reach_native_and_generic_server_callbacks() {
     use kimojio_fsm_http1::{Failure, OperationKind};
@@ -196,7 +193,6 @@ mod metrics {
 
     fn counted_observation() -> (Observation, Issued) {
         let issued = Rc::new(Cell::new((0, 0, 0)));
-        #[cfg(feature = "diagnostics")]
         let observation = {
             use kimojio_fsm_http1::OperationKind;
             use kimojio_http1::LogEvent;
@@ -214,8 +210,6 @@ mod metrics {
                 issued.set((reads, writes, bodies));
             })
         };
-        #[cfg(not(feature = "diagnostics"))]
-        let observation = Observation::new();
         (observation, issued)
     }
 
@@ -415,7 +409,6 @@ mod metrics {
                 assert_eq!(counters.uncertain_write_completions, 0);
                 assert!(!counters.saturated);
                 // Read fragmentation can vary. Every issued operation still has one settled completion.
-                #[cfg(feature = "diagnostics")]
                 assert_eq!(
                     (
                         counters.read_completions,
@@ -424,8 +417,6 @@ mod metrics {
                     ),
                     issued.get(),
                 );
-                #[cfg(not(feature = "diagnostics"))]
-                let _ = issued;
                 assert_eq!(observation.snapshot().await.unwrap(), snapshot);
                 assert_eq!(observation.snapshot().await.unwrap(), snapshot);
                 assert_eq!(observation.final_snapshot(), Some(snapshot));

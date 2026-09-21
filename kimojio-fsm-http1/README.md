@@ -6,8 +6,9 @@ They have no dependency on Kimojio, io_uring, or HTTP/2.
 
 ## Optional observations
 
-The independent Cargo features `metrics` and `diagnostics` are disabled by default.
-The core remains synchronous and reads no clock with either feature.
+The Cargo feature `metrics` is disabled by default.
+Typed logging is always available through the callback ports.
+The core remains synchronous and reads no clock.
 
 ### Snapshot metrics
 
@@ -59,7 +60,7 @@ The read and write flags include readiness operations on their respective lanes.
 
 ### Typed diagnostics
 
-With `diagnostics`, ports can implement `log(&mut self, ConnectionId, Tick, LogEvent)`.
+Ports can implement `log(&mut self, ConnectionId, Tick, LogEvent)` without a feature flag.
 The default implementation does nothing.
 Events contain typed identities, counts, and outcomes, not URLs, headers, body bytes, or formatted strings.
 The callback returns `()` and cannot request a drive suspension.
@@ -80,16 +81,23 @@ Superseded deadline candidates and repeated shutdown commands do not create extr
 Rejected commands remain typed return errors that the adapter can report separately.
 Without another drive transition, a dropped machine does not promise delivery of its pending primary failure.
 
-### Disabled-cost contract
+### Instrumentation costs
 
-Without `metrics`, the core contains no counters, counter updates, or snapshot API.
-Without `diagnostics`, it contains no diagnostic calls or failure-delivery flag.
-These are compile-time guarantees, not claims about identical CPU timing.
-With diagnostics enabled, a no-op port can still retain failure-delivery bookkeeping.
+All counter updates use one inline helper.
+The helper updates counters with `metrics` enabled and does nothing otherwise.
+Counter call sites need no feature gates.
+Without `metrics`, the core contains no counter storage or snapshot API.
+Optimized builds eliminate the empty helper.
+
+The core always calls `Ports::log`, whose default implementation does nothing.
+Static dispatch lets the optimizer eliminate unused log calls and event construction.
+The primary-failure delivery flag remains part of connection state, even for a no-op port.
+The callback and this bookkeeping are separate costs.
+These guarantees do not claim identical CPU timing for every port implementation.
 
 Cargo unifies features across dependencies.
-The disabled-cost contract requires the feature to be absent from the resolved dependency graph.
-Wrappers and composites have their own forwarding features, which callers must enable on those crates.
+Disabled metrics require the feature to be absent from the resolved dependency graph.
+Wrappers and composites have their own metrics forwarding features, which callers must enable on those crates.
 The [Kimojio wrapper](../kimojio-http1/README.md) provides asynchronous snapshot queries and a synchronous typed logger.
 
 ## Supported protocol surface

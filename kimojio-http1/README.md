@@ -113,10 +113,11 @@ The application must continue to poll the server future until shutdown completes
 
 ## Optional observations
 
-The `metrics` and `diagnostics` Cargo features are independent.
-Each feature also enables its counterpart in `kimojio-fsm-http1`.
-Without either feature, the wrapper has no observation fields, channels, or input branch.
-`Config::new` does not allocate observation storage, even with these features enabled.
+The optional `metrics` Cargo feature also enables metrics in `kimojio-fsm-http1`.
+Logging and the `Observation` handle are always available.
+Without `metrics`, the wrapper has no snapshot channel, snapshot cache, or snapshot input branch.
+`Config::new` does not allocate observation storage.
+It retains an empty optional handle until the caller attaches one.
 
 An `Observation` handle belongs to one connection.
 Client construction and server future construction reserve the handle before core construction or transport split.
@@ -162,11 +163,9 @@ Startup failure or driver cancellation without terminal close leaves no final sn
 Pending and new queries then return `Error::Closed`.
 A dropped query does not cancel the connection.
 
-With `diagnostics`, `Observation::with_logger` accepts a typed callback:
+`Observation::with_logger` accepts a typed callback without a feature flag:
 
 ```rust
-# #[cfg(feature = "diagnostics")]
-# {
 use kimojio_http1::{Config, ConnectionId, Observation};
 
 let observation = Observation::with_logger(|connection, now, event| {
@@ -174,7 +173,6 @@ let observation = Observation::with_logger(|connection, now, event| {
 });
 let mut config = Config::new(ConnectionId { slot: 2, generation: 1 });
 config.observation = Some(observation);
-# }
 ```
 
 The callback runs synchronously at the core's drive boundaries.
@@ -182,8 +180,10 @@ The wrapper does not allocate per event or retain a diagnostic queue.
 The callback must not block or panic.
 Caller-owned `Cell` or `RefCell` storage can collect observations.
 The wrapper holds no `RefCell` borrow during the callback.
-Diagnostics alone creates no metrics storage or snapshot channel.
+Without `metrics`, an observation handle creates no metrics storage or snapshot channel.
 `Observation::new` installs no logger.
+The wrapper checks its optional observation handle at each log callback.
+This runtime choice differs from a core port that uses the compile-time no-op default.
 
 Handles use local `Rc` ownership, without atomic counters.
 Snapshots contain the core's connection identity, last observed time, state, storage gauges, and counters.

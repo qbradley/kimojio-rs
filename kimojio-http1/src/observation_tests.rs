@@ -1,7 +1,6 @@
 use super::*;
 use crate::Observation;
 
-#[cfg(feature = "diagnostics")]
 #[test]
 fn diagnostic_port_forwards_immediately_without_holding_a_handle_borrow() {
     use std::cell::RefCell;

@@ -9,7 +9,6 @@ use std::io::Write;
 
 #[path = "coordinator.rs"]
 mod coordinator;
-#[cfg(feature = "metrics")]
 use crate::observation::Metric;
 use coordinator::Boundary;
 
@@ -89,7 +88,6 @@ struct Core<B, W, const SERVER: bool> {
     boundary: Boundary,
     #[cfg(feature = "metrics")]
     counters: Counters,
-    #[cfg(feature = "diagnostics")]
     failure_logged: bool,
 }
 
@@ -169,7 +167,6 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             boundary: Boundary::None,
             #[cfg(feature = "metrics")]
             counters: Counters::default(),
-            #[cfg(feature = "diagnostics")]
             failure_logged: false,
         };
         core.set_deadline(
@@ -215,7 +212,15 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         }
     }
 
-    #[cfg(feature = "diagnostics")]
+    #[inline]
+    fn count(&mut self, metric: Metric, amount: u64) {
+        #[cfg(feature = "metrics")]
+        self.counters.add(metric, amount);
+        #[cfg(not(feature = "metrics"))]
+        let _ = (metric, amount);
+    }
+
+    #[inline]
     fn log<P: Ports<B, W>>(&self, ports: &mut P, event: LogEvent) {
         ports.log(self.id, self.now, event);
     }
@@ -496,8 +501,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             consume_request: false,
         });
         self.exchanges += 1;
-        #[cfg(feature = "metrics")]
-        self.counters.add(Metric::ExchangesStarted, 1);
+        self.count(Metric::ExchangesStarted, 1);
         self.tx = Transmit::begin(framing);
         self.outgoing_connection_fields = connection_fields;
         self.outgoing_metadata_bytes = head.len();
@@ -749,9 +753,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         };
         self.tx.accept_data(command.range.len(), command.end);
         self.outgoing_bytes += command.range.len() as u64;
-        #[cfg(feature = "metrics")]
-        self.counters
-            .add(Metric::ProducerAccepted, command.range.len() as u64);
+        self.count(Metric::ProducerAccepted, command.range.len() as u64);
         self.outgoing_chunk_metadata_bytes += chunk_metadata;
         if self.tx.framing() == Framing::Chunked && command.end {
             self.outgoing_chunk_metadata_bytes += 3;
@@ -885,15 +887,10 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         self.read.complete();
         let ReadCompletion { op, result } = completion;
         self.receive.complete_read(op.buffer);
-        #[cfg(feature = "metrics")]
-        {
-            self.counters.add(Metric::ReadCompletions, 1);
-            if let Ok(n) = result {
-                self.counters.add(Metric::ReadBytes, n as u64);
-            }
-        }
+        self.count(Metric::ReadCompletions, 1);
         match result {
             Ok(n) => {
+                self.count(Metric::ReadBytes, n as u64);
                 self.start = op.range.start;
                 self.end = op.range.start + n;
                 self.eof |= n == 0;
@@ -956,15 +953,12 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         } else {
             Acceptance::Exact
         };
-        #[cfg(feature = "metrics")]
-        {
-            self.counters.add(Metric::WriteCompletions, 1);
-            if let Ok(n) = result {
-                self.counters.add(Metric::WrittenBytes, n as u64);
-            }
-            if acceptance == Acceptance::LowerBound {
-                self.counters.add(Metric::UncertainWrites, 1);
-            }
+        self.count(Metric::WriteCompletions, 1);
+        if let Ok(n) = result {
+            self.count(Metric::WrittenBytes, n as u64);
+        }
+        if acceptance == Acceptance::LowerBound {
+            self.count(Metric::UncertainWrites, 1);
         }
         match result {
             Ok(0) => self.fail(Failure::WriteZero),
@@ -1145,9 +1139,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             self.credit = 0;
         }
         self.received += completion.consumed as u64;
-        #[cfg(feature = "metrics")]
-        self.counters
-            .add(Metric::BodyConsumed, completion.consumed as u64);
+        self.count(Metric::BodyConsumed, completion.consumed as u64);
         if completion.consumed != 0 {
             self.progress();
         }
@@ -1244,8 +1236,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                 .ok_or(CommandError::SequenceExhausted)?;
         }
         self.observe_time(now)?;
-        #[cfg(feature = "metrics")]
-        self.counters.add(Metric::Expirations, 1);
+        self.count(Metric::Expirations, 1);
         if self.timers.kind() == Some(TimerPhase::Continue) {
             self.release_continue();
             self.update_deadline(self.timers.phase, None)?;
@@ -1453,7 +1444,6 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                 }
                 self.rx = Rx::Done;
                 self.incoming_ended();
-                #[cfg(feature = "diagnostics")]
                 self.log(
                     ports,
                     LogEvent::TrailersReceived {
@@ -1510,8 +1500,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                     consume_request: false,
                 });
                 self.exchanges += 1;
-                #[cfg(feature = "metrics")]
-                self.counters.add(Metric::ExchangesStarted, 1);
+                self.count(Metric::ExchangesStarted, 1);
                 self.set_rx(framing)?;
                 let head = RequestHead {
                     method,
@@ -1519,7 +1508,6 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                     version,
                     headers: request.headers,
                 };
-                #[cfg(feature = "diagnostics")]
                 self.log(
                     ports,
                     LogEvent::RequestReceived {
@@ -1625,7 +1613,6 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                     self.update_deadline(self.timers.phase, None)
                         .map_err(|_| Failure::SequenceExhausted)?;
                 }
-                #[cfg(feature = "diagnostics")]
                 self.log(
                     ports,
                     LogEvent::ResponseReceived {

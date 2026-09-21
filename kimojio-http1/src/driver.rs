@@ -16,7 +16,6 @@ use kimojio::{
 use kimojio_fsm_http1 as core;
 
 use crate::body::{BodyDemand, OutgoingData, OutgoingSource};
-#[cfg(any(feature = "metrics", feature = "diagnostics"))]
 use crate::observation::BoundObservation;
 use crate::{
     BodyChunk, Error, IncomingBody, OutgoingBody, OutgoingFrame,
@@ -41,7 +40,6 @@ pub struct Config {
     /// write-all transports report coarser server progress for deadline refresh.
     pub coalesce_full_bodies: bool,
     /// An optional handle reserved by this driver, including before its first poll.
-    #[cfg(any(feature = "metrics", feature = "diagnostics"))]
     pub observation: Option<crate::Observation>,
 }
 
@@ -53,7 +51,6 @@ impl Config {
             protocol: core::Config::default(),
             turn_budget: 64,
             coalesce_full_bodies: false,
-            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
             observation: None,
         }
     }
@@ -167,7 +164,6 @@ pub struct Connection<S> {
     requests: RequestQueue,
     shutdown: Shutdown,
     done: SenderOneshot<Result<(), Error>>,
-    #[cfg(any(feature = "metrics", feature = "diagnostics"))]
     observation: Result<Option<BoundObservation>, Error>,
 }
 
@@ -189,7 +185,6 @@ pub fn connect_native(fd: kimojio::OwnedFd, config: Config) -> (Client, NativeCo
 }
 
 fn connection<S>(stream: S, config: Config) -> (Client, Connection<S>) {
-    #[cfg(any(feature = "metrics", feature = "diagnostics"))]
     let observation = bind_observation(&config);
     let (send, requests) = async_channel();
     let (done, receive) = oneshot();
@@ -206,7 +201,6 @@ fn connection<S>(stream: S, config: Config) -> (Client, Connection<S>) {
             requests: RequestQueue(requests),
             shutdown,
             done,
-            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
             observation,
         },
     )
@@ -229,7 +223,6 @@ impl NativeConnection {
             &connection.requests.0,
             connection.shutdown,
             |_| std::future::ready(Err(Error::Application("client handler".into()))),
-            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
             connection.observation,
         ))
         .await;
@@ -250,7 +243,6 @@ impl<S> Connection<S> {
             &self.requests.0,
             self.shutdown,
             |_| std::future::ready(Err(Error::Application("client handler".into()))),
-            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
             self.observation,
         ))
         .await;
@@ -301,13 +293,6 @@ where
 }
 
 /// Serves a native socket and settles its operations before explicit close.
-#[cfg_attr(
-    not(any(feature = "metrics", feature = "diagnostics")),
-    expect(
-        clippy::manual_async_fn,
-        reason = "Observation-enabled builds bind before the first poll."
-    )
-)]
 pub fn serve_connection_native_with_shutdown<H, F>(
     fd: kimojio::OwnedFd,
     config: Config,
@@ -318,7 +303,6 @@ where
     H: FnMut(Request<IncomingBody>) -> F,
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
-    #[cfg(any(feature = "metrics", feature = "diagnostics"))]
     let observation = bind_observation(&config);
     async move {
         let (_keep_open, requests) = async_channel();
@@ -329,20 +313,12 @@ where
             &requests,
             shutdown,
             handler,
-            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
             observation,
         ))
         .await
     }
 }
 
-#[cfg_attr(
-    not(any(feature = "metrics", feature = "diagnostics")),
-    expect(
-        clippy::manual_async_fn,
-        reason = "Observation-enabled builds bind before the first poll."
-    )
-)]
 fn serve_transport<T, H, F>(
     transport: T,
     config: Config,
@@ -354,7 +330,6 @@ where
     H: FnMut(Request<IncomingBody>) -> F,
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
-    #[cfg(any(feature = "metrics", feature = "diagnostics"))]
     let observation = bind_observation(&config);
     async move {
         let (_keep_open, requests) = async_channel();
@@ -365,14 +340,12 @@ where
             &requests,
             shutdown,
             handler,
-            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
             observation,
         ))
         .await
     }
 }
 
-#[cfg(any(feature = "metrics", feature = "diagnostics"))]
 fn bind_observation(config: &Config) -> Result<Option<BoundObservation>, Error> {
     config
         .observation
@@ -462,14 +435,12 @@ enum Event {
 
 #[derive(Default)]
 struct Ports {
-    #[cfg(feature = "diagnostics")]
     observation: Option<crate::Observation>,
 }
 
 impl core::Ports<Vec<u8>, OutgoingData> for Ports {
     type Output = Event;
 
-    #[cfg(feature = "diagnostics")]
     fn log(&mut self, connection: core::ConnectionId, now: core::Tick, event: core::LogEvent) {
         if let Some(observation) = &self.observation {
             observation.log(connection, now, event);
@@ -691,31 +662,21 @@ struct State {
     max_headers: usize,
     coalesce_full_bodies: bool,
     rotation: usize,
-    #[cfg(any(feature = "metrics", feature = "diagnostics"))]
     observation: Option<BoundObservation>,
 }
 
 impl State {
     #[cfg(test)]
     fn new(config: Config, server: bool, shutdown: Shutdown) -> Result<Self, Error> {
-        #[cfg(any(feature = "metrics", feature = "diagnostics"))]
         let observation = bind_observation(&config)?;
-        Self::new_bound(
-            config,
-            server,
-            shutdown,
-            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
-            observation,
-        )
+        Self::new_bound(config, server, shutdown, observation)
     }
 
     fn new_bound(
         config: Config,
         server: bool,
         shutdown: Shutdown,
-        #[cfg(any(feature = "metrics", feature = "diagnostics"))] observation: Option<
-            BoundObservation,
-        >,
+        observation: Option<BoundObservation>,
     ) -> Result<Self, Error> {
         let buffer = vec![0; config.protocol.max_buffer_bytes];
         let receive_capacity = buffer.capacity();
@@ -759,7 +720,6 @@ impl State {
             max_headers,
             coalesce_full_bodies: config.coalesce_full_bodies,
             rotation: 0,
-            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
             observation,
         })
     }
@@ -1285,10 +1245,7 @@ async fn run<T, H, F>(
     requests: &Receiver<SendRequest>,
     shutdown: Shutdown,
     mut handler: H,
-    #[cfg(any(feature = "metrics", feature = "diagnostics"))] observation: Result<
-        Option<BoundObservation>,
-        Error,
-    >,
+    observation: Result<Option<BoundObservation>, Error>,
 ) -> Result<(), Error>
 where
     T: Transport,
@@ -1296,13 +1253,7 @@ where
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
     let budget = config.turn_budget.max(1);
-    let mut state = State::new_bound(
-        config,
-        server,
-        shutdown,
-        #[cfg(any(feature = "metrics", feature = "diagnostics"))]
-        observation?,
-    )?;
+    let mut state = State::new_bound(config, server, shutdown, observation?)?;
     let (reader, writer) = Box::pin(transport.split())
         .await
         .map_err(Error::Transport)?;
@@ -1334,23 +1285,14 @@ async fn run_native<H, F>(
     requests: &Receiver<SendRequest>,
     shutdown: Shutdown,
     mut handler: H,
-    #[cfg(any(feature = "metrics", feature = "diagnostics"))] observation: Result<
-        Option<BoundObservation>,
-        Error,
-    >,
+    observation: Result<Option<BoundObservation>, Error>,
 ) -> Result<(), Error>
 where
     H: FnMut(Request<IncomingBody>) -> F,
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
     let budget = config.turn_budget.max(1);
-    let mut state = State::new_bound(
-        config,
-        server,
-        shutdown,
-        #[cfg(any(feature = "metrics", feature = "diagnostics"))]
-        observation?,
-    )?;
+    let mut state = State::new_bound(config, server, shutdown, observation?)?;
     let io = native_io(fd);
     state.epoch = kimojio::clock_now();
     drive(state, io, requests, &mut handler, budget).await
@@ -1369,7 +1311,6 @@ where
 {
     let mut turns = 0usize;
     let mut ports = Ports {
-        #[cfg(feature = "diagnostics")]
         observation: state
             .observation
             .as_ref()
@@ -1554,7 +1495,7 @@ mod coalescing_tests;
 #[path = "combined_tests.rs"]
 mod combined_tests;
 
-#[cfg(all(test, any(feature = "metrics", feature = "diagnostics")))]
+#[cfg(test)]
 #[path = "observation_tests.rs"]
 mod observation_tests;
 

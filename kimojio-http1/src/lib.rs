@@ -8,7 +8,6 @@ mod driver;
 mod io;
 mod io_driver;
 mod metadata;
-#[cfg(any(feature = "metrics", feature = "diagnostics"))]
 mod observation;
 mod transport;
 
@@ -22,9 +21,7 @@ pub use http;
 pub use kimojio_fsm_http1::ConnectionId;
 #[cfg(feature = "metrics")]
 pub use kimojio_fsm_http1::{Counters, MetricsSnapshot, SnapshotPhase};
-#[cfg(feature = "diagnostics")]
 pub use kimojio_fsm_http1::{LogEvent, Tick};
-#[cfg(any(feature = "metrics", feature = "diagnostics"))]
 pub use observation::Observation;
 
 /// A connection, protocol, or application-source failure.
@@ -38,7 +35,6 @@ pub enum Error {
     Command(kimojio_fsm_http1::CommandError),
     Transport(kimojio::Errno),
     Application(String),
-    #[cfg(any(feature = "metrics", feature = "diagnostics"))]
     ObservationInUse,
 }
 

@@ -13,7 +13,6 @@ rustc-hash = "2"
 [features]
 hpack-test-support = []
 http1-metrics = ["kimojio-fsm-http1/metrics"]
-http1-diagnostics = ["kimojio-fsm-http1/diagnostics"]
 
 [dev-dependencies]
 criterion.workspace = true

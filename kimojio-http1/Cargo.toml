@@ -14,7 +14,6 @@ kimojio-fsm-http1 = { path = "../kimojio-fsm-http1" }
 [features]
 virtual-clock = ["kimojio/virtual-clock"]
 metrics = ["kimojio-fsm-http1/metrics"]
-diagnostics = ["kimojio-fsm-http1/diagnostics"]
 
 [dev-dependencies]
 base64 = "0.22"

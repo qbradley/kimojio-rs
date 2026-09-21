@@ -41,7 +41,6 @@ pub struct Counters {
     pub saturated: bool,
 }
 
-#[cfg(feature = "metrics")]
 pub(crate) enum Metric {
     ReadCompletions,
     ReadBytes,
@@ -121,7 +120,6 @@ pub struct MetricsSnapshot {
 ///
 /// A primary failure is reported once, before the first subsequent drive
 /// transition. API attempts and superseded deadline candidates are not a trace.
-#[cfg(feature = "diagnostics")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum LogEvent {

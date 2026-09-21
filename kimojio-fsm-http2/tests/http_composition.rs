@@ -19,7 +19,6 @@ struct Ports {
     h1_trace: Vec<&'static str>,
     yielding: bool,
     admission_changes: usize,
-    #[cfg(feature = "http1-diagnostics")]
     logs: Vec<h1::LogEvent>,
 }
 
@@ -35,7 +34,6 @@ impl Ports {
 
 impl h1::Ports<Vec<u8>> for Ports {
     type Output = ();
-    #[cfg(feature = "http1-diagnostics")]
     fn log(&mut self, connection: h1::ConnectionId, _: h1::Tick, event: h1::LogEvent) {
         if let h1::LogEvent::RequestReceived { exchange, .. } = event {
             assert_eq!(connection, exchange.connection());
@@ -96,7 +94,6 @@ impl h1::Ports<Vec<u8>> for Ports {
 
 impl h1::ServerPorts<Vec<u8>> for Ports {
     fn request(&mut self, id: h1::ExchangeId, head: h1::RequestHead<'_>) -> Option<()> {
-        #[cfg(feature = "http1-diagnostics")]
         assert_eq!(
             self.logs.last(),
             Some(&h1::LogEvent::RequestReceived {
@@ -448,7 +445,6 @@ fn http1_prefetch_is_lossless_and_keeps_the_connection_reusable() {
                     );
                     assert_eq!(metrics.counters.exchanges_failed, 0);
                 }
-                #[cfg(feature = "http1-diagnostics")]
                 assert_eq!(
                     ports
                         .logs

@@ -13,18 +13,23 @@ The wrapper cases use virtual time.
 
 ## Observability implementation
 
-The follow-up implementation adds independent, default-off `metrics` and `diagnostics` features to the HTTP/1 core.
+The follow-up implementation adds default-off `metrics` and always-available typed logging to the HTTP/1 core.
+Counter call sites use an inline helper with a no-op implementation when metrics are disabled.
+Ports provide a default no-op log callback without a diagnostics feature.
 The [core README](../../kimojio-fsm-http1/README.md#optional-observations) defines snapshots, accounting, diagnostic delivery, and disabled costs.
 The Kimojio wrapper supplies asynchronous snapshot queries and synchronous typed log forwarding.
 The HTTP/1+HTTP/2 composite exposes observations for its selected HTTP/1 child, including prefix replay.
 This work does not add HTTP/2 telemetry.
 
-The [disabled-cost check](evidence/observability-disabled.txt) compares the promoted receive-phase baseline with the instrumented core.
-Both features remain disabled in that comparison.
+The historical [disabled-cost check](evidence/observability-disabled.txt) compares the promoted receive-phase baseline with the first instrumented core.
+Both observation features remained disabled in that comparison, before removal of the diagnostics feature.
 Client and server layouts remain 1,040 bytes for the measured buffer types.
 The executable text size and emitted connection-symbol sizes are unchanged.
 The assembly differs, so these results do not claim identical CPU timing.
-The [qualification record](evidence/observability-qualification.txt) covers all feature combinations, wrapper query lifetimes, and diagnostic delivery.
+The historical [qualification record](evidence/observability-qualification.txt) covers the original feature combinations, wrapper query lifetimes, and diagnostic delivery.
+Both records include follow-up results for the inline counter helper and unconditional logging.
+The measured core layout is now 1,048 bytes because primary-failure delivery retains its flag.
+The helper produces the same optimized Core instructions as the previous logging-enabled build with metrics disabled.
 
 The remaining sections preserve the original study, including its historical change and bookmark locations.
 The user subsequently integrated role specialization and metadata batching before these follow-up changes.
