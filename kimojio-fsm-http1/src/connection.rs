@@ -46,10 +46,9 @@ struct Exchange {
 }
 
 #[derive(Debug)]
-struct Core<B, W> {
+struct Core<B, W, const SERVER: bool> {
     id: ConnectionId,
     config: Config,
-    server: bool,
     sequence: u64,
     exchanges: u64,
     now: Tick,
@@ -90,13 +89,13 @@ struct Core<B, W> {
 /// A single-exchange HTTP/1 server with independently owned I/O operations.
 #[derive(Debug)]
 pub struct Server<B: Buffer, W: AsRef<[u8]> = B> {
-    core: Core<B, W>,
+    core: Core<B, W, true>,
 }
 
 /// A single-exchange HTTP/1 client. Requests are never automatically replayed.
 #[derive(Debug)]
 pub struct Client<B: Buffer, W: AsRef<[u8]> = B> {
-    core: Core<B, W>,
+    core: Core<B, W, false>,
 }
 
 enum ParsedHead<'a> {
@@ -104,13 +103,12 @@ enum ParsedHead<'a> {
     Response(ResponseHead<'a>, bool),
 }
 
-impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
+impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
     fn new(
         id: ConnectionId,
         config: Config,
         mut input: B,
         now: Tick,
-        server: bool,
     ) -> Result<Self, CommandError> {
         if input.as_ref().is_empty()
             || input.as_ref().len() != input.as_mut().len()
@@ -127,7 +125,6 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         let mut core = Self {
             id,
             config,
-            server,
             sequence: 0,
             exchanges: 0,
             now,
@@ -165,12 +162,12 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             boundary: Boundary::None,
         };
         core.set_deadline(
-            if server {
+            if SERVER {
                 TimerPhase::Head
             } else {
                 TimerPhase::Idle
             },
-            if server {
+            if SERVER {
                 core.config.head_timeout_ns
             } else {
                 core.config.idle_timeout_ns
@@ -340,7 +337,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         self.release_continue();
         self.clear_deadlines();
         if first_failure
-            && self.server
+            && SERVER
             && !self.tx.started()
             && let Some((status, reason)) = status
         {
@@ -755,7 +752,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
             },
             cursor: 0,
         });
-        if !self.server {
+        if !SERVER {
             self.arm_upload();
         }
         Ok(id)
@@ -845,7 +842,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 self.end = op.range.start + n;
                 self.eof |= n == 0;
                 if n != 0 {
-                    if self.server
+                    if SERVER
                         && self.rx == Rx::Head
                         && self.exchange.is_none()
                         && self
@@ -950,14 +947,14 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 {
                     self.settle_transmit();
                 }
-                if !self.server
+                if !SERVER
                     && !self.tx.source_finished()
                     && !self.tx.stopped()
                     && !self.lifecycle.is_closing()
                 {
                     self.arm_upload();
                 }
-                if !self.server
+                if !SERVER
                     && self.waiting_continue()
                     && !self.lifecycle.is_closing()
                     && !self.tx.stopped()
@@ -1229,12 +1226,12 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         match self.boundary {
             Boundary::None => {}
             Boundary::IncomingEnded => {
-                debug_assert!(!self.server);
+                debug_assert!(!SERVER);
                 debug_assert_eq!(self.rx, Rx::Done);
                 debug_assert!(matches!(self.lifecycle, Lifecycle::Http(_)));
             }
             Boundary::OutgoingSettled => {
-                debug_assert!(self.server && self.tx.settled());
+                debug_assert!(SERVER && self.tx.settled());
                 debug_assert!(matches!(self.lifecycle, Lifecycle::Http(_)));
             }
         }
@@ -1394,7 +1391,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
                 self.incoming_ended();
                 Ok(ports.trailers(self.exchange.as_ref().unwrap().id, trailers))
             }
-            Rx::Head if self.server => {
+            Rx::Head if SERVER => {
                 let mut request = httparse::Request::new(headers);
                 let httparse::Status::Complete(count) =
                     request.parse(bytes).map_err(parse_error)?
@@ -1655,7 +1652,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
         now: Tick,
     ) -> Result<Self, CommandError> {
         Ok(Self {
-            core: Core::new(id, config, receive_buffer, now, true)?,
+            core: Core::new(id, config, receive_buffer, now)?,
         })
     }
     pub fn connection_id(&self) -> ConnectionId {
@@ -1780,7 +1777,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Client<B, W> {
         now: Tick,
     ) -> Result<Self, CommandError> {
         Ok(Self {
-            core: Core::new(id, config, receive_buffer, now, false)?,
+            core: Core::new(id, config, receive_buffer, now)?,
         })
     }
     pub fn connection_id(&self) -> ConnectionId {

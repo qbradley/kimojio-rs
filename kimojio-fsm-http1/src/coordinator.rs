@@ -44,16 +44,16 @@ enum Transition {
     Read,
 }
 
-impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
+impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
     pub(super) fn incoming_ended(&mut self) {
-        if !self.server && matches!(self.lifecycle, Lifecycle::Http(_)) {
+        if !SERVER && matches!(self.lifecycle, Lifecycle::Http(_)) {
             self.boundary = Boundary::IncomingEnded;
         }
     }
 
     pub(super) fn settle_transmit(&mut self) {
         self.tx.settle();
-        if self.server && matches!(self.lifecycle, Lifecycle::Http(_)) {
+        if SERVER && matches!(self.lifecycle, Lifecycle::Http(_)) {
             self.boundary = Boundary::OutgoingSettled;
         }
     }
@@ -196,7 +196,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
 
         // A buffered response can revoke upload authority. Resolve it before
         // selecting either a queued upload write or new producer demand.
-        if !self.server && self.rx == Rx::Head && self.start < self.end {
+        if !SERVER && self.rx == Rx::Head && self.start < self.end {
             return self.receive_transition();
         }
         self.transmit_transition()
@@ -213,7 +213,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
     }
 
     fn continue_due(&self) -> bool {
-        self.server
+        SERVER
             && !self.tx.started()
             && self.credit != 0
             && self.start == self.end
@@ -249,7 +249,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
 
     fn receive_transition(&self) -> Option<Transition> {
         self.receive.buffer()?;
-        let active = self.server || self.exchange.is_some();
+        let active = SERVER || self.exchange.is_some();
         if self.start < self.end && active {
             return match self.rx {
                 Rx::Eof if self.no_content => Some(Transition::RejectBody),
@@ -488,7 +488,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
     fn retire_exchange(&mut self) -> ExchangeFinished {
         let exchange = self.exchange.take().unwrap();
         let reusable = !self.close_after
-            && (self.server || self.start == self.end)
+            && (SERVER || self.start == self.end)
             && !self.lifecycle.is_draining()
             && !self.eof
             && exchange.persistent
@@ -561,7 +561,7 @@ impl<B: Buffer, W: AsRef<[u8]>> Core<B, W> {
         head_callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
     ) -> Option<P::Output> {
         if self.rx == Rx::Head
-            && self.server
+            && SERVER
             && self.head.is_empty()
             && self
                 .timers

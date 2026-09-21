@@ -161,7 +161,7 @@ fn deadline_selection_pairs_kind_and_generation_across_all_timer_combinations() 
     ] {
         for continuation in [None, Some(Tick(10)), Some(Tick(20))] {
             for upload in [None, Some(Tick(10)), Some(Tick(20))] {
-                let mut core = Core::<Vec<u8>, Vec<u8>>::new(
+                let mut core = Core::<Vec<u8>, Vec<u8>, false>::new(
                     ConnectionId {
                         slot: 1,
                         generation: 1,
@@ -169,7 +169,6 @@ fn deadline_selection_pairs_kind_and_generation_across_all_timer_combinations() 
                     configuration(),
                     vec![0; 64],
                     Tick(0),
-                    false,
                 )
                 .unwrap();
                 core.timers.upload_at = upload;
@@ -204,7 +203,7 @@ fn deadline_selection_pairs_kind_and_generation_across_all_timer_combinations() 
 
 #[test]
 fn informational_completion_cannot_settle_queued_final_metadata() {
-    fn issue(core: &mut Core<Vec<u8>, Vec<u8>>) -> WriteOp<Vec<u8>> {
+    fn issue(core: &mut Core<Vec<u8>, Vec<u8>, true>) -> WriteOp<Vec<u8>> {
         let mut op = core.output.take().unwrap();
         op.id = core.operation(OperationKind::Write).unwrap();
         core.write.issue(op.id);
@@ -221,7 +220,6 @@ fn informational_completion_cannot_settle_queued_final_metadata() {
                 configuration(),
                 vec![0; 64],
                 Tick(0),
-                true,
             )
             .unwrap();
             let mut headers = [httparse::EMPTY_HEADER; 128];

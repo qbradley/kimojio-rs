@@ -338,7 +338,7 @@ fn head(observer: &mut Observer, id: ExchangeId, parsed: ParsedHead<'_>) -> Opti
     })
 }
 
-fn drive(core: &mut Core<Vec<u8>, Vec<u8>>, observer: &mut Observer) {
+fn drive<const SERVER: bool>(core: &mut Core<Vec<u8>, Vec<u8>, SERVER>, observer: &mut Observer) {
     match observer.drive {
         Drive::Steps => {
             let mut visited = HashSet::new();
@@ -368,13 +368,17 @@ fn io_error(kind: IoErrorKind) -> IoError {
     IoError { kind, code: None }
 }
 
-fn receive(core: &mut Core<Vec<u8>, Vec<u8>>, observer: &mut Observer, bytes: &[u8]) {
+fn receive<const SERVER: bool>(
+    core: &mut Core<Vec<u8>, Vec<u8>, SERVER>,
+    observer: &mut Observer,
+    bytes: &[u8],
+) {
     let mut op = observer.read.take().unwrap();
     op.bytes_mut()[..bytes.len()].copy_from_slice(bytes);
     core.complete_read(op.complete(Ok(bytes.len()))).unwrap();
 }
 
-fn fixture(input: Input, mode: Drive) -> (Core<Vec<u8>, Vec<u8>>, Observer) {
+fn fixture(input: Input, mode: Drive) -> (Core<Vec<u8>, Vec<u8>, true>, Observer) {
     let config = Config {
         head_timeout_ns: None,
         idle_timeout_ns: None,
@@ -390,7 +394,6 @@ fn fixture(input: Input, mode: Drive) -> (Core<Vec<u8>, Vec<u8>>, Observer) {
         config,
         vec![0; 128],
         Tick(0),
-        true,
     )
     .unwrap();
     let mut observer = Observer::new(mode);
@@ -589,7 +592,7 @@ fn client_fixture(
     mode: Drive,
     method: &str,
     body: BodyLength,
-) -> (Core<Vec<u8>, Vec<u8>>, Observer) {
+) -> (Core<Vec<u8>, Vec<u8>, false>, Observer) {
     let mut core = Core::new(
         ConnectionId {
             slot: 2,
@@ -604,7 +607,6 @@ fn client_fixture(
         },
         vec![0; 128],
         Tick(0),
-        false,
     )
     .unwrap();
     core.request(Request {
@@ -726,7 +728,7 @@ fn boundary_policy_preserves_completions_batched_before_drive() {
 
 #[test]
 fn clean_idle_eof_cancels_the_deadline_before_close_issuance() {
-    let mut core = Core::<Vec<u8>, Vec<u8>>::new(
+    let mut core = Core::<Vec<u8>, Vec<u8>, true>::new(
         ConnectionId {
             slot: 3,
             generation: 1,
@@ -737,7 +739,6 @@ fn clean_idle_eof_cancels_the_deadline_before_close_issuance() {
         },
         vec![0; 128],
         Tick(0),
-        true,
     )
     .unwrap();
     let mut observer = Observer::new(Drive::Continue);
