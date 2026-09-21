@@ -77,7 +77,7 @@ async fn serve(
             )
             .boxed_local(),
         };
-        let alarm = operations::sleep(timeout).boxed_local();
+        let alarm = operations::sleep(timeout);
         match futures::future::select(connection, alarm).await {
             Either::Left((result, _alarm)) => result,
             Either::Right((alarm, connection)) => {
@@ -211,6 +211,26 @@ pub(super) async fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[kimojio::test]
+    async fn inline_watchdog_aborts_and_settles_both_transports() {
+        for transport in [Transport::Native, Transport::Generic] {
+            let (fd, peer) = kimojio::pipe::bipipe();
+            operations::timeout_at(kimojio::clock_now() + Duration::from_secs(5), async {
+                let error = serve(fd, Config::default(), Duration::ZERO, transport)
+                    .await
+                    .unwrap_err();
+                assert!(
+                    matches!(error, Error::Application(message) if message.starts_with("server connection watchdog:"))
+                );
+                let mut bytes = [0; 1024];
+                while operations::read(&peer, &mut bytes).await.unwrap() != 0 {}
+                operations::close(peer).await.unwrap();
+            })
+            .await
+            .unwrap();
+        }
+    }
 
     #[test]
     fn route_lengths_are_strict_and_bounded() {
