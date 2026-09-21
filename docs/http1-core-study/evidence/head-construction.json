@@ -1,0 +1,805 @@
+{
+  "baseline_revision": "cd4899b8d4f17e56db5e355df709a13dd72900d9",
+  "artifact_root": "/tmp/http1-head-construction-study",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "build": "CARGO_PROFILE_RELEASE_DEBUG=2 CARGO_TARGET_DIR=target/http1-selection-study cargo build --release -p kimojio-fsm-http1 --example selection_profile_tmp",
+  "variants": {
+    "baseline": "Accepted bulk metadata scanner",
+    "count": "Reuse request field count only",
+    "single": "Count reuse plus exact-size single-allocation request/response encoding"
+  },
+  "binaries": {
+    "baseline-on": "82bb696b792219cb1becc201c889dc72874b81bbb7f00a889f390f0e205fac73",
+    "baseline-off": "a39de455a63df6cdb2d14a8295aa6b86ccef8d44231ca983d9799a0aa4d501ef",
+    "count-on": "1654b19f4792160032df491cacbcfb62915c309770ff08a10297830c9ac5b0f4",
+    "count-off": "500f15365e685e62a0ecc74d1c148df324b54f8e1fad0d8c3127839b3e4c41c0",
+    "single-on": "8bbf7cdeb4a9fdfd152459f6b0d6dc41c450e150eec726ef7723c085905ce74e",
+    "single-off": "87f1cb549b7d865649800a973c2ca84abfa41825e94e2fcdcce321e2b34535ca"
+  },
+  "samples": {
+    "on": {
+      "small:client:continue": [
+        {
+          "baseline": 1297.0,
+          "count": 1249.01,
+          "single": 1176.3
+        },
+        {
+          "count": 1249.09,
+          "single": 1179.16,
+          "baseline": 1299.56
+        },
+        {
+          "single": 1179.77,
+          "baseline": 1306.34,
+          "count": 1270.35
+        },
+        {
+          "single": 1185.73,
+          "count": 1254.96,
+          "baseline": 1309.26
+        },
+        {
+          "baseline": 1301.78,
+          "single": 1183.74,
+          "count": 1267.44
+        },
+        {
+          "count": 1259.42,
+          "baseline": 1304.97,
+          "single": 1181.0
+        }
+      ],
+      "small:client:yield": [
+        {
+          "baseline": 1285.65,
+          "count": 1238.55,
+          "single": 1125.68
+        },
+        {
+          "count": 1240.12,
+          "single": 1145.34,
+          "baseline": 1279.55
+        },
+        {
+          "single": 1126.92,
+          "baseline": 1291.14,
+          "count": 1246.94
+        },
+        {
+          "single": 1104.99,
+          "count": 1266.31,
+          "baseline": 1283.09
+        },
+        {
+          "baseline": 1290.48,
+          "single": 1103.61,
+          "count": 1242.13
+        },
+        {
+          "count": 1239.57,
+          "baseline": 1284.5,
+          "single": 1130.64
+        }
+      ],
+      "small:server:continue": [
+        {
+          "baseline": 1399.31,
+          "count": 1405.82,
+          "single": 1255.54
+        },
+        {
+          "count": 1400.06,
+          "single": 1260.34,
+          "baseline": 1400.95
+        },
+        {
+          "single": 1269.53,
+          "baseline": 1418.78,
+          "count": 1402.51
+        },
+        {
+          "single": 1265.06,
+          "count": 1434.46,
+          "baseline": 1408.54
+        },
+        {
+          "baseline": 1405.55,
+          "single": 1262.42,
+          "count": 1400.56
+        },
+        {
+          "count": 1402.08,
+          "baseline": 1401.77,
+          "single": 1265.61
+        }
+      ],
+      "small:server:yield": [
+        {
+          "baseline": 1362.27,
+          "count": 1353.39,
+          "single": 1209.15
+        },
+        {
+          "count": 1356.36,
+          "single": 1211.82,
+          "baseline": 1353.95
+        },
+        {
+          "single": 1230.35,
+          "baseline": 1361.74,
+          "count": 1360.25
+        },
+        {
+          "single": 1221.94,
+          "count": 1358.97,
+          "baseline": 1360.32
+        },
+        {
+          "baseline": 1363.32,
+          "single": 1221.36,
+          "count": 1351.87
+        },
+        {
+          "count": 1355.8,
+          "baseline": 1352.16,
+          "single": 1215.4
+        }
+      ],
+      "fixed:client:continue": [
+        {
+          "baseline": 29250.37,
+          "count": 27530.61,
+          "single": 27072.67
+        },
+        {
+          "count": 25851.36,
+          "single": 26693.29,
+          "baseline": 27056.99
+        },
+        {
+          "single": 27436.43,
+          "baseline": 27426.51,
+          "count": 26418.62
+        },
+        {
+          "single": 28313.66,
+          "count": 26211.28,
+          "baseline": 28007.4
+        },
+        {
+          "baseline": 28554.83,
+          "single": 26069.92,
+          "count": 27174.99
+        },
+        {
+          "count": 30820.37,
+          "baseline": 29644.9,
+          "single": 30744.38
+        }
+      ],
+      "fixed:client:yield": [
+        {
+          "baseline": 27503.32,
+          "count": 26701.48,
+          "single": 27198.25
+        },
+        {
+          "count": 25940.56,
+          "single": 26100.14,
+          "baseline": 25990.72
+        },
+        {
+          "single": 29603.31,
+          "baseline": 27744.05,
+          "count": 31895.6
+        },
+        {
+          "single": 27652.65,
+          "count": 31454.06,
+          "baseline": 26016.53
+        },
+        {
+          "baseline": 28194.15,
+          "single": 28711.8,
+          "count": 28241.93
+        },
+        {
+          "count": 29843.1,
+          "baseline": 31189.38,
+          "single": 26504.88
+        }
+      ],
+      "fixed:server:continue": [
+        {
+          "baseline": 32788.2,
+          "count": 30091.34,
+          "single": 30147.43
+        },
+        {
+          "count": 30133.58,
+          "single": 28455.7,
+          "baseline": 30668.03
+        },
+        {
+          "single": 31402.52,
+          "baseline": 29362.35,
+          "count": 28756.52
+        },
+        {
+          "single": 27251.29,
+          "count": 32242.73,
+          "baseline": 29554.88
+        },
+        {
+          "baseline": 29730.32,
+          "single": 32365.14,
+          "count": 29910.26
+        },
+        {
+          "count": 29519.08,
+          "baseline": 30776.44,
+          "single": 31170.27
+        }
+      ],
+      "fixed:server:yield": [
+        {
+          "baseline": 29499.86,
+          "count": 28943.94,
+          "single": 29058.49
+        },
+        {
+          "count": 28647.36,
+          "single": 27495.72,
+          "baseline": 30102.07
+        },
+        {
+          "single": 32989.99,
+          "baseline": 30069.4,
+          "count": 29348.37
+        },
+        {
+          "single": 30927.34,
+          "count": 29907.6,
+          "baseline": 31833.21
+        },
+        {
+          "baseline": 30245.29,
+          "single": 29715.07,
+          "count": 30844.03
+        },
+        {
+          "count": 30742.16,
+          "baseline": 31012.6,
+          "single": 31904.34
+        }
+      ],
+      "chunked:client:continue": [
+        {
+          "baseline": 41366.44,
+          "count": 42914.77,
+          "single": 42746.65
+        },
+        {
+          "count": 40944.67,
+          "single": 40713.05,
+          "baseline": 42508.73
+        },
+        {
+          "single": 42637.01,
+          "baseline": 42663.63,
+          "count": 42203.55
+        },
+        {
+          "single": 42450.78,
+          "count": 43836.67,
+          "baseline": 42328.25
+        },
+        {
+          "baseline": 42816.5,
+          "single": 41949.5,
+          "count": 40769.53
+        },
+        {
+          "count": 44366.9,
+          "baseline": 40053.73,
+          "single": 42105.9
+        }
+      ],
+      "chunked:client:yield": [
+        {
+          "baseline": 41577.46,
+          "count": 40843.17,
+          "single": 40795.97
+        },
+        {
+          "count": 41371.8,
+          "single": 40192.84,
+          "baseline": 41349.85
+        },
+        {
+          "single": 39726.03,
+          "baseline": 42595.08,
+          "count": 41623.16
+        },
+        {
+          "single": 39844.29,
+          "count": 42487.82,
+          "baseline": 40503.88
+        },
+        {
+          "baseline": 40768.18,
+          "single": 41672.32,
+          "count": 41186.14
+        },
+        {
+          "count": 41391.27,
+          "baseline": 41521.52,
+          "single": 42990.89
+        }
+      ],
+      "chunked:server:continue": [
+        {
+          "baseline": 42873.84,
+          "count": 44372.09,
+          "single": 42169.62
+        },
+        {
+          "count": 43220.19,
+          "single": 44141.78,
+          "baseline": 45442.54
+        },
+        {
+          "single": 45438.65,
+          "baseline": 44398.02,
+          "count": 45294.34
+        },
+        {
+          "single": 45348.18,
+          "count": 43983.65,
+          "baseline": 43271.4
+        },
+        {
+          "baseline": 44574.62,
+          "single": 47590.76,
+          "count": 44823.98
+        },
+        {
+          "count": 45168.18,
+          "baseline": 45006.66,
+          "single": 43883.84
+        }
+      ],
+      "chunked:server:yield": [
+        {
+          "baseline": 44382.07,
+          "count": 43516.37,
+          "single": 44516.38
+        },
+        {
+          "count": 42265.25,
+          "single": 44750.55,
+          "baseline": 43001.29
+        },
+        {
+          "single": 44303.36,
+          "baseline": 46942.49,
+          "count": 44543.14
+        },
+        {
+          "single": 45308.9,
+          "count": 44941.28,
+          "baseline": 45340.76
+        },
+        {
+          "baseline": 42368.41,
+          "single": 43823.58,
+          "count": 42843.96
+        },
+        {
+          "count": 44493.57,
+          "baseline": 47994.76,
+          "single": 44893.6
+        }
+      ]
+    },
+    "off": {
+      "small:client:continue": [
+        {
+          "baseline": 1261.31,
+          "count": 1221.68,
+          "single": 1129.98
+        },
+        {
+          "count": 1229.03,
+          "single": 1132.41,
+          "baseline": 1261.75
+        },
+        {
+          "single": 1132.41,
+          "baseline": 1266.74,
+          "count": 1225.86
+        },
+        {
+          "single": 1142.94,
+          "count": 1223.91,
+          "baseline": 1262.36
+        },
+        {
+          "baseline": 1259.51,
+          "single": 1153.16,
+          "count": 1220.23
+        },
+        {
+          "count": 1246.29,
+          "baseline": 1268.9,
+          "single": 1154.29
+        }
+      ],
+      "small:client:yield": [
+        {
+          "baseline": 1240.12,
+          "count": 1425.91,
+          "single": 1205.92
+        },
+        {
+          "count": 1200.4,
+          "single": 1089.82,
+          "baseline": 1236.22
+        },
+        {
+          "single": 1095.53,
+          "baseline": 1239.98,
+          "count": 1198.57
+        },
+        {
+          "single": 1246.16,
+          "count": 1203.93,
+          "baseline": 1235.96
+        },
+        {
+          "baseline": 1240.01,
+          "single": 1088.15,
+          "count": 1218.64
+        },
+        {
+          "count": 1198.85,
+          "baseline": 1265.56,
+          "single": 1089.14
+        }
+      ],
+      "small:server:continue": [
+        {
+          "baseline": 1348.06,
+          "count": 1346.28,
+          "single": 1200.29
+        },
+        {
+          "count": 1345.54,
+          "single": 1209.95,
+          "baseline": 1357.63
+        },
+        {
+          "single": 1206.18,
+          "baseline": 1344.84,
+          "count": 1350.18
+        },
+        {
+          "single": 1497.95,
+          "count": 1343.28,
+          "baseline": 1576.65
+        },
+        {
+          "baseline": 1369.62,
+          "single": 1201.75,
+          "count": 1353.26
+        },
+        {
+          "count": 1370.37,
+          "baseline": 1343.88,
+          "single": 1218.94
+        }
+      ],
+      "small:server:yield": [
+        {
+          "baseline": 1269.78,
+          "count": 1260.44,
+          "single": 1103.55
+        },
+        {
+          "count": 1394.76,
+          "single": 1098.66,
+          "baseline": 1263.5
+        },
+        {
+          "single": 1099.02,
+          "baseline": 1265.44,
+          "count": 1273.1
+        },
+        {
+          "single": 1114.91,
+          "count": 1269.88,
+          "baseline": 1280.51
+        },
+        {
+          "baseline": 1259.24,
+          "single": 1103.19,
+          "count": 1281.06
+        },
+        {
+          "count": 1261.97,
+          "baseline": 1287.77,
+          "single": 1085.17
+        }
+      ],
+      "fixed:client:continue": [
+        {
+          "baseline": 25824.53,
+          "count": 28038.28,
+          "single": 25883.25
+        },
+        {
+          "count": 26305.07,
+          "single": 25758.44,
+          "baseline": 26971.44
+        },
+        {
+          "single": 27985.38,
+          "baseline": 30954.33,
+          "count": 28641.28
+        },
+        {
+          "single": 25872.81,
+          "count": 29735.98,
+          "baseline": 26874.1
+        },
+        {
+          "baseline": 29228.87,
+          "single": 27341.65,
+          "count": 30217.3
+        },
+        {
+          "count": 26683.46,
+          "baseline": 25783.17,
+          "single": 25203.98
+        }
+      ],
+      "fixed:client:yield": [
+        {
+          "baseline": 29352.53,
+          "count": 27642.53,
+          "single": 26549.96
+        },
+        {
+          "count": 26230.24,
+          "single": 25086.59,
+          "baseline": 24274.73
+        },
+        {
+          "single": 27352.77,
+          "baseline": 25605.39,
+          "count": 26932.52
+        },
+        {
+          "single": 25423.49,
+          "count": 24952.8,
+          "baseline": 28184.03
+        },
+        {
+          "baseline": 29121.77,
+          "single": 26564.08,
+          "count": 27539.18
+        },
+        {
+          "count": 27908.96,
+          "baseline": 25329.3,
+          "single": 27750.94
+        }
+      ],
+      "fixed:server:continue": [
+        {
+          "baseline": 27574.56,
+          "count": 27330.15,
+          "single": 27462.61
+        },
+        {
+          "count": 26732.34,
+          "single": 27589.17,
+          "baseline": 28174.85
+        },
+        {
+          "single": 27283.94,
+          "baseline": 31828.78,
+          "count": 26276.8
+        },
+        {
+          "single": 27215.86,
+          "count": 28477.66,
+          "baseline": 29427.91
+        },
+        {
+          "baseline": 28067.78,
+          "single": 28973.82,
+          "count": 26364.58
+        },
+        {
+          "count": 28332.98,
+          "baseline": 29904.49,
+          "single": 29219.69
+        }
+      ],
+      "fixed:server:yield": [
+        {
+          "baseline": 26453.93,
+          "count": 25710.71,
+          "single": 26951.35
+        },
+        {
+          "count": 26248.22,
+          "single": 26379.92,
+          "baseline": 27028.14
+        },
+        {
+          "single": 26087.99,
+          "baseline": 29158.54,
+          "count": 25257.41
+        },
+        {
+          "single": 25420.72,
+          "count": 27042.77,
+          "baseline": 28208.15
+        },
+        {
+          "baseline": 27885.98,
+          "single": 25473.68,
+          "count": 25065.81
+        },
+        {
+          "count": 25905.55,
+          "baseline": 27773.71,
+          "single": 26866.21
+        }
+      ],
+      "chunked:client:continue": [
+        {
+          "baseline": 41296.41,
+          "count": 38590.27,
+          "single": 40309.45
+        },
+        {
+          "count": 40705.57,
+          "single": 38582.72,
+          "baseline": 40237.54
+        },
+        {
+          "single": 40075.26,
+          "baseline": 40790.04,
+          "count": 40461.21
+        },
+        {
+          "single": 46964.1,
+          "count": 44297.47,
+          "baseline": 43644.73
+        },
+        {
+          "baseline": 41846.96,
+          "single": 39251.39,
+          "count": 40000.98
+        },
+        {
+          "count": 38929.08,
+          "baseline": 43397.67,
+          "single": 39530.17
+        }
+      ],
+      "chunked:client:yield": [
+        {
+          "baseline": 40051.53,
+          "count": 39230.61,
+          "single": 38592.99
+        },
+        {
+          "count": 38701.89,
+          "single": 38558.06,
+          "baseline": 39328.49
+        },
+        {
+          "single": 42559.08,
+          "baseline": 42007.86,
+          "count": 42851.14
+        },
+        {
+          "single": 38823.55,
+          "count": 39892.32,
+          "baseline": 41288.55
+        },
+        {
+          "baseline": 39689.77,
+          "single": 40943.93,
+          "count": 38999.11
+        },
+        {
+          "count": 39999.54,
+          "baseline": 41362.24,
+          "single": 39286.07
+        }
+      ],
+      "chunked:server:continue": [
+        {
+          "baseline": 43547.93,
+          "count": 42922.4,
+          "single": 41626.11
+        },
+        {
+          "count": 41934.18,
+          "single": 41798.6,
+          "baseline": 42713.96
+        },
+        {
+          "single": 41969.6,
+          "baseline": 42782.31,
+          "count": 42113.24
+        },
+        {
+          "single": 56407.43,
+          "count": 42209.3,
+          "baseline": 47606.16
+        },
+        {
+          "baseline": 42549.59,
+          "single": 41996.4,
+          "count": 44974.84
+        },
+        {
+          "count": 43627.37,
+          "baseline": 43527.2,
+          "single": 40382.66
+        }
+      ],
+      "chunked:server:yield": [
+        {
+          "baseline": 40219.9,
+          "count": 40946.09,
+          "single": 41163.03
+        },
+        {
+          "count": 41514.03,
+          "single": 39890.08,
+          "baseline": 41080.14
+        },
+        {
+          "single": 41658.8,
+          "baseline": 40068.36,
+          "count": 41357.29
+        },
+        {
+          "single": 38715.17,
+          "count": 39235.65,
+          "baseline": 39124.13
+        },
+        {
+          "baseline": 40842.74,
+          "single": 40191.05,
+          "count": 39338.6
+        },
+        {
+          "count": 40483.12,
+          "baseline": 40676.48,
+          "single": 38456.91
+        }
+      ]
+    }
+  },
+  "summaries": {
+    "on": "trial on 1\ntrial on 2\ntrial on 3\ntrial on 4\ntrial on 5\ntrial on 6\nsmall:client:continue count/baseline: reduction=3.4% CI=[3.0,3.9] median_ns=1257.2\nsmall:client:continue single/baseline: reduction=9.4% CI=[9.2,9.5] median_ns=1180.4\nsmall:client:continue single/count: reduction=6.2% CI=[5.7,6.6] median_ns=1180.4\nsmall:client:yield count/baseline: reduction=3.1% CI=[2.4,3.6] median_ns=1241.1\nsmall:client:yield single/baseline: reduction=12.7% CI=[11.6,13.7] median_ns=1126.3\nsmall:client:yield single/count: reduction=9.9% CI=[8.6,11.3] median_ns=1126.3\nsmall:server:continue count/baseline: reduction=-0.1% CI=[-0.9,0.6] median_ns=1402.3\nsmall:server:continue single/baseline: reduction=10.2% CI=[10.0,10.3] median_ns=1263.7\nsmall:server:continue single/count: reduction=10.3% CI=[9.7,10.9] median_ns=1263.7\nsmall:server:yield count/baseline: reduction=0.2% CI=[-0.1,0.5] median_ns=1356.1\nsmall:server:yield single/baseline: reduction=10.3% CI=[10.0,10.8] median_ns=1218.4\nsmall:server:yield single/count: reduction=10.2% CI=[9.8,10.5] median_ns=1218.4\nfixed:client:continue count/baseline: reduction=3.6% CI=[0.5,5.6] median_ns=26796.8\nfixed:client:continue single/baseline: reduction=2.2% CI=[-1.2,5.9] median_ns=27254.5\nfixed:client:continue single/count: reduction=-1.4% CI=[-4.9,1.6] median_ns=27254.5\nfixed:client:yield count/baseline: reduction=-4.3% CI=[-12.5,2.3] median_ns=29042.5\nfixed:client:yield single/baseline: reduction=0.4% CI=[-4.6,7.0] median_ns=27425.5\nfixed:client:yield single/count: reduction=4.6% CI=[-0.0,9.4] median_ns=27425.5\nfixed:server:continue count/baseline: reduction=1.2% CI=[-3.4,5.0] median_ns=30000.8\nfixed:server:continue single/baseline: reduction=1.2% CI=[-4.7,6.3] median_ns=30658.8\nfixed:server:continue single/count: reduction=0.0% CI=[-6.6,7.3] median_ns=30658.8\nfixed:server:yield count/baseline: reduction=2.4% CI=[0.3,4.4] median_ns=29628.0\nfixed:server:yield single/baseline: reduction=0.5% CI=[-4.3,4.7] median_ns=30321.2\nfixed:server:yield single/count: reduction=-1.9% CI=[-6.6,2.0] median_ns=30321.2\nchunked:client:continue count/baseline: reduction=-1.3% CI=[-5.8,2.6] median_ns=42559.2\nchunked:client:continue single/baseline: reduction=-0.4% CI=[-2.8,2.1] median_ns=42278.3\nchunked:client:continue single/count: reduction=0.9% CI=[-1.1,3.0] median_ns=42278.3\nchunked:client:yield count/baseline: reduction=-0.2% CI=[-2.3,1.4] median_ns=41381.5\nchunked:client:yield single/baseline: reduction=1.3% CI=[-1.4,3.8] median_ns=40494.4\nchunked:client:yield single/count: reduction=1.5% CI=[-1.3,4.2] median_ns=40494.4\nchunked:server:continue count/baseline: reduction=-0.5% CI=[-2.3,1.8] median_ns=44598.0\nchunked:server:continue single/baseline: reduction=-1.1% CI=[-4.2,1.7] median_ns=44745.0\nchunked:server:continue single/count: reduction=-0.6% CI=[-3.5,2.4] median_ns=44745.0\nchunked:server:yield count/baseline: reduction=2.7% CI=[0.5,5.0] median_ns=44005.0\nchunked:server:yield single/baseline: reduction=0.8% CI=[-2.5,4.0] median_ns=44633.5\nchunked:server:yield single/count: reduction=-1.9% CI=[-3.6,-0.6] median_ns=44633.5\n",
+    "off": "trial off 1\ntrial off 2\ntrial off 3\ntrial off 4\ntrial off 5\ntrial off 6\nsmall:client:continue count/baseline: reduction=2.8% CI=[2.4,3.1] median_ns=1224.9\nsmall:client:continue single/baseline: reduction=9.7% CI=[9.1,10.3] median_ns=1137.7\nsmall:client:continue single/count: reduction=7.1% CI=[6.4,7.6] median_ns=1137.7\nsmall:client:yield count/baseline: reduction=0.4% CI=[-5.8,3.9] median_ns=1202.2\nsmall:client:yield single/baseline: reduction=8.8% CI=[4.2,12.6] median_ns=1092.7\nsmall:client:yield single/count: reduction=8.4% CI=[3.2,12.3] median_ns=1092.7\nsmall:server:continue count/baseline: reduction=2.6% CI=[-0.7,7.8] median_ns=1348.2\nsmall:server:continue single/baseline: reduction=9.8% CI=[7.7,11.3] median_ns=1208.1\nsmall:server:continue single/count: reduction=7.4% CI=[0.2,11.0] median_ns=1208.1\nsmall:server:yield count/baseline: reduction=-1.4% CI=[-5.1,1.0] median_ns=1271.5\nsmall:server:yield single/baseline: reduction=13.4% CI=[12.7,14.4] median_ns=1101.1\nsmall:server:yield single/count: reduction=14.6% CI=[12.8,17.4] median_ns=1101.1\nfixed:client:continue count/baseline: reduction=-2.5% CI=[-7.5,2.3] median_ns=28339.8\nfixed:client:continue single/baseline: reduction=4.4% CI=[2.1,7.0] median_ns=25878.0\nfixed:client:continue single/count: reduction=6.8% CI=[3.7,9.8] median_ns=25878.0\nfixed:client:yield count/baseline: reduction=0.2% CI=[-6.3,6.5] median_ns=27235.8\nfixed:client:yield single/baseline: reduction=1.7% CI=[-4.8,7.5] median_ns=26557.0\nfixed:client:yield single/count: reduction=1.5% CI=[-0.6,3.5] median_ns=26557.0\nfixed:server:continue count/baseline: reduction=6.5% CI=[3.0,11.4] median_ns=27031.2\nfixed:server:continue single/baseline: reduction=4.1% CI=[-0.2,9.0] median_ns=27525.9\nfixed:server:continue single/count: reduction=-2.6% CI=[-6.1,0.7] median_ns=27525.9\nfixed:server:yield count/baseline: reduction=6.8% CI=[3.7,10.1] median_ns=25808.1\nfixed:server:yield single/baseline: reduction=5.6% CI=[1.7,8.9] median_ns=26234.0\nfixed:server:yield single/count: reduction=-1.3% CI=[-3.7,1.9] median_ns=26234.0\nchunked:client:continue count/baseline: reduction=3.3% CI=[0.0,6.9] median_ns=40231.1\nchunked:client:continue single/baseline: reduction=2.8% CI=[-1.6,6.3] median_ns=39802.7\nchunked:client:continue single/count: reduction=-0.6% CI=[-3.7,2.4] median_ns=39802.7\nchunked:client:yield count/baseline: reduction=1.7% CI=[0.1,2.9] median_ns=39561.5\nchunked:client:yield single/baseline: reduction=2.1% CI=[-0.6,4.6] median_ns=39054.8\nchunked:client:yield single/count: reduction=0.4% CI=[-1.8,1.9] median_ns=39054.8\nchunked:server:continue count/baseline: reduction=1.8% CI=[-2.0,6.3] median_ns=42565.9\nchunked:server:continue single/baseline: reduction=0.1% CI=[-7.4,4.9] median_ns=41884.1\nchunked:server:continue single/count: reduction=-1.8% CI=[-14.0,5.4] median_ns=41884.1\nchunked:server:yield count/baseline: reduction=-0.3% CI=[-2.0,1.5] median_ns=40714.6\nchunked:server:yield single/baseline: reduction=0.8% CI=[-1.7,3.3] median_ns=40040.6\nchunked:server:yield single/count: reduction=1.2% CI=[-0.8,3.3] median_ns=40040.6\n"
+  },
+  "allocation_output": "small client\nsample=0 alloc=1 realloc=0 dealloc=1 requested_sizes=[102]\nsample=1 alloc=1 realloc=0 dealloc=1 requested_sizes=[102]\nsample=2 alloc=1 realloc=0 dealloc=1 requested_sizes=[102]\nsmall server\nsample=0 alloc=1 realloc=0 dealloc=1 requested_sizes=[80]\nsample=1 alloc=1 realloc=0 dealloc=1 requested_sizes=[80]\nsample=2 alloc=1 realloc=0 dealloc=1 requested_sizes=[80]\nfixed client\nsample=0 alloc=1 realloc=0 dealloc=1 requested_sizes=[106]\nsample=1 alloc=1 realloc=0 dealloc=1 requested_sizes=[106]\nsample=2 alloc=1 realloc=0 dealloc=1 requested_sizes=[106]\nfixed server\nsample=0 alloc=1 realloc=0 dealloc=1 requested_sizes=[84]\nsample=1 alloc=1 realloc=0 dealloc=1 requested_sizes=[84]\nsample=2 alloc=1 realloc=0 dealloc=1 requested_sizes=[84]\nchunked client\nsample=0 alloc=2 realloc=0 dealloc=2 requested_sizes=[109, 5]\nsample=1 alloc=2 realloc=0 dealloc=2 requested_sizes=[109, 5]\nsample=2 alloc=2 realloc=0 dealloc=2 requested_sizes=[109, 5]\nchunked server\nsample=0 alloc=2 realloc=0 dealloc=2 requested_sizes=[87, 5]\nsample=1 alloc=2 realloc=0 dealloc=2 requested_sizes=[87, 5]\nsample=2 alloc=2 realloc=0 dealloc=2 requested_sizes=[87, 5]\n",
+  "tools": {
+    "compare.py": "import itertools, json, math, random, re, statistics, subprocess, sys\nfrom pathlib import Path\nroot=Path(__file__).parent\nmode=sys.argv[1]\nrng=random.Random(4103)\ncases=list(itertools.product(['small','fixed','chunked'],['client','server'],['continue','yield']))\nvariants=['baseline','count','single']\nresults={':'.join(c):[] for c in cases}\nfor trial in range(6):\n    order=cases[:]\n    rng.shuffle(order)\n    run_order=variants[trial%3:]+variants[:trial%3]\n    if trial>=3: run_order=run_order[::-1]\n    for case in order:\n        sample={}\n        for variant in run_order:\n            out=subprocess.check_output(['taskset','-c','2',str(root/f'{variant}-{mode}'),*case,'1'],text=True,timeout=15)\n            sample[variant]=float(re.search(r'ns_per_exchange=([0-9.]+)',out)[1])\n        results[':'.join(case)].append(sample)\n        (root/f'comparison-{mode}.json').write_text(json.dumps(results,indent=2)+'\\n')\n    print('trial',mode,trial+1,flush=True)\nfor name,samples in results.items():\n    for variant,base in [('count','baseline'),('single','baseline'),('single','count')]:\n        logs=[math.log(s[variant]/s[base]) for s in samples]\n        ratios=sorted(math.exp(statistics.mean(rng.choices(logs,k=len(logs)))) for _ in range(10000))\n        print(f'{name} {variant}/{base}: reduction={100*(1-math.exp(statistics.mean(logs))):.1f}% CI=[{100*(1-ratios[9750]):.1f},{100*(1-ratios[250]):.1f}] median_ns={statistics.median(s[variant] for s in samples):.1f}',flush=True)\n",
+    "probe.rs": "#[path = \"/tmp/http1-transition-study/support-timers.rs\"]\nmod support;\nuse std::{hint::black_box, time::{Duration, Instant}};\nuse support::{Endpoint, Scenario, Session};\n\nfn run<'a, M: Endpoint<'a>, const YIELD: bool>(mut session: Session<'a, M, YIELD, false>, seconds: u64) {\n    for _ in 0..100 { black_box(session.round_trip()); }\n    let begin = Instant::now();\n    let mut iterations = 0u64;\n    while begin.elapsed() < Duration::from_secs(seconds) {\n        for _ in 0..100 {\n            black_box(session.round_trip());\n        }\n        iterations += 100;\n    }\n    println!(\"iterations={iterations} elapsed_ns={} ns_per_exchange={:.2}\", begin.elapsed().as_nanos(), begin.elapsed().as_nanos() as f64 / iterations as f64);\n}\n\nfn main() {\n    let args: Vec<_> = std::env::args().collect();\n    let scenario = match args[1].as_str() {\n        \"small\" => Scenario::fixed(128),\n        \"fixed\" => Scenario::fixed(1024 * 1024),\n        \"chunked\" => Scenario::chunked(1024 * 1024, support::IO_BYTES),\n        _ => panic!(\"scenario\"),\n    };\n    let seconds = args.get(4).map(|s| s.parse().unwrap()).unwrap_or(5);\n    match (args[2].as_str(), args[3].as_str()) {\n        (\"client\", \"continue\") => {\n            support::client::<false, true>(&scenario).round_trip();\n            run(support::client::<false, false>(&scenario), seconds);\n        }\n        (\"server\", \"continue\") => {\n            support::server::<false, true>(&scenario).round_trip();\n            run(support::server::<false, false>(&scenario), seconds);\n        }\n        (\"client\", \"yield\") => {\n            support::client::<true, true>(&scenario).round_trip();\n            run(support::client::<true, false>(&scenario), seconds);\n        }\n        (\"server\", \"yield\") => {\n            support::server::<true, true>(&scenario).round_trip();\n            run(support::server::<true, false>(&scenario), seconds);\n        }\n        _ => panic!(\"role/mode\"),\n    }\n}\n",
+    "allocation_probe.rs": "#[path = \"/tmp/http1-transition-study/support-timers.rs\"]\nmod support;\nuse std::alloc::{GlobalAlloc, Layout, System};\nuse std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};\nuse support::{Endpoint, Scenario, Session};\n\nstatic ENABLED: AtomicBool = AtomicBool::new(false);\nstatic ALLOCS: AtomicUsize = AtomicUsize::new(0);\nstatic REALLOCS: AtomicUsize = AtomicUsize::new(0);\nstatic DEALLOCS: AtomicUsize = AtomicUsize::new(0);\nstatic EVENTS: AtomicUsize = AtomicUsize::new(0);\nstatic SIZES: [AtomicUsize; 32] = [const { AtomicUsize::new(0) }; 32];\nstruct Counting;\n\nfn record(counter: &AtomicUsize, bytes: usize) {\n    if ENABLED.load(Relaxed) {\n        counter.fetch_add(1, Relaxed);\n        let i = EVENTS.fetch_add(1, Relaxed);\n        if let Some(slot) = SIZES.get(i) {\n            slot.store(bytes, Relaxed);\n        }\n    }\n}\n\n// Diagnostic-only allocator; all allocation operations delegate unchanged to System.\nunsafe impl GlobalAlloc for Counting {\n    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {\n        let ptr = unsafe { System.alloc(layout) };\n        if !ptr.is_null() { record(&ALLOCS, layout.size()); }\n        ptr\n    }\n    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {\n        let ptr = unsafe { System.alloc_zeroed(layout) };\n        if !ptr.is_null() { record(&ALLOCS, layout.size()); }\n        ptr\n    }\n    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {\n        let result = unsafe { System.realloc(ptr, layout, size) };\n        if !result.is_null() { record(&REALLOCS, size); }\n        result\n    }\n    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {\n        if ENABLED.load(Relaxed) { DEALLOCS.fetch_add(1, Relaxed); }\n        unsafe { System.dealloc(ptr, layout) };\n    }\n}\n#[global_allocator]\nstatic ALLOCATOR: Counting = Counting;\n\nfn probe<'a, M: Endpoint<'a>>(mut session: Session<'a, M, false, false>) {\n    for _ in 0..10 { std::hint::black_box(session.round_trip()); }\n    for sample in 0..3 {\n        ALLOCS.store(0, Relaxed);\n        REALLOCS.store(0, Relaxed);\n        DEALLOCS.store(0, Relaxed);\n        EVENTS.store(0, Relaxed);\n        ENABLED.store(true, Relaxed);\n        std::hint::black_box(session.round_trip());\n        ENABLED.store(false, Relaxed);\n        let sizes: Vec<_> = SIZES.iter().take(EVENTS.load(Relaxed)).map(|s| s.load(Relaxed)).collect();\n        println!(\"sample={sample} alloc={} realloc={} dealloc={} requested_sizes={sizes:?}\", ALLOCS.load(Relaxed), REALLOCS.load(Relaxed), DEALLOCS.load(Relaxed));\n    }\n}\nfn main() {\n    for (name,scenario) in [\n        (\"small\",Scenario::fixed(128)),\n        (\"fixed\",Scenario::fixed(1024*1024)),\n        (\"chunked\",Scenario::chunked(1024*1024,support::IO_BYTES)),\n    ] {\n        println!(\"{name} client\");\n        probe(support::client::<false,false>(&scenario));\n        println!(\"{name} server\");\n        probe(support::server::<false,false>(&scenario));\n    }\n}\n"
+  },
+  "method": "Six paired one-second trials per cell, CPU2, balanced variant order and shuffled workload order. Geometric mean ratios; nominal paired-bootstrap 95% intervals, 10000 resamples, no multiple-test adjustment. Shared-host simulated core transport, not network throughput. CHECK=true validates before timing; 100 warmup exchanges precede CHECK=false timing. No sampler or counting allocator in timed builds. Allocation measurements use a separate warmed-up probe.",
+  "qualification": "Small-message timings support both changes. Large-body results vary, including unchanged-path server controls. Timer-enabled chunked-server/yield is 1.9% slower incrementally versus count-only, but combined versus baseline is inconclusive. No universal large-body benefit or absence of regressions is claimed. Long/many-field head performance remains unmeasured."
+}

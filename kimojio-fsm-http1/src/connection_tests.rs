@@ -149,6 +149,48 @@ fn rejected_request_never_changes_sequences_timers_or_owned_slots() {
 }
 
 #[test]
+fn request_reuses_the_accepted_count_including_generated_fields() {
+    for body in [
+        BodyLength::Empty,
+        BodyLength::Known(0),
+        BodyLength::Known(1),
+        BodyLength::Streaming,
+    ] {
+        for expect_continue in [false, true] {
+            let expected = 2 + usize::from(
+                expect_continue && !matches!(body, BodyLength::Empty | BodyLength::Known(0)),
+            );
+            let mut core = Core::<Vec<u8>, Vec<u8>, false>::new(
+                ConnectionId {
+                    slot: 1,
+                    generation: 1,
+                },
+                Config {
+                    max_headers: expected - 1,
+                    ..configuration()
+                },
+                vec![0; 64],
+                Tick(0),
+            )
+            .unwrap();
+            let command = Request {
+                body,
+                expect_continue,
+                ..request()
+            };
+            let sequence = core.sequence;
+            assert_eq!(core.request(command), Err(CommandError::Limit));
+            assert_eq!(core.sequence, sequence);
+            assert_eq!(core.outgoing_metadata_fields, 0);
+            assert!(core.exchange.is_none() && core.output.is_none());
+            core.config.max_headers = expected;
+            core.request(command).unwrap();
+            assert_eq!(core.outgoing_metadata_fields, expected);
+        }
+    }
+}
+
+#[test]
 fn deadline_selection_pairs_kind_and_generation_across_all_timer_combinations() {
     for phase in [
         None,

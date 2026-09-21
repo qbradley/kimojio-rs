@@ -1,6 +1,10 @@
 use crate::*;
 use std::io::{self, Write};
 
+#[cfg(test)]
+#[path = "codec_tests.rs"]
+mod tests;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Framing {
     Empty,
@@ -115,7 +119,8 @@ pub(crate) fn strict_lines(bytes: &[u8]) -> bool {
     })
 }
 
-fn valid_headers(headers: Headers<'_>, config: &Config) -> Result<(), CommandError> {
+// Return the serialized field size while performing the existing validation pass.
+fn valid_headers(headers: Headers<'_>, config: &Config) -> Result<usize, CommandError> {
     if headers.len() > config.max_headers {
         return Err(CommandError::Limit);
     }
@@ -141,7 +146,16 @@ fn valid_headers(headers: Headers<'_>, config: &Config) -> Result<(), CommandErr
             return Err(CommandError::InvalidFraming);
         }
     }
-    Ok(())
+    Ok(bytes)
+}
+
+fn head_length(limit: usize, parts: &[usize]) -> Result<usize, CommandError> {
+    parts.iter().try_fold(0usize, |length, &part| {
+        length
+            .checked_add(part)
+            .filter(|&length| length <= limit)
+            .ok_or(CommandError::Limit)
+    })
 }
 
 struct HeadWriter {
@@ -151,8 +165,13 @@ struct HeadWriter {
 
 impl HeadWriter {
     fn new(limit: usize) -> Self {
+        Self::with_capacity(limit, 0)
+    }
+
+    fn with_capacity(limit: usize, capacity: usize) -> Self {
+        debug_assert!(capacity <= limit);
         Self {
-            bytes: Vec::new(),
+            bytes: Vec::with_capacity(capacity),
             limit,
         }
     }
@@ -201,6 +220,18 @@ fn append_framing(
     .map_err(|_| CommandError::Limit)
 }
 
+fn framing_length(body: BodyLength, framing: Framing) -> usize {
+    match (body, framing) {
+        (_, Framing::Chunked) => b"transfer-encoding: chunked\r\n".len(),
+        (BodyLength::Known(n), _) => {
+            let digits = n.checked_ilog10().unwrap_or(0) as usize + 1;
+            b"content-length: ".len() + digits + b"\r\n".len()
+        }
+        (BodyLength::Empty, _) => b"content-length: 0\r\n".len(),
+        _ => 0,
+    }
+}
+
 fn version(version: Version) -> &'static str {
     match version {
         Version::Http10 => "HTTP/1.0",
@@ -212,7 +243,7 @@ pub(crate) fn encode_request(
     request: Request<'_>,
     config: &Config,
 ) -> Result<(Vec<u8>, Framing), CommandError> {
-    valid_headers(request.head.headers, config)?;
+    let header_bytes = valid_headers(request.head.headers, config)?;
     if !token(request.head.method.as_bytes())
         || request.head.target.is_empty()
         || !request.head.target.bytes().all(|b| b.is_ascii_graphic())
@@ -236,7 +267,24 @@ pub(crate) fn encode_request(
     {
         return Err(CommandError::Limit);
     }
-    let mut out = HeadWriter::new(config.max_head_bytes);
+    let expect = request.expect_continue && framing != Framing::Empty;
+    let length = head_length(
+        config.max_head_bytes,
+        &[
+            version(request.head.version).len(),
+            request.head.method.len(),
+            request.head.target.len(),
+            6, // Two spaces, the start-line CRLF, and the final empty line.
+            header_bytes,
+            framing_length(request.body, framing),
+            if expect {
+                b"expect: 100-continue\r\n".len()
+            } else {
+                0
+            },
+        ],
+    )?;
+    let mut out = HeadWriter::with_capacity(config.max_head_bytes, length);
     write!(
         out,
         "{} {} {}\r\n",
@@ -247,11 +295,12 @@ pub(crate) fn encode_request(
     .map_err(|_| CommandError::Limit)?;
     append_headers(&mut out, request.head.headers)?;
     append_framing(&mut out, request.body, framing)?;
-    if request.expect_continue && framing != Framing::Empty {
+    if expect {
         out.write_all(b"expect: 100-continue\r\n")
             .map_err(|_| CommandError::Limit)?;
     }
     out.write_all(b"\r\n").map_err(|_| CommandError::Limit)?;
+    debug_assert_eq!(out.bytes.len(), length);
     Ok((out.bytes, framing))
 }
 
@@ -262,7 +311,7 @@ pub(crate) fn encode_response(
     tunnel: bool,
     config: &Config,
 ) -> Result<(Vec<u8>, Framing), CommandError> {
-    valid_headers(response.head.headers, config)?;
+    let header_bytes = valid_headers(response.head.headers, config)?;
     if !(100..=599).contains(&response.head.status)
         || response
             .head
@@ -297,7 +346,37 @@ pub(crate) fn encode_response(
     if response.head.reason.len() > config.max_head_bytes {
         return Err(CommandError::Limit);
     }
-    let mut out = HeadWriter::new(config.max_head_bytes);
+    let connection: &[u8] = if (close || framing == Framing::Eof)
+        && !has_token(response.head.headers, "connection", b"close")
+    {
+        b"connection: close\r\n"
+    } else if !close
+        && !tunnel
+        && response.head.version == Version::Http10
+        && !has_token(response.head.headers, "connection", b"keep-alive")
+        && !has_token(response.head.headers, "connection", b"close")
+    {
+        b"connection: keep-alive\r\n"
+    } else {
+        b""
+    };
+    let length = head_length(
+        config.max_head_bytes,
+        &[
+            version(response.head.version).len(),
+            3, // Validated status codes are in 100..=599.
+            response.head.reason.len(),
+            6, // Two spaces, the status-line CRLF, and the final empty line.
+            header_bytes,
+            if body_forbidden {
+                0
+            } else {
+                framing_length(response.body, framing)
+            },
+            connection.len(),
+        ],
+    )?;
+    let mut out = HeadWriter::with_capacity(config.max_head_bytes, length);
     write!(
         out,
         "{} {} {}\r\n",
@@ -310,21 +389,11 @@ pub(crate) fn encode_response(
     if !body_forbidden {
         append_framing(&mut out, response.body, framing)?;
     }
-    if (close || framing == Framing::Eof)
-        && !has_token(response.head.headers, "connection", b"close")
-    {
-        out.write_all(b"connection: close\r\n")
-            .map_err(|_| CommandError::Limit)?;
-    } else if !close
-        && !tunnel
-        && response.head.version == Version::Http10
-        && !has_token(response.head.headers, "connection", b"keep-alive")
-        && !has_token(response.head.headers, "connection", b"close")
-    {
-        out.write_all(b"connection: keep-alive\r\n")
-            .map_err(|_| CommandError::Limit)?;
+    if !connection.is_empty() {
+        out.write_all(connection).map_err(|_| CommandError::Limit)?;
     }
     out.write_all(b"\r\n").map_err(|_| CommandError::Limit)?;
+    debug_assert_eq!(out.bytes.len(), length);
     Ok((out.bytes, framing))
 }
 

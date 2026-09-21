@@ -1,0 +1,195 @@
+use super::*;
+
+fn check_exact_limit(encode: impl Fn(&Config) -> Result<(Vec<u8>, Framing), CommandError>) {
+    let config = Config {
+        max_body_bytes: u64::MAX,
+        ..Config::default()
+    };
+    let expected = encode(&config).unwrap();
+    let length = expected.0.len();
+    for limit in [length - 1, length, length + 1] {
+        let result = encode(&Config {
+            max_head_bytes: limit,
+            ..config.clone()
+        });
+        if limit < length {
+            assert_eq!(result, Err(CommandError::Limit));
+        } else {
+            assert_eq!(result.unwrap(), expected);
+        }
+    }
+}
+
+#[test]
+fn request_head_sizes_cover_decimal_boundaries_and_generated_expect() {
+    let headers = [
+        Header {
+            name: "host",
+            value: b"a",
+        },
+        Header {
+            name: "x-value",
+            value: b"\t\xff",
+        },
+    ];
+    for version in [Version::Http10, Version::Http11] {
+        for body in [
+            BodyLength::Empty,
+            BodyLength::Known(0),
+            BodyLength::Known(1),
+            BodyLength::Known(9),
+            BodyLength::Known(10),
+            BodyLength::Known(99),
+            BodyLength::Known(100),
+            BodyLength::Known(999),
+            BodyLength::Known(1000),
+            BodyLength::Known(u64::MAX),
+            BodyLength::Streaming,
+        ] {
+            if version == Version::Http10 && body == BodyLength::Streaming {
+                continue;
+            }
+            for expect_continue in [false, true] {
+                for target in ["/", "/long/path?query=value"] {
+                    let request = Request {
+                        head: RequestHead {
+                            method: "POST",
+                            target,
+                            version,
+                            headers: &headers,
+                        },
+                        body,
+                        expect_continue,
+                    };
+                    check_exact_limit(|config| encode_request(request, config));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn response_head_sizes_cover_suppression_and_generated_connection_fields() {
+    for version in [Version::Http10, Version::Http11] {
+        for status in [100, 103, 200, 204, 205, 304, 599] {
+            for body in [
+                BodyLength::Empty,
+                BodyLength::Known(0),
+                BodyLength::Known(9),
+                BodyLength::Known(10),
+                BodyLength::Known(99),
+                BodyLength::Known(100),
+                BodyLength::Known(u64::MAX),
+                BodyLength::Streaming,
+            ] {
+                for head_method in [false, true] {
+                    for close in [false, true] {
+                        for tunnel in [false, true] {
+                            if ((status < 200 || status == 204 || tunnel)
+                                && body != BodyLength::Empty)
+                                || (status == 205
+                                    && !matches!(body, BodyLength::Empty | BodyLength::Known(0)))
+                            {
+                                continue;
+                            }
+                            for connection in [
+                                None,
+                                Some("close"),
+                                Some("keep-alive"),
+                                Some("keep-alive, close"),
+                            ] {
+                                let header = [Header {
+                                    name: "connection",
+                                    value: connection.unwrap_or("").as_bytes(),
+                                }];
+                                for reason in ["", "Some reason"] {
+                                    let response = Response {
+                                        head: ResponseHead {
+                                            version,
+                                            status,
+                                            reason,
+                                            headers: if connection.is_some() {
+                                                &header
+                                            } else {
+                                                &[]
+                                            },
+                                        },
+                                        body,
+                                    };
+                                    check_exact_limit(|config| {
+                                        encode_response(
+                                            response,
+                                            head_method,
+                                            close,
+                                            tunnel,
+                                            config,
+                                        )
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn head_size_arithmetic_rejects_overflow_before_allocation() {
+    assert_eq!(
+        head_length(usize::MAX, &[usize::MAX, 1]),
+        Err(CommandError::Limit)
+    );
+    assert_eq!(head_length(16, &[8, 9]), Err(CommandError::Limit));
+    assert_eq!(head_length(16, &[8, 8]), Ok(16));
+    assert_eq!(head_length(0, &[]), Ok(0));
+}
+
+#[test]
+fn head_size_preflight_preserves_validation_error_precedence() {
+    let config = Config {
+        max_head_bytes: 20,
+        ..Config::default()
+    };
+    // Each field fits alone, but the complete head would exceed the budget.
+    let reserved = [Header {
+        name: "content-length",
+        value: b"0",
+    }];
+    let invalid = [Header {
+        name: "bad name",
+        value: b"x",
+    }];
+    for (headers, expected) in [
+        (reserved.as_slice(), CommandError::InvalidFraming),
+        (invalid.as_slice(), CommandError::InvalidHead),
+    ] {
+        let request = Request {
+            head: RequestHead {
+                method: "GET",
+                target: "/",
+                version: Version::Http10,
+                headers,
+            },
+            body: BodyLength::Empty,
+            expect_continue: false,
+        };
+        assert_eq!(encode_request(request, &config), Err(expected));
+        let response = Response::new(200, "OK", headers, BodyLength::Empty);
+        assert_eq!(
+            encode_response(response, false, false, false, &config),
+            Err(expected)
+        );
+    }
+    let response = Response::new(200, "bad\nreason", &[], BodyLength::Empty);
+    assert_eq!(
+        encode_response(response, false, false, false, &config),
+        Err(CommandError::InvalidHead)
+    );
+    let response = Response::new(204, "No Content", &[], BodyLength::Known(1));
+    assert_eq!(
+        encode_response(response, false, false, false, &config),
+        Err(CommandError::InvalidFraming)
+    );
+}

@@ -461,10 +461,11 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             return Err(CommandError::InvalidState);
         }
         let (head, framing) = codec::encode_request(request, &self.config)?;
+        let fields = header_count(&head);
         self.check_outgoing_metadata(
             head.len()
                 .saturating_add(if framing == Framing::Chunked { 5 } else { 0 }),
-            header_count(&head),
+            fields,
         )?;
         let upgrade = codec::upgrade_protocols(request.head.headers)
             .map_err(|_| CommandError::InvalidHead)?;
@@ -506,7 +507,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         self.tx = Transmit::begin(framing);
         self.outgoing_connection_fields = connection_fields;
         self.outgoing_metadata_bytes = head.len();
-        self.outgoing_metadata_fields = header_count(&head);
+        self.outgoing_metadata_fields = fields;
         self.queue_head(head, MetadataKind::FinalHead);
         Ok(id)
     }
