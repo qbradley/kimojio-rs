@@ -1,0 +1,3884 @@
+{
+  "source_revision": "7c101976fdba39df35c71ed7cde08fd38debeb46",
+  "artifact_root": "/tmp/http1-opportunities-study",
+  "rustc": "1.98.1 (48a229cea 2026-09-01)",
+  "build": "CARGO_PROFILE_RELEASE_DEBUG=2 CARGO_TARGET_DIR=target/http1-selection-study cargo build --release -p kimojio-fsm-http1 --example selection_profile_tmp",
+  "binaries": {
+    "on": "ae6393126f1504d739e507522f98a699ab17d9e071f52866d2dd81f5aaa39644",
+    "off": "d2b45a00b074c8161bb730439e38ffe6621b3e22c5be8ddadd1559023cddabcd"
+  },
+  "method": "Unprofiled timings: five one-second runs per case, CPU 2, shuffled order. Clock profiles: requested 2ms, ten seconds, CPU 2; about 2500 samples per run. Normalized sampled percentages are used, not the profiler absolute CPU seconds. CHECK=true validates before timing; 100 warmup exchanges precede measurement. Allocation probe is separate from timed/profiled binaries.",
+  "profiles": {
+    "chunked-client-off-pinned": {
+      "samples": 2503,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/chunked-client-off-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-off",
+        "chunked",
+        "client",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 18.3,
+          "inclusive": 43.11
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 7.99,
+          "inclusive": 7.99
+        }
+      ],
+      "receive_metadata_inline_percent": 9.27,
+      "process_metadata_inline_percent": 0.52,
+      "selector_inline_parts_percent": {
+        "next_transition": 3.28,
+        "http_transition": 1.48,
+        "source_transition": 0.88,
+        "receive_transition": 0.84,
+        "transmit_transition": 0.8,
+        "http_transition::{closure#1}": 0.44,
+        "incoming_transition": 0.24,
+        "producer_transition": 0.04
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_request",
+          "self": 0.04,
+          "inclusive": 1.52
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 0.2,
+          "inclusive": 0.2
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 2.04,
+          "inclusive": 6.71
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 42.11,
+          "inclusive": 42.11
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 42.11,
+          "inclusive": 42.11
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 18.3,
+          "inclusive": 43.11
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 7.99,
+          "inclusive": 7.99
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 4.99,
+          "inclusive": 98.0
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body",
+          "self": 2.76,
+          "inclusive": 3.4
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::release",
+          "self": 2.24,
+          "inclusive": 2.32
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 2.04,
+          "inclusive": 6.71
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::settle_write",
+          "self": 2.0,
+          "inclusive": 2.04
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::write",
+          "self": 1.84,
+          "inclusive": 5.35
+        },
+        {
+          "name": "<kimojio_fsm_http1::state::IoState>::issue",
+          "self": 1.84,
+          "inclusive": 1.84
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          5.63
+        ],
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          2.04
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          0.96
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.56
+        ],
+        [
+          "('coordinator.rs', 638, 'receive_metadata')",
+          0.56
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          0.56
+        ],
+        [
+          "('coordinator.rs', 640, 'receive_metadata')",
+          0.56
+        ],
+        [
+          "('coordinator.rs', 660, 'receive_metadata')",
+          0.52
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.52
+        ],
+        [
+          "('coordinator.rs', 656, 'receive_metadata')",
+          0.4
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/chunked-client-off-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/chunked-client-off-pinned.er/archive.log /tmp/http1-opportunities-study/chunked-client-off-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-off chunked client continue 10'\nProcess pid 1908411, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 1581 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:57:31 2026\n\nExperiment Ended: 10.014811100\nData Collection Duration: 10.014811100\n"
+    },
+    "chunked-server-off-pinned": {
+      "samples": 2502,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/chunked-server-off-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-off",
+        "chunked",
+        "server",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 17.47,
+          "inclusive": 45.76
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 10.99,
+          "inclusive": 12.31
+        }
+      ],
+      "receive_metadata_inline_percent": 7.91,
+      "process_metadata_inline_percent": 0.28,
+      "selector_inline_parts_percent": {
+        "next_transition": 4.36,
+        "http_transition": 1.92,
+        "source_transition": 1.36,
+        "continue_due": 1.36,
+        "receive_transition": 0.88,
+        "transmit_transition": 0.8,
+        "producer_transition": 0.32
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_response",
+          "self": 0.0,
+          "inclusive": 1.24
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 0.04,
+          "inclusive": 0.04
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.88,
+          "inclusive": 5.88
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 41.49,
+          "inclusive": 41.49
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 41.49,
+          "inclusive": 41.49
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 17.47,
+          "inclusive": 45.76
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 10.99,
+          "inclusive": 12.31
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 4.2,
+          "inclusive": 98.16
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body",
+          "self": 2.04,
+          "inclusive": 2.4
+        },
+        {
+          "name": "<kimojio_fsm_http1::state::IoState>::issue",
+          "self": 2.0,
+          "inclusive": 2.0
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.88,
+          "inclusive": 5.88
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::send",
+          "self": 1.72,
+          "inclusive": 1.92
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::release",
+          "self": 1.68,
+          "inclusive": 1.96
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::write",
+          "self": 1.64,
+          "inclusive": 5.0
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          4.64
+        ],
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          1.88
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          1.04
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.84
+        ],
+        [
+          "('coordinator.rs', 638, 'receive_metadata')",
+          0.68
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          0.48
+        ],
+        [
+          "('coordinator.rs', 640, 'receive_metadata')",
+          0.36
+        ],
+        [
+          "('coordinator.rs', 298, 'advance')",
+          0.32
+        ],
+        [
+          "('coordinator.rs', 0, 'advance')",
+          0.28
+        ],
+        [
+          "('coordinator.rs', 648, 'receive_metadata')",
+          0.28
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/chunked-server-off-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/chunked-server-off-pinned.er/archive.log /tmp/http1-opportunities-study/chunked-server-off-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-off chunked server continue 10'\nProcess pid 1908533, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 0 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:57:41 2026\n\nExperiment Ended: 10.011423900\nData Collection Duration: 10.011423900\n"
+    },
+    "fixed-client-off-pinned": {
+      "samples": 2503,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/fixed-client-off-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-off",
+        "fixed",
+        "client",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 8.67,
+          "inclusive": 27.21
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 7.03,
+          "inclusive": 7.03
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::receive_transition",
+          "self": 0.04,
+          "inclusive": 0.04
+        }
+      ],
+      "receive_metadata_inline_percent": 1.52,
+      "process_metadata_inline_percent": 0.0,
+      "selector_inline_parts_percent": {
+        "next_transition": 2.96,
+        "http_transition": 1.68,
+        "receive_transition": 0.64,
+        "source_transition": 0.6,
+        "transmit_transition": 0.4,
+        "producer_transition": 0.4,
+        "http_transition::{closure#1}": 0.36,
+        "incoming_transition": 0.04
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_request",
+          "self": 0.12,
+          "inclusive": 1.88
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 0.64,
+          "inclusive": 0.64
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.68,
+          "inclusive": 1.68
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 57.81,
+          "inclusive": 57.81
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 57.81,
+          "inclusive": 57.81
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 8.67,
+          "inclusive": 27.21
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 7.03,
+          "inclusive": 7.03
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 5.39,
+          "inclusive": 98.12
+        },
+        {
+          "name": "<kimojio_fsm_http1::state::IoState>::issue",
+          "self": 2.64,
+          "inclusive": 2.64
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::settle_write",
+          "self": 2.08,
+          "inclusive": 2.12
+        },
+        {
+          "name": "<kimojio_fsm_http1::operations::WriteOp<&[u8]>>::slices",
+          "self": 1.76,
+          "inclusive": 1.76
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::send",
+          "self": 1.72,
+          "inclusive": 2.12
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.68,
+          "inclusive": 1.68
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write",
+          "self": 1.64,
+          "inclusive": 3.36
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          1.68
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          1.36
+        ],
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          0.92
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.32
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.24
+        ],
+        [
+          "('coordinator.rs', 638, 'receive_metadata')",
+          0.2
+        ],
+        [
+          "('coordinator.rs', 311, 'advance')",
+          0.2
+        ],
+        [
+          "('coordinator.rs', 509, 'issue_read')",
+          0.2
+        ],
+        [
+          "('coordinator.rs', 298, 'advance')",
+          0.16
+        ],
+        [
+          "('coordinator.rs', 457, 'advance')",
+          0.16
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/fixed-client-off-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/fixed-client-off-pinned.er/archive.log /tmp/http1-opportunities-study/fixed-client-off-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-off fixed client continue 10'\nProcess pid 1908173, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 0 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:57:10 2026\n\nExperiment Ended: 10.012847400\nData Collection Duration: 10.012847400\n"
+    },
+    "fixed-server-off-pinned": {
+      "samples": 2502,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/fixed-server-off-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-off",
+        "fixed",
+        "server",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 9.67,
+          "inclusive": 35.45
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 11.47,
+          "inclusive": 12.31
+        }
+      ],
+      "receive_metadata_inline_percent": 2.04,
+      "process_metadata_inline_percent": 0.04,
+      "selector_inline_parts_percent": {
+        "next_transition": 4.8,
+        "http_transition": 1.64,
+        "continue_due": 1.64,
+        "source_transition": 1.16,
+        "transmit_transition": 0.92,
+        "receive_transition": 0.8,
+        "producer_transition": 0.44,
+        "incoming_transition": 0.08
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_response",
+          "self": 0.12,
+          "inclusive": 1.48
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 0.16,
+          "inclusive": 0.16
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.72,
+          "inclusive": 1.72
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 49.64,
+          "inclusive": 49.64
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 49.64,
+          "inclusive": 49.64
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 11.47,
+          "inclusive": 12.31
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 9.67,
+          "inclusive": 35.45
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 5.08,
+          "inclusive": 98.44
+        },
+        {
+          "name": "<kimojio_fsm_http1::state::IoState>::issue",
+          "self": 3.88,
+          "inclusive": 3.88
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write",
+          "self": 2.36,
+          "inclusive": 3.28
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::send",
+          "self": 2.28,
+          "inclusive": 2.56
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::settle_body",
+          "self": 1.76,
+          "inclusive": 1.8
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.72,
+          "inclusive": 1.72
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body",
+          "self": 1.68,
+          "inclusive": 1.92
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          1.64
+        ],
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          1.4
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          1.12
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.72
+        ],
+        [
+          "('coordinator.rs', 509, 'issue_read')",
+          0.32
+        ],
+        [
+          "('coordinator.rs', 457, 'advance')",
+          0.28
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.24
+        ],
+        [
+          "('coordinator.rs', 505, 'issue_read')",
+          0.2
+        ],
+        [
+          "('coordinator.rs', 658, 'receive_metadata')",
+          0.2
+        ],
+        [
+          "('coordinator.rs', 484, 'issue_write')",
+          0.2
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/fixed-server-off-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/fixed-server-off-pinned.er/archive.log /tmp/http1-opportunities-study/fixed-server-off-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-off fixed server continue 10'\nProcess pid 1908287, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 2 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:57:21 2026\n\nExperiment Ended: 10.014768500\nData Collection Duration: 10.014768500\n"
+    },
+    "small-client-off-pinned": {
+      "samples": 2500,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/small-client-off-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-off",
+        "small",
+        "client",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 35.44,
+          "inclusive": 56.28
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 4.32,
+          "inclusive": 4.32
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::receive_transition",
+          "self": 0.2,
+          "inclusive": 0.2
+        }
+      ],
+      "receive_metadata_inline_percent": 29.52,
+      "process_metadata_inline_percent": 0.16,
+      "selector_inline_parts_percent": {
+        "next_transition": 2.24,
+        "http_transition": 0.56,
+        "receive_transition": 0.48,
+        "source_transition": 0.44,
+        "transmit_transition": 0.44,
+        "producer_transition": 0.24,
+        "incoming_transition": 0.08,
+        "http_transition::{closure#1}": 0.04
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_request",
+          "self": 1.32,
+          "inclusive": 26.04
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 4.72,
+          "inclusive": 4.72
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 0.76,
+          "inclusive": 0.76
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 3.04,
+          "inclusive": 3.04
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 35.44,
+          "inclusive": 56.28
+        },
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 4.72,
+          "inclusive": 4.72
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 4.32,
+          "inclusive": 4.32
+        },
+        {
+          "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write",
+          "self": 4.2,
+          "inclusive": 11.96
+        },
+        {
+          "name": "<static>@0x98e2b (<libc.so.6>)",
+          "self": 3.88,
+          "inclusive": 4.68
+        },
+        {
+          "name": "kimojio_fsm_http1::codec::valid_headers",
+          "self": 3.12,
+          "inclusive": 3.12
+        },
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 3.04,
+          "inclusive": 3.04
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 2.96,
+          "inclusive": 97.96
+        },
+        {
+          "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write_all",
+          "self": 2.48,
+          "inclusive": 14.44
+        },
+        {
+          "name": "core::fmt::write",
+          "self": 2.48,
+          "inclusive": 17.24
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          21.24
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          2.4
+        ],
+        [
+          "('coordinator.rs', 658, 'receive_metadata')",
+          2.2
+        ],
+        [
+          "('coordinator.rs', 652, 'receive_metadata')",
+          1.12
+        ],
+        [
+          "('coordinator.rs', 638, 'receive_metadata')",
+          1.12
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          0.76
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.64
+        ],
+        [
+          "('coordinator.rs', 431, 'advance')",
+          0.48
+        ],
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          0.36
+        ],
+        [
+          "('connection.rs', 1582, 'metadata')",
+          0.36
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/small-client-off-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/small-client-off-pinned.er/archive.log /tmp/http1-opportunities-study/small-client-off-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-off small client continue 10'\nProcess pid 1907921, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 1059 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:56:49 2026\n\nExperiment Ended: 10.000802200\nData Collection Duration: 10.000802200\n"
+    },
+    "small-server-off-pinned": {
+      "samples": 2499,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/small-server-off-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-off",
+        "small",
+        "server",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 40.54,
+          "inclusive": 64.07
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 6.04,
+          "inclusive": 7.2
+        }
+      ],
+      "receive_metadata_inline_percent": 32.93,
+      "process_metadata_inline_percent": 0.24,
+      "selector_inline_parts_percent": {
+        "next_transition": 2.84,
+        "http_transition": 1.04,
+        "continue_due": 0.76,
+        "source_transition": 0.44,
+        "receive_transition": 0.4,
+        "transmit_transition": 0.36,
+        "producer_transition": 0.16,
+        "incoming_transition": 0.04
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_response",
+          "self": 0.8,
+          "inclusive": 20.33
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 4.48,
+          "inclusive": 4.48
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 0.44,
+          "inclusive": 0.44
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 2.76,
+          "inclusive": 2.76
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 40.54,
+          "inclusive": 64.07
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 6.04,
+          "inclusive": 7.2
+        },
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 4.48,
+          "inclusive": 4.48
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 4.04,
+          "inclusive": 98.52
+        },
+        {
+          "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write",
+          "self": 3.04,
+          "inclusive": 9.36
+        },
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 2.76,
+          "inclusive": 2.76
+        },
+        {
+          "name": "<static>@0x98e2b (<libc.so.6>)",
+          "self": 2.76,
+          "inclusive": 3.48
+        },
+        {
+          "name": "kimojio_fsm_http1::codec::valid_headers",
+          "self": 2.72,
+          "inclusive": 2.72
+        },
+        {
+          "name": "httparse::parse_headers_iter_uninit",
+          "self": 2.32,
+          "inclusive": 3.36
+        },
+        {
+          "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write_all",
+          "self": 2.2,
+          "inclusive": 11.56
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          22.29
+        ],
+        [
+          "('coordinator.rs', 658, 'receive_metadata')",
+          3.48
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          2.68
+        ],
+        [
+          "('coordinator.rs', 638, 'receive_metadata')",
+          1.8
+        ],
+        [
+          "('coordinator.rs', 652, 'receive_metadata')",
+          1.28
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          0.68
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.56
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.4
+        ],
+        [
+          "('coordinator.rs', 431, 'advance')",
+          0.36
+        ],
+        [
+          "('coordinator.rs', 641, 'receive_metadata')",
+          0.32
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/small-server-off-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/small-server-off-pinned.er/archive.log /tmp/http1-opportunities-study/small-server-off-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-off small server continue 10'\nProcess pid 1908042, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 3 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:57:00 2026\n\nExperiment Ended: 10.000696500\nData Collection Duration: 10.000696500\n"
+    },
+    "chunked-client-on-pinned": {
+      "samples": 2503,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/chunked-client-on-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-on",
+        "chunked",
+        "client",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 20.06,
+          "inclusive": 44.31
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 8.47,
+          "inclusive": 8.47
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::receive_transition",
+          "self": 0.04,
+          "inclusive": 0.04
+        }
+      ],
+      "receive_metadata_inline_percent": 8.67,
+      "process_metadata_inline_percent": 0.32,
+      "selector_inline_parts_percent": {
+        "next_transition": 3.32,
+        "http_transition": 2.24,
+        "transmit_transition": 0.88,
+        "receive_transition": 0.68,
+        "http_transition::{closure#1}": 0.6,
+        "source_transition": 0.4,
+        "incoming_transition": 0.2,
+        "producer_transition": 0.2
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_request",
+          "self": 0.0,
+          "inclusive": 1.24
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 0.4,
+          "inclusive": 0.4
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.72,
+          "inclusive": 5.99
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 41.83,
+          "inclusive": 41.83
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 41.83,
+          "inclusive": 41.83
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 20.06,
+          "inclusive": 44.31
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 8.47,
+          "inclusive": 8.47
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 5.07,
+          "inclusive": 97.96
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body",
+          "self": 2.36,
+          "inclusive": 2.92
+        },
+        {
+          "name": "<kimojio_fsm_http1::state::IoState>::issue",
+          "self": 1.92,
+          "inclusive": 1.92
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::release",
+          "self": 1.88,
+          "inclusive": 2.56
+        },
+        {
+          "name": "core::fmt::write",
+          "self": 1.8,
+          "inclusive": 5.03
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.72,
+          "inclusive": 5.99
+        },
+        {
+          "name": "<kimojio_fsm_http1::operations::WriteOp<&[u8]>>::slices",
+          "self": 1.56,
+          "inclusive": 1.56
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          4.95
+        ],
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          1.88
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          1.08
+        ],
+        [
+          "('coordinator.rs', 308, 'advance')",
+          0.84
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          0.6
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.6
+        ],
+        [
+          "('connection.rs', 1310, 'assert_invariants')",
+          0.52
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.52
+        ],
+        [
+          "('coordinator.rs', 640, 'receive_metadata')",
+          0.4
+        ],
+        [
+          "('coordinator.rs', 648, 'receive_metadata')",
+          0.36
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/chunked-client-on-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/chunked-client-on-pinned.er/archive.log /tmp/http1-opportunities-study/chunked-client-on-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-on chunked client continue 10'\nProcess pid 1909446, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 0 to 3495 MHz.; max of 3495 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:58:54 2026\n\nExperiment Ended: 10.012299400\nData Collection Duration: 10.012299400\n"
+    },
+    "chunked-client-repeat-on-pinned": {
+      "samples": 2503,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/chunked-client-repeat-on-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-on",
+        "chunked",
+        "client",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 16.86,
+          "inclusive": 41.07
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 7.67,
+          "inclusive": 7.67
+        }
+      ],
+      "receive_metadata_inline_percent": 8.11,
+      "process_metadata_inline_percent": 0.28,
+      "selector_inline_parts_percent": {
+        "next_transition": 2.76,
+        "http_transition": 1.36,
+        "source_transition": 1.16,
+        "transmit_transition": 0.84,
+        "receive_transition": 0.76,
+        "incoming_transition": 0.4,
+        "http_transition::{closure#1}": 0.28,
+        "producer_transition": 0.12
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_request",
+          "self": 0.0,
+          "inclusive": 1.24
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 0.16,
+          "inclusive": 0.16
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.84,
+          "inclusive": 5.87
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 45.31,
+          "inclusive": 45.31
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 45.31,
+          "inclusive": 45.31
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 16.86,
+          "inclusive": 41.07
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 7.67,
+          "inclusive": 7.67
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 4.87,
+          "inclusive": 98.04
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body",
+          "self": 2.76,
+          "inclusive": 3.04
+        },
+        {
+          "name": "<kimojio_fsm_http1::state::IoState>::issue",
+          "self": 2.64,
+          "inclusive": 2.64
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::release",
+          "self": 2.56,
+          "inclusive": 3.4
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.84,
+          "inclusive": 5.87
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::send",
+          "self": 1.48,
+          "inclusive": 1.72
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write",
+          "self": 1.48,
+          "inclusive": 2.36
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          5.79
+        ],
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          1.84
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          1.12
+        ],
+        [
+          "('coordinator.rs', 308, 'advance')",
+          0.6
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.48
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          0.4
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.36
+        ],
+        [
+          "('coordinator.rs', 641, 'receive_metadata')",
+          0.36
+        ],
+        [
+          "('coordinator.rs', 652, 'receive_metadata')",
+          0.32
+        ],
+        [
+          "('coordinator.rs', 660, 'receive_metadata')",
+          0.32
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/chunked-client-repeat-on-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/chunked-client-repeat-on-pinned.er/archive.log /tmp/http1-opportunities-study/chunked-client-repeat-on-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-on chunked client continue 10'\nProcess pid 1910609, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 6 to 3492 MHz.; max of 3492 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 22:00:17 2026\n\nExperiment Ended: 10.011426400\nData Collection Duration: 10.011426400\n"
+    },
+    "chunked-client-yield-on-pinned": {
+      "samples": 2502,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/chunked-client-yield-on-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-on",
+        "chunked",
+        "client",
+        "yield",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<true, false>",
+          "self": 18.31,
+          "inclusive": 40.81
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 4.6,
+          "inclusive": 4.6
+        }
+      ],
+      "receive_metadata_inline_percent": 8.63,
+      "process_metadata_inline_percent": 0.48,
+      "selector_inline_parts_percent": {
+        "next_transition": 1.72,
+        "http_transition": 0.92,
+        "receive_transition": 0.64,
+        "source_transition": 0.52,
+        "transmit_transition": 0.4,
+        "http_transition::{closure#1}": 0.24,
+        "incoming_transition": 0.16
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_request",
+          "self": 0.0,
+          "inclusive": 1.2
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 0.28,
+          "inclusive": 0.28
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 2.12,
+          "inclusive": 6.51
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 41.97,
+          "inclusive": 41.97
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 41.97,
+          "inclusive": 41.97
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<true, false>",
+          "self": 18.31,
+          "inclusive": 40.81
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, true, false>>::round_trip",
+          "self": 8.23,
+          "inclusive": 97.6
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 4.6,
+          "inclusive": 4.6
+        },
+        {
+          "name": "<kimojio_fsm_http1::state::IoState>::issue",
+          "self": 2.76,
+          "inclusive": 2.76
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::release",
+          "self": 2.24,
+          "inclusive": 2.8
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 2.12,
+          "inclusive": 6.51
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<true, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body",
+          "self": 1.76,
+          "inclusive": 2.16
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<true, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write",
+          "self": 1.76,
+          "inclusive": 2.88
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::send",
+          "self": 1.64,
+          "inclusive": 1.72
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          5.6
+        ],
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          1.48
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          1.28
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          0.68
+        ],
+        [
+          "('coordinator.rs', 641, 'receive_metadata')",
+          0.64
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.6
+        ],
+        [
+          "('coordinator.rs', 308, 'advance')",
+          0.36
+        ],
+        [
+          "('coordinator.rs', 656, 'receive_metadata')",
+          0.32
+        ],
+        [
+          "('coordinator.rs', 0, 'receive_metadata')",
+          0.28
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.24
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/chunked-client-yield-on-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/chunked-client-yield-on-pinned.er/archive.log /tmp/http1-opportunities-study/chunked-client-yield-on-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-on chunked client yield 10'\nProcess pid 1909940, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 2559 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:59:35 2026\n\nExperiment Ended: 10.012736200\nData Collection Duration: 10.012736200\n"
+    },
+    "chunked-server-on-pinned": {
+      "samples": 2501,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/chunked-server-on-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-on",
+        "chunked",
+        "server",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 17.99,
+          "inclusive": 43.9
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 9.4,
+          "inclusive": 11.28
+        }
+      ],
+      "receive_metadata_inline_percent": 8.96,
+      "process_metadata_inline_percent": 0.32,
+      "selector_inline_parts_percent": {
+        "next_transition": 4.28,
+        "continue_due": 1.88,
+        "http_transition": 1.12,
+        "source_transition": 0.96,
+        "producer_transition": 0.48,
+        "transmit_transition": 0.36,
+        "receive_transition": 0.32
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_response",
+          "self": 0.04,
+          "inclusive": 0.64
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 0.16,
+          "inclusive": 0.16
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.56,
+          "inclusive": 4.52
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 44.38,
+          "inclusive": 44.38
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 44.38,
+          "inclusive": 44.38
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 17.99,
+          "inclusive": 43.9
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 9.4,
+          "inclusive": 11.28
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 4.76,
+          "inclusive": 97.68
+        },
+        {
+          "name": "<kimojio_fsm_http1::state::IoState>::issue",
+          "self": 2.24,
+          "inclusive": 2.24
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body",
+          "self": 2.24,
+          "inclusive": 2.88
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::release",
+          "self": 2.08,
+          "inclusive": 2.68
+        },
+        {
+          "name": "<kimojio_fsm_http1::state::Transmit>::started",
+          "self": 1.88,
+          "inclusive": 1.88
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.56,
+          "inclusive": 4.52
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::send",
+          "self": 1.56,
+          "inclusive": 1.64
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          5.56
+        ],
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          1.88
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          1.36
+        ],
+        [
+          "('coordinator.rs', 308, 'advance')",
+          0.64
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.64
+        ],
+        [
+          "('coordinator.rs', 641, 'receive_metadata')",
+          0.48
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.48
+        ],
+        [
+          "('coordinator.rs', 298, 'advance')",
+          0.4
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          0.36
+        ],
+        [
+          "('coordinator.rs', 660, 'receive_metadata')",
+          0.32
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/chunked-server-on-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/chunked-server-on-pinned.er/archive.log /tmp/http1-opportunities-study/chunked-server-on-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-on chunked server continue 10'\nProcess pid 1909578, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 0 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:59:04 2026\n\nExperiment Ended: 10.011293200\nData Collection Duration: 10.011293200\n"
+    },
+    "chunked-server-repeat-on-pinned": {
+      "samples": 2503,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/chunked-server-repeat-on-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-on",
+        "chunked",
+        "server",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 18.06,
+          "inclusive": 45.67
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 11.27,
+          "inclusive": 12.78
+        }
+      ],
+      "receive_metadata_inline_percent": 8.19,
+      "process_metadata_inline_percent": 0.44,
+      "selector_inline_parts_percent": {
+        "next_transition": 5.31,
+        "source_transition": 1.48,
+        "http_transition": 1.44,
+        "continue_due": 1.2,
+        "receive_transition": 0.88,
+        "transmit_transition": 0.44,
+        "producer_transition": 0.36,
+        "incoming_transition": 0.16
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_response",
+          "self": 0.04,
+          "inclusive": 1.2
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 0.16,
+          "inclusive": 0.16
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.44,
+          "inclusive": 4.91
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 39.99,
+          "inclusive": 39.99
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 39.99,
+          "inclusive": 39.99
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 18.06,
+          "inclusive": 45.67
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 11.27,
+          "inclusive": 12.78
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 4.91,
+          "inclusive": 98.44
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::release",
+          "self": 2.0,
+          "inclusive": 2.44
+        },
+        {
+          "name": "<kimojio_fsm_http1::state::IoState>::issue",
+          "self": 2.0,
+          "inclusive": 2.0
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::settle_body",
+          "self": 1.8,
+          "inclusive": 1.84
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body",
+          "self": 1.76,
+          "inclusive": 2.48
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::send",
+          "self": 1.6,
+          "inclusive": 1.6
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write",
+          "self": 1.56,
+          "inclusive": 2.44
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          4.39
+        ],
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          1.88
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.88
+        ],
+        [
+          "('coordinator.rs', 638, 'receive_metadata')",
+          0.84
+        ],
+        [
+          "('coordinator.rs', 308, 'advance')",
+          0.8
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          0.56
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.48
+        ],
+        [
+          "('coordinator.rs', 641, 'receive_metadata')",
+          0.44
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          0.4
+        ],
+        [
+          "('coordinator.rs', 656, 'receive_metadata')",
+          0.4
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/chunked-server-repeat-on-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/chunked-server-repeat-on-pinned.er/archive.log /tmp/http1-opportunities-study/chunked-server-repeat-on-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-on chunked server continue 10'\nProcess pid 1910784, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 0 to 3493 MHz.; max of 3493 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 22:00:27 2026\n\nExperiment Ended: 10.013301200\nData Collection Duration: 10.013301200\n"
+    },
+    "chunked-server-yield-on-pinned": {
+      "samples": 2501,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/chunked-server-yield-on-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-on",
+        "chunked",
+        "server",
+        "yield",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<true, false>",
+          "self": 19.35,
+          "inclusive": 42.1
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 6.64,
+          "inclusive": 7.92
+        }
+      ],
+      "receive_metadata_inline_percent": 10.12,
+      "process_metadata_inline_percent": 0.32,
+      "selector_inline_parts_percent": {
+        "next_transition": 3.28,
+        "http_transition": 1.0,
+        "continue_due": 0.88,
+        "transmit_transition": 0.6,
+        "receive_transition": 0.56,
+        "producer_transition": 0.16,
+        "source_transition": 0.12,
+        "incoming_transition": 0.04
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_response",
+          "self": 0.04,
+          "inclusive": 0.88
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 0.16,
+          "inclusive": 0.16
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.2,
+          "inclusive": 4.56
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 42.66,
+          "inclusive": 42.66
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 42.66,
+          "inclusive": 42.66
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<true, false>",
+          "self": 19.35,
+          "inclusive": 42.1
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, true, false>>::round_trip",
+          "self": 8.28,
+          "inclusive": 98.36
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 6.64,
+          "inclusive": 7.92
+        },
+        {
+          "name": "<kimojio_fsm_http1::state::IoState>::issue",
+          "self": 2.32,
+          "inclusive": 2.32
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<true, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body",
+          "self": 2.04,
+          "inclusive": 2.32
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<true, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write",
+          "self": 1.84,
+          "inclusive": 2.52
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::release",
+          "self": 1.56,
+          "inclusive": 2.0
+        },
+        {
+          "name": "<kimojio_fsm_http1::state::Transmit>::started",
+          "self": 1.32,
+          "inclusive": 1.32
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::send",
+          "self": 1.28,
+          "inclusive": 1.32
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          6.08
+        ],
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          1.32
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.72
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          0.72
+        ],
+        [
+          "('coordinator.rs', 641, 'receive_metadata')",
+          0.72
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          0.68
+        ],
+        [
+          "('coordinator.rs', 308, 'advance')",
+          0.64
+        ],
+        [
+          "('coordinator.rs', 640, 'receive_metadata')",
+          0.56
+        ],
+        [
+          "('coordinator.rs', 298, 'advance')",
+          0.36
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.36
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/chunked-server-yield-on-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/chunked-server-yield-on-pinned.er/archive.log /tmp/http1-opportunities-study/chunked-server-yield-on-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-on chunked server yield 10'\nProcess pid 1910064, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 0 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:59:46 2026\n\nExperiment Ended: 10.011260000\nData Collection Duration: 10.011260000\n"
+    },
+    "fixed-client-on-pinned": {
+      "samples": 2501,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/fixed-client-on-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-on",
+        "fixed",
+        "client",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 10.52,
+          "inclusive": 31.47
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 8.48,
+          "inclusive": 8.48
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::receive_transition",
+          "self": 0.04,
+          "inclusive": 0.04
+        }
+      ],
+      "receive_metadata_inline_percent": 1.8,
+      "process_metadata_inline_percent": 0.0,
+      "selector_inline_parts_percent": {
+        "next_transition": 3.12,
+        "http_transition": 2.0,
+        "receive_transition": 0.92,
+        "transmit_transition": 0.84,
+        "source_transition": 0.8,
+        "http_transition::{closure#1}": 0.36,
+        "producer_transition": 0.32,
+        "incoming_transition": 0.16
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_request",
+          "self": 0.0,
+          "inclusive": 2.32
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 0.44,
+          "inclusive": 0.44
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.8,
+          "inclusive": 1.8
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 51.94,
+          "inclusive": 51.94
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 51.94,
+          "inclusive": 51.94
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 10.52,
+          "inclusive": 31.47
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 8.48,
+          "inclusive": 8.48
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 4.96,
+          "inclusive": 98.84
+        },
+        {
+          "name": "<kimojio_fsm_http1::state::IoState>::issue",
+          "self": 2.92,
+          "inclusive": 2.92
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::write",
+          "self": 2.2,
+          "inclusive": 6.2
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::settle_write",
+          "self": 1.92,
+          "inclusive": 2.08
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 1.8,
+          "inclusive": 1.8
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::progress",
+          "self": 1.8,
+          "inclusive": 2.04
+        },
+        {
+          "name": "<kimojio_fsm_http1::operations::WriteOp<&[u8]>>::slices",
+          "self": 1.8,
+          "inclusive": 1.8
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          1.4
+        ],
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          1.24
+        ],
+        [
+          "('coordinator.rs', 308, 'advance')",
+          0.48
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.48
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          0.44
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.44
+        ],
+        [
+          "('coordinator.rs', 311, 'advance')",
+          0.4
+        ],
+        [
+          "('connection.rs', 1310, 'assert_invariants')",
+          0.36
+        ],
+        [
+          "('coordinator.rs', 509, 'issue_read')",
+          0.24
+        ],
+        [
+          "('coordinator.rs', 298, 'advance')",
+          0.24
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/fixed-client-on-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/fixed-client-on-pinned.er/archive.log /tmp/http1-opportunities-study/fixed-client-on-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-on fixed client continue 10'\nProcess pid 1909195, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 0 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:58:33 2026\n\nExperiment Ended: 10.009810100\nData Collection Duration: 10.009810100\n"
+    },
+    "fixed-server-on-pinned": {
+      "samples": 2503,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/fixed-server-on-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-on",
+        "fixed",
+        "server",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 10.59,
+          "inclusive": 34.48
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 10.59,
+          "inclusive": 11.51
+        }
+      ],
+      "receive_metadata_inline_percent": 1.68,
+      "process_metadata_inline_percent": 0.0,
+      "selector_inline_parts_percent": {
+        "next_transition": 4.43,
+        "continue_due": 1.76,
+        "source_transition": 1.48,
+        "http_transition": 1.24,
+        "transmit_transition": 0.6,
+        "receive_transition": 0.52,
+        "producer_transition": 0.44,
+        "incoming_transition": 0.08,
+        "http_transition::{closure#1}": 0.04
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_response",
+          "self": 0.12,
+          "inclusive": 1.8
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 0.28,
+          "inclusive": 0.28
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 2.32,
+          "inclusive": 2.32
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 48.82,
+          "inclusive": 48.82
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 48.82,
+          "inclusive": 48.82
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 10.59,
+          "inclusive": 11.51
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 10.59,
+          "inclusive": 34.48
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 5.15,
+          "inclusive": 97.76
+        },
+        {
+          "name": "<kimojio_fsm_http1::state::IoState>::issue",
+          "self": 2.6,
+          "inclusive": 2.6
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 2.32,
+          "inclusive": 2.32
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::release",
+          "self": 2.04,
+          "inclusive": 2.48
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::settle_body",
+          "self": 1.92,
+          "inclusive": 1.92
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::send",
+          "self": 1.72,
+          "inclusive": 2.08
+        },
+        {
+          "name": "<selection_profile_tmp::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write",
+          "self": 1.72,
+          "inclusive": 2.6
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          1.56
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          1.36
+        ],
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          1.04
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.84
+        ],
+        [
+          "('coordinator.rs', 311, 'advance')",
+          0.68
+        ],
+        [
+          "('coordinator.rs', 308, 'advance')",
+          0.68
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.48
+        ],
+        [
+          "('coordinator.rs', 298, 'advance')",
+          0.28
+        ],
+        [
+          "('coordinator.rs', 638, 'receive_metadata')",
+          0.2
+        ],
+        [
+          "('coordinator.rs', 457, 'advance')",
+          0.2
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/fixed-server-on-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/fixed-server-on-pinned.er/archive.log /tmp/http1-opportunities-study/fixed-server-on-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-on fixed server continue 10'\nProcess pid 1909320, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 2 to 3492 MHz.; max of 3492 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:58:43 2026\n\nExperiment Ended: 10.012466700\nData Collection Duration: 10.012466700\n"
+    },
+    "small-client-on-pinned": {
+      "samples": 2499,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/small-client-on-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-on",
+        "small",
+        "client",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 33.61,
+          "inclusive": 54.7
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 5.0,
+          "inclusive": 5.0
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::receive_transition",
+          "self": 0.16,
+          "inclusive": 0.16
+        }
+      ],
+      "receive_metadata_inline_percent": 26.73,
+      "process_metadata_inline_percent": 0.04,
+      "selector_inline_parts_percent": {
+        "next_transition": 2.12,
+        "http_transition": 1.32,
+        "transmit_transition": 0.56,
+        "receive_transition": 0.48,
+        "source_transition": 0.32,
+        "incoming_transition": 0.16,
+        "producer_transition": 0.12,
+        "http_transition::{closure#1}": 0.08
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_request",
+          "self": 1.44,
+          "inclusive": 26.25
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 6.76,
+          "inclusive": 6.76
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 0.56,
+          "inclusive": 0.56
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 6.04,
+          "inclusive": 6.04
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 33.61,
+          "inclusive": 54.7
+        },
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 6.76,
+          "inclusive": 6.76
+        },
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 6.04,
+          "inclusive": 6.04
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 5.0,
+          "inclusive": 5.0
+        },
+        {
+          "name": "kimojio_fsm_http1::codec::valid_headers",
+          "self": 3.72,
+          "inclusive": 3.72
+        },
+        {
+          "name": "<static>@0x98e2b (<libc.so.6>)",
+          "self": 3.36,
+          "inclusive": 4.04
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 3.16,
+          "inclusive": 97.92
+        },
+        {
+          "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write",
+          "self": 2.96,
+          "inclusive": 11.68
+        },
+        {
+          "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write_all",
+          "self": 2.64,
+          "inclusive": 14.33
+        },
+        {
+          "name": "kimojio_fsm_http1::codec::strict_lines",
+          "self": 1.84,
+          "inclusive": 1.84
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          15.49
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          2.52
+        ],
+        [
+          "('coordinator.rs', 658, 'receive_metadata')",
+          1.64
+        ],
+        [
+          "('coordinator.rs', 638, 'receive_metadata')",
+          1.48
+        ],
+        [
+          "('coordinator.rs', 640, 'receive_metadata')",
+          1.24
+        ],
+        [
+          "('coordinator.rs', 0, 'receive_metadata')",
+          0.88
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          0.8
+        ],
+        [
+          "('coordinator.rs', 652, 'receive_metadata')",
+          0.8
+        ],
+        [
+          "('coordinator.rs', 656, 'receive_metadata')",
+          0.72
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.56
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/small-client-on-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/small-client-on-pinned.er/archive.log /tmp/http1-opportunities-study/small-client-on-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-on small client continue 10'\nProcess pid 1908840, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 2380 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:58:02 2026\n\nExperiment Ended: 10.000752800\nData Collection Duration: 10.000752800\n"
+    },
+    "small-client-repeat-on-pinned": {
+      "samples": 2500,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/small-client-repeat-on-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-on",
+        "small",
+        "client",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 35.76,
+          "inclusive": 54.4
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 4.2,
+          "inclusive": 4.2
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::receive_transition",
+          "self": 0.08,
+          "inclusive": 0.08
+        }
+      ],
+      "receive_metadata_inline_percent": 28.08,
+      "process_metadata_inline_percent": 0.12,
+      "selector_inline_parts_percent": {
+        "next_transition": 2.36,
+        "http_transition": 0.56,
+        "source_transition": 0.44,
+        "receive_transition": 0.4,
+        "transmit_transition": 0.24,
+        "producer_transition": 0.12,
+        "incoming_transition": 0.08,
+        "http_transition::{closure#1}": 0.08
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_request",
+          "self": 1.32,
+          "inclusive": 26.36
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 5.92,
+          "inclusive": 5.92
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 0.56,
+          "inclusive": 0.56
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 3.44,
+          "inclusive": 3.44
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 35.76,
+          "inclusive": 54.4
+        },
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 5.92,
+          "inclusive": 5.92
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 4.24,
+          "inclusive": 98.52
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 4.2,
+          "inclusive": 4.2
+        },
+        {
+          "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write",
+          "self": 3.72,
+          "inclusive": 11.8
+        },
+        {
+          "name": "<static>@0x98e2b (<libc.so.6>)",
+          "self": 3.6,
+          "inclusive": 4.32
+        },
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 3.44,
+          "inclusive": 3.44
+        },
+        {
+          "name": "kimojio_fsm_http1::codec::valid_headers",
+          "self": 3.36,
+          "inclusive": 3.36
+        },
+        {
+          "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write_all",
+          "self": 2.96,
+          "inclusive": 14.76
+        },
+        {
+          "name": "core::fmt::write",
+          "self": 2.16,
+          "inclusive": 17.12
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          19.52
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          2.44
+        ],
+        [
+          "('coordinator.rs', 658, 'receive_metadata')",
+          2.2
+        ],
+        [
+          "('coordinator.rs', 638, 'receive_metadata')",
+          1.4
+        ],
+        [
+          "('coordinator.rs', 652, 'receive_metadata')",
+          1.28
+        ],
+        [
+          "('coordinator.rs', 431, 'advance')",
+          0.96
+        ],
+        [
+          "('coordinator.rs', 308, 'advance')",
+          0.76
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          0.6
+        ],
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          0.4
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.4
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/small-client-repeat-on-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/small-client-repeat-on-pinned.er/archive.log /tmp/http1-opportunities-study/small-client-repeat-on-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-on small client continue 10'\nProcess pid 1910184, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 0 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:59:56 2026\n\nExperiment Ended: 10.000823800\nData Collection Duration: 10.000823800\n"
+    },
+    "small-client-yield-on-pinned": {
+      "samples": 2499,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/small-client-yield-on-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-on",
+        "small",
+        "client",
+        "yield",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<true, false>",
+          "self": 36.85,
+          "inclusive": 56.22
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 3.16,
+          "inclusive": 3.16
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::receive_transition",
+          "self": 0.16,
+          "inclusive": 0.16
+        }
+      ],
+      "receive_metadata_inline_percent": 28.21,
+      "process_metadata_inline_percent": 0.04,
+      "selector_inline_parts_percent": {
+        "next_transition": 1.96,
+        "receive_transition": 0.44,
+        "source_transition": 0.28,
+        "http_transition": 0.24,
+        "http_transition::{closure#1}": 0.16,
+        "transmit_transition": 0.12,
+        "incoming_transition": 0.08,
+        "producer_transition": 0.04
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_request",
+          "self": 0.92,
+          "inclusive": 26.21
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 4.32,
+          "inclusive": 4.32
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 0.92,
+          "inclusive": 0.92
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 4.24,
+          "inclusive": 4.24
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<true, false>",
+          "self": 36.85,
+          "inclusive": 56.22
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, true, false>>::round_trip",
+          "self": 4.92,
+          "inclusive": 98.08
+        },
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 4.32,
+          "inclusive": 4.32
+        },
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 4.24,
+          "inclusive": 4.24
+        },
+        {
+          "name": "<static>@0x98e2b (<libc.so.6>)",
+          "self": 3.84,
+          "inclusive": 5.16
+        },
+        {
+          "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write",
+          "self": 3.76,
+          "inclusive": 12.32
+        },
+        {
+          "name": "kimojio_fsm_http1::codec::valid_headers",
+          "self": 3.4,
+          "inclusive": 3.4
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition",
+          "self": 3.16,
+          "inclusive": 3.16
+        },
+        {
+          "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write_all",
+          "self": 2.96,
+          "inclusive": 15.29
+        },
+        {
+          "name": "core::fmt::write",
+          "self": 2.08,
+          "inclusive": 18.21
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          20.77
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          2.68
+        ],
+        [
+          "('coordinator.rs', 638, 'receive_metadata')",
+          1.4
+        ],
+        [
+          "('coordinator.rs', 652, 'receive_metadata')",
+          1.16
+        ],
+        [
+          "('coordinator.rs', 658, 'receive_metadata')",
+          1.16
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          0.76
+        ],
+        [
+          "('coordinator.rs', 431, 'advance')",
+          0.72
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.52
+        ],
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          0.44
+        ],
+        [
+          "('coordinator.rs', 308, 'advance')",
+          0.44
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/small-client-yield-on-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/small-client-yield-on-pinned.er/archive.log /tmp/http1-opportunities-study/small-client-yield-on-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-on small client yield 10'\nProcess pid 1909708, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 0 to 3492 MHz.; max of 3492 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:59:14 2026\n\nExperiment Ended: 10.000726300\nData Collection Duration: 10.000726300\n"
+    },
+    "small-server-on-pinned": {
+      "samples": 2500,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/small-server-on-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-on",
+        "small",
+        "server",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 38.36,
+          "inclusive": 63.4
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 6.6,
+          "inclusive": 7.6
+        }
+      ],
+      "receive_metadata_inline_percent": 31.76,
+      "process_metadata_inline_percent": 0.0,
+      "selector_inline_parts_percent": {
+        "next_transition": 3.24,
+        "http_transition": 1.0,
+        "continue_due": 0.88,
+        "source_transition": 0.44,
+        "transmit_transition": 0.36,
+        "receive_transition": 0.32,
+        "http_transition::{closure#1}": 0.16,
+        "producer_transition": 0.16,
+        "incoming_transition": 0.04
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_response",
+          "self": 1.2,
+          "inclusive": 20.48
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 4.0,
+          "inclusive": 4.0
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 0.44,
+          "inclusive": 0.44
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 3.96,
+          "inclusive": 3.96
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 38.36,
+          "inclusive": 63.4
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 6.6,
+          "inclusive": 7.6
+        },
+        {
+          "name": "<static>@0x98e2b (<libc.so.6>)",
+          "self": 4.0,
+          "inclusive": 4.8
+        },
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 4.0,
+          "inclusive": 4.0
+        },
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 3.96,
+          "inclusive": 3.96
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 3.8,
+          "inclusive": 98.36
+        },
+        {
+          "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write",
+          "self": 3.08,
+          "inclusive": 10.6
+        },
+        {
+          "name": "kimojio_fsm_http1::codec::valid_headers",
+          "self": 2.8,
+          "inclusive": 2.8
+        },
+        {
+          "name": "kimojio_fsm_http1::codec::strict_lines",
+          "self": 2.52,
+          "inclusive": 2.52
+        },
+        {
+          "name": "httparse::parse_headers_iter_uninit",
+          "self": 2.2,
+          "inclusive": 3.36
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          19.48
+        ],
+        [
+          "('coordinator.rs', 658, 'receive_metadata')",
+          2.92
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          2.12
+        ],
+        [
+          "('coordinator.rs', 638, 'receive_metadata')",
+          1.68
+        ],
+        [
+          "('coordinator.rs', 652, 'receive_metadata')",
+          1.08
+        ],
+        [
+          "('coordinator.rs', 640, 'receive_metadata')",
+          0.84
+        ],
+        [
+          "('coordinator.rs', 0, 'receive_metadata')",
+          0.8
+        ],
+        [
+          "('coordinator.rs', 656, 'receive_metadata')",
+          0.76
+        ],
+        [
+          "('coordinator.rs', 641, 'receive_metadata')",
+          0.68
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          0.64
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/small-server-on-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/small-server-on-pinned.er/archive.log /tmp/http1-opportunities-study/small-server-on-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-on small server continue 10'\nProcess pid 1909084, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 0 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:58:22 2026\n\nExperiment Ended: 10.000949500\nData Collection Duration: 10.000949500\n"
+    },
+    "small-server-repeat-on-pinned": {
+      "samples": 2499,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/small-server-repeat-on-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-on",
+        "small",
+        "server",
+        "continue",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 40.9,
+          "inclusive": 63.87
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 6.28,
+          "inclusive": 7.16
+        }
+      ],
+      "receive_metadata_inline_percent": 33.81,
+      "process_metadata_inline_percent": 0.04,
+      "selector_inline_parts_percent": {
+        "next_transition": 3.6,
+        "http_transition": 0.92,
+        "continue_due": 0.6,
+        "transmit_transition": 0.4,
+        "source_transition": 0.28,
+        "receive_transition": 0.28,
+        "producer_transition": 0.12,
+        "http_transition::{closure#1}": 0.08
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_response",
+          "self": 1.24,
+          "inclusive": 19.41
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 4.56,
+          "inclusive": 4.56
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 0.28,
+          "inclusive": 0.28
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 2.44,
+          "inclusive": 2.44
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<false, false>",
+          "self": 40.9,
+          "inclusive": 63.87
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 6.28,
+          "inclusive": 7.16
+        },
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 4.56,
+          "inclusive": 4.56
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip",
+          "self": 3.96,
+          "inclusive": 98.16
+        },
+        {
+          "name": "<static>@0x98e2b (<libc.so.6>)",
+          "self": 3.52,
+          "inclusive": 4.48
+        },
+        {
+          "name": "kimojio_fsm_http1::codec::valid_headers",
+          "self": 2.76,
+          "inclusive": 2.76
+        },
+        {
+          "name": "kimojio_fsm_http1::codec::strict_lines",
+          "self": 2.6,
+          "inclusive": 2.6
+        },
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 2.44,
+          "inclusive": 2.44
+        },
+        {
+          "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write",
+          "self": 2.32,
+          "inclusive": 9.16
+        },
+        {
+          "name": "kimojio_fsm_http1::codec::framing",
+          "self": 2.0,
+          "inclusive": 2.0
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          23.33
+        ],
+        [
+          "('coordinator.rs', 658, 'receive_metadata')",
+          3.36
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          2.28
+        ],
+        [
+          "('coordinator.rs', 652, 'receive_metadata')",
+          1.56
+        ],
+        [
+          "('coordinator.rs', 638, 'receive_metadata')",
+          1.48
+        ],
+        [
+          "('coordinator.rs', 308, 'advance')",
+          0.84
+        ],
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          0.6
+        ],
+        [
+          "('coordinator.rs', 304, 'advance')",
+          0.56
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          0.48
+        ],
+        [
+          "('coordinator.rs', 640, 'receive_metadata')",
+          0.44
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/small-server-repeat-on-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/small-server-repeat-on-pinned.er/archive.log /tmp/http1-opportunities-study/small-server-repeat-on-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-on small server continue 10'\nProcess pid 1910491, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 0 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 22:00:06 2026\n\nExperiment Ended: 10.000826600\nData Collection Duration: 10.000826600\n"
+    },
+    "small-server-yield-on-pinned": {
+      "samples": 2498,
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "gprofng",
+        "collect",
+        "app",
+        "-O",
+        "/tmp/http1-opportunities-study/small-server-yield-on-pinned.er",
+        "-p",
+        "2",
+        "/tmp/http1-opportunities-study/timers-on",
+        "small",
+        "server",
+        "yield",
+        "10"
+      ],
+      "next": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<true, false>",
+          "self": 40.79,
+          "inclusive": 61.45
+        }
+      ],
+      "selector": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 3.2,
+          "inclusive": 4.04
+        }
+      ],
+      "receive_metadata_inline_percent": 32.51,
+      "process_metadata_inline_percent": 0.04,
+      "selector_inline_parts_percent": {
+        "next_transition": 1.8,
+        "http_transition": 0.48,
+        "continue_due": 0.4,
+        "transmit_transition": 0.16,
+        "source_transition": 0.12,
+        "http_transition::{closure#1}": 0.08,
+        "receive_transition": 0.08,
+        "incoming_transition": 0.04,
+        "producer_transition": 0.04
+      },
+      "encoder": [
+        {
+          "name": "kimojio_fsm_http1::codec::encode_response",
+          "self": 1.12,
+          "inclusive": 21.38
+        }
+      ],
+      "header_count": [
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 3.64,
+          "inclusive": 3.64
+        }
+      ],
+      "prepare_body": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body",
+          "self": 0.44,
+          "inclusive": 0.44
+        }
+      ],
+      "copy_leaf": [
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 3.6,
+          "inclusive": 3.6
+        }
+      ],
+      "top_functions": [
+        {
+          "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as selection_profile_tmp::support::Endpoint>::next::<true, false>",
+          "self": 40.79,
+          "inclusive": 61.45
+        },
+        {
+          "name": "<selection_profile_tmp::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, true, false>>::round_trip",
+          "self": 5.36,
+          "inclusive": 98.0
+        },
+        {
+          "name": "<static>@0x98e2b (<libc.so.6>)",
+          "self": 3.64,
+          "inclusive": 4.76
+        },
+        {
+          "name": "kimojio_fsm_http1::connection::header_count",
+          "self": 3.64,
+          "inclusive": 3.64
+        },
+        {
+          "name": "<static>@0x158ef1 (<libc.so.6>)",
+          "self": 3.6,
+          "inclusive": 3.6
+        },
+        {
+          "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition",
+          "self": 3.2,
+          "inclusive": 4.04
+        },
+        {
+          "name": "kimojio_fsm_http1::codec::valid_headers",
+          "self": 2.72,
+          "inclusive": 2.72
+        },
+        {
+          "name": "kimojio_fsm_http1::codec::strict_lines",
+          "self": 2.64,
+          "inclusive": 2.64
+        },
+        {
+          "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write",
+          "self": 2.56,
+          "inclusive": 10.33
+        },
+        {
+          "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write_all",
+          "self": 2.28,
+          "inclusive": 12.61
+        }
+      ],
+      "next_hot_lines": [
+        [
+          "('coordinator.rs', 662, 'receive_metadata')",
+          21.78
+        ],
+        [
+          "('coordinator.rs', 643, 'receive_metadata')",
+          3.36
+        ],
+        [
+          "('coordinator.rs', 658, 'receive_metadata')",
+          2.92
+        ],
+        [
+          "('coordinator.rs', 652, 'receive_metadata')",
+          1.16
+        ],
+        [
+          "('coordinator.rs', 638, 'receive_metadata')",
+          1.08
+        ],
+        [
+          "('option.rs', 0, 'next')",
+          0.68
+        ],
+        [
+          "('coordinator.rs', 713, 'deliver_body')",
+          0.56
+        ],
+        [
+          "('connection.rs', 1485, 'metadata')",
+          0.48
+        ],
+        [
+          "('coordinator.rs', 308, 'advance')",
+          0.48
+        ],
+        [
+          "('coordinator.rs', 284, 'next')",
+          0.48
+        ]
+      ],
+      "header": "Experiment: /tmp/http1-opportunities-study/small-server-yield-on-pinned.er\nNo errors\nNo warnings\nArchive command ` /usr/bin/gp-archive -n -a on --outfile /tmp/http1-opportunities-study/small-server-yield-on-pinned.er/archive.log /tmp/http1-opportunities-study/small-server-yield-on-pinned.er'\n\nTarget command (64-bit): '/tmp/http1-opportunities-study/timers-on small server yield 10'\nProcess pid 1909833, ppid 1907812, pgrp 1907811, sid 1907811\nCurrent working directory: /workspace/kimojio-rs-2\nCollector version: `2.41'; experiment version 12.4 (64-bit)\nHost `azl3000002', OS `Linux 6.6.137.mshv2-2.azl3', page size 4096, architecture `x86_64'\n  32 CPUs, with clocks ranging from 0 to 3491 MHz.; max of 3491 MHz. assumed\n  Memory: 65620881 pages @  4096 = 256331 MB.\nData collection parameters:\n  Clock-profiling, interval = 2000 microsecs.\n  Periodic sampling, 1 secs.\n  Follow descendant processes from: fork|exec|combo\n\nExperiment started Mon Sep 21 21:59:25 2026\n\nExperiment Ended: 10.000871200\nData Collection Duration: 10.000871200\n"
+    }
+  },
+  "timing_summary": {
+    "on:small:client": {
+      "wall_ns_median": 1731.38,
+      "wall_ns_min": 1728.27,
+      "wall_ns_max": 1739.2
+    },
+    "on:small:server": {
+      "wall_ns_median": 1897.55,
+      "wall_ns_min": 1893.47,
+      "wall_ns_max": 1911.07
+    },
+    "on:fixed:client": {
+      "wall_ns_median": 28170.81,
+      "wall_ns_min": 25788.89,
+      "wall_ns_max": 30156.15
+    },
+    "on:fixed:server": {
+      "wall_ns_median": 31928.25,
+      "wall_ns_min": 28388.88,
+      "wall_ns_max": 39752.65
+    },
+    "on:chunked:client": {
+      "wall_ns_median": 42952.94,
+      "wall_ns_min": 42059.85,
+      "wall_ns_max": 43281.7
+    },
+    "on:chunked:server": {
+      "wall_ns_median": 44732.83,
+      "wall_ns_min": 43468.15,
+      "wall_ns_max": 44848.69
+    },
+    "off:small:client": {
+      "wall_ns_median": 1703.44,
+      "wall_ns_min": 1694.79,
+      "wall_ns_max": 1705.06
+    },
+    "off:small:server": {
+      "wall_ns_median": 1908.43,
+      "wall_ns_min": 1907.78,
+      "wall_ns_max": 1915.15
+    },
+    "off:fixed:client": {
+      "wall_ns_median": 27107.9,
+      "wall_ns_min": 26146.93,
+      "wall_ns_max": 29207.47
+    },
+    "off:fixed:server": {
+      "wall_ns_median": 28268.89,
+      "wall_ns_min": 27126.74,
+      "wall_ns_max": 31451.26
+    },
+    "off:chunked:client": {
+      "wall_ns_median": 41219.66,
+      "wall_ns_min": 40255.21,
+      "wall_ns_max": 42762.58
+    },
+    "off:chunked:server": {
+      "wall_ns_median": 42938.64,
+      "wall_ns_min": 41798.64,
+      "wall_ns_max": 44593.57
+    }
+  },
+  "timing_samples": {
+    "on:small:client": [
+      {
+        "wall_ns_per_exchange": 1734.23,
+        "process_cpu_ns_per_exchange": 1738.2486561470455,
+        "iterations": 576700,
+        "output": "iterations=576700 elapsed_ns=1000129622 ns_per_exchange=1734.23"
+      },
+      {
+        "wall_ns_per_exchange": 1728.41,
+        "process_cpu_ns_per_exchange": 1732.3228482544043,
+        "iterations": 578600,
+        "output": "iterations=578600 elapsed_ns=1000055987 ns_per_exchange=1728.41"
+      },
+      {
+        "wall_ns_per_exchange": 1739.2,
+        "process_cpu_ns_per_exchange": 1743.161739130442,
+        "iterations": 575000,
+        "output": "iterations=575000 elapsed_ns=1000039491 ns_per_exchange=1739.20"
+      },
+      {
+        "wall_ns_per_exchange": 1731.38,
+        "process_cpu_ns_per_exchange": 1735.8673822714566,
+        "iterations": 577600,
+        "output": "iterations=577600 elapsed_ns=1000045335 ns_per_exchange=1731.38"
+      },
+      {
+        "wall_ns_per_exchange": 1728.27,
+        "process_cpu_ns_per_exchange": 1730.402626576816,
+        "iterations": 578700,
+        "output": "iterations=578700 elapsed_ns=1000147496 ns_per_exchange=1728.27"
+      }
+    ],
+    "on:small:server": [
+      {
+        "wall_ns_per_exchange": 1911.07,
+        "process_cpu_ns_per_exchange": 1915.7672463214242,
+        "iterations": 523300,
+        "output": "iterations=523300 elapsed_ns=1000065320 ns_per_exchange=1911.07"
+      },
+      {
+        "wall_ns_per_exchange": 1897.55,
+        "process_cpu_ns_per_exchange": 1901.8994307400399,
+        "iterations": 527000,
+        "output": "iterations=527000 elapsed_ns=1000009895 ns_per_exchange=1897.55"
+      },
+      {
+        "wall_ns_per_exchange": 1893.47,
+        "process_cpu_ns_per_exchange": 1897.7205603937923,
+        "iterations": 528200,
+        "output": "iterations=528200 elapsed_ns=1000132091 ns_per_exchange=1893.47"
+      },
+      {
+        "wall_ns_per_exchange": 1894.1,
+        "process_cpu_ns_per_exchange": 1898.571969696982,
+        "iterations": 528000,
+        "output": "iterations=528000 elapsed_ns=1000085135 ns_per_exchange=1894.10"
+      },
+      {
+        "wall_ns_per_exchange": 1898.14,
+        "process_cpu_ns_per_exchange": 1902.421711899802,
+        "iterations": 526900,
+        "output": "iterations=526900 elapsed_ns=1000129366 ns_per_exchange=1898.14"
+      }
+    ],
+    "on:fixed:client": [
+      {
+        "wall_ns_per_exchange": 25788.89,
+        "process_cpu_ns_per_exchange": 26052.577319587635,
+        "iterations": 38800,
+        "output": "iterations=38800 elapsed_ns=1000608996 ns_per_exchange=25788.89"
+      },
+      {
+        "wall_ns_per_exchange": 30156.15,
+        "process_cpu_ns_per_exchange": 30473.463855421633,
+        "iterations": 33200,
+        "output": "iterations=33200 elapsed_ns=1001184097 ns_per_exchange=30156.15"
+      },
+      {
+        "wall_ns_per_exchange": 28798.43,
+        "process_cpu_ns_per_exchange": 29096.69540229894,
+        "iterations": 34800,
+        "output": "iterations=34800 elapsed_ns=1002185213 ns_per_exchange=28798.43"
+      },
+      {
+        "wall_ns_per_exchange": 27135.61,
+        "process_cpu_ns_per_exchange": 27412.303523035258,
+        "iterations": 36900,
+        "output": "iterations=36900 elapsed_ns=1001304167 ns_per_exchange=27135.61"
+      },
+      {
+        "wall_ns_per_exchange": 28170.81,
+        "process_cpu_ns_per_exchange": 28465.999999999913,
+        "iterations": 35500,
+        "output": "iterations=35500 elapsed_ns=1000063657 ns_per_exchange=28170.81"
+      }
+    ],
+    "on:fixed:server": [
+      {
+        "wall_ns_per_exchange": 29194.11,
+        "process_cpu_ns_per_exchange": 29496.501457725935,
+        "iterations": 34300,
+        "output": "iterations=34300 elapsed_ns=1001357903 ns_per_exchange=29194.11"
+      },
+      {
+        "wall_ns_per_exchange": 32051.7,
+        "process_cpu_ns_per_exchange": 32392.371794871844,
+        "iterations": 31200,
+        "output": "iterations=31200 elapsed_ns=1000012995 ns_per_exchange=32051.70"
+      },
+      {
+        "wall_ns_per_exchange": 28388.88,
+        "process_cpu_ns_per_exchange": 28682.12464589241,
+        "iterations": 35300,
+        "output": "iterations=35300 elapsed_ns=1002127408 ns_per_exchange=28388.88"
+      },
+      {
+        "wall_ns_per_exchange": 31928.25,
+        "process_cpu_ns_per_exchange": 32263.630573248363,
+        "iterations": 31400,
+        "output": "iterations=31400 elapsed_ns=1002546877 ns_per_exchange=31928.25"
+      },
+      {
+        "wall_ns_per_exchange": 39752.65,
+        "process_cpu_ns_per_exchange": 40202.38095238089,
+        "iterations": 25200,
+        "output": "iterations=25200 elapsed_ns=1001766709 ns_per_exchange=39752.65"
+      }
+    ],
+    "on:chunked:client": [
+      {
+        "wall_ns_per_exchange": 42059.85,
+        "process_cpu_ns_per_exchange": 42554.11764705877,
+        "iterations": 23800,
+        "output": "iterations=23800 elapsed_ns=1001024327 ns_per_exchange=42059.85"
+      },
+      {
+        "wall_ns_per_exchange": 43281.7,
+        "process_cpu_ns_per_exchange": 43820.17241379319,
+        "iterations": 23200,
+        "output": "iterations=23200 elapsed_ns=1004135429 ns_per_exchange=43281.70"
+      },
+      {
+        "wall_ns_per_exchange": 42828.08,
+        "process_cpu_ns_per_exchange": 43338.03418803405,
+        "iterations": 23400,
+        "output": "iterations=23400 elapsed_ns=1002177082 ns_per_exchange=42828.08"
+      },
+      {
+        "wall_ns_per_exchange": 42952.94,
+        "process_cpu_ns_per_exchange": 43458.84120171678,
+        "iterations": 23300,
+        "output": "iterations=23300 elapsed_ns=1000803541 ns_per_exchange=42952.94"
+      },
+      {
+        "wall_ns_per_exchange": 43068.64,
+        "process_cpu_ns_per_exchange": 43572.40343347651,
+        "iterations": 23300,
+        "output": "iterations=23300 elapsed_ns=1003499124 ns_per_exchange=43068.64"
+      }
+    ],
+    "on:chunked:server": [
+      {
+        "wall_ns_per_exchange": 43468.15,
+        "process_cpu_ns_per_exchange": 43983.722943722925,
+        "iterations": 23100,
+        "output": "iterations=23100 elapsed_ns=1004114347 ns_per_exchange=43468.15"
+      },
+      {
+        "wall_ns_per_exchange": 44770.46,
+        "process_cpu_ns_per_exchange": 45296.38392857133,
+        "iterations": 22400,
+        "output": "iterations=22400 elapsed_ns=1002858212 ns_per_exchange=44770.46"
+      },
+      {
+        "wall_ns_per_exchange": 44732.83,
+        "process_cpu_ns_per_exchange": 45274.73214285711,
+        "iterations": 22400,
+        "output": "iterations=22400 elapsed_ns=1002015406 ns_per_exchange=44732.83"
+      },
+      {
+        "wall_ns_per_exchange": 44035.64,
+        "process_cpu_ns_per_exchange": 44555.701754386064,
+        "iterations": 22800,
+        "output": "iterations=22800 elapsed_ns=1004012688 ns_per_exchange=44035.64"
+      },
+      {
+        "wall_ns_per_exchange": 44848.69,
+        "process_cpu_ns_per_exchange": 45391.74887892359,
+        "iterations": 22300,
+        "output": "iterations=22300 elapsed_ns=1000125596 ns_per_exchange=44848.69"
+      }
+    ],
+    "off:small:client": [
+      {
+        "wall_ns_per_exchange": 1694.79,
+        "process_cpu_ns_per_exchange": 1698.656159972887,
+        "iterations": 590100,
+        "output": "iterations=590100 elapsed_ns=1000096119 ns_per_exchange=1694.79"
+      },
+      {
+        "wall_ns_per_exchange": 1696.37,
+        "process_cpu_ns_per_exchange": 1699.597964376591,
+        "iterations": 589500,
+        "output": "iterations=589500 elapsed_ns=1000010487 ns_per_exchange=1696.37"
+      },
+      {
+        "wall_ns_per_exchange": 1703.56,
+        "process_cpu_ns_per_exchange": 1707.5591892352236,
+        "iterations": 587100,
+        "output": "iterations=587100 elapsed_ns=1000157691 ns_per_exchange=1703.56"
+      },
+      {
+        "wall_ns_per_exchange": 1705.06,
+        "process_cpu_ns_per_exchange": 1708.8900255754545,
+        "iterations": 586500,
+        "output": "iterations=586500 elapsed_ns=1000019742 ns_per_exchange=1705.06"
+      },
+      {
+        "wall_ns_per_exchange": 1703.44,
+        "process_cpu_ns_per_exchange": 1707.4348492590705,
+        "iterations": 587100,
+        "output": "iterations=587100 elapsed_ns=1000087295 ns_per_exchange=1703.44"
+      }
+    ],
+    "off:small:server": [
+      {
+        "wall_ns_per_exchange": 1908.11,
+        "process_cpu_ns_per_exchange": 1912.37168479298,
+        "iterations": 524100,
+        "output": "iterations=524100 elapsed_ns=1000041919 ns_per_exchange=1908.11"
+      },
+      {
+        "wall_ns_per_exchange": 1907.78,
+        "process_cpu_ns_per_exchange": 1912.180465471194,
+        "iterations": 524200,
+        "output": "iterations=524200 elapsed_ns=1000056842 ns_per_exchange=1907.78"
+      },
+      {
+        "wall_ns_per_exchange": 1915.15,
+        "process_cpu_ns_per_exchange": 1919.5040214477183,
+        "iterations": 522200,
+        "output": "iterations=522200 elapsed_ns=1000092250 ns_per_exchange=1915.15"
+      },
+      {
+        "wall_ns_per_exchange": 1908.43,
+        "process_cpu_ns_per_exchange": 1913.0858778625957,
+        "iterations": 524000,
+        "output": "iterations=524000 elapsed_ns=1000019635 ns_per_exchange=1908.43"
+      },
+      {
+        "wall_ns_per_exchange": 1911.62,
+        "process_cpu_ns_per_exchange": 1916.0187308868408,
+        "iterations": 523200,
+        "output": "iterations=523200 elapsed_ns=1000157258 ns_per_exchange=1911.62"
+      }
+    ],
+    "off:fixed:client": [
+      {
+        "wall_ns_per_exchange": 26146.93,
+        "process_cpu_ns_per_exchange": 26402.898172323752,
+        "iterations": 38300,
+        "output": "iterations=38300 elapsed_ns=1001427430 ns_per_exchange=26146.93"
+      },
+      {
+        "wall_ns_per_exchange": 27107.9,
+        "process_cpu_ns_per_exchange": 27386.85636856372,
+        "iterations": 36900,
+        "output": "iterations=36900 elapsed_ns=1000281390 ns_per_exchange=27107.90"
+      },
+      {
+        "wall_ns_per_exchange": 27006.07,
+        "process_cpu_ns_per_exchange": 27275.579514824836,
+        "iterations": 37100,
+        "output": "iterations=37100 elapsed_ns=1001925011 ns_per_exchange=27006.07"
+      },
+      {
+        "wall_ns_per_exchange": 27170.27,
+        "process_cpu_ns_per_exchange": 27444.281842818407,
+        "iterations": 36900,
+        "output": "iterations=36900 elapsed_ns=1002582756 ns_per_exchange=27170.27"
+      },
+      {
+        "wall_ns_per_exchange": 29207.47,
+        "process_cpu_ns_per_exchange": 29503.556851312125,
+        "iterations": 34300,
+        "output": "iterations=34300 elapsed_ns=1001816010 ns_per_exchange=29207.47"
+      }
+    ],
+    "off:fixed:server": [
+      {
+        "wall_ns_per_exchange": 28268.89,
+        "process_cpu_ns_per_exchange": 28559.971751412428,
+        "iterations": 35400,
+        "output": "iterations=35400 elapsed_ns=1000718824 ns_per_exchange=28268.89"
+      },
+      {
+        "wall_ns_per_exchange": 31067.68,
+        "process_cpu_ns_per_exchange": 31391.86335403731,
+        "iterations": 32200,
+        "output": "iterations=32200 elapsed_ns=1000379298 ns_per_exchange=31067.68"
+      },
+      {
+        "wall_ns_per_exchange": 27126.74,
+        "process_cpu_ns_per_exchange": 27401.46341463417,
+        "iterations": 36900,
+        "output": "iterations=36900 elapsed_ns=1000976603 ns_per_exchange=27126.74"
+      },
+      {
+        "wall_ns_per_exchange": 27274.58,
+        "process_cpu_ns_per_exchange": 27549.182561307887,
+        "iterations": 36700,
+        "output": "iterations=36700 elapsed_ns=1000976942 ns_per_exchange=27274.58"
+      },
+      {
+        "wall_ns_per_exchange": 31451.26,
+        "process_cpu_ns_per_exchange": 31789.591194968605,
+        "iterations": 31800,
+        "output": "iterations=31800 elapsed_ns=1000149996 ns_per_exchange=31451.26"
+      }
+    ],
+    "off:chunked:client": [
+      {
+        "wall_ns_per_exchange": 41582.72,
+        "process_cpu_ns_per_exchange": 42074.81327800825,
+        "iterations": 24100,
+        "output": "iterations=24100 elapsed_ns=1002143435 ns_per_exchange=41582.72"
+      },
+      {
+        "wall_ns_per_exchange": 40255.21,
+        "process_cpu_ns_per_exchange": 40726.70682730923,
+        "iterations": 24900,
+        "output": "iterations=24900 elapsed_ns=1002354607 ns_per_exchange=40255.21"
+      },
+      {
+        "wall_ns_per_exchange": 40527.4,
+        "process_cpu_ns_per_exchange": 40995.38461538463,
+        "iterations": 24700,
+        "output": "iterations=24700 elapsed_ns=1001026599 ns_per_exchange=40527.40"
+      },
+      {
+        "wall_ns_per_exchange": 41219.66,
+        "process_cpu_ns_per_exchange": 41703.415637860264,
+        "iterations": 24300,
+        "output": "iterations=24300 elapsed_ns=1001637748 ns_per_exchange=41219.66"
+      },
+      {
+        "wall_ns_per_exchange": 42762.58,
+        "process_cpu_ns_per_exchange": 43262.94871794898,
+        "iterations": 23400,
+        "output": "iterations=23400 elapsed_ns=1000644399 ns_per_exchange=42762.58"
+      }
+    ],
+    "off:chunked:server": [
+      {
+        "wall_ns_per_exchange": 42938.64,
+        "process_cpu_ns_per_exchange": 43456.137339055786,
+        "iterations": 23300,
+        "output": "iterations=23300 elapsed_ns=1000470096 ns_per_exchange=42938.64"
+      },
+      {
+        "wall_ns_per_exchange": 41798.64,
+        "process_cpu_ns_per_exchange": 42283.62499999999,
+        "iterations": 24000,
+        "output": "iterations=24000 elapsed_ns=1003167214 ns_per_exchange=41798.64"
+      },
+      {
+        "wall_ns_per_exchange": 42915.02,
+        "process_cpu_ns_per_exchange": 43424.1880341881,
+        "iterations": 23400,
+        "output": "iterations=23400 elapsed_ns=1004211325 ns_per_exchange=42915.02"
+      },
+      {
+        "wall_ns_per_exchange": 43203.31,
+        "process_cpu_ns_per_exchange": 43717.50000000001,
+        "iterations": 23200,
+        "output": "iterations=23200 elapsed_ns=1002316675 ns_per_exchange=43203.31"
+      },
+      {
+        "wall_ns_per_exchange": 44593.57,
+        "process_cpu_ns_per_exchange": 45135.73333333321,
+        "iterations": 22500,
+        "output": "iterations=22500 elapsed_ns=1003355326 ns_per_exchange=44593.57"
+      }
+    ]
+  },
+  "allocation_probe_output": "small client\nsample=0 alloc=1 realloc=3 dealloc=1 requested_sizes=[8, 22, 52, 106]\nsample=1 alloc=1 realloc=3 dealloc=1 requested_sizes=[8, 22, 52, 106]\nsample=2 alloc=1 realloc=3 dealloc=1 requested_sizes=[8, 22, 52, 106]\nsmall server\nsample=0 alloc=1 realloc=2 dealloc=1 requested_sizes=[16, 34, 110]\nsample=1 alloc=1 realloc=2 dealloc=1 requested_sizes=[16, 34, 110]\nsample=2 alloc=1 realloc=2 dealloc=1 requested_sizes=[16, 34, 110]\nfixed client\nsample=0 alloc=1 realloc=3 dealloc=1 requested_sizes=[8, 22, 52, 106]\nsample=1 alloc=1 realloc=3 dealloc=1 requested_sizes=[8, 22, 52, 106]\nsample=2 alloc=1 realloc=3 dealloc=1 requested_sizes=[8, 22, 52, 106]\nfixed server\nsample=0 alloc=1 realloc=2 dealloc=1 requested_sizes=[16, 34, 110]\nsample=1 alloc=1 realloc=2 dealloc=1 requested_sizes=[16, 34, 110]\nsample=2 alloc=1 realloc=2 dealloc=1 requested_sizes=[16, 34, 110]\nchunked client\nsample=0 alloc=2 realloc=4 dealloc=2 requested_sizes=[8, 22, 52, 106, 214, 5]\nsample=1 alloc=2 realloc=4 dealloc=2 requested_sizes=[8, 22, 52, 106, 214, 5]\nsample=2 alloc=2 realloc=4 dealloc=2 requested_sizes=[8, 22, 52, 106, 214, 5]\nchunked server\nsample=0 alloc=2 realloc=2 dealloc=2 requested_sizes=[16, 34, 110, 5]\nsample=1 alloc=2 realloc=2 dealloc=2 requested_sizes=[16, 34, 110, 5]\nsample=2 alloc=2 realloc=2 dealloc=2 requested_sizes=[16, 34, 110, 5]\n",
+  "tools": {
+    "probe.rs": "#[path = \"/tmp/http1-transition-study/support.rs.original\"]\nmod support;\nuse std::{hint::black_box, time::{Duration, Instant}};\nuse support::{Endpoint, Scenario, Session};\n\nfn run<'a, M: Endpoint<'a>, const YIELD: bool>(mut session: Session<'a, M, YIELD, false>, seconds: u64) {\n    for _ in 0..100 { black_box(session.round_trip()); }\n    let begin = Instant::now();\n    let mut iterations = 0u64;\n    while begin.elapsed() < Duration::from_secs(seconds) {\n        for _ in 0..100 {\n            black_box(session.round_trip());\n        }\n        iterations += 100;\n    }\n    println!(\"iterations={iterations} elapsed_ns={} ns_per_exchange={:.2}\", begin.elapsed().as_nanos(), begin.elapsed().as_nanos() as f64 / iterations as f64);\n}\n\nfn main() {\n    let args: Vec<_> = std::env::args().collect();\n    let scenario = match args[1].as_str() {\n        \"small\" => Scenario::fixed(128),\n        \"fixed\" => Scenario::fixed(1024 * 1024),\n        \"chunked\" => Scenario::chunked(1024 * 1024, support::IO_BYTES),\n        _ => panic!(\"scenario\"),\n    };\n    let seconds = args.get(4).map(|s| s.parse().unwrap()).unwrap_or(5);\n    match (args[2].as_str(), args[3].as_str()) {\n        (\"client\", \"continue\") => {\n            support::client::<false, true>(&scenario).round_trip();\n            run(support::client::<false, false>(&scenario), seconds);\n        }\n        (\"server\", \"continue\") => {\n            support::server::<false, true>(&scenario).round_trip();\n            run(support::server::<false, false>(&scenario), seconds);\n        }\n        (\"client\", \"yield\") => {\n            support::client::<true, true>(&scenario).round_trip();\n            run(support::client::<true, false>(&scenario), seconds);\n        }\n        (\"server\", \"yield\") => {\n            support::server::<true, true>(&scenario).round_trip();\n            run(support::server::<true, false>(&scenario), seconds);\n        }\n        _ => panic!(\"role/mode\"),\n    }\n}\n",
+    "profile.py": "import itertools, json, subprocess\nfrom pathlib import Path\n\nroot = Path(__file__).parent\ncases = [(mode,size,role,'continue','') for mode,size,role in itertools.product(['off','on'], ['small','fixed','chunked'], ['client','server'])]\ncases += [('on',size,role,'yield','-yield') for size,role in itertools.product(['small','chunked'], ['client','server'])]\ncases += [('on',size,role,'continue','-repeat') for size,role in itertools.product(['small','chunked'], ['client','server'])]\nfor timers,size,role,callback,suffix in cases:\n    name = f'{size}-{role}{suffix}-{timers}-pinned'\n    for attempt in range(3):\n        command = ['taskset','-c','2','gprofng','collect','app','-O',str(root/(name+'.er')),'-p','2',str(root/f'timers-{timers}'),size,role,callback,'10']\n        with (root/(name+'.log')).open('w') as log:\n            subprocess.run(command,stdout=log,stderr=subprocess.STDOUT,check=True,timeout=30)\n        for kind in ['functions','pcs','header','callers-callees']:\n            with (root/(name+'.'+kind)).open('w') as out:\n                subprocess.run(['gprofng','display','text','-limit','0','-'+kind,str(root/(name+'.er'))],stdout=out,stderr=subprocess.DEVNULL,check=True,timeout=30)\n        if 'No errors' in (root/(name+'.header')).read_text() and 'CPU' in (root/(name+'.functions')).read_text():\n            break\n    else:\n        raise RuntimeError(f'no valid samples for {name}')\n    (root/(name+'.command.json')).write_text(json.dumps(command))\n    print(name,flush=True)\n",
+    "analyze.py": "import collections as C\nimport json\nfrom pathlib import Path\nimport re\nimport subprocess\n\nroot = Path(__file__).parent\nrow = re.compile(r'^\\s*([0-9.]+)\\s+([0-9.]+)\\s+([0-9.]+)\\s+([0-9.]+)\\s+(.*)$')\npc = re.compile(r'^(.*?) \\+ 0x([0-9A-Fa-f]+)(?:,.*)?$')\nsummary = {}\nfor mode in ['off','on']:\n    binary = root / ('timers-' + mode)\n    symbols = {}\n    for line in subprocess.check_output(['nm','-C',str(binary)], text=True).splitlines():\n        m = re.match(r'^([0-9a-f]+) [tTwW] (.*)$', line)\n        if m:\n            symbols[m[2]] = int(m[1], 16)\n    profiles = {}\n    all_addresses = set()\n    for file in sorted(root.glob(f'*-{mode}-pinned.pcs')):\n        rows = []\n        for line in file.read_text().splitlines():\n            m = row.match(line)\n            if not m: continue\n            name = m[5]\n            p = pc.match(name)\n            address = symbols[p[1]] + int(p[2],16) if p and p[1] in symbols else None\n            if address: all_addresses.add(address)\n            rows.append({'seconds':float(m[1]), 'name':name, 'address':address})\n        profiles[file.stem] = rows\n    addresses = sorted(all_addresses)\n    # One JSON object per input line when reading addresses from stdin.\n    result = subprocess.check_output(['llvm-symbolizer', '--obj=' + str(binary), '--inlines', '--demangle', '--output-style=JSON'], input=''.join(hex(a)+'\\n' for a in addresses), text=True)\n    frames = {a:json.loads(line)['Symbol'] for a,line in zip(addresses,result.splitlines())}\n    (root / f'symbolized-{mode}.json').write_text(json.dumps(frames,indent=2))\n    for name, rows in profiles.items():\n        total = next(r['seconds'] for r in rows if r['name']=='<Total>')\n        next_parts = C.Counter()\n        selector_parts = C.Counter()\n        core = C.Counter()\n        hot_lines = C.Counter()\n        for r in rows:\n            if r['address'] is None: continue\n            stack = frames[r['address']]\n            core_frames = [f for f in stack if 'connection::Core<' in f['FunctionName']]\n            if not core_frames: continue\n            methods = [f['FunctionName'].split('>>::',1)[1].split('::<',1)[0] for f in core_frames]\n            leaf = methods[0]\n            core[leaf] += r['seconds']\n            if 'next' in methods:\n                next_parts[leaf] += r['seconds']\n                hot_lines[(core_frames[0]['FileName'].split('/')[-1], core_frames[0]['Line'], leaf)] += r['seconds']\n            if 'next_transition' in methods or 'receive_transition' in methods:\n                selector_parts[leaf] += r['seconds']\n        functions = []\n        for line in (root / (name+'.functions')).read_text().splitlines():\n            m = row.match(line)\n            if m:\n                functions.append({'name':m[5], 'self':float(m[2]), 'inclusive':float(m[4])})\n        summary[name] = {\n            'cpu_seconds':total, 'samples':round(total/.002),\n            'functions':functions,\n            'next_inline_parts_percent':{k:round(v/total*100,2) for k,v in next_parts.most_common()},\n            'selector_inline_parts_percent':{k:round(v/total*100,2) for k,v in selector_parts.most_common()},\n            'core_leaf_percent':{k:round(v/total*100,2) for k,v in core.most_common()},\n            'next_hot_lines': [(str(k),round(v/total*100,2)) for k,v in hot_lines.most_common(10)],\n        }\n(root / 'summary.json').write_text(json.dumps(summary,indent=2)+'\\n')\nfor name,s in summary.items():\n    print('\\n',name,'samples=',s['samples'])\n    print('TOP:', [(f['name'],f['self'],f['inclusive']) for f in s['functions'][1:5]])\n    print('NEXT:',s['next_inline_parts_percent'])\n    print('SELECTOR:',s['selector_inline_parts_percent'])\n    print('HOT LINES:',s['next_hot_lines'][:3])\n",
+    "timing.py": "import itertools, json, random, re, resource, statistics, subprocess\nfrom pathlib import Path\nroot=Path(__file__).parent\ncases=list(itertools.product(['on','off'],['small','fixed','chunked'],['client','server']))\nrng=random.Random(903)\nresults={':'.join(c):[] for c in cases}\nfor trial in range(5):\n    order=cases[:]\n    rng.shuffle(order)\n    for mode,size,role in order:\n        before=resource.getrusage(resource.RUSAGE_CHILDREN)\n        output=subprocess.check_output(['taskset','-c','2',str(root/f'timers-{mode}'),size,role,'continue','1'],text=True,timeout=15)\n        after=resource.getrusage(resource.RUSAGE_CHILDREN)\n        iterations=int(re.search(r'iterations=(\\d+)',output)[1])\n        cpu_seconds=after.ru_utime+after.ru_stime-before.ru_utime-before.ru_stime\n        results[':'.join((mode,size,role))].append({'wall_ns_per_exchange':float(re.search(r'ns_per_exchange=([0-9.]+)',output)[1]),'process_cpu_ns_per_exchange':1e9*cpu_seconds/iterations,'iterations':iterations,'output':output.strip()})\n    (root/'timing.json').write_text(json.dumps(results,indent=2)+'\\n')\nfor case,values in results.items():\n    wall=[v['wall_ns_per_exchange'] for v in values]\n    cpu=[v['process_cpu_ns_per_exchange'] for v in values]\n    print(case,f'wall median={statistics.median(wall):.1f} range=[{min(wall):.1f},{max(wall):.1f}] CPU including setup={statistics.median(cpu):.1f}ns')\n",
+    "allocation_probe.rs": "#[path = \"/tmp/http1-transition-study/support-timers.rs\"]\nmod support;\nuse std::alloc::{GlobalAlloc, Layout, System};\nuse std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};\nuse support::{Endpoint, Scenario, Session};\n\nstatic ENABLED: AtomicBool = AtomicBool::new(false);\nstatic ALLOCS: AtomicUsize = AtomicUsize::new(0);\nstatic REALLOCS: AtomicUsize = AtomicUsize::new(0);\nstatic DEALLOCS: AtomicUsize = AtomicUsize::new(0);\nstatic EVENTS: AtomicUsize = AtomicUsize::new(0);\nstatic SIZES: [AtomicUsize; 32] = [const { AtomicUsize::new(0) }; 32];\nstruct Counting;\n\nfn record(counter: &AtomicUsize, bytes: usize) {\n    if ENABLED.load(Relaxed) {\n        counter.fetch_add(1, Relaxed);\n        let i = EVENTS.fetch_add(1, Relaxed);\n        if let Some(slot) = SIZES.get(i) {\n            slot.store(bytes, Relaxed);\n        }\n    }\n}\n\n// Diagnostic-only allocator; all allocation operations delegate unchanged to System.\nunsafe impl GlobalAlloc for Counting {\n    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {\n        let ptr = unsafe { System.alloc(layout) };\n        if !ptr.is_null() { record(&ALLOCS, layout.size()); }\n        ptr\n    }\n    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {\n        let ptr = unsafe { System.alloc_zeroed(layout) };\n        if !ptr.is_null() { record(&ALLOCS, layout.size()); }\n        ptr\n    }\n    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {\n        let result = unsafe { System.realloc(ptr, layout, size) };\n        if !result.is_null() { record(&REALLOCS, size); }\n        result\n    }\n    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {\n        if ENABLED.load(Relaxed) { DEALLOCS.fetch_add(1, Relaxed); }\n        unsafe { System.dealloc(ptr, layout) };\n    }\n}\n#[global_allocator]\nstatic ALLOCATOR: Counting = Counting;\n\nfn probe<'a, M: Endpoint<'a>>(mut session: Session<'a, M, false, false>) {\n    for _ in 0..10 { std::hint::black_box(session.round_trip()); }\n    for sample in 0..3 {\n        ALLOCS.store(0, Relaxed);\n        REALLOCS.store(0, Relaxed);\n        DEALLOCS.store(0, Relaxed);\n        EVENTS.store(0, Relaxed);\n        ENABLED.store(true, Relaxed);\n        std::hint::black_box(session.round_trip());\n        ENABLED.store(false, Relaxed);\n        let sizes: Vec<_> = SIZES.iter().take(EVENTS.load(Relaxed)).map(|s| s.load(Relaxed)).collect();\n        println!(\"sample={sample} alloc={} realloc={} dealloc={} requested_sizes={sizes:?}\", ALLOCS.load(Relaxed), REALLOCS.load(Relaxed), DEALLOCS.load(Relaxed));\n    }\n}\nfn main() {\n    for (name,scenario) in [\n        (\"small\",Scenario::fixed(128)),\n        (\"fixed\",Scenario::fixed(1024*1024)),\n        (\"chunked\",Scenario::chunked(1024*1024,support::IO_BYTES)),\n    ] {\n        println!(\"{name} client\");\n        probe(support::client::<false,false>(&scenario));\n        println!(\"{name} server\");\n        probe(support::server::<false,false>(&scenario));\n    }\n}\n"
+  }
+}

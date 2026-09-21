@@ -1,0 +1,541 @@
+{
+  "baseline_production_revision": "7c101976fdba39df35c71ed7cde08fd38debeb46",
+  "artifact_root": "/tmp/http1-bulk-metadata-study",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "build": "CARGO_PROFILE_RELEASE_DEBUG=2 CARGO_TARGET_DIR=target/http1-selection-study cargo build --release -p kimojio-fsm-http1 --example selection_profile_tmp",
+  "selected_variant": "scalar",
+  "binaries": {
+    "baseline-on": "ae6393126f1504d739e507522f98a699ab17d9e071f52866d2dd81f5aaa39644",
+    "baseline-off": "d2b45a00b074c8161bb730439e38ffe6621b3e22c5be8ddadd1559023cddabcd",
+    "scalar-on": "82bb696b792219cb1becc201c889dc72874b81bbb7f00a889f390f0e205fac73",
+    "scalar-off": "a39de455a63df6cdb2d14a8295aa6b86ccef8d44231ca983d9799a0aa4d501ef",
+    "memchr-on": "09ec3504599faec6c067269e1138c7ba06047c5de07b02e5af7276c21dc7c8fe",
+    "memchr-off": "719ef56544523b00e1448723dcce4dc636e4c6fc4506a35a76009b96ad586b01"
+  },
+  "samples": {
+    "on": {
+      "small:client:continue": [
+        {
+          "baseline": 1794.97,
+          "scalar": 1371.53,
+          "memchr": 1354.2
+        },
+        {
+          "scalar": 1367.8,
+          "memchr": 1355.22,
+          "baseline": 1803.58
+        },
+        {
+          "memchr": 1355.02,
+          "baseline": 1794.66,
+          "scalar": 1368.02
+        },
+        {
+          "memchr": 1354.69,
+          "scalar": 1366.86,
+          "baseline": 1797.3
+        },
+        {
+          "baseline": 1797.86,
+          "memchr": 1369.28,
+          "scalar": 1368.52
+        },
+        {
+          "scalar": 1380.0,
+          "baseline": 1790.47,
+          "memchr": 1356.69
+        }
+      ],
+      "small:client:yield": [
+        {
+          "baseline": 1728.07,
+          "scalar": 1357.5,
+          "memchr": 1340.49
+        },
+        {
+          "scalar": 1347.6,
+          "memchr": 1343.78,
+          "baseline": 1733.18
+        },
+        {
+          "memchr": 1352.62,
+          "baseline": 1757.59,
+          "scalar": 1358.15
+        },
+        {
+          "memchr": 1343.08,
+          "scalar": 1346.45,
+          "baseline": 1737.54
+        },
+        {
+          "baseline": 1732.38,
+          "memchr": 1353.42,
+          "scalar": 1348.26
+        },
+        {
+          "scalar": 1357.64,
+          "baseline": 1732.47,
+          "memchr": 1358.93
+        }
+      ],
+      "small:server:continue": [
+        {
+          "baseline": 1962.39,
+          "scalar": 1600.96,
+          "memchr": 1369.92
+        },
+        {
+          "scalar": 1434.79,
+          "memchr": 1377.17,
+          "baseline": 1953.81
+        },
+        {
+          "memchr": 1396.91,
+          "baseline": 1943.06,
+          "scalar": 1398.88
+        },
+        {
+          "memchr": 1382.09,
+          "scalar": 1404.7,
+          "baseline": 1944.28
+        },
+        {
+          "baseline": 1947.03,
+          "memchr": 1380.48,
+          "scalar": 1400.72
+        },
+        {
+          "scalar": 1406.41,
+          "baseline": 1955.75,
+          "memchr": 1373.38
+        }
+      ],
+      "small:server:yield": [
+        {
+          "baseline": 1901.85,
+          "scalar": 1372.46,
+          "memchr": 1334.66
+        },
+        {
+          "scalar": 1369.79,
+          "memchr": 1338.0,
+          "baseline": 1898.25
+        },
+        {
+          "memchr": 1344.12,
+          "baseline": 1902.0,
+          "scalar": 1351.35
+        },
+        {
+          "memchr": 1353.51,
+          "scalar": 1351.24,
+          "baseline": 1904.61
+        },
+        {
+          "baseline": 1898.1,
+          "memchr": 1345.71,
+          "scalar": 1356.78
+        },
+        {
+          "scalar": 1351.63,
+          "baseline": 1898.73,
+          "memchr": 1340.44
+        }
+      ],
+      "chunked:client:continue": [
+        {
+          "baseline": 43711.43,
+          "scalar": 41444.15,
+          "memchr": 44107.21
+        },
+        {
+          "scalar": 42805.36,
+          "memchr": 43624.85,
+          "baseline": 42724.66
+        },
+        {
+          "memchr": 45422.52,
+          "baseline": 42329.57,
+          "scalar": 45906.88
+        },
+        {
+          "memchr": 43238.51,
+          "scalar": 42975.11,
+          "baseline": 40819.24
+        },
+        {
+          "baseline": 42785.88,
+          "memchr": 42888.75,
+          "scalar": 40947.24
+        },
+        {
+          "scalar": 42226.89,
+          "baseline": 42270.03,
+          "memchr": 42894.46
+        }
+      ],
+      "chunked:client:yield": [
+        {
+          "baseline": 45136.8,
+          "scalar": 42949.28,
+          "memchr": 44625.65
+        },
+        {
+          "scalar": 41218.05,
+          "memchr": 44669.62,
+          "baseline": 42636.17
+        },
+        {
+          "memchr": 42338.8,
+          "baseline": 43265.33,
+          "scalar": 43137.57
+        },
+        {
+          "memchr": 42070.12,
+          "scalar": 43278.37,
+          "baseline": 42014.05
+        },
+        {
+          "baseline": 41835.5,
+          "memchr": 42467.89,
+          "scalar": 40753.69
+        },
+        {
+          "scalar": 42164.61,
+          "baseline": 44144.43,
+          "memchr": 42164.36
+        }
+      ],
+      "chunked:server:continue": [
+        {
+          "baseline": 44549.17,
+          "scalar": 45617.02,
+          "memchr": 47328.47
+        },
+        {
+          "scalar": 44984.08,
+          "memchr": 46600.02,
+          "baseline": 46539.96
+        },
+        {
+          "memchr": 49032.11,
+          "baseline": 46021.19,
+          "scalar": 44003.8
+        },
+        {
+          "memchr": 45178.72,
+          "scalar": 45998.67,
+          "baseline": 46432.2
+        },
+        {
+          "baseline": 44331.66,
+          "memchr": 45468.3,
+          "scalar": 44840.24
+        },
+        {
+          "scalar": 45370.02,
+          "baseline": 45039.15,
+          "memchr": 47322.45
+        }
+      ],
+      "chunked:server:yield": [
+        {
+          "baseline": 44777.95,
+          "scalar": 44600.08,
+          "memchr": 46061.98
+        },
+        {
+          "scalar": 45198.46,
+          "memchr": 46015.96,
+          "baseline": 45591.52
+        },
+        {
+          "memchr": 44346.86,
+          "baseline": 46933.47,
+          "scalar": 45349.89
+        },
+        {
+          "memchr": 47322.08,
+          "scalar": 47887.19,
+          "baseline": 46382.63
+        },
+        {
+          "baseline": 45907.25,
+          "memchr": 47074.81,
+          "scalar": 48586.48
+        },
+        {
+          "scalar": 44824.77,
+          "baseline": 45047.03,
+          "memchr": 45512.58
+        }
+      ]
+    },
+    "off": {
+      "small:client:continue": [
+        {
+          "baseline": 1695.97,
+          "scalar": 1265.77,
+          "memchr": 1243.24
+        },
+        {
+          "scalar": 1262.99,
+          "memchr": 1246.81,
+          "baseline": 1698.06
+        },
+        {
+          "memchr": 1248.52,
+          "baseline": 1696.88,
+          "scalar": 1266.73
+        },
+        {
+          "memchr": 1240.66,
+          "scalar": 1266.63,
+          "baseline": 1704.63
+        },
+        {
+          "baseline": 1712.48,
+          "memchr": 1238.43,
+          "scalar": 1264.74
+        },
+        {
+          "scalar": 1264.16,
+          "baseline": 1710.76,
+          "memchr": 1241.68
+        }
+      ],
+      "small:client:yield": [
+        {
+          "baseline": 1694.93,
+          "scalar": 1236.3,
+          "memchr": 1221.34
+        },
+        {
+          "scalar": 1241.87,
+          "memchr": 1215.59,
+          "baseline": 1682.32
+        },
+        {
+          "memchr": 1223.83,
+          "baseline": 1684.03,
+          "scalar": 1248.92
+        },
+        {
+          "memchr": 1225.22,
+          "scalar": 1244.77,
+          "baseline": 1680.84
+        },
+        {
+          "baseline": 1690.43,
+          "memchr": 1218.05,
+          "scalar": 1236.69
+        },
+        {
+          "scalar": 1237.73,
+          "baseline": 1704.12,
+          "memchr": 1217.27
+        }
+      ],
+      "small:server:continue": [
+        {
+          "baseline": 1902.71,
+          "scalar": 1352.52,
+          "memchr": 1322.97
+        },
+        {
+          "scalar": 1387.42,
+          "memchr": 1326.39,
+          "baseline": 1903.35
+        },
+        {
+          "memchr": 1322.35,
+          "baseline": 1906.17,
+          "scalar": 1361.14
+        },
+        {
+          "memchr": 1324.27,
+          "scalar": 1358.38,
+          "baseline": 1905.2
+        },
+        {
+          "baseline": 1911.74,
+          "memchr": 1332.05,
+          "scalar": 1347.34
+        },
+        {
+          "scalar": 1355.6,
+          "baseline": 1913.13,
+          "memchr": 1324.82
+        }
+      ],
+      "small:server:yield": [
+        {
+          "baseline": 1823.72,
+          "scalar": 1263.23,
+          "memchr": 1258.87
+        },
+        {
+          "scalar": 1262.42,
+          "memchr": 1261.8,
+          "baseline": 1836.34
+        },
+        {
+          "memchr": 1266.83,
+          "baseline": 1819.21,
+          "scalar": 1262.37
+        },
+        {
+          "memchr": 1252.32,
+          "scalar": 1268.72,
+          "baseline": 1835.81
+        },
+        {
+          "baseline": 1825.94,
+          "memchr": 1252.55,
+          "scalar": 1271.02
+        },
+        {
+          "scalar": 1263.2,
+          "baseline": 1833.68,
+          "memchr": 1253.33
+        }
+      ],
+      "chunked:client:continue": [
+        {
+          "baseline": 40770.21,
+          "scalar": 40963.02,
+          "memchr": 43406.38
+        },
+        {
+          "scalar": 39667.23,
+          "memchr": 40867.05,
+          "baseline": 41047.03
+        },
+        {
+          "memchr": 42934.57,
+          "baseline": 41389.67,
+          "scalar": 42101.2
+        },
+        {
+          "memchr": 42097.16,
+          "scalar": 41757.72,
+          "baseline": 41210.8
+        },
+        {
+          "baseline": 42229.75,
+          "memchr": 41019.56,
+          "scalar": 41638.39
+        },
+        {
+          "scalar": 42371.94,
+          "baseline": 42002.53,
+          "memchr": 43660.67
+        }
+      ],
+      "chunked:client:yield": [
+        {
+          "baseline": 41544.19,
+          "scalar": 39158.98,
+          "memchr": 40933.89
+        },
+        {
+          "scalar": 38360.18,
+          "memchr": 40731.27,
+          "baseline": 39180.27
+        },
+        {
+          "memchr": 41686.34,
+          "baseline": 42031.79,
+          "scalar": 40409.61
+        },
+        {
+          "memchr": 42189.0,
+          "scalar": 41163.17,
+          "baseline": 39879.3
+        },
+        {
+          "baseline": 39135.6,
+          "memchr": 39838.59,
+          "scalar": 41412.49
+        },
+        {
+          "scalar": 41273.14,
+          "baseline": 38693.17,
+          "memchr": 43264.06
+        }
+      ],
+      "chunked:server:continue": [
+        {
+          "baseline": 44198.96,
+          "scalar": 43994.05,
+          "memchr": 44416.88
+        },
+        {
+          "scalar": 43723.21,
+          "memchr": 44678.23,
+          "baseline": 43731.81
+        },
+        {
+          "memchr": 45769.96,
+          "baseline": 41941.25,
+          "scalar": 44029.55
+        },
+        {
+          "memchr": 44507.79,
+          "scalar": 43964.74,
+          "baseline": 45885.63
+        },
+        {
+          "baseline": 41770.7,
+          "memchr": 44957.7,
+          "scalar": 42621.89
+        },
+        {
+          "scalar": 43704.15,
+          "baseline": 42710.42,
+          "memchr": 44413.4
+        }
+      ],
+      "chunked:server:yield": [
+        {
+          "baseline": 41025.79,
+          "scalar": 40529.75,
+          "memchr": 42023.25
+        },
+        {
+          "scalar": 39409.7,
+          "memchr": 42130.11,
+          "baseline": 41806.54
+        },
+        {
+          "memchr": 41300.14,
+          "baseline": 40345.66,
+          "scalar": 41282.53
+        },
+        {
+          "memchr": 42947.96,
+          "scalar": 40017.08,
+          "baseline": 40092.19
+        },
+        {
+          "baseline": 43335.9,
+          "memchr": 41291.67,
+          "scalar": 41952.15
+        },
+        {
+          "scalar": 39471.5,
+          "baseline": 41921.31,
+          "memchr": 41318.35
+        }
+      ]
+    }
+  },
+  "summaries": {
+    "on": "trial on 1\ntrial on 2\ntrial on 3\ntrial on 4\ntrial on 5\ntrial on 6\nsmall:client:continue scalar/baseline: reduction=23.7% CI=[23.4,24.0] median_ns=1368.3\nsmall:client:continue memchr/baseline: reduction=24.4% CI=[24.2,24.7] median_ns=1355.1\nsmall:client:continue memchr/scalar: reduction=0.9% CI=[0.5,1.3] median_ns=1355.1\nsmall:client:yield scalar/baseline: reduction=22.1% CI=[21.8,22.5] median_ns=1352.9\nsmall:client:yield memchr/baseline: reduction=22.3% CI=[21.9,22.7] median_ns=1348.2\nsmall:client:yield memchr/scalar: reduction=0.3% CI=[-0.1,0.7] median_ns=1348.2\nsmall:server:continue scalar/baseline: reduction=26.2% CI=[23.1,28.0] median_ns=1405.6\nsmall:server:continue memchr/baseline: reduction=29.3% CI=[28.7,29.8] median_ns=1378.8\nsmall:server:continue memchr/scalar: reduction=4.1% CI=[1.2,8.5] median_ns=1378.8\nsmall:server:yield scalar/baseline: reduction=28.5% CI=[28.1,28.9] median_ns=1354.2\nsmall:server:yield memchr/baseline: reduction=29.4% CI=[29.1,29.6] median_ns=1342.3\nsmall:server:yield memchr/scalar: reduction=1.2% CI=[0.4,2.0] median_ns=1342.3\nchunked:client:continue scalar/baseline: reduction=-0.6% CI=[-4.6,3.1] median_ns=42516.1\nchunked:client:continue memchr/baseline: reduction=-3.0% CI=[-5.1,-1.0] median_ns=43431.7\nchunked:client:continue memchr/scalar: reduction=-2.3% CI=[-4.3,-0.4] median_ns=43431.7\nchunked:client:yield scalar/baseline: reduction=2.1% CI=[-0.2,4.0] median_ns=42556.9\nchunked:client:yield memchr/baseline: reduction=0.3% CI=[-2.0,2.4] median_ns=42403.3\nchunked:client:yield memchr/scalar: reduction=-1.9% CI=[-5.1,1.1] median_ns=42403.3\nchunked:server:continue scalar/baseline: reduction=0.8% CI=[-1.1,2.8] median_ns=45177.1\nchunked:server:continue memchr/baseline: reduction=-2.9% CI=[-5.5,-0.1] median_ns=46961.2\nchunked:server:continue memchr/scalar: reduction=-3.7% CI=[-7.2,-0.7] median_ns=46961.2\nchunked:server:yield scalar/baseline: reduction=-0.6% CI=[-3.2,1.6] median_ns=45274.2\nchunked:server:yield memchr/baseline: reduction=-0.6% CI=[-2.3,2.0] median_ns=46039.0\nchunked:server:yield memchr/scalar: reduction=0.0% CI=[-1.9,1.8] median_ns=46039.0\n",
+    "off": "trial off 1\ntrial off 2\ntrial off 3\ntrial off 4\ntrial off 5\ntrial off 6\nsmall:client:continue scalar/baseline: reduction=25.7% CI=[25.5,26.0] median_ns=1265.3\nsmall:client:continue memchr/baseline: reduction=27.0% CI=[26.7,27.4] median_ns=1242.5\nsmall:client:continue memchr/scalar: reduction=1.7% CI=[1.5,2.0] median_ns=1242.5\nsmall:client:yield scalar/baseline: reduction=26.5% CI=[26.1,27.0] median_ns=1239.8\nsmall:client:yield memchr/baseline: reduction=27.8% CI=[27.4,28.2] median_ns=1219.7\nsmall:client:yield memchr/scalar: reduction=1.7% CI=[1.4,1.9] median_ns=1219.7\nsmall:server:continue scalar/baseline: reduction=28.7% CI=[28.0,29.2] median_ns=1357.0\nsmall:server:continue memchr/baseline: reduction=30.5% CI=[30.4,30.6] median_ns=1324.5\nsmall:server:continue memchr/scalar: reduction=2.6% CI=[1.8,3.4] median_ns=1324.5\nsmall:server:yield scalar/baseline: reduction=30.8% CI=[30.6,31.1] median_ns=1263.2\nsmall:server:yield memchr/baseline: reduction=31.2% CI=[30.8,31.6] median_ns=1256.1\nsmall:server:yield memchr/scalar: reduction=0.6% CI=[0.1,1.1] median_ns=1256.1\nchunked:client:continue scalar/baseline: reduction=0.1% CI=[-1.2,1.6] median_ns=41698.1\nchunked:client:continue memchr/baseline: reduction=-2.1% CI=[-4.4,0.4] median_ns=42515.9\nchunked:client:continue memchr/scalar: reduction=-2.2% CI=[-4.0,-0.4] median_ns=42515.9\nchunked:client:yield scalar/baseline: reduction=-0.6% CI=[-4.4,3.1] median_ns=40786.4\nchunked:client:yield memchr/baseline: reduction=-3.4% CI=[-7.2,-0.2] median_ns=41310.1\nchunked:client:yield memchr/scalar: reduction=-2.8% CI=[-5.0,0.1] median_ns=41310.1\nchunked:server:continue scalar/baseline: reduction=-0.7% CI=[-2.8,1.6] median_ns=43844.0\nchunked:server:continue memchr/baseline: reduction=-3.3% CI=[-6.6,-0.1] median_ns=44593.0\nchunked:server:continue memchr/scalar: reduction=-2.6% CI=[-4.0,-1.4] median_ns=44593.0\nchunked:server:yield scalar/baseline: reduction=2.4% CI=[0.0,4.6] median_ns=40273.4\nchunked:server:yield memchr/baseline: reduction=-1.0% CI=[-4.0,1.8] median_ns=41670.8\nchunked:server:yield memchr/scalar: reduction=-3.5% CI=[-6.0,-0.7] median_ns=41670.8\n"
+  },
+  "comparison_script": "import itertools, json, math, random, re, statistics, subprocess, sys\nfrom pathlib import Path\nroot=Path(__file__).parent\nmode=sys.argv[1]\nrng=random.Random(2301)\ncases=list(itertools.product(['small','chunked'],['client','server'],['continue','yield']))\nvariants=['baseline','scalar','memchr']\nresults={':'.join(c):[] for c in cases}\nfor trial in range(6):\n    order=cases[:]\n    rng.shuffle(order)\n    run_order=variants[trial%3:]+variants[:trial%3]\n    if trial>=3: run_order=run_order[::-1]\n    for case in order:\n        sample={}\n        for variant in run_order:\n            out=subprocess.check_output(['taskset','-c','2',str(root/f'{variant}-{mode}'),*case,'1'],text=True,timeout=15)\n            sample[variant]=float(re.search(r'ns_per_exchange=([0-9.]+)',out)[1])\n        results[':'.join(case)].append(sample)\n        (root/f'comparison-{mode}.json').write_text(json.dumps(results,indent=2)+'\\n')\n    print('trial',mode,trial+1,flush=True)\nfor name,samples in results.items():\n    for variant,base in [('scalar','baseline'),('memchr','baseline'),('memchr','scalar')]:\n        logs=[math.log(s[variant]/s[base]) for s in samples]\n        ratios=sorted(math.exp(statistics.mean(rng.choices(logs,k=len(logs)))) for _ in range(10000))\n        print(f'{name} {variant}/{base}: reduction={100*(1-math.exp(statistics.mean(logs))):.1f}% CI=[{100*(1-ratios[9750]):.1f},{100*(1-ratios[250]):.1f}] median_ns={statistics.median(s[variant] for s in samples):.1f}',flush=True)\n",
+  "probe_source": "#[path = \"/tmp/http1-transition-study/support.rs.original\"]\nmod support;\nuse std::{hint::black_box, time::{Duration, Instant}};\nuse support::{Endpoint, Scenario, Session};\n\nfn run<'a, M: Endpoint<'a>, const YIELD: bool>(mut session: Session<'a, M, YIELD, false>, seconds: u64) {\n    for _ in 0..100 { black_box(session.round_trip()); }\n    let begin = Instant::now();\n    let mut iterations = 0u64;\n    while begin.elapsed() < Duration::from_secs(seconds) {\n        for _ in 0..100 {\n            black_box(session.round_trip());\n        }\n        iterations += 100;\n    }\n    println!(\"iterations={iterations} elapsed_ns={} ns_per_exchange={:.2}\", begin.elapsed().as_nanos(), begin.elapsed().as_nanos() as f64 / iterations as f64);\n}\n\nfn main() {\n    let args: Vec<_> = std::env::args().collect();\n    let scenario = match args[1].as_str() {\n        \"small\" => Scenario::fixed(128),\n        \"fixed\" => Scenario::fixed(1024 * 1024),\n        \"chunked\" => Scenario::chunked(1024 * 1024, support::IO_BYTES),\n        _ => panic!(\"scenario\"),\n    };\n    let seconds = args.get(4).map(|s| s.parse().unwrap()).unwrap_or(5);\n    match (args[2].as_str(), args[3].as_str()) {\n        (\"client\", \"continue\") => {\n            support::client::<false, true>(&scenario).round_trip();\n            run(support::client::<false, false>(&scenario), seconds);\n        }\n        (\"server\", \"continue\") => {\n            support::server::<false, true>(&scenario).round_trip();\n            run(support::server::<false, false>(&scenario), seconds);\n        }\n        (\"client\", \"yield\") => {\n            support::client::<true, true>(&scenario).round_trip();\n            run(support::client::<true, false>(&scenario), seconds);\n        }\n        (\"server\", \"yield\") => {\n            support::server::<true, true>(&scenario).round_trip();\n            run(support::server::<true, false>(&scenario), seconds);\n        }\n        _ => panic!(\"role/mode\"),\n    }\n}\n",
+  "method": "Six paired one-second trials per cell, CPU2, balanced variant order and shuffled case order. Geometric mean ratios; nominal paired-bootstrap 95% intervals, 10000 resamples, no multiple-test adjustment. Shared-host simulated core transport, not network throughput. CHECK=true validates before timing; 100 warmup exchanges precede CHECK=false timed exchanges. No profiling/counting instrumentation in timed builds.",
+  "limitations": "Long-head, many-field, and one-byte-fragment performance has not been compared; those inputs have correctness coverage. memchr was rejected and removed; no new dependency remains."
+}

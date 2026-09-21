@@ -44,6 +44,58 @@ enum Transition {
     Read,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MetadataEnd {
+    Buffered,
+    Complete,
+    Invalid,
+}
+
+/// Find one metadata section without copying or inspecting bytes past its end.
+/// The returned length excludes an invalid byte, which the caller must consume.
+fn metadata_span(bytes: &[u8], head: &[u8], rx: Rx) -> (usize, MetadataEnd) {
+    let single_line = matches!(rx, Rx::Size | Rx::ChunkCrlf);
+    let (prefix, mut cr) = match head.strip_suffix(b"\r") {
+        Some(prefix) => (prefix, true),
+        None => (head, false),
+    };
+    let mut empty_line = prefix.ends_with(b"\r\n") || (rx == Rx::Trailers && prefix.is_empty());
+    let mut cursor = 0;
+    for offset in bytes
+        .iter()
+        .enumerate()
+        .filter_map(|(offset, byte)| matches!(byte, b'\r' | b'\n').then_some(offset))
+    {
+        if offset != cursor {
+            if cr {
+                return (cursor, MetadataEnd::Invalid);
+            }
+            empty_line = false;
+        }
+        if bytes[offset] == b'\r' {
+            if cr {
+                return (offset, MetadataEnd::Invalid);
+            }
+            cr = true;
+        } else {
+            if !cr {
+                return (offset, MetadataEnd::Invalid);
+            }
+            if single_line || empty_line {
+                return (offset + 1, MetadataEnd::Complete);
+            }
+            cr = false;
+            empty_line = true;
+        }
+        cursor = offset + 1;
+    }
+    if cr && cursor < bytes.len() {
+        (cursor, MetadataEnd::Invalid)
+    } else {
+        (bytes.len(), MetadataEnd::Buffered)
+    }
+}
+
 impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
     pub(super) fn incoming_ended(&mut self) {
         if !SERVER && matches!(self.lifecycle, Lifecycle::Http(_)) {
@@ -635,38 +687,40 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         } else {
             0
         };
-        let deadline_pending = self.timers.notification == Notification::Pending;
-        loop {
-            let byte = self.receive.buffer().unwrap().as_ref()[self.start];
-            self.start += 1;
-            if (byte == b'\n' && self.head.last() != Some(&b'\r'))
-                || (self.head.last() == Some(&b'\r') && byte != b'\n')
-            {
-                self.fail(Failure::Protocol);
-                return None;
-            }
-            if self.head.len().saturating_add(retained) >= limit {
-                self.fail(Failure::Limit);
-                return None;
-            }
-            if self.head.len() == self.head.capacity() {
-                let capacity = self.head.len().saturating_mul(2).max(32).min(limit);
-                self.head.reserve_exact(capacity - self.head.len());
-            }
-            self.head.push(byte);
-            let complete = match self.rx {
-                Rx::Head => self.head.ends_with(b"\r\n\r\n"),
-                Rx::Trailers => self.head == b"\r\n" || self.head.ends_with(b"\r\n\r\n"),
-                _ => self.head.ends_with(b"\r\n"),
-            };
-            if complete {
-                return self.process_metadata(ports, head_callback);
-            }
-            // Preserve the deadline callback boundary before consuming more bytes.
-            if self.start == self.end || deadline_pending {
-                return None;
-            }
+        let remaining = limit.saturating_sub(self.head.len().saturating_add(retained));
+        // Inspect at most the first over-limit byte: CRLF errors on that byte
+        // precede the limit error, just as in the byte-at-a-time receiver.
+        let mut count = (self.end - self.start).min(remaining.saturating_add(1));
+        if self.timers.notification == Notification::Pending {
+            // Preserve the first-byte/head-deadline callback boundary.
+            count = count.min(1);
         }
+        let bytes = &self.receive.buffer().unwrap().as_ref()[self.start..self.start + count];
+        let (length, end) = metadata_span(bytes, &self.head, self.rx);
+        let accepted = length.min(remaining);
+        let required = self.head.len() + accepted;
+        if required > self.head.capacity() {
+            let capacity = self
+                .head
+                .len()
+                .saturating_mul(2)
+                .max(32)
+                .max(required)
+                .min(limit);
+            self.head.reserve_exact(capacity - self.head.len());
+        }
+        self.head.extend_from_slice(&bytes[..accepted]);
+        self.start += accepted;
+        if end == MetadataEnd::Invalid {
+            self.start += 1;
+            self.fail(Failure::Protocol);
+        } else if length > remaining {
+            self.start += 1;
+            self.fail(Failure::Limit);
+        } else if end == MetadataEnd::Complete {
+            return self.process_metadata(ports, head_callback);
+        }
+        None
     }
 
     pub(super) fn start_request_head(&mut self) -> Result<(), CommandError> {

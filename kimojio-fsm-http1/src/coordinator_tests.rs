@@ -755,6 +755,168 @@ fn clean_idle_eof_cancels_the_deadline_before_close_issuance() {
     core.assert_invariants();
 }
 
+// Independent byte-at-a-time oracle for the bulk scanner's section boundary.
+fn scalar_metadata_span(bytes: &[u8], prefix: &[u8], rx: Rx) -> (usize, MetadataEnd) {
+    let mut head = prefix.to_vec();
+    for (offset, &byte) in bytes.iter().enumerate() {
+        if (byte == b'\n' && head.last() != Some(&b'\r'))
+            || (head.last() == Some(&b'\r') && byte != b'\n')
+        {
+            return (offset, MetadataEnd::Invalid);
+        }
+        head.push(byte);
+        let complete = match rx {
+            Rx::Head => head.ends_with(b"\r\n\r\n"),
+            Rx::Trailers => head == b"\r\n" || head.ends_with(b"\r\n\r\n"),
+            Rx::Size | Rx::ChunkCrlf => head.ends_with(b"\r\n"),
+            _ => unreachable!(),
+        };
+        if complete {
+            return (offset + 1, MetadataEnd::Complete);
+        }
+    }
+    (bytes.len(), MetadataEnd::Buffered)
+}
+
+#[test]
+fn bulk_metadata_matches_scalar_for_all_short_crlf_sequences() {
+    let prefixes: &[&[u8]] = &[
+        b"",
+        b"x",
+        b"x\r",
+        b"x\r\n",
+        b"x\r\nx",
+        b"x\r\nx\r",
+        b"x\r\n\r",
+        b"\r",
+        b"\r\n",
+    ];
+    for rx in [Rx::Head, Rx::Trailers, Rx::Size, Rx::ChunkCrlf] {
+        for &prefix in prefixes {
+            if scalar_metadata_span(prefix, b"", rx).1 != MetadataEnd::Buffered {
+                continue;
+            }
+            for length in 0..=7 {
+                for mut pattern in 0..3usize.pow(length) {
+                    let bytes: Vec<_> = (0..length)
+                        .map(|_| {
+                            let byte = b"x\r\n"[pattern % 3];
+                            pattern /= 3;
+                            byte
+                        })
+                        .collect();
+                    assert_eq!(
+                        metadata_span(&bytes, prefix, rx),
+                        scalar_metadata_span(&bytes, prefix, rx),
+                        "rx={rx:?} prefix={prefix:?} bytes={bytes:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bulk_metadata_matches_scalar_across_long_and_binary_fragments() {
+    for length in [
+        0, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 1024,
+    ] {
+        for fill in [b'x', 0, 255] {
+            for suffix in [b"\r\nY: z\r\n\r\nUNREAD\n".as_slice(), b"\n", b"\rX"] {
+                let mut bytes = vec![fill; length];
+                bytes.extend_from_slice(suffix);
+                for rx in [Rx::Head, Rx::Trailers, Rx::Size, Rx::ChunkCrlf] {
+                    for split in 0..=bytes.len() {
+                        let (prefix, input) = bytes.split_at(split);
+                        if scalar_metadata_span(prefix, b"", rx).1 != MetadataEnd::Buffered {
+                            continue;
+                        }
+                        assert_eq!(
+                            metadata_span(input, prefix, rx),
+                            scalar_metadata_span(input, prefix, rx),
+                            "length={length} fill={fill} rx={rx:?} split={split}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bulk_metadata_preserves_limit_error_precedence_and_consumed_prefix() {
+    for limit in [16, 20] {
+        for retained in [0, 3, usize::MAX] {
+            for length in [0, 15, 16, 19, 20] {
+                for trailing_cr in [false, true] {
+                    for pending in [false, true] {
+                        for input in [b"x".as_slice(), b"\n", b"\r\n", b"\rX", b"abc\r\nsuffix"] {
+                            let mut prefix = vec![b'A'; length];
+                            if trailing_cr && let Some(last) = prefix.last_mut() {
+                                *last = b'\r';
+                            }
+                            let mut expected_head = prefix.clone();
+                            let mut expected_failure = None;
+                            let mut consumed = 0;
+                            for &byte in input {
+                                consumed += 1;
+                                if (byte == b'\n' && expected_head.last() != Some(&b'\r'))
+                                    || (expected_head.last() == Some(&b'\r') && byte != b'\n')
+                                {
+                                    expected_failure = Some(Failure::Protocol);
+                                    break;
+                                }
+                                if expected_head.len().saturating_add(retained) >= limit {
+                                    expected_failure = Some(Failure::Limit);
+                                    break;
+                                }
+                                expected_head.push(byte);
+                                assert!(!expected_head.ends_with(b"\r\n\r\n"));
+                                if pending {
+                                    break;
+                                }
+                            }
+                            let mut core = Core::<Vec<u8>, Vec<u8>, true>::new(
+                                ConnectionId {
+                                    slot: 4,
+                                    generation: 1,
+                                },
+                                Config {
+                                    max_head_bytes: limit,
+                                    head_timeout_ns: None,
+                                    ..Config::default()
+                                },
+                                vec![0; 64],
+                                Tick(0),
+                            )
+                            .unwrap();
+                            core.head = prefix;
+                            core.metadata_bytes = retained;
+                            core.start = 3;
+                            core.end = 3 + input.len();
+                            let ReceiveStorage::Available(buffer) = &mut core.receive else {
+                                unreachable!()
+                            };
+                            buffer[core.start..core.end].copy_from_slice(input);
+                            core.timers.notification = if pending {
+                                Notification::Pending
+                            } else {
+                                Notification::Delivered
+                            };
+                            let mut observer = Observer::new(Drive::Continue);
+                            assert!(core.receive_metadata(&mut observer, head).is_none());
+                            assert_eq!(core.failure, expected_failure);
+                            assert_eq!(core.head, expected_head);
+                            assert_eq!(core.start, 3 + consumed);
+                            assert!(observer.trace.is_empty());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn metadata_batches_only_until_a_section_or_deadline_boundary() {
     let request = b"GET / HTTP/1.1\r\nHost: a\r\n\r\n";
