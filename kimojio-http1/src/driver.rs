@@ -600,7 +600,7 @@ struct State {
     pending_write: Option<core::OperationId>,
     pending_close: Option<core::CloseOp>,
     deadline: Option<core::Deadline>,
-    timer: Option<Pin<Box<operations::SleepFuture<'static>>>>,
+    timer: Option<operations::SleepFuture<'static>>,
     epoch: Instant,
     shutdown: Shutdown,
     shutdown_progress: ShutdownProgress,
@@ -1119,7 +1119,7 @@ impl State {
                                 .epoch
                                 .checked_add(Duration::from_nanos(deadline.at.0))
                                 .ok_or(Error::Limit)?;
-                            Some(Box::pin(operations::sleep_until(at)))
+                            Some(operations::sleep_until(at))
                         }
                         None => None,
                     };
@@ -1188,8 +1188,8 @@ where
     };
     let (result, (), ()) = futures::join!(
         drive(state, io, requests, &mut handler, budget),
-        Box::pin(io::read_worker(Box::new(reader), reads, read_complete)),
-        Box::pin(io::write_worker(Box::new(writer), writes, write_complete)),
+        Box::pin(io::read_worker(reader, reads, read_complete)),
+        Box::pin(io::write_worker(writer, writes, write_complete)),
     );
     result
 }
@@ -1312,7 +1312,7 @@ async fn next_input(
                 {
                     abort.as_mut().poll(cx).map(|_| Some(Input::Wake))
                 }
-                8 => match state.timer.as_mut().map(|timer| timer.as_mut().poll(cx)) {
+                8 => match state.timer.as_mut().map(|timer| Pin::new(timer).poll(cx)) {
                     Some(Poll::Ready(result)) => {
                         state.timer.take();
                         Poll::Ready(Some(Input::Timer(result)))
@@ -1383,6 +1383,39 @@ mod combined_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn move_and_replace_deadline() {
+        let mut state = State::new(
+            Config::new(core::ConnectionId {
+                slot: 1,
+                generation: 1,
+            }),
+            false,
+            Shutdown::default(),
+        )
+        .unwrap();
+        state.timer = Some(operations::sleep_until(
+            kimojio::clock_now() + Duration::from_secs(60),
+        ));
+        assert!(futures::poll!(state.timer.as_mut().unwrap()).is_pending());
+        let mut moved = std::hint::black_box(state);
+        moved.timer = Some(operations::sleep_until(kimojio::clock_now()));
+        moved.timer.take().unwrap().await.unwrap();
+        assert!(moved.timer.is_none());
+    }
+
+    #[kimojio::test]
+    async fn inline_deadline_can_move_after_poll_and_be_replaced() {
+        move_and_replace_deadline().await;
+    }
+
+    #[cfg(feature = "virtual-clock")]
+    #[kimojio::test]
+    async fn inline_virtual_deadline_can_move_after_poll_and_be_replaced() {
+        operations::virtual_clock_enable(true);
+        move_and_replace_deadline().await;
+        assert_eq!(operations::virtual_clock_pending_timers(), 0);
+    }
 
     #[test]
     fn shutdown_progress_is_monotonic_for_all_five_turn_histories() {

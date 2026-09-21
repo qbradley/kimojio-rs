@@ -72,8 +72,11 @@ The protocol machine, not a transport write-all cursor, decides the next write a
 Native cancellation targets the original operation and awaits its result.
 A late success retains its exact byte count.
 Native connections use reusable pinned operation slots instead of transport workers and channels.
+The driver stores its `Unpin` deadline future inline, without an additional timer box.
+The runtime still owns the timer operation and its cancellation resources.
 Native close waits for both original-operation slots to settle, then awaits an actual close operation.
 The generic stream backend retains its workers.
+Each pinned worker future owns its transport half directly, without a separate box for that half.
 See the [overhead PoC record](../docs/http1-wrapper-lab/poc-overhead.md) for the experiment and allocation evidence.
 
 This backend supplies neither TLS nor a user-space readiness retry loop.

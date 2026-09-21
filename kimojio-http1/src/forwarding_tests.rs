@@ -356,13 +356,13 @@ async fn native_cancellation_case(success: bool) {
     let cancel = Rc::new(CancellationToken::new());
     let closed = Rc::new(Cell::new(false));
     let worker = io::write_worker(
-        Box::new(DelayedWriter {
+        DelayedWriter {
             started: Some(started),
             cancelled: Some(cancelled),
             settle: Some(settled),
             closed: closed.clone(),
             success,
-        }),
+        },
         requests,
         complete,
     );
@@ -466,7 +466,7 @@ async fn raw_native_worker_preserves_forwarded_lease_and_exact_cancel_or_success
         }))
         .ok()
         .unwrap();
-        let mut worker = Box::pin(io::write_worker(Box::new(writer), requests, complete));
+        let mut worker = Box::pin(io::write_worker(writer, requests, complete));
         assert!(futures::poll!(worker.as_mut()).is_pending());
         operations::yield_io().await;
         if success {

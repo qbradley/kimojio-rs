@@ -21,6 +21,17 @@ struct Counts {
     writes: Cell<usize>,
     pending_writes: Cell<usize>,
     closes: Cell<usize>,
+    reader_address: Cell<usize>,
+    writer_address: Cell<usize>,
+    reader_drops: Cell<usize>,
+    writer_drops: Cell<usize>,
+}
+
+fn record_address(previous: &Cell<usize>, address: usize) {
+    let old = previous.replace(address);
+    if old != 0 {
+        assert_eq!(old, address, "worker moved its transport half");
+    }
 }
 
 struct ProducerDropped(Rc<Cell<bool>>);
@@ -46,6 +57,30 @@ struct Writer {
     stream: OwnedFdStreamWrite,
     counts: Rc<Counts>,
     fail_write: bool,
+}
+
+impl Drop for Reader {
+    fn drop(&mut self) {
+        record_address(
+            &self.counts.reader_address,
+            std::ptr::from_ref(self) as usize,
+        );
+        self.counts
+            .reader_drops
+            .set(self.counts.reader_drops.get() + 1);
+    }
+}
+
+impl Drop for Writer {
+    fn drop(&mut self) {
+        record_address(
+            &self.counts.writer_address,
+            std::ptr::from_ref(self) as usize,
+        );
+        self.counts
+            .writer_drops
+            .set(self.counts.writer_drops.get() + 1);
+    }
 }
 
 impl SplittableStream for Stream {
@@ -88,6 +123,10 @@ impl AsyncStreamRead for Reader {
         buffer: &mut [u8],
         deadline: Option<Instant>,
     ) -> Result<usize, Errno> {
+        record_address(
+            &self.counts.reader_address,
+            std::ptr::from_ref(self) as usize,
+        );
         self.counts.reads.set(self.counts.reads.get() + 1);
         let _reading = Reading(self.counts.clone());
         self.stream.try_read(buffer, deadline).await
@@ -100,6 +139,10 @@ impl AsyncStreamRead for Reader {
 
 impl AsyncStreamWrite for Writer {
     async fn write(&mut self, buffer: &[u8], deadline: Option<Instant>) -> Result<(), Errno> {
+        record_address(
+            &self.counts.writer_address,
+            std::ptr::from_ref(self) as usize,
+        );
         self.counts.writes.set(self.counts.writes.get() + 1);
         self.counts
             .pending_writes
@@ -120,6 +163,10 @@ impl AsyncStreamWrite for Writer {
     }
 
     async fn close(&mut self) -> Result<(), Errno> {
+        record_address(
+            &self.counts.writer_address,
+            std::ptr::from_ref(self) as usize,
+        );
         assert_eq!(self.counts.reads.get(), 0, "close preceded read settlement");
         assert_eq!(
             self.counts.pending_writes.get(),
@@ -150,6 +197,53 @@ fn pair(fail_write: bool) -> (Stream, OwnedFdStream, Rc<Counts>) {
         OwnedFdStream::new(b),
         counts,
     )
+}
+
+#[kimojio::test]
+async fn workers_retain_transport_halves_through_streaming_reuse_and_drop_once() {
+    let (stream, peer, counts) = pair(false);
+    let (mut client, driver) = connect(stream, config(90));
+    let server = serve_connection_with_shutdown(
+        peer,
+        config(91),
+        Shutdown::default(),
+        |mut request: Request<IncomingBody>| async move {
+            assert_eq!(request.body_mut().collect(3).await?, b"abc");
+            Ok(Response::new(OutgoingBody::full(b"done".to_vec())))
+        },
+    );
+    let app = async {
+        for _ in 0..3 {
+            let body = OutgoingBody::from_stream(
+                Some(3),
+                futures::stream::iter([Ok(OutgoingFrame::Data(b"abc".to_vec()))]),
+            );
+            let mut response = client
+                .send(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/")
+                        .header("host", "test")
+                        .body(body)
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.body_mut().collect(4).await.unwrap(), b"done");
+        }
+        client.shutdown().await.unwrap();
+    };
+    operations::timeout_at(kimojio::clock_now() + Duration::from_secs(3), async {
+        let ((), driver, server) = futures::join!(app, driver.run(), server);
+        driver.unwrap();
+        server.unwrap();
+    })
+    .await
+    .unwrap();
+    assert!(counts.writes.get() >= 3);
+    assert_eq!(counts.closes.get(), 1);
+    assert_eq!(counts.reader_drops.get(), 1);
+    assert_eq!(counts.writer_drops.get(), 1);
 }
 
 #[kimojio::test]

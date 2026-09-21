@@ -139,7 +139,7 @@ impl<W: AsyncStreamWrite> WriteTransport for W {
 }
 
 pub(crate) async fn read_worker<R: ReadTransport>(
-    mut stream: Box<R>,
+    mut stream: R,
     requests: Receiver<Pending<ReadOp<Vec<u8>>>>,
     completions: Sender<ReadCompletion<Vec<u8>>>,
 ) {
@@ -152,7 +152,7 @@ pub(crate) async fn read_worker<R: ReadTransport>(
 }
 
 pub(crate) async fn write_worker<W: WriteTransport>(
-    mut stream: Box<W>,
+    mut stream: W,
     requests: Receiver<WriteAction>,
     completions: Sender<WriteResult>,
 ) {
