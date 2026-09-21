@@ -1,0 +1,17 @@
+warning: can be more succinctly written as a byte str
+  --> kimojio/src/pipe.rs:64:23
+   |
+64 |         let output1 = [b'h', b'e', b'l', b'l', b'o'];
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `*b"hello"`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#byte_char_slices
+   = note: `#[warn(clippy::byte_char_slices)]` on by default
+
+warning: can be more succinctly written as a byte str
+  --> kimojio/src/pipe.rs:65:23
+   |
+65 |         let output2 = [b'w', b'o', b'r', b'l', b'd'];
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `*b"world"`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#byte_char_slices
+

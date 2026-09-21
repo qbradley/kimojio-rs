@@ -1,0 +1,1020 @@
+{
+  "total_http1_named_text": 147248,
+  "symbols": [
+    {
+      "address": "0x9e4b0",
+      "size": 30,
+      "name": "core::ptr::drop_glue::<core::option::Option<kimojio_fsm_http1::operations::ReadOp<alloc::vec::Vec<u8>>>>"
+    },
+    {
+      "address": "0x9e4d0",
+      "size": 30,
+      "name": "core::ptr::drop_glue::<core::option::Option<(kimojio_fsm_http1::operations::BodyCompletion<alloc::vec::Vec<u8>>, kimojio_fsm_http1::types::ExchangeId, usize)>>"
+    },
+    {
+      "address": "0xb6630",
+      "size": 166,
+      "name": "core::ptr::drop_glue::<roundtrip::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, false, false>>"
+    },
+    {
+      "address": "0xc5cf0",
+      "size": 166,
+      "name": "core::ptr::drop_glue::<roundtrip::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, false, false>>"
+    },
+    {
+      "address": "0x85eb0",
+      "size": 251,
+      "name": "core::ptr::drop_glue::<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>"
+    },
+    {
+      "address": "0xb66e0",
+      "size": 251,
+      "name": "core::ptr::drop_glue::<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>>"
+    },
+    {
+      "address": "0xc5da0",
+      "size": 251,
+      "name": "core::ptr::drop_glue::<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>>"
+    },
+    {
+      "address": "0x85fb0",
+      "size": 57,
+      "name": "core::ptr::drop_glue::<kimojio_fsm_http1::operations::WriteStorage<&[u8]>>"
+    },
+    {
+      "address": "0xc5ea0",
+      "size": 57,
+      "name": "core::ptr::drop_glue::<kimojio_fsm_http1::operations::WriteStorage<&[u8]>>"
+    },
+    {
+      "address": "0xc5ee0",
+      "size": 24,
+      "name": "core::ptr::drop_glue::<kimojio_fsm_http1::operations::BodyOp<alloc::vec::Vec<u8>>>"
+    },
+    {
+      "address": "0xc5f00",
+      "size": 24,
+      "name": "core::ptr::drop_glue::<kimojio_fsm_http1::operations::ReadOp<alloc::vec::Vec<u8>>>"
+    },
+    {
+      "address": "0xc5f20",
+      "size": 57,
+      "name": "core::ptr::drop_glue::<kimojio_fsm_http1::operations::WriteOp<&[u8]>>"
+    },
+    {
+      "address": "0x9e4f0",
+      "size": 57,
+      "name": "core::ptr::drop_glue::<kimojio_fsm_http1::operations::WriteOp<&[u8]>>"
+    },
+    {
+      "address": "0x85ff0",
+      "size": 24,
+      "name": "core::ptr::drop_glue::<kimojio_fsm_http1::types::Rejected<kimojio_fsm_http1::operations::BodyCompletion<alloc::vec::Vec<u8>>>>"
+    },
+    {
+      "address": "0x86010",
+      "size": 24,
+      "name": "core::ptr::drop_glue::<kimojio_fsm_http1::types::Rejected<kimojio_fsm_http1::operations::ReadCompletion<alloc::vec::Vec<u8>>>>"
+    },
+    {
+      "address": "0x86030",
+      "size": 60,
+      "name": "core::ptr::drop_glue::<kimojio_fsm_http1::types::Rejected<kimojio_fsm_http1::operations::WriteCompletion<&[u8]>>>"
+    },
+    {
+      "address": "0x20d620",
+      "size": 60,
+      "name": "core::ptr::drop_glue::<std::io::default_write_fmt::Adapter<kimojio_fsm_http1::codec::HeadWriter>>"
+    },
+    {
+      "address": "0xcaefc",
+      "size": 51,
+      "name": "core::panicking::assert_failed::<core::option::Option<kimojio_fsm_http1::types::ExchangeId>, core::option::Option<kimojio_fsm_http1::types::ExchangeId>>"
+    },
+    {
+      "address": "0xcaf2f",
+      "size": 51,
+      "name": "core::panicking::assert_failed::<core::result::Result<(), kimojio_fsm_http1::types::Failure>, core::result::Result<(), kimojio_fsm_http1::types::Failure>>"
+    },
+    {
+      "address": "0x20d696",
+      "size": 51,
+      "name": "core::panicking::assert_failed::<kimojio_fsm_http1::state::IoState, kimojio_fsm_http1::state::IoState>"
+    },
+    {
+      "address": "0x20d6c9",
+      "size": 51,
+      "name": "core::panicking::assert_failed::<kimojio_fsm_http1::state::Producer, kimojio_fsm_http1::state::Producer>"
+    },
+    {
+      "address": "0x20d6fc",
+      "size": 51,
+      "name": "core::panicking::assert_failed::<kimojio_fsm_http1::state::Lifecycle, kimojio_fsm_http1::state::Lifecycle>"
+    },
+    {
+      "address": "0xcaf62",
+      "size": 51,
+      "name": "core::panicking::assert_failed::<kimojio_fsm_http1::types::Acceptance, kimojio_fsm_http1::types::Acceptance>"
+    },
+    {
+      "address": "0xcaf95",
+      "size": 51,
+      "name": "core::panicking::assert_failed::<kimojio_fsm_http1::types::ExchangeId, kimojio_fsm_http1::types::ExchangeId>"
+    },
+    {
+      "address": "0xcafc8",
+      "size": 51,
+      "name": "core::panicking::assert_failed::<kimojio_fsm_http1::types::Version, kimojio_fsm_http1::types::Version>"
+    },
+    {
+      "address": "0x860b0",
+      "size": 8620,
+      "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::next::<false, false>"
+    },
+    {
+      "address": "0x88260",
+      "size": 8620,
+      "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::next::<false, true>"
+    },
+    {
+      "address": "0x8a410",
+      "size": 8573,
+      "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::next::<true, true>"
+    },
+    {
+      "address": "0x8c590",
+      "size": 8573,
+      "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::next::<true, false>"
+    },
+    {
+      "address": "0x8e710",
+      "size": 8509,
+      "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::next::<false, false>"
+    },
+    {
+      "address": "0x90850",
+      "size": 8509,
+      "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::next::<false, true>"
+    },
+    {
+      "address": "0x92990",
+      "size": 8405,
+      "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::next::<true, true>"
+    },
+    {
+      "address": "0x94a70",
+      "size": 8405,
+      "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::next::<true, false>"
+    },
+    {
+      "address": "0x96b50",
+      "size": 454,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::arm_upload"
+    },
+    {
+      "address": "0x96d20",
+      "size": 236,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::queue_head"
+    },
+    {
+      "address": "0x96e10",
+      "size": 2365,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::settle_write"
+    },
+    {
+      "address": "0x97750",
+      "size": 213,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::update_deadline"
+    },
+    {
+      "address": "0x97830",
+      "size": 565,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::inform"
+    },
+    {
+      "address": "0x97a70",
+      "size": 406,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::set_rx"
+    },
+    {
+      "address": "0x97c10",
+      "size": 535,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::progress"
+    },
+    {
+      "address": "0x97e30",
+      "size": 680,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::settle_body"
+    },
+    {
+      "address": "0x980e0",
+      "size": 665,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::settle_write"
+    },
+    {
+      "address": "0x98380",
+      "size": 1429,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::fail"
+    },
+    {
+      "address": "0x98920",
+      "size": 386,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::set_rx"
+    },
+    {
+      "address": "0x98ab0",
+      "size": 720,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::progress"
+    },
+    {
+      "address": "0x98d80",
+      "size": 48,
+      "name": "<kimojio_fsm_http1::state::MethodSemantics>::from_method"
+    },
+    {
+      "address": "0x98db0",
+      "size": 504,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::coordinate"
+    },
+    {
+      "address": "0x98fb0",
+      "size": 302,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::receive_eof"
+    },
+    {
+      "address": "0x990e0",
+      "size": 646,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body"
+    },
+    {
+      "address": "0x99370",
+      "size": 922,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition"
+    },
+    {
+      "address": "0x99710",
+      "size": 1029,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::retire_exchange"
+    },
+    {
+      "address": "0x99b20",
+      "size": 167,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::closing_transition"
+    },
+    {
+      "address": "0x99bd0",
+      "size": 215,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::receive_transition"
+    },
+    {
+      "address": "0x99cb0",
+      "size": 169,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::upgrade_transition"
+    },
+    {
+      "address": "0x99d60",
+      "size": 381,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::coordinate"
+    },
+    {
+      "address": "0x99ee0",
+      "size": 1140,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition"
+    },
+    {
+      "address": "0x9a360",
+      "size": 959,
+      "name": "<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::retire_exchange"
+    },
+    {
+      "address": "0x9a720",
+      "size": 740,
+      "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>>::with_output_type"
+    },
+    {
+      "address": "0xc7020",
+      "size": 314,
+      "name": "<kimojio_fsm_http1::operations::WriteOp<&[u8]>>::slices"
+    },
+    {
+      "address": "0x20d7a0",
+      "size": 49,
+      "name": "<kimojio_fsm_http1::state::Lifecycle>::issue_close"
+    },
+    {
+      "address": "0x20d7e0",
+      "size": 39,
+      "name": "<kimojio_fsm_http1::state::Lifecycle>::begin_upgrade"
+    },
+    {
+      "address": "0x20d810",
+      "size": 57,
+      "name": "<kimojio_fsm_http1::state::Lifecycle>::notify_upgrade"
+    },
+    {
+      "address": "0x9aa10",
+      "size": 779,
+      "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>>::with_output_type"
+    },
+    {
+      "address": "0x20d850",
+      "size": 42,
+      "name": "<kimojio_fsm_http1::state::IoState>::wait_for_readiness"
+    },
+    {
+      "address": "0x20d880",
+      "size": 79,
+      "name": "<kimojio_fsm_http1::state::IoState>::issue"
+    },
+    {
+      "address": "0x20d8d0",
+      "size": 40,
+      "name": "<kimojio_fsm_http1::state::IoState>::complete"
+    },
+    {
+      "address": "0x20d900",
+      "size": 104,
+      "name": "<kimojio_fsm_http1::state::Transmit>::accept_data"
+    },
+    {
+      "address": "0x20d970",
+      "size": 36,
+      "name": "<kimojio_fsm_http1::state::Transmit>::stop_upload"
+    },
+    {
+      "address": "0x20d9a0",
+      "size": 73,
+      "name": "<kimojio_fsm_http1::state::Transmit>::request_data"
+    },
+    {
+      "address": "0x20d9f0",
+      "size": 50,
+      "name": "<kimojio_fsm_http1::state::Transmit>::settle"
+    },
+    {
+      "address": "0x20da30",
+      "size": 7,
+      "name": "<kimojio_fsm_http1::state::Transmit>::started"
+    },
+    {
+      "address": "0x9e960",
+      "size": 2569,
+      "name": "<roundtrip::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip"
+    },
+    {
+      "address": "0x9f370",
+      "size": 2569,
+      "name": "<roundtrip::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, false, true>>::round_trip"
+    },
+    {
+      "address": "0x9fd80",
+      "size": 2569,
+      "name": "<roundtrip::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, true, true>>::round_trip"
+    },
+    {
+      "address": "0xa0790",
+      "size": 2569,
+      "name": "<roundtrip::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, true, false>>::round_trip"
+    },
+    {
+      "address": "0xa11a0",
+      "size": 2607,
+      "name": "<roundtrip::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, false, false>>::round_trip"
+    },
+    {
+      "address": "0xa1bd0",
+      "size": 2607,
+      "name": "<roundtrip::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, false, true>>::round_trip"
+    },
+    {
+      "address": "0xa2600",
+      "size": 2607,
+      "name": "<roundtrip::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, true, true>>::round_trip"
+    },
+    {
+      "address": "0xa3030",
+      "size": 2607,
+      "name": "<roundtrip::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, true, false>>::round_trip"
+    },
+    {
+      "address": "0x20dad0",
+      "size": 162,
+      "name": "kimojio_fsm_http1::connection::header_count"
+    },
+    {
+      "address": "0x20db80",
+      "size": 778,
+      "name": "kimojio_fsm_http1::codec::chunk_size"
+    },
+    {
+      "address": "0x20de90",
+      "size": 102,
+      "name": "kimojio_fsm_http1::codec::persistent"
+    },
+    {
+      "address": "0x20df00",
+      "size": 148,
+      "name": "kimojio_fsm_http1::codec::strict_lines"
+    },
+    {
+      "address": "0x20dfa0",
+      "size": 216,
+      "name": "kimojio_fsm_http1::codec::field_present"
+    },
+    {
+      "address": "0x20e080",
+      "size": 1080,
+      "name": "kimojio_fsm_http1::codec::valid_headers"
+    },
+    {
+      "address": "0x20e4c0",
+      "size": 859,
+      "name": "kimojio_fsm_http1::codec::valid_trailer"
+    },
+    {
+      "address": "0x20e820",
+      "size": 627,
+      "name": "kimojio_fsm_http1::codec::valid_upgrade"
+    },
+    {
+      "address": "0x20eaa0",
+      "size": 160,
+      "name": "kimojio_fsm_http1::codec::append_framing"
+    },
+    {
+      "address": "0x20eb40",
+      "size": 203,
+      "name": "kimojio_fsm_http1::codec::append_headers"
+    },
+    {
+      "address": "0x20ec10",
+      "size": 822,
+      "name": "kimojio_fsm_http1::codec::encode_request"
+    },
+    {
+      "address": "0x20ef50",
+      "size": 1172,
+      "name": "kimojio_fsm_http1::codec::encode_response"
+    },
+    {
+      "address": "0x20f3f0",
+      "size": 905,
+      "name": "kimojio_fsm_http1::codec::expect_continue"
+    },
+    {
+      "address": "0x20f780",
+      "size": 928,
+      "name": "kimojio_fsm_http1::codec::connection_fields"
+    },
+    {
+      "address": "0x20fb20",
+      "size": 1126,
+      "name": "kimojio_fsm_http1::codec::upgrade_protocols"
+    },
+    {
+      "address": "0x20ff90",
+      "size": 409,
+      "name": "kimojio_fsm_http1::codec::host"
+    },
+    {
+      "address": "0x210130",
+      "size": 1554,
+      "name": "kimojio_fsm_http1::codec::framing"
+    },
+    {
+      "address": "0x210750",
+      "size": 1092,
+      "name": "kimojio_fsm_http1::codec::has_token"
+    },
+    {
+      "address": "0x210ba0",
+      "size": 107,
+      "name": "<std::io::default_write_fmt::Adapter<kimojio_fsm_http1::codec::HeadWriter> as core::fmt::Write>::write_str"
+    },
+    {
+      "address": "0xa3e00",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::upgrade_ready"
+    },
+    {
+      "address": "0xa3e20",
+      "size": 515,
+      "name": "<roundtrip::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body"
+    },
+    {
+      "address": "0xa4030",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::close"
+    },
+    {
+      "address": "0xa4050",
+      "size": 300,
+      "name": "<roundtrip::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write"
+    },
+    {
+      "address": "0xa4180",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::cancel"
+    },
+    {
+      "address": "0xa41a0",
+      "size": 46,
+      "name": "<roundtrip::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::closed"
+    },
+    {
+      "address": "0xa41d0",
+      "size": 274,
+      "name": "<roundtrip::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body_sent"
+    },
+    {
+      "address": "0xa42f0",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<false, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::readiness"
+    },
+    {
+      "address": "0xa3e00",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<false, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::upgrade_ready"
+    },
+    {
+      "address": "0xa4310",
+      "size": 646,
+      "name": "<roundtrip::support::Transport<false, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body"
+    },
+    {
+      "address": "0xa4030",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<false, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::close"
+    },
+    {
+      "address": "0xa45a0",
+      "size": 787,
+      "name": "<roundtrip::support::Transport<false, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write"
+    },
+    {
+      "address": "0xa4180",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<false, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::cancel"
+    },
+    {
+      "address": "0xa41a0",
+      "size": 46,
+      "name": "<roundtrip::support::Transport<false, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::closed"
+    },
+    {
+      "address": "0xa48c0",
+      "size": 404,
+      "name": "<roundtrip::support::Transport<false, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body_sent"
+    },
+    {
+      "address": "0xa42f0",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<false, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::readiness"
+    },
+    {
+      "address": "0xa3e00",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<true, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::upgrade_ready"
+    },
+    {
+      "address": "0xa4a60",
+      "size": 646,
+      "name": "<roundtrip::support::Transport<true, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body"
+    },
+    {
+      "address": "0xa4030",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<true, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::close"
+    },
+    {
+      "address": "0xa4cf0",
+      "size": 787,
+      "name": "<roundtrip::support::Transport<true, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write"
+    },
+    {
+      "address": "0xa4180",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<true, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::cancel"
+    },
+    {
+      "address": "0xa41a0",
+      "size": 46,
+      "name": "<roundtrip::support::Transport<true, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::closed"
+    },
+    {
+      "address": "0xa5010",
+      "size": 404,
+      "name": "<roundtrip::support::Transport<true, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body_sent"
+    },
+    {
+      "address": "0xa42f0",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<true, true> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::readiness"
+    },
+    {
+      "address": "0xa3e00",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<true, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::upgrade_ready"
+    },
+    {
+      "address": "0xa51b0",
+      "size": 515,
+      "name": "<roundtrip::support::Transport<true, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body"
+    },
+    {
+      "address": "0xa4030",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<true, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::close"
+    },
+    {
+      "address": "0xa53c0",
+      "size": 300,
+      "name": "<roundtrip::support::Transport<true, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write"
+    },
+    {
+      "address": "0xa4180",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<true, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::cancel"
+    },
+    {
+      "address": "0xa41a0",
+      "size": 46,
+      "name": "<roundtrip::support::Transport<true, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::closed"
+    },
+    {
+      "address": "0xa54f0",
+      "size": 274,
+      "name": "<roundtrip::support::Transport<true, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body_sent"
+    },
+    {
+      "address": "0xa42f0",
+      "size": 26,
+      "name": "<roundtrip::support::Transport<true, false> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::readiness"
+    },
+    {
+      "address": "0xa5610",
+      "size": 282,
+      "name": "<roundtrip::support::Transport<false, false> as kimojio_fsm_http1::ClientPorts<alloc::vec::Vec<u8>, &[u8]>>::response"
+    },
+    {
+      "address": "0xa5730",
+      "size": 429,
+      "name": "<roundtrip::support::Transport<false, true> as kimojio_fsm_http1::ClientPorts<alloc::vec::Vec<u8>, &[u8]>>::response"
+    },
+    {
+      "address": "0xa58e0",
+      "size": 429,
+      "name": "<roundtrip::support::Transport<true, true> as kimojio_fsm_http1::ClientPorts<alloc::vec::Vec<u8>, &[u8]>>::response"
+    },
+    {
+      "address": "0xa5a90",
+      "size": 282,
+      "name": "<roundtrip::support::Transport<true, false> as kimojio_fsm_http1::ClientPorts<alloc::vec::Vec<u8>, &[u8]>>::response"
+    },
+    {
+      "address": "0xc71e0",
+      "size": 161,
+      "name": "<kimojio_fsm_http1::types::SendBody<&[u8]> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xce930",
+      "size": 74,
+      "name": "<&core::option::Option<kimojio_fsm_http1::types::ExchangeId> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc7290",
+      "size": 94,
+      "name": "<&core::result::Result<usize, kimojio_fsm_http1::types::IoError> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc72f0",
+      "size": 86,
+      "name": "<&core::result::Result<(), kimojio_fsm_http1::types::Failure> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc7350",
+      "size": 99,
+      "name": "<&kimojio_fsm_http1::operations::BodyCompletion<alloc::vec::Vec<u8>> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc73c0",
+      "size": 99,
+      "name": "<&kimojio_fsm_http1::operations::ReadCompletion<alloc::vec::Vec<u8>> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc7430",
+      "size": 99,
+      "name": "<&kimojio_fsm_http1::operations::WriteCompletion<&[u8]> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc74a0",
+      "size": 162,
+      "name": "<&kimojio_fsm_http1::types::SendBody<&[u8]> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc7550",
+      "size": 43,
+      "name": "<&kimojio_fsm_http1::operations::MetadataKind as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x210c10",
+      "size": 46,
+      "name": "<&kimojio_fsm_http1::state::Notification as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x210c40",
+      "size": 71,
+      "name": "<&kimojio_fsm_http1::state::Closing as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x210c90",
+      "size": 152,
+      "name": "<&kimojio_fsm_http1::state::IoState as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x210d30",
+      "size": 43,
+      "name": "<&kimojio_fsm_http1::state::Upgrade as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x210d60",
+      "size": 115,
+      "name": "<&kimojio_fsm_http1::state::Producer as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x210de0",
+      "size": 46,
+      "name": "<&kimojio_fsm_http1::state::Admission as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x210e10",
+      "size": 220,
+      "name": "<&kimojio_fsm_http1::state::Lifecycle as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x210ef0",
+      "size": 47,
+      "name": "<&kimojio_fsm_http1::state::SourceEnd as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc7580",
+      "size": 47,
+      "name": "<&kimojio_fsm_http1::types::Acceptance as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc75b0",
+      "size": 99,
+      "name": "<&kimojio_fsm_http1::types::ExchangeId as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x210f20",
+      "size": 141,
+      "name": "<&kimojio_fsm_http1::types::OperationId as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x210fb0",
+      "size": 43,
+      "name": "<&kimojio_fsm_http1::types::OperationKind as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc7620",
+      "size": 43,
+      "name": "<&kimojio_fsm_http1::types::OperationKind as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc7650",
+      "size": 99,
+      "name": "<&kimojio_fsm_http1::types::BodyId as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc76c0",
+      "size": 250,
+      "name": "<&kimojio_fsm_http1::types::Failure as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc77c0",
+      "size": 99,
+      "name": "<&kimojio_fsm_http1::types::IoError as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc7830",
+      "size": 41,
+      "name": "<&kimojio_fsm_http1::types::Version as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x9ad20",
+      "size": 40,
+      "name": "<kimojio_fsm_http1::types::RejectReason as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x9ad50",
+      "size": 96,
+      "name": "<kimojio_fsm_http1::types::Rejected<kimojio_fsm_http1::types::SendBody<&[u8]>> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x9adb0",
+      "size": 96,
+      "name": "<kimojio_fsm_http1::types::Rejected<kimojio_fsm_http1::operations::BodyCompletion<alloc::vec::Vec<u8>>> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x9ae10",
+      "size": 96,
+      "name": "<kimojio_fsm_http1::types::Rejected<kimojio_fsm_http1::operations::ReadCompletion<alloc::vec::Vec<u8>>> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x9ae70",
+      "size": 99,
+      "name": "<kimojio_fsm_http1::types::Rejected<kimojio_fsm_http1::operations::WriteCompletion<&[u8]>> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xa5bb0",
+      "size": 40,
+      "name": "<kimojio_fsm_http1::types::CommandError as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x9aee0",
+      "size": 40,
+      "name": "<kimojio_fsm_http1::types::CommandError as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc7ab0",
+      "size": 40,
+      "name": "<kimojio_fsm_http1::types::IoErrorKind as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xa5be0",
+      "size": 446,
+      "name": "<roundtrip::support::Transport<false, true> as kimojio_fsm_http1::ServerPorts<alloc::vec::Vec<u8>, &[u8]>>::request"
+    },
+    {
+      "address": "0xa5da0",
+      "size": 446,
+      "name": "<roundtrip::support::Transport<true, true> as kimojio_fsm_http1::ServerPorts<alloc::vec::Vec<u8>, &[u8]>>::request"
+    },
+    {
+      "address": "0x9af10",
+      "size": 800,
+      "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::read"
+    },
+    {
+      "address": "0x9b230",
+      "size": 1094,
+      "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::send"
+    },
+    {
+      "address": "0x9b680",
+      "size": 1790,
+      "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::begin"
+    },
+    {
+      "address": "0x9bd80",
+      "size": 1101,
+      "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::write"
+    },
+    {
+      "address": "0x9c1d0",
+      "size": 527,
+      "name": "<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::release"
+    },
+    {
+      "address": "0x9c3e0",
+      "size": 979,
+      "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::read"
+    },
+    {
+      "address": "0x9c7c0",
+      "size": 1094,
+      "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::send"
+    },
+    {
+      "address": "0x9cc10",
+      "size": 795,
+      "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::write"
+    },
+    {
+      "address": "0x9cf30",
+      "size": 491,
+      "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::release"
+    },
+    {
+      "address": "0x9d120",
+      "size": 2440,
+      "name": "<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::incoming"
+    },
+    {
+      "address": "0xc7ae0",
+      "size": 140,
+      "name": "<kimojio_fsm_http1::operations::ReadOp<alloc::vec::Vec<u8>> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc7bb0",
+      "size": 425,
+      "name": "<kimojio_fsm_http1::operations::WriteStorage<&[u8]> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc7d60",
+      "size": 99,
+      "name": "<kimojio_fsm_http1::types::ConnectionId as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x211030",
+      "size": 99,
+      "name": "<kimojio_fsm_http1::types::ConnectionId as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc7dd0",
+      "size": 99,
+      "name": "<kimojio_fsm_http1::types::BodyId as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc7e40",
+      "size": 188,
+      "name": "<kimojio_fsm_http1::operations::BodyOp<alloc::vec::Vec<u8>> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x2110d0",
+      "size": 310,
+      "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write"
+    },
+    {
+      "address": "0xc7f60",
+      "size": 146,
+      "name": "<kimojio_fsm_http1::operations::WriteOp<&[u8]> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc8000",
+      "size": 99,
+      "name": "<kimojio_fsm_http1::types::ExchangeId as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xa5f60",
+      "size": 83,
+      "name": "<core::result::Result<(), kimojio_fsm_http1::types::Failure> as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0xc8090",
+      "size": 141,
+      "name": "<kimojio_fsm_http1::types::OperationId as core::fmt::Debug>::fmt"
+    },
+    {
+      "address": "0x211210",
+      "size": 253,
+      "name": "<std::io::default_write_fmt::Adapter<kimojio_fsm_http1::codec::HeadWriter> as core::fmt::Write>::write_char"
+    },
+    {
+      "address": "0x211310",
+      "size": 19,
+      "name": "<std::io::default_write_fmt::Adapter<kimojio_fsm_http1::codec::HeadWriter> as core::fmt::Write>::write_fmt"
+    },
+    {
+      "address": "0x9dab0",
+      "size": 325,
+      "name": "<<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>>::next<roundtrip::support::Transport<false, false>>::{closure#0} as core::ops::function::FnOnce<(&mut roundtrip::support::Transport<false, false>, kimojio_fsm_http1::types::ExchangeId, kimojio_fsm_http1::connection::ParsedHead)>>::call_once"
+    },
+    {
+      "address": "0x9dc00",
+      "size": 104,
+      "name": "<<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>>::next<roundtrip::support::Transport<false, true>>::{closure#0} as core::ops::function::FnOnce<(&mut roundtrip::support::Transport<false, true>, kimojio_fsm_http1::types::ExchangeId, kimojio_fsm_http1::connection::ParsedHead)>>::call_once"
+    },
+    {
+      "address": "0x9dc70",
+      "size": 104,
+      "name": "<<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>>::next<roundtrip::support::Transport<true, true>>::{closure#0} as core::ops::function::FnOnce<(&mut roundtrip::support::Transport<true, true>, kimojio_fsm_http1::types::ExchangeId, kimojio_fsm_http1::connection::ParsedHead)>>::call_once"
+    },
+    {
+      "address": "0x9dce0",
+      "size": 325,
+      "name": "<<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>>::next<roundtrip::support::Transport<true, false>>::{closure#0} as core::ops::function::FnOnce<(&mut roundtrip::support::Transport<true, false>, kimojio_fsm_http1::types::ExchangeId, kimojio_fsm_http1::connection::ParsedHead)>>::call_once"
+    },
+    {
+      "address": "0x9de30",
+      "size": 109,
+      "name": "<<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>>::next<roundtrip::support::Transport<false, false>>::{closure#0} as core::ops::function::FnOnce<(&mut roundtrip::support::Transport<false, false>, kimojio_fsm_http1::types::ExchangeId, kimojio_fsm_http1::connection::ParsedHead)>>::call_once"
+    },
+    {
+      "address": "0x9dea0",
+      "size": 109,
+      "name": "<<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>>::next<roundtrip::support::Transport<false, true>>::{closure#0} as core::ops::function::FnOnce<(&mut roundtrip::support::Transport<false, true>, kimojio_fsm_http1::types::ExchangeId, kimojio_fsm_http1::connection::ParsedHead)>>::call_once"
+    },
+    {
+      "address": "0x9df10",
+      "size": 109,
+      "name": "<<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>>::next<roundtrip::support::Transport<true, true>>::{closure#0} as core::ops::function::FnOnce<(&mut roundtrip::support::Transport<true, true>, kimojio_fsm_http1::types::ExchangeId, kimojio_fsm_http1::connection::ParsedHead)>>::call_once"
+    },
+    {
+      "address": "0x9df80",
+      "size": 109,
+      "name": "<<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>>::next<roundtrip::support::Transport<true, false>>::{closure#0} as core::ops::function::FnOnce<(&mut roundtrip::support::Transport<true, false>, kimojio_fsm_http1::types::ExchangeId, kimojio_fsm_http1::connection::ParsedHead)>>::call_once"
+    },
+    {
+      "address": "0x211330",
+      "size": 281,
+      "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write_all"
+    },
+    {
+      "address": "0x211450",
+      "size": 169,
+      "name": "<kimojio_fsm_http1::codec::HeadWriter as std::io::Write>::write_fmt"
+    }
+  ]
+}

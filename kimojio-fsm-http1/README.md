@@ -658,6 +658,10 @@ CARGO_TARGET_DIR="$CANDIDATE_TARGET" cargo bench -p kimojio-fsm-http1 --bench ro
 
 The benchmark change precedes both refactors, so each descendant inherits the same workloads.
 Criterion stores estimates and samples in the selected target directory, under `criterion`.
+
+The [core optimization study](../docs/http1-core-study/README.md) compares role specialization,
+metadata dispatch, active deadlines, and one-role executable sizes.
+It also records a receive-phase defect, separate candidate fixes, observability guidance, and adapter box removals.
 The normal command uses Criterion's default sample size and measurement durations.
 For a preliminary run, append `--sample-size 20 --warm-up-time 1 --measurement-time 2` after `--`.
 Short runs remain sensitive to CPU frequency, shared-host load, and compiler code layout.

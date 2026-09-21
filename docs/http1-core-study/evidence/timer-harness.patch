@@ -1,0 +1,78 @@
+diff --git a/kimojio-fsm-http1/benches/support/mod.rs b/kimojio-fsm-http1/benches/support/mod.rs
+index ae211198..b5fa77ad 100644
+--- a/kimojio-fsm-http1/benches/support/mod.rs
++++ b/kimojio-fsm-http1/benches/support/mod.rs
+@@ -130,6 +130,7 @@ pub struct Stats {
+ }
+ 
+ pub struct Transport<'a, const YIELD: bool, const CHECK: bool> {
++    clock: u64,
+     input: &'a [u8],
+     incoming_body: &'a [u8],
+     output: &'a [u8],
+@@ -168,6 +169,7 @@ impl<'a, const YIELD: bool, const CHECK: bool> Transport<'a, YIELD, CHECK> {
+             )
+         };
+         Self {
++            clock: 0,
+             input,
+             incoming_body,
+             output,
+@@ -321,7 +323,8 @@ impl<'a, const YIELD: bool, const CHECK: bool> Ports<Vec<u8>, &'a [u8]>
+         Self::callback()
+     }
+     fn deadline_changed(&mut self, deadline: Option<Deadline>) -> Option<()> {
+-        assert!(deadline.is_none(), "benchmark timers are disabled");
++        assert!(deadline.is_none_or(|deadline| deadline.at.0 >= self.clock));
++        black_box(deadline);
+         Self::callback()
+     }
+     fn upgrade_ready(&mut self, _: ExchangeId) -> Option<()> {
+@@ -372,6 +375,7 @@ impl<'a, const YIELD: bool, const CHECK: bool> ServerPorts<Vec<u8>, &'a [u8]>
+ // large operations or a dynamic-dispatch cost in each completion.
+ pub trait Endpoint<'a> {
+     const SERVER: bool;
++    fn observe_time(&mut self, now: Tick);
+     fn next<const YIELD: bool, const CHECK: bool>(
+         &mut self,
+         ports: &mut Transport<'a, YIELD, CHECK>,
+@@ -387,6 +391,9 @@ pub trait Endpoint<'a> {
+ 
+ impl<'a> Endpoint<'a> for Client<Vec<u8>, &'a [u8]> {
+     const SERVER: bool = false;
++    fn observe_time(&mut self, now: Tick) {
++        self.observe_time(now).unwrap();
++    }
+     fn next<const YIELD: bool, const CHECK: bool>(
+         &mut self,
+         ports: &mut Transport<'a, YIELD, CHECK>,
+@@ -416,6 +423,9 @@ impl<'a> Endpoint<'a> for Client<Vec<u8>, &'a [u8]> {
+ 
+ impl<'a> Endpoint<'a> for Server<Vec<u8>, &'a [u8]> {
+     const SERVER: bool = true;
++    fn observe_time(&mut self, now: Tick) {
++        self.observe_time(now).unwrap();
++    }
+     fn next<const YIELD: bool, const CHECK: bool>(
+         &mut self,
+         ports: &mut Transport<'a, YIELD, CHECK>,
+@@ -456,10 +466,6 @@ fn config(scenario: &Scenario) -> Config {
+         max_buffer_bytes: IO_BYTES,
+         max_body_bytes: scenario.body_bytes() as u64,
+         max_requests: u64::MAX,
+-        head_timeout_ns: None,
+-        body_timeout_ns: None,
+-        idle_timeout_ns: None,
+-        continue_timeout_ns: None,
+         ..Config::default()
+     }
+ }
+@@ -508,6 +514,8 @@ impl<'a, M: Endpoint<'a>, const YIELD: bool, const CHECK: bool> Session<'a, M, Y
+         t.begin();
+         t.exchange = self.machine.begin(self.scenario);
+         loop {
++            t.clock = t.clock.checked_add(1_000).unwrap();
++            self.machine.observe_time(Tick(t.clock));
+             let yielded = self.machine.next(t).is_some();
+             let mut progress = false;
+             if let Some(exchange) = t.head.take() {

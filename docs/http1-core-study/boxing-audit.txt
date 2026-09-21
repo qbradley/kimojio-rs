@@ -1,0 +1,308 @@
+BOXING AUDIT
+
+Worktree: /workspace/kimojio-rs/target/http1-core-study/boxing
+Base: 7c7fe7415029b91c17aea61707656fd620b9c02d
+Commits, in order:
+  957bf0c3aa6ec49e003fde4069172913391742f9
+  42119237c4ef9ae959d77428df92bd1242a962e7
+No push. No root-worktree, HTTP1-core, runtime, TLS, or bookmark changes.
+All source references below use the final worktree.
+inventory.txt contains every Box/boxed/into_boxed occurrence in the audited paths.
+This report is an ignored handoff artifact, not a proposed repository document.
+
+RESULT
+
+1. HTTP1 transport halves now reside directly inside their existing pinned worker
+   futures. The workers still own each half until operation settlement and close.
+   This removes two allocations per generic connection when both half types are
+   non-zero-sized. It removes no per-operation allocation: those half boxes were
+   already connection-lifetime allocations.
+   Sites: kimojio-http1/src/io.rs:142,155 and src/driver.rs:1191-1192.
+
+2. HTTP1 stores SleepFuture directly in State. Safe Pin::new proves the required
+   Unpin bound; no unsafe projection or cancellation change is necessary.
+   This removes one allocation whenever a changed Some(deadline) creates a timer.
+   Native and generic HTTP1 both benefit. Runtime timer resources still allocate.
+   Sites: kimojio-http1/src/driver.rs:603,1122,1315.
+
+3. The HTTP2 interoperability server passes SleepFuture directly to select.
+   This removes one allocation per fixture connection watchdog.
+   Site: kimojio-http2/examples/interop_support/server.rs:80.
+
+TEST EVIDENCE
+
+All Cargo runs used:
+  CARGO_TARGET_DIR=/workspace/kimojio-rs/target/http1-core-study/build-boxing
+  taskset -c 8-31
+No workload ran on CPU2.
+
+Passed:
+  cargo fmt
+  cargo fmt --check
+  cargo test -p kimojio-http1 --quiet
+    80 tests: 36 unit, 44 integration; no doctests.
+  cargo test -p kimojio-http1 --features virtual-clock --quiet
+    84 tests: 37 unit, 47 integration; no doctests.
+  cargo test -p kimojio-http2 --example interop --quiet
+    18 tests.
+  cargo test -p kimojio-http2 --example interop --features virtual-clock --quiet
+    18 tests.
+  cargo clippy --quiet
+    Workspace pass, no warnings.
+  cargo clippy --all-targets --all-features --quiet
+    Workspace pass. Only existing byte_char_slices warnings in
+    kimojio/src/pipe.rs:64-65 remain.
+  git diff --check
+
+New coverage:
+  kimojio-http1/src/driver.rs:1387-1418:
+    Poll a deadline, move its containing State, replace the pending timer, and
+    finish its replacement. Both real and active virtual-clock modes pass.
+    Virtual mode also reports zero retained timers.
+  kimojio-http1/tests/settlement.rs:26-34,59-83,126,142,166,202:
+    Address guards cover repeated read/write calls, close, and destruction.
+    Existing cancellation/error tests now use those guards too.
+    A new three-request streaming/reuse test requires exactly one destruction
+    of each half and one close, after original operations settle.
+  kimojio-http2/examples/interop_support/server.rs:218:
+    A zero-duration watchdog aborts and settles native and generic connections.
+    The peer observes EOF after pending settings bytes drain.
+  Existing HTTP1 forwarding, late-completion, body-lease, deadline, duplex,
+    streaming, and public driver-size tests all pass.
+
+Two intermediate test compilation mistakes were corrected before final runs:
+poll_once requires virtual-clock, and HTTP1 has full rather than from_static.
+Neither affected the committed production implementation.
+
+LAYOUT AND PERFORMANCE EVIDENCE
+
+Compiler: rustc 1.98.1 (48a229cea 2026-09-01), x86_64.
+Concrete sizes from separately linked default and virtual-clock runtime rlibs:
+                                    default   virtual-clock
+  SleepFuture                           8            56 bytes
+  Option<SleepFuture>                   16            56 bytes
+  Option<Pin<Box<SleepFuture>>>           8             8 bytes
+Thus the private HTTP1 timer field grows by 8 or 48 bytes, respectively.
+The removed box formerly held another 8 or 56 bytes, plus allocator overhead.
+The interop watchdog removes a fat boxed-future handle; the inline timer size
+depends on the same feature configuration.
+
+HTTP1 public client/server future size guards (<1024 bytes) still pass with both
+feature configurations. The workers now include the half in the same heap
+allocation as the worker future. Their outer pinned-box handles remain small.
+There is no new transfer of the half on each read/write operation.
+Address regression guards exercise this property through reuse and cancellation.
+Construction-time moves and total worker-frame size were not benchmarked.
+
+The allocation reductions above follow directly from the removed constructors.
+They are not allocator-counter or throughput measurements. There is no CPU,
+latency, peak-memory, or memcpy speedup claim. No perf profile was collected.
+No frozen performance binary or hot-stack ranking applies to this audit.
+The parent owns timing experiments.
+
+RETAINED PRODUCTION BOX INVENTORY
+
+Classification:
+  A = address stability or cancellation ownership in the present design.
+  E = owned public type erasure / heterogeneous values.
+  L = layout or move-cost boundary, not a Rust correctness requirement.
+  O = runtime-sized owned storage, not removable by substituting Vec.
+  C = cold or test-fixture convenience.
+No recursive type layout requires any box in the audited wrappers.
+
+HTTP1:
+
+  src/body.rs:72,131 [E+A]
+    The non-generic OutgoingBody owns arbitrary, possibly !Unpin streams.
+    Its heap source survives body/active-exchange moves. Empty/full bodies have
+    no producer-stream box. from_incoming uses that existing stream path.
+
+  src/driver.rs:158,193,270; src/transport.rs:16 [L]
+    The connection/serve future retains arbitrary SplittableStream storage.
+    The box prevents large inline transport buffers from inflating outer futures.
+    The native client reuses this representation for a small NativeTransport.
+    That native descriptor box is not required by address stability. A dedicated
+    native setup representation can remove it, at a connection-time benefit.
+    Decision: retain the shared representation in this bounded change rather
+    than refactor the connection constructors for an unmeasured cold allocation.
+
+  src/driver.rs:212,231,298,313 [L]
+    run/run_native boxes bound nested future layouts. They are not necessary
+    merely because async futures require pinning. Removing them embeds the
+    complete driver state in each caller's future.
+
+  src/driver.rs:1173 [L]
+    The generic split future can contain the entire transport and large halves.
+    Its box remains a boundary for arbitrary transport implementations.
+
+  src/driver.rs:1191-1192 [A+L]
+    The worker futures borrow their owned halves and operation storage across
+    awaits. Existing outer boxes keep these futures pinned and keep the joined
+    driver small. Only the redundant boxes around the halves were removed.
+
+  src/io_driver.rs:146,153 [A]
+    Two reusable pinned Option<F> slots per native connection. Async operation
+    futures can borrow their own operation buffers/iovecs. Slot replacement
+    drops completed futures in place. This is not per-read/write boxing.
+
+  src/driver.rs:507,1138 [A+L]
+    One boxed handler future per admitted server request. Active exchange
+    storage moves and is replaced. Arbitrary !Unpin futures must stay pinned.
+    Erasure is internal, not a public API necessity. A typed reusable slot can
+    be designed, but it changes generic state/layout and requires separate
+    measurements for large futures. It is not a safe textual box deletion.
+
+HTTP2:
+
+  src/body.rs:72,110; src/driver.rs:1643 [E+A]
+    Owned public OutgoingBody type erases arbitrary streams. The producer
+    receives the same box, not another box at line 1643. Empty/full/static
+    bodies bypass this allocation.
+
+  src/body.rs:209,300 [A]
+    The stored retirement waiter owns ReceiverOneshot after recv consumes it.
+    A cancelled retirement/completion call must leave that waiter alive so a
+    later call can resume. A stack-local waiter would drop the receiver and
+    close the completion channel. The current recv API returns an opaque future.
+
+  src/driver.rs:159,238; src/observation.rs:61; src/driver.rs:255 [E]
+    Optional informational callbacks and observers are heterogeneous across
+    requests on the same non-generic Client. The driver owns them after send
+    admission. Ordinary send allocates neither optional box. The borrowed
+    &mut dyn observer at observation.rs:65 adds no allocation.
+
+  src/driver.rs:323,355,418,518 [L]
+    The connection retains a boxed generic transport; run_stream consumes that
+    same allocation. As in HTTP1, the native client's small descriptor box is
+    not a pinning requirement. Decision: retain the shared setup representation,
+    with explicit acknowledgment that a specialized native representation can
+    remove this cold allocation.
+
+  src/driver.rs:378,388,427,468 [L]
+    One boxed shared run future per connection bounds nested driver stacks.
+
+  src/driver.rs:426,467,471 [A+L]
+    One erased handler future per request. This erasure is internal, not a
+    public API constraint. I compiled a static-F prototype with safe stack
+    pinning inside the existing runtime task, then rejected and removed it.
+    Reason: arbitrary F would move by value through spawn_task/Task::new and
+    nested async-scope construction, instead of moving a fixed-size boxed
+    pointer. Without large-handler layout/move measurements, that conflicts
+    with the requirement not to create larger hot moves or inflated stacks.
+    No prototype changes remain.
+
+  src/io.rs:40,49 [A]
+    Two reusable pinned operation slots per native or generic connection.
+    Their self-borrowing async operation futures survive ordinary Io moves.
+
+  src/io/stream.rs:15-36 [L]
+    One box per generic half, retained for the connection. Unlike the HTTP1
+    workers, this adapter transfers halves into and out of operation slots on
+    every completion. Inlining them adds repeated moves of potentially large
+    buffers. No per-operation replacement boxes are created.
+
+  src/io.rs:90,113 [A]
+    Wake futures occupy a movable BTreeMap and contain an async io_scope with
+    borrowed sleep/cancellation state. Pinning just the inner sleep is not
+    equivalent to pinning the complete future. Removal needs a different timer
+    representation with preserved scope settlement.
+
+  src/driver.rs:910,957 [A+E, indirect]
+    Producer and handler calls to spawn_task acquire the runtime's pinned,
+    heterogeneous task allocation. kimojio/src/task.rs:231 owns that allocation.
+    This is separate from a producer stream box or handler future box.
+    Runtime task ownership is outside this task's edit scope.
+
+HTTP1 STATIC EXAMPLE:
+
+  src/app.rs:4,174; src/composite.rs:72 [O]
+    Owned receive storage and the 16-KiB file buffer cross operation/completion
+    boundaries. Fixed-sized payload ownership is necessary; Vec still allocates.
+
+  src/ring.rs:42,53,151 [A]
+    The submitted operation remains at a stable address until its original CQE.
+    Pending and Event transfer the same allocation. FileOperation::entry uses
+    pointers to inline open_how/statx fields (src/file.rs:129-150). Cancellation
+    acknowledgment alone cannot release those fields.
+
+  src/main.rs:5 [C+E]
+    The main function erases heterogeneous errors. Allocation is on cold errors.
+
+WEBSOCKET CHAT EXAMPLE:
+
+  src/chat.rs:10,248 [O]
+    Owned runtime-sized receive buffer, transferred across HTTP upgrade.
+  src/chat.rs:110,112,259,556 [L]
+    Boxed HTTP/WebSocket alternatives keep each connection slot small and avoid
+    moving large machine values through extraction/upgrade transitions.
+    The protocol states are movable; these are not recursive or Pin requirements.
+  src/chat.rs:148; src/driver.rs:294 [O]
+    Runtime-sized fixed-capacity connection/socket tables.
+  src/hub.rs:110,186,219,380,800-815 [O]
+    Shared message storage, assembly capacity, per-client queues, and client
+    slots obey explicit byte budgets. Boxed slices provide exact logical
+    capacity. Vec would retain an allocation and add capacity metadata.
+  src/hub.rs:546 [no allocation]
+    Box::new([]) is empty storage and does not allocate payload memory.
+  src/driver.rs:477,518,536 [A+E, indirect]
+    Execute/accept/timer tasks use the runtime's pinned task allocation.
+    The root retains task handles until settlement. No extra caller Box exists.
+
+HTTP1/HTTP2 FSM COMPOSITION SURFACE:
+
+  kimojio-fsm-http2/src/http/mod.rs:38-56,101-112,157-173 [L]
+    Client/server children, detecting state, and replay alternatives retain
+    boxed state. These boxes avoid large enum/slot layouts and move only pointers
+    during selection and replay transitions. The protocol machines are not
+    recursively defined or immovable. Detection allocates two candidate children
+    plus one outer detecting state; direct selection allocates one child box.
+  src/http/detect.rs:274; src/api.rs:121 [O]
+    Read pages own runtime-sized byte storage behind Rc<Page>. Detection shares
+    the same page API as the direct engine. Leases can outlive transport close.
+  src/api.rs:23 [no allocation]
+    SendBuffer for Box<[u8]> is trait support, not an allocation site.
+
+SUPPLEMENTARY BOXES
+
+  kimojio-fsm-http2/src/server/h2/endpoint.rs:225,258 [L, legacy internals]
+    The old endpoint boxes its outbound queue. The queue contains VecDeque and
+    a sequence, not recursive state. Borrowed transactions do not themselves
+    require this box. It is a legacy layout choice, not used by the direct
+    wrappers' core Connection path. No unrelated legacy engine refactor was made.
+
+  kimojio-http1/examples/client.rs:82,85;
+  examples/keepalive_bench.rs:248,251,293,295;
+  kimojio-http2/examples/interop_support/mod.rs:49,53,702,706;
+  examples/interop_support/server.rs:70,78 [C+E+L]
+    Example/fixture branches select native or generic future types at runtime.
+    Boxed erasure keeps a common return type and small surrounding future.
+    The separate concrete watchdog box at server.rs:80 was removed.
+
+  kimojio-http2/examples/interop_support/mod.rs:383-384,421,426,429,645 [A/C/E]
+    prime polls send before placing it into a concurrent collection. Its pinned
+    box survives that move. The ready/pending result branches erase distinct
+    future types. consume's box is fixture convenience in FuturesUnordered,
+    which could own a typed future instead. That changes fixture task layout and
+    was not pursued as a wrapper hot-path improvement.
+
+  kimojio-http1/examples/bench_client.rs:121,129 [L]
+    Large fixed histogram storage avoids inflating each benchmark task's future.
+  Main/entry Result<Box<dyn Error>> sites in HTTP1 examples and HTTP2 benches
+    [C+E]: cold heterogeneous error returns, not request-path allocation.
+
+  All cfg(test), tests/, and benchmark-only occurrences are in inventory.txt.
+    Most Pin<Box<_>> sites keep manually polled cancellation futures alive until
+    explicit drop or move between test combinators. Dynamic native/generic test
+    branches need a shared future type. Several lexical-only boxes are
+    replaceable with pin!, but are test convenience, not production overhead.
+    Ring tests retain operation buffers until real CQEs. Box::new(()) at
+    examples/http1-static/src/ring.rs:286 does not allocate.
+    Tests were not broadly rewritten merely to remove non-production boxes.
+
+LIMITS AND DECISIONS
+
+No public type erasure was removed, no unsafe pin shortcut was added, and no
+per-stream replacement allocation was introduced. Native setup descriptor boxes,
+internal handler erasure, optional fixture boxes, and large-layout boundaries
+remain explicit future design decisions rather than alleged safety necessities.
+The two accepted commits are independent of HTTP1-core and runtime work.

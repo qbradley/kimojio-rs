@@ -1,0 +1,23 @@
+{
+  "base": {
+    "binary": "/workspace/kimojio-rs/target/http1-core-study/frozen-base/roundtrip",
+    "sha256": "289eb94b361ab0225a862f8e1c0fba3fd8d0a56b74472d9f12c131332f344ef5",
+    "source": "7c7fe7415029b91c17aea61707656fd620b9c02d",
+    "build": "CARGO_PROFILE_BENCH_DEBUG=1 cargo bench -p kimojio-fsm-http1 --bench roundtrip --no-run",
+    "size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n2487900\t  60824\t   1360\t2550084\t 26e944\t/workspace/kimojio-rs/target/http1-core-study/frozen-base/roundtrip\n"
+  },
+  "role": {
+    "binary": "/workspace/kimojio-rs/target/http1-core-study/frozen-role/roundtrip",
+    "sha256": "849a4dccf30f893177378795ae55a9ad9c49ced5c2e0b6566dd3f8e93582891a",
+    "source": "2fd535dd196f119c3f32fe86afc85a277657a164",
+    "build": "CARGO_PROFILE_BENCH_DEBUG=1 cargo bench -p kimojio-fsm-http1 --bench roundtrip --no-run",
+    "size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n2521760\t  60696\t   4448\t2586904\t 277918\t/workspace/kimojio-rs/target/http1-core-study/frozen-role/roundtrip\n"
+  },
+  "metadata": {
+    "binary": "/workspace/kimojio-rs/target/http1-core-study/frozen-metadata/roundtrip",
+    "sha256": "bb8db06612cecbafb56e65847085a5acb7aa3877ba79701f892a2ea8a1f97094",
+    "source": "a064dd4e3f856646670b7d0b96953e7e695ca334",
+    "build": "CARGO_PROFILE_BENCH_DEBUG=1 cargo bench -p kimojio-fsm-http1 --bench roundtrip --no-run",
+    "size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n2487700\t  60824\t   1552\t2550076\t 26e93c\t/workspace/kimojio-rs/target/http1-core-study/frozen-metadata/roundtrip\n"
+  }
+}

@@ -1,0 +1,386 @@
+[
+  {
+    "timers": false,
+    "cell": "http1/chunked_1mib/client/continue",
+    "candidate": "role",
+    "baseline_ns": 55040.0,
+    "candidate_ns": 65908.0,
+    "ratio": 1.0015881991213136,
+    "ratio_ci95": [
+      0.901612468038917,
+      1.1281919672209737
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/chunked_1mib/client/continue",
+    "candidate": "metadata",
+    "baseline_ns": 55040.0,
+    "candidate_ns": 49546.0,
+    "ratio": 0.9252499183828616,
+    "ratio_ci95": [
+      0.7699813459479167,
+      1.1309216126435888
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/chunked_1mib/client/yield",
+    "candidate": "role",
+    "baseline_ns": 50183.0,
+    "candidate_ns": 53279.0,
+    "ratio": 0.9772845224021427,
+    "ratio_ci95": [
+      0.8419104429512599,
+      1.110996860057576
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/chunked_1mib/client/yield",
+    "candidate": "metadata",
+    "baseline_ns": 50183.0,
+    "candidate_ns": 47277.0,
+    "ratio": 0.8885627014390772,
+    "ratio_ci95": [
+      0.7484919940936103,
+      1.0430854742721547
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/chunked_1mib/server/continue",
+    "candidate": "role",
+    "baseline_ns": 55680.0,
+    "candidate_ns": 51372.0,
+    "ratio": 0.9352202078138289,
+    "ratio_ci95": [
+      0.9070819672783316,
+      0.9771251182255094
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/chunked_1mib/server/continue",
+    "candidate": "metadata",
+    "baseline_ns": 55680.0,
+    "candidate_ns": 52997.0,
+    "ratio": 0.98842131057563,
+    "ratio_ci95": [
+      0.9298850899048714,
+      1.0863559942288628
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/chunked_1mib/server/yield",
+    "candidate": "role",
+    "baseline_ns": 52373.0,
+    "candidate_ns": 52155.0,
+    "ratio": 0.9239752212271005,
+    "ratio_ci95": [
+      0.8489207170090429,
+      0.9958675945792296
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/chunked_1mib/server/yield",
+    "candidate": "metadata",
+    "baseline_ns": 52373.0,
+    "candidate_ns": 51012.0,
+    "ratio": 0.9301172780016609,
+    "ratio_ci95": [
+      0.7925132150292807,
+      1.085783162115636
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/fixed_128b/client/continue",
+    "candidate": "role",
+    "baseline_ns": 2158.5,
+    "candidate_ns": 2514.2000000000003,
+    "ratio": 1.0136646044610895,
+    "ratio_ci95": [
+      0.838150766316803,
+      1.1873618040721716
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/fixed_128b/client/continue",
+    "candidate": "metadata",
+    "baseline_ns": 2158.5,
+    "candidate_ns": 1846.5,
+    "ratio": 0.8441390521065012,
+    "ratio_ci95": [
+      0.7258531445424745,
+      0.9595786285533275
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/fixed_128b/client/yield",
+    "candidate": "role",
+    "baseline_ns": 2135.2000000000003,
+    "candidate_ns": 2042.8999999999999,
+    "ratio": 1.0404529558749165,
+    "ratio_ci95": [
+      0.9811598648121884,
+      1.1225167254371426
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/fixed_128b/client/yield",
+    "candidate": "metadata",
+    "baseline_ns": 2135.2000000000003,
+    "candidate_ns": 1777.7,
+    "ratio": 0.8553126590749078,
+    "ratio_ci95": [
+      0.7840727112185487,
+      0.9313836965551074
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/fixed_128b/server/continue",
+    "candidate": "role",
+    "baseline_ns": 3339.4,
+    "candidate_ns": 2445.5,
+    "ratio": 0.7527542334563809,
+    "ratio_ci95": [
+      0.6659391298165321,
+      0.8371656409079623
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/fixed_128b/server/continue",
+    "candidate": "metadata",
+    "baseline_ns": 3339.4,
+    "candidate_ns": 2011.4999999999998,
+    "ratio": 0.6532984034822426,
+    "ratio_ci95": [
+      0.5843066611757953,
+      0.7219382388118578
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/fixed_128b/server/yield",
+    "candidate": "role",
+    "baseline_ns": 2759.7999999999997,
+    "candidate_ns": 2380.3,
+    "ratio": 0.8274333512081793,
+    "ratio_ci95": [
+      0.690278486519948,
+      1.0017414112195082
+    ]
+  },
+  {
+    "timers": false,
+    "cell": "http1/fixed_128b/server/yield",
+    "candidate": "metadata",
+    "baseline_ns": 2759.7999999999997,
+    "candidate_ns": 1899.5,
+    "ratio": 0.6055906625144374,
+    "ratio_ci95": [
+      0.5301959140164803,
+      0.6877954496774362
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/chunked_1mib/client/continue",
+    "candidate": "role",
+    "baseline_ns": 55031.0,
+    "candidate_ns": 49432.0,
+    "ratio": 0.8633109605547292,
+    "ratio_ci95": [
+      0.7957009267062705,
+      0.930245406082153
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/chunked_1mib/client/continue",
+    "candidate": "metadata",
+    "baseline_ns": 55031.0,
+    "candidate_ns": 51565.0,
+    "ratio": 0.9157296569748001,
+    "ratio_ci95": [
+      0.8302402407839055,
+      1.0026170236939318
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/chunked_1mib/client/yield",
+    "candidate": "role",
+    "baseline_ns": 53291.0,
+    "candidate_ns": 48072.0,
+    "ratio": 0.8634320604019649,
+    "ratio_ci95": [
+      0.7743930456108346,
+      0.9334551528038249
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/chunked_1mib/client/yield",
+    "candidate": "metadata",
+    "baseline_ns": 53291.0,
+    "candidate_ns": 49410.0,
+    "ratio": 0.9563258051704767,
+    "ratio_ci95": [
+      0.8127112075016316,
+      1.1237465191491731
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/chunked_1mib/server/continue",
+    "candidate": "role",
+    "baseline_ns": 56306.0,
+    "candidate_ns": 53117.0,
+    "ratio": 0.9595568588325969,
+    "ratio_ci95": [
+      0.8989469296188857,
+      1.041349289708809
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/chunked_1mib/server/continue",
+    "candidate": "metadata",
+    "baseline_ns": 56306.0,
+    "candidate_ns": 52791.0,
+    "ratio": 0.9381388176143295,
+    "ratio_ci95": [
+      0.8798725506690298,
+      1.0005608183852008
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/chunked_1mib/server/yield",
+    "candidate": "role",
+    "baseline_ns": 55767.0,
+    "candidate_ns": 53715.0,
+    "ratio": 0.9233414762664832,
+    "ratio_ci95": [
+      0.8217984750556047,
+      1.0257175471250182
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/chunked_1mib/server/yield",
+    "candidate": "metadata",
+    "baseline_ns": 55767.0,
+    "candidate_ns": 51202.0,
+    "ratio": 0.8760080600236722,
+    "ratio_ci95": [
+      0.7791667391156882,
+      0.9454200211929972
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/fixed_128b/client/continue",
+    "candidate": "role",
+    "baseline_ns": 2377.8,
+    "candidate_ns": 2122.7,
+    "ratio": 0.9610605864903035,
+    "ratio_ci95": [
+      0.8394170417149143,
+      1.1218282867137948
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/fixed_128b/client/continue",
+    "candidate": "metadata",
+    "baseline_ns": 2377.8,
+    "candidate_ns": 1843.5,
+    "ratio": 0.8454693422564211,
+    "ratio_ci95": [
+      0.7326205451916702,
+      0.9728072546729041
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/fixed_128b/client/yield",
+    "candidate": "role",
+    "baseline_ns": 2142.7000000000003,
+    "candidate_ns": 2104.9,
+    "ratio": 0.9439412226744373,
+    "ratio_ci95": [
+      0.8486764159780348,
+      1.0262300180175523
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/fixed_128b/client/yield",
+    "candidate": "metadata",
+    "baseline_ns": 2142.7000000000003,
+    "candidate_ns": 1850.9,
+    "ratio": 0.8223213565666533,
+    "ratio_ci95": [
+      0.7374155746427071,
+      0.9182996708801835
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/fixed_128b/server/continue",
+    "candidate": "role",
+    "baseline_ns": 2953.7,
+    "candidate_ns": 2557.1000000000004,
+    "ratio": 0.8643271768564674,
+    "ratio_ci95": [
+      0.8314760816720447,
+      0.8952965927464429
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/fixed_128b/server/continue",
+    "candidate": "metadata",
+    "baseline_ns": 2953.7,
+    "candidate_ns": 2088.8,
+    "ratio": 0.6928791136978055,
+    "ratio_ci95": [
+      0.6681002907700587,
+      0.7094673484038532
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/fixed_128b/server/yield",
+    "candidate": "role",
+    "baseline_ns": 2881.7,
+    "candidate_ns": 2475.2000000000003,
+    "ratio": 0.829725758951181,
+    "ratio_ci95": [
+      0.7254448132847618,
+      0.9436154678983519
+    ]
+  },
+  {
+    "timers": true,
+    "cell": "http1/fixed_128b/server/yield",
+    "candidate": "metadata",
+    "baseline_ns": 2881.7,
+    "candidate_ns": 1960.2,
+    "ratio": 0.6533877395683453,
+    "ratio_ci95": [
+      0.6004675914652128,
+      0.6922253052978851
+    ]
+  }
+]

@@ -1,0 +1,17 @@
+Benchmarking http1/fixed_128b/server/continue: Profiling for 1.0000 s
+Benchmarking http1/fixed_128b/server/continue: Complete (Analysis Disabled)
+
+
+ Performance counter stats for 'taskset -c 2 target/http1-core-study/frozen-base/roundtrip --bench --profile-time 1 fixed_128b/server/continue':
+
+   <not supported>      cycles                                                                
+   <not supported>      instructions                                                          
+   <not supported>      branches                                                              
+   <not supported>      branch-misses                                                         
+
+       1.476943016 seconds time elapsed
+
+       1.472878000 seconds user
+       0.003999000 seconds sys
+
+
