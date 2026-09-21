@@ -202,6 +202,68 @@ fn deadline_selection_pairs_kind_and_generation_across_all_timer_combinations() 
 }
 
 #[test]
+fn head_scratch_obeys_capacity_and_exposes_only_parsed_headers() {
+    fn check<const SERVER: bool>() {
+        for max_headers in [1, 3, 128] {
+            for count in [0, 1, max_headers, max_headers + 1] {
+                let mut core = Core::<Vec<u8>, Vec<u8>, SERVER>::new(
+                    ConnectionId {
+                        slot: 1,
+                        generation: 1,
+                    },
+                    Config {
+                        max_headers,
+                        ..configuration()
+                    },
+                    vec![0; 64],
+                    Tick(0),
+                )
+                .unwrap();
+                if !SERVER {
+                    let mut outgoing = request();
+                    outgoing.head.version = Version::Http10;
+                    outgoing.head.headers = &[];
+                    core.request(outgoing).unwrap();
+                }
+                // HTTP/1.0 requests and 204 responses permit zero header fields.
+                let mut wire = if SERVER {
+                    format!("GET /{count} HTTP/1.0\r\n")
+                } else {
+                    format!("HTTP/1.1 204 {count}\r\n")
+                };
+                for index in 0..count {
+                    wire.push_str(&format!("X-{index}: value-{index}\r\n"));
+                }
+                wire.push_str("\r\n");
+                let result = core.metadata(wire.as_bytes(), &mut CloseOnly, |_, _, head| {
+                    let (count, headers) = match head {
+                        ParsedHead::Request(head) => (&head.target[1..], head.headers),
+                        ParsedHead::Response(head, informational) => {
+                            assert!(!informational);
+                            (head.reason, head.headers)
+                        }
+                    };
+                    assert_eq!(headers.len(), count.parse::<usize>().unwrap());
+                    for (index, header) in headers.iter().enumerate() {
+                        assert_eq!(header.name, format!("X-{index}"));
+                        assert_eq!(header.value, format!("value-{index}").as_bytes());
+                    }
+                    None
+                });
+                if count > max_headers {
+                    assert!(matches!(result, Err(Failure::Limit)));
+                } else {
+                    assert!(matches!(result, Ok(None)));
+                    assert_eq!(core.metadata_fields, count);
+                }
+            }
+        }
+    }
+    check::<true>();
+    check::<false>();
+}
+
+#[test]
 fn informational_completion_cannot_settle_queued_final_metadata() {
     fn issue(core: &mut Core<Vec<u8>, Vec<u8>, true>) -> WriteOp<Vec<u8>> {
         let mut op = core.output.take().unwrap();
@@ -222,10 +284,8 @@ fn informational_completion_cannot_settle_queued_final_metadata() {
                 Tick(0),
             )
             .unwrap();
-            let mut headers = [httparse::EMPTY_HEADER; 128];
             core.metadata(
                 b"GET / HTTP/1.1\r\nHost: a\r\n\r\n",
-                &mut headers,
                 &mut CloseOnly,
                 |_, _, _| None,
             )

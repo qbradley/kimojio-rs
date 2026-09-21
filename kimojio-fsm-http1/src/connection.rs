@@ -6,6 +6,7 @@ use crate::state::{
 };
 use crate::*;
 use std::io::Write;
+use std::mem::MaybeUninit;
 
 #[path = "coordinator.rs"]
 mod coordinator;
@@ -1362,7 +1363,6 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
     ) -> Option<P::Output> {
         let mut bytes = std::mem::take(&mut self.head);
-        let mut headers = [httparse::EMPTY_HEADER; 128];
         let accounting = if matches!(self.rx, Rx::Head | Rx::Trailers) {
             self.metadata_bytes = self.metadata_bytes.saturating_add(bytes.len());
             self.metadata_bytes <= self.config.max_head_bytes
@@ -1375,12 +1375,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         } else if !codec::strict_lines(&bytes) {
             Err(Failure::Protocol)
         } else {
-            self.metadata(
-                &bytes,
-                &mut headers[..self.config.max_headers],
-                ports,
-                callback,
-            )
+            self.metadata(&bytes, ports, callback)
         };
         bytes.clear();
         self.head = bytes;
@@ -1393,10 +1388,9 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         }
     }
 
-    fn metadata<'a, P: Ports<B, W>>(
+    fn metadata<P: Ports<B, W>>(
         &mut self,
-        bytes: &'a [u8],
-        headers: &'a mut [Header<'a>],
+        bytes: &[u8],
         ports: &mut P,
         callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
     ) -> Result<Option<P::Output>, Failure> {
@@ -1429,8 +1423,11 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                 Ok(None)
             }
             Rx::Trailers => {
+                // Standalone trailer parsing still requires initialized storage.
+                let mut headers = [httparse::EMPTY_HEADER; 128];
                 let httparse::Status::Complete((count, trailers)) =
-                    httparse::parse_headers(bytes, headers).map_err(parse_error)?
+                    httparse::parse_headers(bytes, &mut headers[..self.config.max_headers])
+                        .map_err(parse_error)?
                 else {
                     return Err(Failure::Protocol);
                 };
@@ -1454,9 +1451,12 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                 Ok(ports.trailers(self.exchange.as_ref().unwrap().id, trailers))
             }
             Rx::Head if SERVER => {
-                let mut request = httparse::Request::new(headers);
-                let httparse::Status::Complete(count) =
-                    request.parse(bytes).map_err(parse_error)?
+                // Initialize only parsed headers, and no header scratch for chunk metadata.
+                let mut headers = [MaybeUninit::uninit(); 128];
+                let mut request = httparse::Request::new(&mut []);
+                let httparse::Status::Complete(count) = request
+                    .parse_with_uninit_headers(bytes, &mut headers[..self.config.max_headers])
+                    .map_err(parse_error)?
                 else {
                     return Err(Failure::Protocol);
                 };
@@ -1518,9 +1518,15 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                 Ok(callback(ports, id, ParsedHead::Request(head)))
             }
             Rx::Head => {
-                let mut response = httparse::Response::new(headers);
-                let httparse::Status::Complete(count) =
-                    response.parse(bytes).map_err(parse_error)?
+                let mut headers = [MaybeUninit::uninit(); 128];
+                let mut response = httparse::Response::new(&mut []);
+                let httparse::Status::Complete(count) = httparse::ParserConfig::default()
+                    .parse_response_with_uninit_headers(
+                        &mut response,
+                        bytes,
+                        &mut headers[..self.config.max_headers],
+                    )
+                    .map_err(parse_error)?
                 else {
                     return Err(Failure::Protocol);
                 };
