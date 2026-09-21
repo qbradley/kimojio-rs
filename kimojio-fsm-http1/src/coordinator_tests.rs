@@ -754,3 +754,53 @@ fn clean_idle_eof_cancels_the_deadline_before_close_issuance() {
     assert_eq!(core.next_transition(), Some(Transition::Close));
     core.assert_invariants();
 }
+
+#[test]
+fn metadata_batches_only_until_a_section_or_deadline_boundary() {
+    let request = b"GET / HTTP/1.1\r\nHost: a\r\n\r\n";
+    for idle in [false, true] {
+        let mut core = Core::<Vec<u8>, Vec<u8>, true>::new(
+            ConnectionId {
+                slot: 4,
+                generation: 1,
+            },
+            Config {
+                head_timeout_ns: Some(100),
+                idle_timeout_ns: Some(200),
+                ..Config::default()
+            },
+            vec![0; 128],
+            Tick(0),
+        )
+        .unwrap();
+        let mut observer = Observer::new(Drive::Yield);
+        drive(&mut core, &mut observer);
+        receive(
+            &mut core,
+            &mut observer,
+            &[request.as_slice(), request.as_slice()].concat(),
+        );
+        if idle {
+            core.set_deadline(TimerPhase::Idle, Some(200)).unwrap();
+            core.advance(Transition::Deadline, &mut observer, head);
+        }
+        observer.trace.clear();
+        assert_eq!(core.next_transition(), Some(Transition::Metadata));
+        core.advance(Transition::Metadata, &mut observer, head);
+        if idle {
+            assert_eq!(core.start, 1);
+            assert!(observer.trace.is_empty());
+            assert_eq!(core.next_transition(), Some(Transition::Deadline));
+            core.advance(Transition::Deadline, &mut observer, head);
+            assert_eq!(observer.deadline.unwrap().at, Tick(100));
+            assert_eq!(core.next_transition(), Some(Transition::Metadata));
+            core.advance(Transition::Metadata, &mut observer, head);
+        }
+        assert_eq!(core.start, request.len());
+        assert_eq!(observer.trace.last().unwrap(), "request");
+        assert_eq!(observer.trace.len(), if idle { 2 } else { 1 });
+        assert_eq!(core.rx, Rx::Done);
+        assert_eq!(core.end - core.start, request.len());
+        core.assert_invariants();
+    }
+}

@@ -574,14 +574,6 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             self.fail(Failure::SequenceExhausted);
             return None;
         }
-        let byte = self.receive.buffer().unwrap().as_ref()[self.start];
-        self.start += 1;
-        if (byte == b'\n' && self.head.last() != Some(&b'\r'))
-            || (self.head.last() == Some(&b'\r') && byte != b'\n')
-        {
-            self.fail(Failure::Protocol);
-            return None;
-        }
         let limit = if matches!(self.rx, Rx::Size | Rx::ChunkCrlf) {
             self.config.max_chunk_line_bytes
         } else {
@@ -592,24 +584,37 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         } else {
             0
         };
-        if self.head.len().saturating_add(retained) >= limit {
-            self.fail(Failure::Limit);
-            return None;
-        }
-        if self.head.len() == self.head.capacity() {
-            let capacity = self.head.len().saturating_mul(2).max(32).min(limit);
-            self.head.reserve_exact(capacity - self.head.len());
-        }
-        self.head.push(byte);
-        let complete = match self.rx {
-            Rx::Head => self.head.ends_with(b"\r\n\r\n"),
-            Rx::Trailers => self.head == b"\r\n" || self.head.ends_with(b"\r\n\r\n"),
-            _ => self.head.ends_with(b"\r\n"),
-        };
-        if complete {
-            self.process_metadata(ports, head_callback)
-        } else {
-            None
+        let deadline_pending = self.timers.notification == Notification::Pending;
+        loop {
+            let byte = self.receive.buffer().unwrap().as_ref()[self.start];
+            self.start += 1;
+            if (byte == b'\n' && self.head.last() != Some(&b'\r'))
+                || (self.head.last() == Some(&b'\r') && byte != b'\n')
+            {
+                self.fail(Failure::Protocol);
+                return None;
+            }
+            if self.head.len().saturating_add(retained) >= limit {
+                self.fail(Failure::Limit);
+                return None;
+            }
+            if self.head.len() == self.head.capacity() {
+                let capacity = self.head.len().saturating_mul(2).max(32).min(limit);
+                self.head.reserve_exact(capacity - self.head.len());
+            }
+            self.head.push(byte);
+            let complete = match self.rx {
+                Rx::Head => self.head.ends_with(b"\r\n\r\n"),
+                Rx::Trailers => self.head == b"\r\n" || self.head.ends_with(b"\r\n\r\n"),
+                _ => self.head.ends_with(b"\r\n"),
+            };
+            if complete {
+                return self.process_metadata(ports, head_callback);
+            }
+            // Preserve the deadline callback boundary before consuming more bytes.
+            if self.start == self.end || deadline_pending {
+                return None;
+            }
         }
     }
 
