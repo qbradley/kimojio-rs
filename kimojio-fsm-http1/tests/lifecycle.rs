@@ -12,6 +12,68 @@ fn timed() -> Config {
     }
 }
 
+#[test]
+fn reused_server_head_deadline_does_not_depend_on_an_idle_timer() {
+    for idle_timeout_ns in [None, Some(200)] {
+        for pipelined in [false, true] {
+            let mut machine = server(Config {
+                head_timeout_ns: Some(100),
+                idle_timeout_ns,
+                ..config()
+            });
+            let Some(Event::Read(read)) = next_server(&mut machine) else {
+                panic!("expected first read")
+            };
+            machine
+                .complete_read(fill(
+                    read,
+                    if pipelined {
+                        b"GET / HTTP/1.1\r\nHost: a\r\n\r\nG"
+                    } else {
+                        b"GET / HTTP/1.1\r\nHost: a\r\n\r\n"
+                    },
+                ))
+                .unwrap();
+            let Some(Event::Request(exchange, _)) = next_server(&mut machine) else {
+                panic!("expected request")
+            };
+            machine
+                .respond(exchange, Response::new(200, "OK", &[], BodyLength::Empty))
+                .unwrap();
+            loop {
+                match next_server(&mut machine).unwrap() {
+                    Event::Write(write) => machine.complete_write(finish_write(write)).unwrap(),
+                    Event::Incoming(_) => {}
+                    Event::Finished(finished) => {
+                        assert!(finished.reusable);
+                        break;
+                    }
+                    other => panic!("unexpected event {other:?}"),
+                }
+            }
+            machine.observe_time(Tick(10)).unwrap();
+            if !pipelined {
+                let Some(Event::Read(read)) = next_server(&mut machine) else {
+                    panic!("expected reused read")
+                };
+                machine.complete_read(fill(read, b"G")).unwrap();
+            }
+            let mut deadlines = Vec::new();
+            while let Some(event) = machine.next(&mut Capture) {
+                match event {
+                    Event::Deadline(Some(deadline)) => deadlines.push(deadline),
+                    Event::Deadline(None) => {}
+                    Event::Read(_) => break,
+                    other => panic!("unexpected event {other:?}"),
+                }
+            }
+            let head = deadlines.last().expect("missing head deadline");
+            assert_eq!(head.at, Tick(110));
+            machine.expire(*head, Tick(110)).unwrap();
+        }
+    }
+}
+
 fn deadline_client(client: &mut Client<B>) -> Deadline {
     let Some(Event::Deadline(Some(deadline))) = client.next(&mut Capture) else {
         panic!("missing deadline")

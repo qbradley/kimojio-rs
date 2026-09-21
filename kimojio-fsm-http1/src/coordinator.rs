@@ -253,7 +253,9 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         if self.start < self.end && active {
             return match self.rx {
                 Rx::Eof if self.no_content => Some(Transition::RejectBody),
-                Rx::Head | Rx::Size | Rx::ChunkCrlf | Rx::Trailers => Some(Transition::Metadata),
+                Rx::AwaitingRequest | Rx::Head | Rx::Size | Rx::ChunkCrlf | Rx::Trailers => {
+                    Some(Transition::Metadata)
+                }
                 Rx::Fixed(_) | Rx::Chunk(_) | Rx::Eof if self.credit != 0 => Some(Transition::Body),
                 _ => None,
             };
@@ -265,7 +267,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             return (!matches!(self.rx, Rx::Done | Rx::Paused)).then_some(Transition::Eof);
         }
         let needs_input = match self.rx {
-            Rx::Head | Rx::Size | Rx::ChunkCrlf | Rx::Trailers => true,
+            Rx::AwaitingRequest | Rx::Head | Rx::Size | Rx::ChunkCrlf | Rx::Trailers => true,
             Rx::Fixed(_) | Rx::Chunk(_) | Rx::Eof => self.credit != 0 || self.no_content,
             Rx::Done | Rx::Paused => false,
         };
@@ -510,7 +512,11 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         self.incoming_connection_fields.clear();
         self.outgoing_connection_fields.clear();
         if reusable {
-            self.rx = Rx::Head;
+            self.rx = if SERVER {
+                Rx::AwaitingRequest
+            } else {
+                Rx::Head
+            };
             if self
                 .set_deadline(TimerPhase::Idle, self.config.idle_timeout_ns)
                 .is_err()
@@ -560,17 +566,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         ports: &mut P,
         head_callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
     ) -> Option<P::Output> {
-        if self.rx == Rx::Head
-            && SERVER
-            && self.head.is_empty()
-            && self
-                .timers
-                .phase
-                .is_some_and(|(kind, _)| kind == TimerPhase::Idle)
-            && self
-                .set_deadline(TimerPhase::Head, self.config.head_timeout_ns)
-                .is_err()
-        {
+        if self.rx == Rx::AwaitingRequest && self.start_request_head().is_err() {
             self.fail(Failure::SequenceExhausted);
             return None;
         }
@@ -618,6 +614,12 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         }
     }
 
+    pub(super) fn start_request_head(&mut self) -> Result<(), CommandError> {
+        debug_assert_eq!(self.rx, Rx::AwaitingRequest);
+        self.rx = Rx::Head;
+        self.set_deadline(TimerPhase::Head, self.config.head_timeout_ns)
+    }
+
     fn deliver_body<P: Ports<B, W>>(&mut self, ports: &mut P) -> Option<P::Output> {
         let left = match self.rx {
             Rx::Fixed(left) | Rx::Chunk(left) => left,
@@ -653,7 +655,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                 self.close_after = true;
                 self.incoming_ended();
             }
-            Rx::Head if self.head.is_empty() && self.exchange.is_none() => {
+            Rx::Head | Rx::AwaitingRequest if self.head.is_empty() && self.exchange.is_none() => {
                 self.lifecycle.begin_closing();
                 self.clear_deadlines();
             }

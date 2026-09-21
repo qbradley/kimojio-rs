@@ -503,6 +503,9 @@ It never causes a zero-byte transport write.
 
 The server starts with a head deadline.
 An idle persistent connection uses the idle deadline until the next request starts.
+The server records that receive phase independently of the optional idle timer.
+The first nonempty read or buffered request prefix starts the next head deadline even when idle timing is disabled.
+An idle EOF does not start a head deadline.
 The client starts idle and arms its response-head deadline when it accepts a request.
 That head deadline includes time spent on the upload.
 

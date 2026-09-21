@@ -1,5 +1,16 @@
 # HTTP/1 state costs, observability, and adapter boxing
 
+## Receive-phase promotion
+
+The explicit receive-phase correction is now integrated with role specialization and metadata batching.
+The original study and measurements below describe their separate baseline experiments.
+The reused-server head-deadline defect below is fixed.
+
+Core regressions cover enabled and disabled idle timing with buffered and separately received prefixes.
+Additional regressions cover native and generic wrappers, plus selected and detected HTTP/1 composition.
+They cover partial-head timeouts, exact wire responses, original-operation settlement, actual close, idle EOF, and unchanged initial timing.
+The wrapper cases use virtual time.
+
 ## Conclusions and delivered changes
 
 The strongest measured opportunity is repeated global dispatch during metadata parsing, not the success branch in `complete_read`.

@@ -781,6 +781,7 @@ fn metadata_batches_only_until_a_section_or_deadline_boundary() {
             &[request.as_slice(), request.as_slice()].concat(),
         );
         if idle {
+            core.rx = Rx::AwaitingRequest;
             core.set_deadline(TimerPhase::Idle, Some(200)).unwrap();
             core.advance(Transition::Deadline, &mut observer, head);
         }

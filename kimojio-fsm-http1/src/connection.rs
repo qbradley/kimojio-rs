@@ -22,6 +22,7 @@ enum Rx {
     Eof,
     Done,
     Paused,
+    AwaitingRequest,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -842,17 +843,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                 self.end = op.range.start + n;
                 self.eof |= n == 0;
                 if n != 0 {
-                    if SERVER
-                        && self.rx == Rx::Head
-                        && self.exchange.is_none()
-                        && self
-                            .timers
-                            .phase
-                            .is_some_and(|(kind, _)| kind == TimerPhase::Idle)
-                        && self
-                            .set_deadline(TimerPhase::Head, self.config.head_timeout_ns)
-                            .is_err()
-                    {
+                    if self.rx == Rx::AwaitingRequest && self.start_request_head().is_err() {
                         self.fail(Failure::SequenceExhausted);
                     } else {
                         self.progress();
@@ -1223,6 +1214,9 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
     }
 
     fn assert_invariants(&self) {
+        if self.rx == Rx::AwaitingRequest {
+            debug_assert!(SERVER && self.exchange.is_none() && self.head.is_empty());
+        }
         match self.boundary {
             Boundary::None => {}
             Boundary::IncomingEnded => {
