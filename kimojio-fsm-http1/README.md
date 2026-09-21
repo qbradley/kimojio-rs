@@ -4,6 +4,94 @@ This crate contains HTTP/1 client and server state machines.
 The machines perform no I/O and read no clock.
 They have no dependency on Kimojio, io_uring, or HTTP/2.
 
+## Optional observations
+
+The independent Cargo features `metrics` and `diagnostics` are disabled by default.
+The core remains synchronous and reads no clock with either feature.
+
+### Snapshot metrics
+
+With `metrics`, `Client::metrics()` and `Server::metrics()` return a `Copy` value of type `MetricsSnapshot`.
+The getter allocates no storage, drives no transition, and resets no counter.
+`observed_at` contains the last caller-supplied `Tick`, not the time of the query.
+Snapshots contain connection identity, coarse lifecycle, active exchange, buffer gauges, body credit, outstanding-operation flags, primary failure, and lifetime counters.
+The lifecycle is descriptive, not permission to issue a command.
+
+```rust
+# #[cfg(feature = "metrics")]
+# {
+use kimojio_fsm_http1::{Config, ConnectionId, Server, Tick};
+let server = Server::new(
+    ConnectionId { slot: 1, generation: 1 },
+    Config::default(),
+    vec![0_u8; 8192],
+    Tick(0),
+).unwrap();
+let snapshot = server.metrics();
+assert_eq!(snapshot.counters.read_bytes, 0);
+assert_eq!(snapshot.observed_at, Tick(0));
+# }
+```
+
+Counters follow accepted operations, not attempted API calls.
+Rejected completions and stale deadlines do not change counters.
+Counters saturate at `u64::MAX`.
+Any overflow sets the sticky `saturated` flag without a protocol-state change.
+
+| Counter | Meaning |
+| --- | --- |
+| `read_completions`, `write_completions` | Accepted completions, including EOF, partial results, and errors |
+| `read_bytes` | Bytes in successful read completions, including framing |
+| `written_bytes_lower_bound` | Newly confirmed written bytes, including framing, without repeated cursor bytes |
+| `uncertain_write_completions` | Accepted write errors with unknown progress |
+| `body_deliveries`, `body_bytes_delivered` | Lease offers and offered bytes, including repeated offers after partial consumption |
+| `body_bytes_consumed` | Bytes consumed through accepted lease returns |
+| `producer_bytes_accepted` | Payload bytes accepted by `send_body`, not transport completion |
+| `exchanges_started` | Created exchange records, including records that subsequently fail head admission |
+| `exchanges_retired`, `exchanges_failed` | Retirement callbacks and retirements with an error result |
+| `cancellation_requests` | Issued cancellation requests, not completion of the original operation |
+| `deadline_expirations` | Accepted deadline expirations |
+
+The write total excludes unknown progress instead of inventing a byte count.
+Buffer gauges cover unconsumed input and metadata scratch storage, not total allocations or RSS.
+Unconsumed input includes bytes in an outstanding body lease.
+The read and write flags include readiness operations on their respective lanes.
+
+### Typed diagnostics
+
+With `diagnostics`, ports can implement `log(&mut self, ConnectionId, Tick, LogEvent)`.
+The default implementation does nothing.
+Events contain typed identities, counts, and outcomes, not URLs, headers, body bytes, or formatted strings.
+The callback returns `()` and cannot request a drive suspension.
+It must return promptly and must not reenter the machine.
+
+`LogEvent` covers operation issuance, cancellation, metadata delivery, body offers and returns, producer demand, source completion, incoming completion, and exchange retirement.
+It also covers deadline notifications, upgrade readiness, primary failure, and connection closure.
+The public enum lists the exact variants.
+
+Each normal event follows its committed transition and immediately precedes the corresponding capability callback.
+The callback still controls the ordinary yield through its existing `Option<Output>`.
+The first drive transition after a primary failure reports that failure once.
+API calls without ports do not invoke diagnostics immediately.
+The supplied `Tick` describes delivery time in the caller's time domain, not the historical time of failure.
+
+There is no diagnostic queue and no lossless API-attempt trace.
+Superseded deadline candidates and repeated shutdown commands do not create extra events.
+Rejected commands remain typed return errors that the adapter can report separately.
+Without another drive transition, a dropped machine does not promise delivery of its pending primary failure.
+
+### Disabled-cost contract
+
+Without `metrics`, the core contains no counters, counter updates, or snapshot API.
+Without `diagnostics`, it contains no diagnostic calls or failure-delivery flag.
+These are compile-time guarantees, not claims about identical CPU timing.
+With diagnostics enabled, a no-op port can still retain failure-delivery bookkeeping.
+
+Cargo unifies features across dependencies.
+The disabled-cost contract requires the feature to be absent from the resolved dependency graph.
+Wrappers and composites have their own forwarding features, which callers must enable on those crates.
+The [Kimojio wrapper](../kimojio-http1/README.md) provides asynchronous snapshot queries and a synchronous typed logger.
+
 ## Supported protocol surface
 
 The machines support HTTP/1.0 and HTTP/1.1 with one active exchange.

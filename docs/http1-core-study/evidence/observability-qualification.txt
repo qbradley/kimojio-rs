@@ -1,0 +1,48 @@
+HTTP/1 observability qualification
+
+Core, wrapper, and HTTP/1+HTTP/2 composite tests and doctests:
+  No observation features: 506 passed, 0 failed, 0 ignored.
+  Metrics only:            520 passed, 0 failed, 0 ignored.
+  Diagnostics only:        513 passed, 0 failed, 0 ignored.
+
+All features, also including the WebSocket FSM:
+                           588 passed, 0 failed, 0 ignored.
+
+The observation tests cover accepted and rejected completions, partial body
+consumption, repeated offers, uncertain write progress, saturation, stale
+deadlines, cancellation joins, and read-only snapshots.
+Diagnostic tests cover request/response callbacks, informational responses,
+readiness, trailers, body returns, closure, primary failures, and coalesced
+API calls. Composition tests cover prefetched-input replay and child selection.
+
+Wrapper tests exercise native and generic transports, exact byte counters,
+live and final snapshots, idle wakeup, cancellation, queued and blocked queries,
+startup failure, unpolled driver drop, duplicate binding, and real log delivery.
+The tests preserve old snapshots and correlate logs with completed exchanges.
+No observation tests remain ignored.
+
+Commands:
+  cargo fmt --all
+  cargo clippy
+  cargo clippy --all-targets --all-features
+  cargo test -p kimojio-fsm-http1 -p kimojio-http1 \
+    -p kimojio-fsm-http2 -p kimojio-fsm-websocket --all-features
+
+The feature matrix selects the first three packages with --no-default-features
+and either an empty feature list or these explicit forwarding features:
+  kimojio-fsm-http1/metrics,kimojio-http1/metrics,kimojio-fsm-http2/http1-metrics
+  kimojio-fsm-http1/diagnostics,kimojio-http1/diagnostics,kimojio-fsm-http2/http1-diagnostics
+
+Formatting and both Clippy commands passed.
+All-target/all-feature Clippy retained two unrelated byte_char_slices warnings
+in kimojio/src/pipe.rs:64-65. This change introduced no Clippy warning.
+
+An initial integrated run stopped because the filesystem was full.
+Task-owned incremental and composite build caches were removed.
+The complete qualification then passed with CARGO_INCREMENTAL=0.
+
+Limits:
+The snapshots and logs cover HTTP/1, including its use inside the composite.
+They do not cover the direct HTTP/2 engine.
+Diagnostic delivery requires a subsequent drive transition.
+Enabled-feature throughput was not measured.

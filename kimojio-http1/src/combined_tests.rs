@@ -72,7 +72,7 @@ async fn eager_native_slots_keep_exact_original_results_across_scheduler_modes()
             })
             .unwrap();
         let op = (0..32)
-            .find_map(|_| match client.next(&mut Ports) {
+            .find_map(|_| match client.next(&mut Ports::default()) {
                 Some(Event::Write(op)) => Some(op),
                 Some(Event::Deadline(_) | Event::SourceFinished(_)) | None => None,
                 _ => panic!("unexpected eager admission event"),
@@ -120,7 +120,7 @@ async fn eager_native_slots_keep_exact_original_results_across_scheduler_modes()
         };
         client.complete_write(completion).unwrap();
         let receipt = (0..32)
-            .find_map(|_| match client.next(&mut Ports) {
+            .find_map(|_| match client.next(&mut Ports::default()) {
                 Some(Event::BodySent(receipt)) => Some(receipt),
                 Some(Event::Cancel(_) | Event::Deadline(_) | Event::SourceFinished(_)) | None => {
                     None
@@ -142,7 +142,7 @@ async fn eager_native_slots_keep_exact_original_results_across_scheduler_modes()
         assert_eq!(receipt.result, Err(core::Failure::Cancelled));
         drop(receipt);
         let close = (0..32)
-            .find_map(|_| match client.next(&mut Ports) {
+            .find_map(|_| match client.next(&mut Ports::default()) {
                 Some(Event::Close(op)) => Some(op),
                 Some(Event::Deadline(_) | Event::ExchangeFinished(_)) | None => None,
                 _ => panic!("unexpected close event"),

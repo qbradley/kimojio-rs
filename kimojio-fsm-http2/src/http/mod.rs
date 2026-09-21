@@ -71,6 +71,15 @@ impl<B: SendBuffer> Client<B> {
         }
     }
 
+    /// Observes the selected HTTP/1 child without driving it.
+    #[cfg(feature = "http1-metrics")]
+    pub fn http1_metrics(&self) -> Option<h1::MetricsSnapshot> {
+        match &self.inner {
+            ClientInner::Http1(client) => Some(client.metrics()),
+            ClientInner::Http2(_) => None,
+        }
+    }
+
     pub fn http2_mut(&mut self) -> Option<&mut crate::Client<B>> {
         match &mut self.inner {
             ClientInner::Http1(_) => None,
@@ -186,6 +195,15 @@ impl<B: SendBuffer> Server<B> {
     pub fn http1_mut(&mut self) -> Option<&mut h1::Server<Vec<u8>, B>> {
         match &mut self.inner {
             ServerInner::Http1(server) | ServerInner::Replay1(server, _) => Some(server),
+            _ => None,
+        }
+    }
+
+    /// Observes the selected HTTP/1 child, including during prefix replay.
+    #[cfg(feature = "http1-metrics")]
+    pub fn http1_metrics(&self) -> Option<h1::MetricsSnapshot> {
+        match &self.inner {
+            ServerInner::Http1(server) | ServerInner::Replay1(server, _) => Some(server.metrics()),
             _ => None,
         }
     }

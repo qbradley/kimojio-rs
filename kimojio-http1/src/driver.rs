@@ -16,6 +16,8 @@ use kimojio::{
 use kimojio_fsm_http1 as core;
 
 use crate::body::{BodyDemand, OutgoingData, OutgoingSource};
+#[cfg(any(feature = "metrics", feature = "diagnostics"))]
+use crate::observation::BoundObservation;
 use crate::{
     BodyChunk, Error, IncomingBody, OutgoingBody, OutgoingFrame,
     io::{self, WriteResult},
@@ -38,6 +40,9 @@ pub struct Config {
     /// When enabled, the client upload deadline includes metadata, and generic
     /// write-all transports report coarser server progress for deadline refresh.
     pub coalesce_full_bodies: bool,
+    /// An optional handle reserved by this driver, including before its first poll.
+    #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+    pub observation: Option<crate::Observation>,
 }
 
 impl Config {
@@ -48,6 +53,8 @@ impl Config {
             protocol: core::Config::default(),
             turn_budget: 64,
             coalesce_full_bodies: false,
+            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+            observation: None,
         }
     }
 }
@@ -160,6 +167,8 @@ pub struct Connection<S> {
     requests: RequestQueue,
     shutdown: Shutdown,
     done: SenderOneshot<Result<(), Error>>,
+    #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+    observation: Result<Option<BoundObservation>, Error>,
 }
 
 /// Wraps an established transport. No I/O occurs until the driver is polled.
@@ -180,6 +189,8 @@ pub fn connect_native(fd: kimojio::OwnedFd, config: Config) -> (Client, NativeCo
 }
 
 fn connection<S>(stream: S, config: Config) -> (Client, Connection<S>) {
+    #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+    let observation = bind_observation(&config);
     let (send, requests) = async_channel();
     let (done, receive) = oneshot();
     let shutdown = Shutdown::default();
@@ -195,6 +206,8 @@ fn connection<S>(stream: S, config: Config) -> (Client, Connection<S>) {
             requests: RequestQueue(requests),
             shutdown,
             done,
+            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+            observation,
         },
     )
 }
@@ -216,6 +229,8 @@ impl NativeConnection {
             &connection.requests.0,
             connection.shutdown,
             |_| std::future::ready(Err(Error::Application("client handler".into()))),
+            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+            connection.observation,
         ))
         .await;
         let _ = connection.done.send(result.clone());
@@ -235,6 +250,8 @@ impl<S> Connection<S> {
             &self.requests.0,
             self.shutdown,
             |_| std::future::ready(Err(Error::Application("client handler".into()))),
+            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+            self.observation,
         ))
         .await;
         let _ = self.done.send(result.clone());
@@ -284,33 +301,84 @@ where
 }
 
 /// Serves a native socket and settles its operations before explicit close.
-pub async fn serve_connection_native_with_shutdown<H, F>(
+#[cfg_attr(
+    not(any(feature = "metrics", feature = "diagnostics")),
+    expect(
+        clippy::manual_async_fn,
+        reason = "Observation-enabled builds bind before the first poll."
+    )
+)]
+pub fn serve_connection_native_with_shutdown<H, F>(
     fd: kimojio::OwnedFd,
     config: Config,
     shutdown: Shutdown,
     handler: H,
-) -> Result<(), Error>
+) -> impl Future<Output = Result<(), Error>>
 where
     H: FnMut(Request<IncomingBody>) -> F,
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
-    let (_keep_open, requests) = async_channel();
-    Box::pin(run_native(fd, config, true, &requests, shutdown, handler)).await
+    #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+    let observation = bind_observation(&config);
+    async move {
+        let (_keep_open, requests) = async_channel();
+        Box::pin(run_native(
+            fd,
+            config,
+            true,
+            &requests,
+            shutdown,
+            handler,
+            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+            observation,
+        ))
+        .await
+    }
 }
 
-async fn serve_transport<T, H, F>(
+#[cfg_attr(
+    not(any(feature = "metrics", feature = "diagnostics")),
+    expect(
+        clippy::manual_async_fn,
+        reason = "Observation-enabled builds bind before the first poll."
+    )
+)]
+fn serve_transport<T, H, F>(
     transport: T,
     config: Config,
     shutdown: Shutdown,
     handler: H,
-) -> Result<(), Error>
+) -> impl Future<Output = Result<(), Error>>
 where
     T: Transport,
     H: FnMut(Request<IncomingBody>) -> F,
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
-    let (_keep_open, requests) = async_channel();
-    Box::pin(run(transport, config, true, &requests, shutdown, handler)).await
+    #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+    let observation = bind_observation(&config);
+    async move {
+        let (_keep_open, requests) = async_channel();
+        Box::pin(run(
+            transport,
+            config,
+            true,
+            &requests,
+            shutdown,
+            handler,
+            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+            observation,
+        ))
+        .await
+    }
+}
+
+#[cfg(any(feature = "metrics", feature = "diagnostics"))]
+fn bind_observation(config: &Config) -> Result<Option<BoundObservation>, Error> {
+    config
+        .observation
+        .as_ref()
+        .map(crate::Observation::bind)
+        .transpose()
 }
 
 enum Machine {
@@ -392,10 +460,21 @@ enum Event {
     Response(core::ExchangeId, Result<Response<()>, Error>, bool),
 }
 
-struct Ports;
+#[derive(Default)]
+struct Ports {
+    #[cfg(feature = "diagnostics")]
+    observation: Option<crate::Observation>,
+}
 
 impl core::Ports<Vec<u8>, OutgoingData> for Ports {
     type Output = Event;
+
+    #[cfg(feature = "diagnostics")]
+    fn log(&mut self, connection: core::ConnectionId, now: core::Tick, event: core::LogEvent) {
+        if let Some(observation) = &self.observation {
+            observation.log(connection, now, event);
+        }
+    }
 
     fn read(&mut self, value: core::ReadOp<Vec<u8>>) -> Option<Event> {
         Some(Event::Read(value))
@@ -564,6 +643,8 @@ enum Input {
     Handler(Result<Response<OutgoingBody>, Error>),
     Timer(Result<(), kimojio::Errno>),
     Wake,
+    #[cfg(feature = "metrics")]
+    Snapshot(crate::observation::SnapshotRequest),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -610,10 +691,32 @@ struct State {
     max_headers: usize,
     coalesce_full_bodies: bool,
     rotation: usize,
+    #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+    observation: Option<BoundObservation>,
 }
 
 impl State {
+    #[cfg(test)]
     fn new(config: Config, server: bool, shutdown: Shutdown) -> Result<Self, Error> {
+        #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+        let observation = bind_observation(&config)?;
+        Self::new_bound(
+            config,
+            server,
+            shutdown,
+            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+            observation,
+        )
+    }
+
+    fn new_bound(
+        config: Config,
+        server: bool,
+        shutdown: Shutdown,
+        #[cfg(any(feature = "metrics", feature = "diagnostics"))] observation: Option<
+            BoundObservation,
+        >,
+    ) -> Result<Self, Error> {
         let buffer = vec![0; config.protocol.max_buffer_bytes];
         let receive_capacity = buffer.capacity();
         let max_buffer = config.protocol.max_buffer_bytes;
@@ -656,7 +759,17 @@ impl State {
             max_headers,
             coalesce_full_bodies: config.coalesce_full_bodies,
             rotation: 0,
+            #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+            observation,
         })
+    }
+
+    #[cfg(feature = "metrics")]
+    fn metrics(&self) -> core::MetricsSnapshot {
+        match &self.machine {
+            Machine::Client(inner) => inner.metrics(),
+            Machine::Server(inner) => inner.metrics(),
+        }
     }
 
     fn observe_time(&mut self) -> Result<core::Tick, Error> {
@@ -982,6 +1095,10 @@ impl State {
             }
             Input::Timer(result) => result.map_err(Error::Transport)?,
             Input::Wake => {}
+            #[cfg(feature = "metrics")]
+            Input::Snapshot(reply) => {
+                let _ = reply.send(Ok(self.metrics()));
+            }
         }
         if self.pending_read.is_none()
             && self.pending_write.is_none()
@@ -1127,7 +1244,13 @@ impl State {
                 }
             }
             Event::Upgrade => return Err(Error::Application("HTTP upgrade is not exposed".into())),
-            Event::Closed(result) => return Ok(Some(result.map_err(Error::Protocol))),
+            Event::Closed(result) => {
+                #[cfg(feature = "metrics")]
+                if let Some(observation) = &self.observation {
+                    observation.finish(self.metrics());
+                }
+                return Ok(Some(result.map_err(Error::Protocol)));
+            }
             Event::Request(id, request) => {
                 let mut active = Active::new(
                     id,
@@ -1162,6 +1285,10 @@ async fn run<T, H, F>(
     requests: &Receiver<SendRequest>,
     shutdown: Shutdown,
     mut handler: H,
+    #[cfg(any(feature = "metrics", feature = "diagnostics"))] observation: Result<
+        Option<BoundObservation>,
+        Error,
+    >,
 ) -> Result<(), Error>
 where
     T: Transport,
@@ -1169,7 +1296,13 @@ where
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
     let budget = config.turn_budget.max(1);
-    let mut state = State::new(config, server, shutdown)?;
+    let mut state = State::new_bound(
+        config,
+        server,
+        shutdown,
+        #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+        observation?,
+    )?;
     let (reader, writer) = Box::pin(transport.split())
         .await
         .map_err(Error::Transport)?;
@@ -1201,13 +1334,23 @@ async fn run_native<H, F>(
     requests: &Receiver<SendRequest>,
     shutdown: Shutdown,
     mut handler: H,
+    #[cfg(any(feature = "metrics", feature = "diagnostics"))] observation: Result<
+        Option<BoundObservation>,
+        Error,
+    >,
 ) -> Result<(), Error>
 where
     H: FnMut(Request<IncomingBody>) -> F,
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
     let budget = config.turn_budget.max(1);
-    let mut state = State::new(config, server, shutdown)?;
+    let mut state = State::new_bound(
+        config,
+        server,
+        shutdown,
+        #[cfg(any(feature = "metrics", feature = "diagnostics"))]
+        observation?,
+    )?;
     let io = native_io(fd);
     state.epoch = kimojio::clock_now();
     drive(state, io, requests, &mut handler, budget).await
@@ -1225,13 +1368,20 @@ where
     F: Future<Output = Result<Response<OutgoingBody>, Error>> + 'static,
 {
     let mut turns = 0usize;
+    let mut ports = Ports {
+        #[cfg(feature = "diagnostics")]
+        observation: state
+            .observation
+            .as_ref()
+            .map(|bound| bound.observation.clone()),
+    };
     loop {
         if let Err(error) = state.observe() {
             state.fail(error);
         }
         let event = match &mut state.machine {
-            Machine::Client(inner) => inner.next(&mut Ports),
-            Machine::Server(inner) => inner.next(&mut Ports),
+            Machine::Client(inner) => inner.next(&mut ports),
+            Machine::Server(inner) => inner.next(&mut ports),
         };
         let mut runnable = event.is_some();
         if let Some(event) = event {
@@ -1281,12 +1431,31 @@ async fn next_input(
             std::future::pending::<()>().await;
         }
     };
+    #[cfg(feature = "metrics")]
+    let observation = state.observation.as_ref();
+    #[cfg(feature = "metrics")]
+    let snapshot = async {
+        if let Some(observation) = observation {
+            let mut wait = std::pin::pin!(observation.requests.recv());
+            if let Ok(reply) = futures::future::poll_fn(|cx| {
+                poll_receive(&observation.requests, wait.as_mut(), cx, runnable)
+            })
+            .await
+            {
+                return reply;
+            }
+        }
+        std::future::pending().await
+    };
+    #[cfg(feature = "metrics")]
+    futures::pin_mut!(snapshot);
     futures::pin_mut!(
         read, write, release, demand, request, graceful, abort, cancelled
     );
     futures::future::poll_fn(|cx| {
-        for offset in 0..10 {
-            let index = (state.rotation + offset) % 10;
+        const LANES: usize = 10 + cfg!(feature = "metrics") as usize;
+        for offset in 0..LANES {
+            let index = (state.rotation + offset) % LANES;
             let ready = match index {
                 0 => read.as_mut().poll(cx).map(|r| Some(Input::Read(r))),
                 1 => write.as_mut().poll(cx).map(|r| Some(Input::Write(r))),
@@ -1321,10 +1490,15 @@ async fn next_input(
                 },
                 9 => poll_receive(&state.demands.0, demand.as_mut(), cx, runnable)
                     .map(|r| r.ok().map(Input::Demand)),
+                #[cfg(feature = "metrics")]
+                10 => snapshot
+                    .as_mut()
+                    .poll(cx)
+                    .map(|reply| Some(Input::Snapshot(reply))),
                 _ => Poll::Pending,
             };
             if let Poll::Ready(Some(input)) = ready {
-                state.rotation = (index + 1) % 10;
+                state.rotation = (index + 1) % LANES;
                 return Poll::Ready(Some(input));
             }
         }
@@ -1379,6 +1553,10 @@ mod coalescing_tests;
 #[cfg(test)]
 #[path = "combined_tests.rs"]
 mod combined_tests;
+
+#[cfg(all(test, any(feature = "metrics", feature = "diagnostics")))]
+#[path = "observation_tests.rs"]
+mod observation_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1499,7 +1677,7 @@ mod tests {
         let mut writes = 0;
         let mut source_finished = false;
         loop {
-            match client.next(&mut Ports) {
+            match client.next(&mut Ports::default()) {
                 Some(Event::Deadline(_)) => {}
                 Some(Event::SourceFinished(exchange)) => {
                     assert_eq!(exchange, id);
@@ -1647,7 +1825,7 @@ mod tests {
         let mut closed = false;
         let mut body = Vec::new();
         for _ in 0..64 {
-            match client.next(&mut Ports) {
+            match client.next(&mut Ports::default()) {
                 Some(Event::Read(op)) => read = Some(op),
                 Some(Event::Write(op)) => {
                     let count = op.slices().iter().map(|slice| slice.len()).sum();

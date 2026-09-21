@@ -1,0 +1,39 @@
+HTTP/1 observation disabled-cost check
+
+Baseline: 089ec2d24ebb2cd7d8723e73478fb3600407044d
+Instrumented core source: d925db304092d30d8b077b24d0478582d208e116
+Probe: docs/http1-core-study/observation_probe.rs
+Compiler: rustc 1.98.1 (48a229cea 2026-09-01), LLVM 22.1.8
+Host: x86_64-unknown-linux-gnu
+Core build: cargo build -p kimojio-fsm-http1 --release
+Candidate features: --no-default-features
+Probe flags: --edition=2024 -C opt-level=3 -C codegen-units=1
+
+Each revision used a separate worktree and CARGO_TARGET_DIR.
+Both probes ran ten client and ten server roundtrips for each workload:
+128-byte fixed bodies and 1-MiB chunked bodies.
+The existing benchmark support checked wire and body correctness.
+
+                               Baseline   Disabled candidate
+Client<Vec<u8>, &[u8]> bytes        1040                 1040
+Server<Vec<u8>, &[u8]> bytes        1040                 1040
+Executable text bytes           457027               457027
+Executable data bytes            19040                19040
+Executable bss bytes              1072                 1072
+
+The emitted HTTP/1 connection symbols had identical addresses and sizes.
+The assembly was not byte-identical. One parser branch used a different
+equivalent instruction arrangement, and panic source-line metadata differed.
+There is no throughput or identical-cycle claim.
+
+Reproduction:
+Build each library in its own target directory, then run this command with
+BUILD and OUTPUT set to that revision's release directory and probe path:
+
+rustc --edition=2024 -C opt-level=3 -C codegen-units=1 -A dead_code \
+  docs/http1-core-study/observation_probe.rs \
+  --extern "kimojio_fsm_http1=$BUILD/libkimojio_fsm_http1.rlib" \
+  -L "dependency=$BUILD/deps" -o "$OUTPUT"
+
+Run each OUTPUT and compare `size` and `nm -S --size-sort --demangle`.
+The common probe must use the same benchmark support source for both builds.

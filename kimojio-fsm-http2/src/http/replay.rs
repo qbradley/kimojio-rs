@@ -45,6 +45,11 @@ pub(super) struct Ports<'a, P> {
 impl<B: SendBuffer, P: h1::Ports<Vec<u8>, B>> h1::Ports<Vec<u8>, B> for Ports<'_, P> {
     type Output = Step<P::Output>;
 
+    #[cfg(feature = "http1-diagnostics")]
+    fn log(&mut self, connection: h1::ConnectionId, now: h1::Tick, event: h1::LogEvent) {
+        self.outer.log(connection, now, event);
+    }
+
     fn read(&mut self, op: h1::ReadOp<Vec<u8>>) -> Option<Self::Output> {
         Some(Step::Read1(op))
     }

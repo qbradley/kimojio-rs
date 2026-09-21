@@ -295,14 +295,39 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         ports: &mut P,
         head_callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
     ) -> Option<P::Output> {
+        #[cfg(feature = "diagnostics")]
+        if let Some(failure) = self.failure
+            && !self.failure_logged
+        {
+            self.failure_logged = true;
+            self.log(ports, LogEvent::PrimaryFailure(failure));
+        }
         match transition {
             Transition::Deadline => {
                 self.timers.notification.take();
+                #[cfg(feature = "diagnostics")]
+                self.log(ports, LogEvent::DeadlineChanged(self.timers.deadline()));
                 ports.deadline_changed(self.timers.deadline())
             }
-            Transition::Receipt => ports.body_sent(self.body_result.take().unwrap()),
+            Transition::Receipt => {
+                let result = self.body_result.take().unwrap();
+                #[cfg(feature = "diagnostics")]
+                self.log(
+                    ports,
+                    LogEvent::BodyReturned {
+                        exchange: result.exchange,
+                        body: result.id,
+                        accepted: result.accepted,
+                        acceptance: result.acceptance,
+                        result: result.result,
+                    },
+                );
+                ports.body_sent(result)
+            }
             Transition::Closed => {
                 self.lifecycle = Lifecycle::Closed(Notification::Delivered);
+                #[cfg(feature = "diagnostics")]
+                self.log(ports, LogEvent::Closed(self.failure.map_or(Ok(()), Err)));
                 ports.closed(self.failure.map_or(Ok(()), Err))
             }
             Transition::Coordinate => {
@@ -316,14 +341,27 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             Transition::SourceFinished => {
                 let exchange = self.exchange.as_mut().unwrap();
                 exchange.source_notification.take();
-                ports.source_finished(exchange.id)
+                let id = exchange.id;
+                #[cfg(feature = "diagnostics")]
+                self.log(ports, LogEvent::SourceFinished(id));
+                ports.source_finished(id)
             }
-            Transition::CancelRead => ports.cancel(CancelOp {
-                target: self.read.cancel().unwrap(),
-            }),
-            Transition::CancelWrite => ports.cancel(CancelOp {
-                target: self.write.cancel().unwrap(),
-            }),
+            Transition::CancelRead => {
+                let target = self.read.cancel().unwrap();
+                #[cfg(feature = "metrics")]
+                self.counters.add(Metric::Cancellations, 1);
+                #[cfg(feature = "diagnostics")]
+                self.log(ports, LogEvent::CancellationRequested(target));
+                ports.cancel(CancelOp { target })
+            }
+            Transition::CancelWrite => {
+                let target = self.write.cancel().unwrap();
+                #[cfg(feature = "metrics")]
+                self.counters.add(Metric::Cancellations, 1);
+                #[cfg(feature = "diagnostics")]
+                self.log(ports, LogEvent::CancellationRequested(target));
+                ports.cancel(CancelOp { target })
+            }
             Transition::DiscardOutput => {
                 let op = self.output.take().unwrap();
                 self.settle_write(op, Acceptance::Exact);
@@ -351,11 +389,21 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             }
             Transition::FinishAbortedExchange => {
                 let exchange = self.exchange.take().unwrap();
-                ports.exchange_finished(ExchangeFinished {
+                let finished = ExchangeFinished {
                     exchange: exchange.id,
                     result: self.failure.map_or(Ok(()), Err),
                     reusable: false,
-                })
+                };
+                #[cfg(feature = "metrics")]
+                {
+                    self.counters.add(Metric::ExchangesRetired, 1);
+                    if finished.result.is_err() {
+                        self.counters.add(Metric::ExchangesFailed, 1);
+                    }
+                }
+                #[cfg(feature = "diagnostics")]
+                self.log(ports, LogEvent::ExchangeFinished(finished));
+                ports.exchange_finished(finished)
             }
             Transition::Close => {
                 let id = OperationId {
@@ -364,6 +412,8 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                     kind: OperationKind::Close,
                 };
                 self.lifecycle.issue_close(id);
+                #[cfg(feature = "diagnostics")]
+                self.log(ports, LogEvent::OperationIssued(id));
                 ports.close(CloseOp { id })
             }
             Transition::Continue => {
@@ -390,19 +440,39 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             Transition::IncomingFinished => {
                 let exchange = self.exchange.as_mut().unwrap();
                 exchange.incoming_notification.take();
-                ports.incoming_finished(exchange.id)
+                let id = exchange.id;
+                #[cfg(feature = "diagnostics")]
+                self.log(ports, LogEvent::IncomingFinished(id));
+                ports.incoming_finished(id)
             }
             Transition::UpgradeReady => {
                 self.lifecycle.notify_upgrade();
                 self.clear_deadlines();
+                #[cfg(feature = "diagnostics")]
+                self.log(
+                    ports,
+                    LogEvent::UpgradeReady(self.exchange.as_ref().unwrap().id),
+                );
                 ports.upgrade_ready(self.exchange.as_ref().unwrap().id)
             }
             Transition::RetireExchange => {
                 let finished = self.retire_exchange();
+                #[cfg(feature = "metrics")]
+                self.counters.add(Metric::ExchangesRetired, 1);
+                #[cfg(feature = "diagnostics")]
+                self.log(ports, LogEvent::ExchangeFinished(finished));
                 ports.exchange_finished(finished)
             }
             Transition::Demand => {
                 self.tx.request_data();
+                #[cfg(feature = "diagnostics")]
+                self.log(
+                    ports,
+                    LogEvent::SendReady {
+                        exchange: self.exchange.as_ref().unwrap().id,
+                        capacity: self.send_capacity(),
+                    },
+                );
                 ports.send_ready(self.exchange.as_ref().unwrap().id, self.send_capacity())
             }
             Transition::Metadata => self.receive_metadata(ports, head_callback),
@@ -423,6 +493,8 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         if self.write == IoState::NeedsReadiness {
             let id = self.operation(OperationKind::Writable)?;
             self.write.issue(id);
+            #[cfg(feature = "diagnostics")]
+            self.log(ports, LogEvent::OperationIssued(id));
             ports.readiness(ReadinessOp {
                 id,
                 direction: Direction::Write,
@@ -432,6 +504,8 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             let mut op = self.output.take().unwrap();
             op.id = id;
             self.write.issue(id);
+            #[cfg(feature = "diagnostics")]
+            self.log(ports, LogEvent::OperationIssued(id));
             ports.write(op)
         }
     }
@@ -442,6 +516,8 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         if self.read == IoState::NeedsReadiness {
             let id = self.operation(OperationKind::Readable)?;
             self.read.issue(id);
+            #[cfg(feature = "diagnostics")]
+            self.log(ports, LogEvent::OperationIssued(id));
             ports.readiness(ReadinessOp {
                 id,
                 direction: Direction::Read,
@@ -451,6 +527,8 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             let buffer = self.receive.read();
             let len = buffer.as_ref().len();
             self.read.issue(id);
+            #[cfg(feature = "diagnostics")]
+            self.log(ports, LogEvent::OperationIssued(id));
             ports.read(ReadOp {
                 id,
                 buffer,
@@ -645,6 +723,20 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             range: self.start..self.start + count,
             buffered_end: self.end,
         };
+        #[cfg(feature = "metrics")]
+        {
+            self.counters.add(Metric::BodyDeliveries, 1);
+            self.counters.add(Metric::BodyDelivered, count as u64);
+        }
+        #[cfg(feature = "diagnostics")]
+        self.log(
+            ports,
+            LogEvent::BodyOffered {
+                exchange: op.exchange,
+                operation: op.id,
+                bytes: count,
+            },
+        );
         ports.body(op)
     }
 

@@ -26,7 +26,7 @@ fn lease() -> (
     .unwrap();
     let request = b"POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 7\r\n\r\npayload";
     for _ in 0..32 {
-        match server.next(&mut Ports) {
+        match server.next(&mut Ports::default()) {
             Some(Event::Read(mut op)) => {
                 op.bytes_mut()[..request.len()].copy_from_slice(request);
                 server
@@ -88,7 +88,7 @@ fn destination() -> (core::Client<Vec<u8>, OutgoingData>, core::ExchangeId) {
         })
         .unwrap();
     for _ in 0..32 {
-        match client.next(&mut Ports) {
+        match client.next(&mut Ports::default()) {
             Some(Event::Write(op)) => {
                 let n = op.slices().iter().map(|bytes| bytes.len()).sum();
                 client.complete_write(op.complete(Ok(n))).unwrap();
@@ -155,7 +155,7 @@ fn forwarded_lease_survives_partial_writes_and_cancellation_until_receipt() {
         let mut writes = 0;
         for _ in 0..64 {
             assert_not_returned(&returned);
-            match client.next(&mut Ports) {
+            match client.next(&mut Ports::default()) {
                 Some(Event::Write(op)) => {
                     writes += 1;
                     let payload = op.slices()[1];
@@ -181,7 +181,7 @@ fn forwarded_lease_survives_partial_writes_and_cancellation_until_receipt() {
                             client.cancel_exchange(id).unwrap();
                             let mut cancelled_original = false;
                             for _ in 0..32 {
-                                match client.next(&mut Ports) {
+                                match client.next(&mut Ports::default()) {
                                     Some(Event::Cancel(cancel)) => {
                                         cancelled_original |= cancel.target == op.id()
                                     }
@@ -339,7 +339,7 @@ async fn native_cancellation_case(success: bool) {
         .unwrap();
     let mut write = None;
     for _ in 0..32 {
-        match client.next(&mut Ports) {
+        match client.next(&mut Ports::default()) {
             Some(Event::Write(op)) => {
                 write = Some(op);
                 break;
@@ -387,7 +387,7 @@ async fn native_cancellation_case(success: bool) {
         assert_not_returned(&returned);
         let mut received = false;
         for _ in 0..32 {
-            match client.next(&mut Ports) {
+            match client.next(&mut Ports::default()) {
                 Some(Event::BodySent(receipt)) => {
                     assert_eq!(
                         receipt.acceptance,
@@ -437,7 +437,7 @@ async fn raw_native_worker_preserves_forwarded_lease_and_exact_cancel_or_success
             })
             .unwrap();
         let write = (0..32)
-            .find_map(|_| match client.next(&mut Ports) {
+            .find_map(|_| match client.next(&mut Ports::default()) {
                 Some(Event::Write(op)) => Some(op),
                 Some(Event::SourceFinished(_) | Event::Deadline(_)) | None => None,
                 _ => panic!("unexpected write event"),
@@ -483,7 +483,7 @@ async fn raw_native_worker_preserves_forwarded_lease_and_exact_cancel_or_success
             assert_not_returned(&returned);
             client.complete_write(completion).unwrap();
             let receipt = (0..32)
-                .find_map(|_| match client.next(&mut Ports) {
+                .find_map(|_| match client.next(&mut Ports::default()) {
                     Some(Event::BodySent(receipt)) => Some(receipt),
                     Some(Event::SourceFinished(_) | Event::Deadline(_) | Event::Cancel(_))
                     | None => None,

@@ -11,6 +11,24 @@ Additional regressions cover native and generic wrappers, plus selected and dete
 They cover partial-head timeouts, exact wire responses, original-operation settlement, actual close, idle EOF, and unchanged initial timing.
 The wrapper cases use virtual time.
 
+## Observability implementation
+
+The follow-up implementation adds independent, default-off `metrics` and `diagnostics` features to the HTTP/1 core.
+The [core README](../../kimojio-fsm-http1/README.md#optional-observations) defines snapshots, accounting, diagnostic delivery, and disabled costs.
+The Kimojio wrapper supplies asynchronous snapshot queries and synchronous typed log forwarding.
+The HTTP/1+HTTP/2 composite exposes observations for its selected HTTP/1 child, including prefix replay.
+This work does not add HTTP/2 telemetry.
+
+The [disabled-cost check](evidence/observability-disabled.txt) compares the promoted receive-phase baseline with the instrumented core.
+Both features remain disabled in that comparison.
+Client and server layouts remain 1,040 bytes for the measured buffer types.
+The executable text size and emitted connection-symbol sizes are unchanged.
+The assembly differs, so these results do not claim identical CPU timing.
+The [qualification record](evidence/observability-qualification.txt) covers all feature combinations, wrapper query lifetimes, and diagnostic delivery.
+
+The remaining sections preserve the original study, including its historical change and bookmark locations.
+The user subsequently integrated role specialization and metadata batching before these follow-up changes.
+
 ## Conclusions and delivered changes
 
 The strongest measured opportunity is repeated global dispatch during metadata parsing, not the success branch in `complete_read`.
@@ -23,7 +41,7 @@ An explicit receive phase both fixes that problem and simplifies the first-byte 
 
 The core experiments remain separate changes, not silently combined production changes.
 The production changes remove redundant adapter boxes.
-Metrics and logging have a design recommendation here, but no new telemetry API yet.
+At the time of this study, metrics and logging were design recommendations without a telemetry API.
 
 | Work | jj change | Commit | State |
 | --- | --- | --- | --- |

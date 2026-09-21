@@ -111,6 +111,86 @@ See [explicit duplex responses](../docs/http1-wrapper-lab/duplex-wrapper.md) for
 `Shutdown::abort` requests cancellation through the core.
 The application must continue to poll the server future until shutdown completes.
 
+## Optional observations
+
+The `metrics` and `diagnostics` Cargo features are independent.
+Each feature also enables its counterpart in `kimojio-fsm-http1`.
+Without either feature, the wrapper has no observation fields, channels, or input branch.
+`Config::new` does not allocate observation storage, even with these features enabled.
+
+An `Observation` handle belongs to one connection.
+Client construction and server future construction reserve the handle before core construction or transport split.
+A second driver that uses the same handle returns `Error::ObservationInUse`.
+Cloning a configuration does not create a new observation handle.
+The handle remains reserved after close or startup failure.
+
+With `metrics`, the application can request a snapshot through the handle:
+
+```rust,no_run
+# #[cfg(feature = "metrics")]
+# async fn observe(socket: kimojio::OwnedFd) -> Result<(), kimojio_http1::Error> {
+use kimojio_http1::{connect_native, Config, ConnectionId, Observation};
+
+let observation = Observation::new();
+let mut config = Config::new(ConnectionId { slot: 1, generation: 1 });
+config.observation = Some(observation.clone());
+let (mut client, driver) = connect_native(socket, config);
+let application = async {
+    let snapshot = observation.snapshot().await?;
+    assert!(!snapshot.server);
+    client.shutdown().await
+};
+let (application, driver) = futures::join!(application, driver.run());
+application?;
+driver?;
+assert!(observation.final_snapshot().is_some());
+# Ok(())
+# }
+```
+
+The driver must remain polled while snapshot requests wait.
+Snapshot requests share the round-robin input loop with requests, handlers, timers, and I/O completions.
+The bounded channel retains at most one queued snapshot request.
+Additional callers wait for capacity.
+Each query has a oneshot reply.
+The wrapper copies a snapshot only for a query or terminal close, not after each I/O completion.
+
+`final_snapshot()` returns `None` until the core reports terminal close.
+After that callback, queued and new queries can receive the same final snapshot.
+The final snapshot includes a protocol failure when the core closes with an error.
+Startup failure or driver cancellation without terminal close leaves no final snapshot.
+Pending and new queries then return `Error::Closed`.
+A dropped query does not cancel the connection.
+
+With `diagnostics`, `Observation::with_logger` accepts a typed callback:
+
+```rust
+# #[cfg(feature = "diagnostics")]
+# {
+use kimojio_http1::{Config, ConnectionId, Observation};
+
+let observation = Observation::with_logger(|connection, now, event| {
+    eprintln!("{connection:?} {now:?} {event:?}");
+});
+let mut config = Config::new(ConnectionId { slot: 2, generation: 1 });
+config.observation = Some(observation);
+# }
+```
+
+The callback runs synchronously at the core's drive boundaries.
+The wrapper does not allocate per event or retain a diagnostic queue.
+The callback must not block or panic.
+Caller-owned `Cell` or `RefCell` storage can collect observations.
+The wrapper holds no `RefCell` borrow during the callback.
+Diagnostics alone creates no metrics storage or snapshot channel.
+`Observation::new` installs no logger.
+
+Handles use local `Rc` ownership, without atomic counters.
+Snapshots contain the core's connection identity, last observed time, state, storage gauges, and counters.
+The gauges describe protocol storage, not process memory.
+Diagnostics contain typed protocol facts, not HTTP headers or body contents.
+Neither interface grants permission to issue protocol commands.
+
 ## Bodies and metadata
 
 `OutgoingBody` supports four sources:

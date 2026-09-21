@@ -9,6 +9,8 @@ use std::io::Write;
 
 #[path = "coordinator.rs"]
 mod coordinator;
+#[cfg(feature = "metrics")]
+use crate::observation::Metric;
 use coordinator::Boundary;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,6 +87,10 @@ struct Core<B, W, const SERVER: bool> {
     failure: Option<Failure>,
     lifecycle: Lifecycle,
     boundary: Boundary,
+    #[cfg(feature = "metrics")]
+    counters: Counters,
+    #[cfg(feature = "diagnostics")]
+    failure_logged: bool,
 }
 
 /// A single-exchange HTTP/1 server with independently owned I/O operations.
@@ -161,6 +167,10 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             failure: None,
             lifecycle: Lifecycle::Http(Admission::Accepting),
             boundary: Boundary::None,
+            #[cfg(feature = "metrics")]
+            counters: Counters::default(),
+            #[cfg(feature = "diagnostics")]
+            failure_logged: false,
         };
         core.set_deadline(
             if SERVER {
@@ -175,6 +185,39 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             },
         )?;
         Ok(core)
+    }
+
+    #[cfg(feature = "metrics")]
+    fn metrics(&self) -> MetricsSnapshot {
+        MetricsSnapshot {
+            connection: self.id,
+            server: SERVER,
+            observed_at: self.now,
+            phase: match self.lifecycle {
+                Lifecycle::Http(Admission::Accepting) => SnapshotPhase::Http,
+                Lifecycle::Http(Admission::Draining) => SnapshotPhase::Draining,
+                Lifecycle::Upgrade(_) => SnapshotPhase::Upgrading,
+                Lifecycle::ErrorResponse => SnapshotPhase::ErrorResponse,
+                Lifecycle::Closing(_) => SnapshotPhase::Closing,
+                Lifecycle::Closed(_) => SnapshotPhase::Closed,
+                Lifecycle::HandedOff => SnapshotPhase::HandedOff,
+            },
+            exchange: self.exchange.as_ref().map(|exchange| exchange.id),
+            buffered_input_bytes: self.end - self.start,
+            body_credit: self.credit,
+            metadata_buffer_bytes: self.head.len(),
+            metadata_buffer_capacity: self.head.capacity(),
+            read_outstanding: self.read.operation().is_some(),
+            write_outstanding: self.write.operation().is_some(),
+            body_lease_outstanding: self.receive.lease().is_some(),
+            failure: self.failure,
+            counters: self.counters,
+        }
+    }
+
+    #[cfg(feature = "diagnostics")]
+    fn log<P: Ports<B, W>>(&self, ports: &mut P, event: LogEvent) {
+        ports.log(self.id, self.now, event);
     }
 
     fn sequence(&mut self) -> Result<u64, CommandError> {
@@ -453,6 +496,8 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             consume_request: false,
         });
         self.exchanges += 1;
+        #[cfg(feature = "metrics")]
+        self.counters.add(Metric::ExchangesStarted, 1);
         self.tx = Transmit::begin(framing);
         self.outgoing_connection_fields = connection_fields;
         self.outgoing_metadata_bytes = head.len();
@@ -704,6 +749,9 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         };
         self.tx.accept_data(command.range.len(), command.end);
         self.outgoing_bytes += command.range.len() as u64;
+        #[cfg(feature = "metrics")]
+        self.counters
+            .add(Metric::ProducerAccepted, command.range.len() as u64);
         self.outgoing_chunk_metadata_bytes += chunk_metadata;
         if self.tx.framing() == Framing::Chunked && command.end {
             self.outgoing_chunk_metadata_bytes += 3;
@@ -837,6 +885,13 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         self.read.complete();
         let ReadCompletion { op, result } = completion;
         self.receive.complete_read(op.buffer);
+        #[cfg(feature = "metrics")]
+        {
+            self.counters.add(Metric::ReadCompletions, 1);
+            if let Ok(n) = result {
+                self.counters.add(Metric::ReadBytes, n as u64);
+            }
+        }
         match result {
             Ok(n) => {
                 self.start = op.range.start;
@@ -901,6 +956,16 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         } else {
             Acceptance::Exact
         };
+        #[cfg(feature = "metrics")]
+        {
+            self.counters.add(Metric::WriteCompletions, 1);
+            if let Ok(n) = result {
+                self.counters.add(Metric::WrittenBytes, n as u64);
+            }
+            if acceptance == Acceptance::LowerBound {
+                self.counters.add(Metric::UncertainWrites, 1);
+            }
+        }
         match result {
             Ok(0) => self.fail(Failure::WriteZero),
             Ok(n) => {
@@ -1080,6 +1145,9 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             self.credit = 0;
         }
         self.received += completion.consumed as u64;
+        #[cfg(feature = "metrics")]
+        self.counters
+            .add(Metric::BodyConsumed, completion.consumed as u64);
         if completion.consumed != 0 {
             self.progress();
         }
@@ -1176,6 +1244,8 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                 .ok_or(CommandError::SequenceExhausted)?;
         }
         self.observe_time(now)?;
+        #[cfg(feature = "metrics")]
+        self.counters.add(Metric::Expirations, 1);
         if self.timers.kind() == Some(TimerPhase::Continue) {
             self.release_continue();
             self.update_deadline(self.timers.phase, None)?;
@@ -1383,6 +1453,14 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                 }
                 self.rx = Rx::Done;
                 self.incoming_ended();
+                #[cfg(feature = "diagnostics")]
+                self.log(
+                    ports,
+                    LogEvent::TrailersReceived {
+                        exchange: self.exchange.as_ref().unwrap().id,
+                        fields: trailers.len(),
+                    },
+                );
                 Ok(ports.trailers(self.exchange.as_ref().unwrap().id, trailers))
             }
             Rx::Head if SERVER => {
@@ -1432,17 +1510,24 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                     consume_request: false,
                 });
                 self.exchanges += 1;
+                #[cfg(feature = "metrics")]
+                self.counters.add(Metric::ExchangesStarted, 1);
                 self.set_rx(framing)?;
-                Ok(callback(
+                let head = RequestHead {
+                    method,
+                    target: request.path.ok_or(Failure::Protocol)?,
+                    version,
+                    headers: request.headers,
+                };
+                #[cfg(feature = "diagnostics")]
+                self.log(
                     ports,
-                    id,
-                    ParsedHead::Request(RequestHead {
-                        method,
-                        target: request.path.ok_or(Failure::Protocol)?,
+                    LogEvent::RequestReceived {
+                        exchange: id,
                         version,
-                        headers: request.headers,
-                    }),
-                ))
+                    },
+                );
+                Ok(callback(ports, id, ParsedHead::Request(head)))
             }
             Rx::Head => {
                 let mut response = httparse::Response::new(headers);
@@ -1540,6 +1625,15 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                     self.update_deadline(self.timers.phase, None)
                         .map_err(|_| Failure::SequenceExhausted)?;
                 }
+                #[cfg(feature = "diagnostics")]
+                self.log(
+                    ports,
+                    LogEvent::ResponseReceived {
+                        exchange: self.exchange.as_ref().unwrap().id,
+                        status,
+                        informational,
+                    },
+                );
                 Ok(callback(
                     ports,
                     self.exchange.as_ref().unwrap().id,
@@ -1651,6 +1745,12 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
     }
     pub fn connection_id(&self) -> ConnectionId {
         self.core.id
+    }
+
+    /// Returns a snapshot without driving the machine or resetting counters.
+    #[cfg(feature = "metrics")]
+    pub fn metrics(&self) -> MetricsSnapshot {
+        self.core.metrics()
     }
     /// Bytes already received but not yet consumed by HTTP or a body consumer.
     ///
@@ -1776,6 +1876,12 @@ impl<B: Buffer, W: AsRef<[u8]>> Client<B, W> {
     }
     pub fn connection_id(&self) -> ConnectionId {
         self.core.id
+    }
+
+    /// Returns a snapshot without driving the machine or resetting counters.
+    #[cfg(feature = "metrics")]
+    pub fn metrics(&self) -> MetricsSnapshot {
+        self.core.metrics()
     }
     /// Bytes already received but not yet consumed by HTTP or a body consumer.
     ///

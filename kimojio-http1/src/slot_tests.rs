@@ -16,7 +16,7 @@ async fn direct_slots_keep_forwarded_storage_through_cancel_and_late_success() {
             })
             .unwrap();
         let write = (0..32)
-            .find_map(|_| match client.next(&mut Ports) {
+            .find_map(|_| match client.next(&mut Ports::default()) {
                 Some(Event::Write(op)) => Some(op),
                 Some(Event::SourceFinished(_) | Event::Deadline(_)) | None => None,
                 _ => panic!("unexpected write event"),
@@ -54,7 +54,7 @@ async fn direct_slots_keep_forwarded_storage_through_cancel_and_late_success() {
         assert_not_returned(&returned);
         client.complete_write(completion).unwrap();
         let receipt = (0..32)
-            .find_map(|_| match client.next(&mut Ports) {
+            .find_map(|_| match client.next(&mut Ports::default()) {
                 Some(Event::BodySent(receipt)) => Some(receipt),
                 Some(Event::SourceFinished(_) | Event::Deadline(_) | Event::Cancel(_)) | None => {
                     None
@@ -86,7 +86,7 @@ async fn dropping_a_native_read_slot_settles_before_descriptor_release() {
     )
     .unwrap();
     let read = (0..32)
-        .find_map(|_| match server.next(&mut Ports) {
+        .find_map(|_| match server.next(&mut Ports::default()) {
             Some(Event::Read(op)) => Some(op),
             Some(Event::Deadline(_)) | None => None,
             _ => panic!("unexpected server event"),

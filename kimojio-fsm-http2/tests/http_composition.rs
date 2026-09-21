@@ -19,6 +19,8 @@ struct Ports {
     h1_trace: Vec<&'static str>,
     yielding: bool,
     admission_changes: usize,
+    #[cfg(feature = "http1-diagnostics")]
+    logs: Vec<h1::LogEvent>,
 }
 
 impl Ports {
@@ -33,6 +35,13 @@ impl Ports {
 
 impl h1::Ports<Vec<u8>> for Ports {
     type Output = ();
+    #[cfg(feature = "http1-diagnostics")]
+    fn log(&mut self, connection: h1::ConnectionId, _: h1::Tick, event: h1::LogEvent) {
+        if let h1::LogEvent::RequestReceived { exchange, .. } = event {
+            assert_eq!(connection, exchange.connection());
+        }
+        self.logs.push(event);
+    }
     fn read(&mut self, op: h1::ReadOp<Vec<u8>>) -> Option<()> {
         assert!(self.read.replace(op).is_none());
         self.h1_event("read")
@@ -87,6 +96,14 @@ impl h1::Ports<Vec<u8>> for Ports {
 
 impl h1::ServerPorts<Vec<u8>> for Ports {
     fn request(&mut self, id: h1::ExchangeId, head: h1::RequestHead<'_>) -> Option<()> {
+        #[cfg(feature = "http1-diagnostics")]
+        assert_eq!(
+            self.logs.last(),
+            Some(&h1::LogEvent::RequestReceived {
+                exchange: id,
+                version: head.version
+            })
+        );
         self.requests
             .push((id, head.method.into(), head.target.into()));
         self.h1_event("request")
@@ -197,6 +214,20 @@ fn detecting() -> http::Server {
         Duration::ZERO,
     )
     .unwrap()
+}
+
+#[cfg(feature = "http1-metrics")]
+#[test]
+fn snapshots_require_a_selected_http1_child_and_do_not_drive_it() {
+    assert_eq!(detecting().http1_metrics(), None);
+    let mut server = http::Server::http1(h1_server());
+    let before = server.http1_mut().unwrap().metrics();
+    assert_eq!(server.http1_metrics(), Some(before));
+    assert_eq!(server.http1_mut().unwrap().metrics(), before);
+    let server = http::Server::<Vec<u8>>::http2(
+        h2::Server::new(h2::Config::default(), Duration::ZERO).unwrap(),
+    );
+    assert_eq!(server.http1_metrics(), None);
 }
 
 fn drive(server: &mut http::Server, ports: &mut Ports) {
@@ -402,6 +433,30 @@ fn http1_prefetch_is_lossless_and_keeps_the_connection_reusable() {
                 assert!(ports.h2.heads.is_empty());
                 assert!(ports.h2.write.is_none());
                 assert!(ports.detection_closed.is_empty());
+                #[cfg(feature = "http1-metrics")]
+                {
+                    let metrics = server.http1_metrics().unwrap();
+                    assert_eq!(metrics.counters.exchanges_started, 2);
+                    assert_eq!(metrics.counters.exchanges_retired, 2);
+                    assert_eq!(
+                        metrics.counters.read_bytes,
+                        (request.len() + second.len()) as u64
+                    );
+                    assert_eq!(
+                        metrics.counters.written_bytes_lower_bound,
+                        output.len() as u64
+                    );
+                    assert_eq!(metrics.counters.exchanges_failed, 0);
+                }
+                #[cfg(feature = "http1-diagnostics")]
+                assert_eq!(
+                    ports
+                        .logs
+                        .iter()
+                        .filter(|event| matches!(event, h1::LogEvent::RequestReceived { .. }))
+                        .count(),
+                    2
+                );
                 let observations = (
                     output,
                     ports
@@ -1190,6 +1245,12 @@ fn selected_client_preserves_http1_commands_and_callbacks() {
         let mut client = http::Client::http1(child);
         assert_eq!(client.protocol(), http::Protocol::Http1);
         assert!(client.http2_mut().is_none());
+        #[cfg(feature = "http1-metrics")]
+        {
+            let before = client.http1_mut().unwrap().metrics();
+            assert_eq!(client.http1_metrics(), Some(before));
+            assert_eq!(client.http1_mut().unwrap().metrics(), before);
+        }
         client
             .http1_mut()
             .unwrap()
@@ -1281,6 +1342,8 @@ fn selected_http2_client_has_the_direct_initial_wire_and_notifications() {
         assert_eq!(id, expected_id);
         assert_eq!(selected.protocol(), http::Protocol::Http2);
         assert!(selected.http1_mut().is_none());
+        #[cfg(feature = "http1-metrics")]
+        assert_eq!(selected.http1_metrics(), None);
         let mut baseline = support::MemoryPorts::default();
         let mut ports = Ports {
             yielding,

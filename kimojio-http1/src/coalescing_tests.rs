@@ -3,8 +3,8 @@ use super::*;
 fn event(machine: &mut Machine, deadline: &mut Option<core::Deadline>) -> Event {
     loop {
         let event = match machine {
-            Machine::Client(client) => client.next(&mut Ports),
-            Machine::Server(server) => server.next(&mut Ports),
+            Machine::Client(client) => client.next(&mut Ports::default()),
+            Machine::Server(server) => server.next(&mut Ports::default()),
         };
         match event {
             Some(Event::Deadline(value)) => *deadline = value,

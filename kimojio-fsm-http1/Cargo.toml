@@ -11,6 +11,10 @@ readme = "README.md"
 [dependencies]
 httparse.workspace = true
 
+[features]
+metrics = []
+diagnostics = []
+
 [dev-dependencies]
 criterion.workspace = true
 serde_json = "1"
