@@ -1,0 +1,29 @@
+INFO: detected rust-toolchain file /workspace/kimojio-rs-2/rust-toolchain.toml - default toolchain will be overridden by 1.98.1
+   Compiling kimojio-http1 v0.17.0 (/workspace/kimojio-rs-2/kimojio-http1)
+    Finished `release` profile [optimized] target(s) in 1.36s
+     Running tests/benchmark_workloads.rs (target/release/deps/benchmark_workloads-09b3ba3bed08fff0)
+
+running 6 tests
+test validation_rejects_corruption_and_length_errors ... ok
+
+thread 'zero_iteration_batch_is_not_a_timing_result' (3072646) panicked at kimojio-http1/tests/../benches/support/mod.rs:424:33:
+invalid wrapper benchmark: Limit
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test zero_iteration_batch_is_not_a_timing_result - should panic ... ok
+native bytes=0 chunked=false: Outcome { elapsed: 107.602µs, measured: 3, server: Counts { exchanges: 11, bytes: 0, frames: 0 }, client: Counts { exchanges: 11, bytes: 0, frames: 0 }, diagnostics: Some(Diagnostics { reads: 23, writes: 22, deadlines: 80, body_deliveries: 0, receipts: 0, retired: 22 }) }
+coalesce=false deadlines=true: Diagnostics { reads: 161, writes: 160, deadlines: 483, body_deliveries: 80, receipts: 80, retired: 80 }
+native bytes=128 chunked=false: Outcome { elapsed: 126.402µs, measured: 3, server: Counts { exchanges: 11, bytes: 1408, frames: 11 }, client: Counts { exchanges: 11, bytes: 1408, frames: 11 }, diagnostics: Some(Diagnostics { reads: 45, writes: 44, deadlines: 135, body_deliveries: 22, receipts: 22, retired: 22 }) }
+coalesce=true deadlines=true: Diagnostics { reads: 81, writes: 80, deadlines: 361, body_deliveries: 80, receipts: 80, retired: 80 }
+coalesce=false deadlines=false: Diagnostics { reads: 161, writes: 160, deadlines: 0, body_deliveries: 80, receipts: 80, retired: 80 }
+test qualification_diagnostics_identify_coalescing_and_deadline_controls ... ok
+native bytes=1048576 chunked=true: Outcome { elapsed: 4.738358ms, measured: 3, server: Counts { exchanges: 11, bytes: 11534336, frames: 1408 }, client: Counts { exchanges: 11, bytes: 11534336, frames: 1408 }, diagnostics: Some(Diagnostics { reads: 1459, writes: 1452, deadlines: 5047, body_deliveries: 2816, receipts: 1408, retired: 22 }) }
+native bytes=8192 chunked=true: Outcome { elapsed: 953.412µs, measured: 3, server: Counts { exchanges: 11, bytes: 90112, frames: 176 }, client: Counts { exchanges: 11, bytes: 90112, frames: 176 }, diagnostics: Some(Diagnostics { reads: 276, writes: 396, deadlines: 871, body_deliveries: 352, receipts: 352, retired: 22 }) }
+stream bytes=0 chunked=false: Outcome { elapsed: 100.301µs, measured: 3, server: Counts { exchanges: 11, bytes: 0, frames: 0 }, client: Counts { exchanges: 11, bytes: 0, frames: 0 }, diagnostics: Some(Diagnostics { reads: 23, writes: 22, deadlines: 80, body_deliveries: 0, receipts: 0, retired: 22 }) }
+stream bytes=128 chunked=false: Outcome { elapsed: 168.002µs, measured: 3, server: Counts { exchanges: 11, bytes: 1408, frames: 11 }, client: Counts { exchanges: 11, bytes: 1408, frames: 11 }, diagnostics: Some(Diagnostics { reads: 45, writes: 44, deadlines: 135, body_deliveries: 22, receipts: 22, retired: 22 }) }
+test session_outlives_the_default_core_request_limit_without_reconnect ... ok
+test controls_and_duplex_forwarding_preserve_success_and_payloads ... ok
+stream bytes=1048576 chunked=true: Outcome { elapsed: 6.042773ms, measured: 3, server: Counts { exchanges: 11, bytes: 11534336, frames: 1408 }, client: Counts { exchanges: 11, bytes: 11534336, frames: 1408 }, diagnostics: Some(Diagnostics { reads: 1458, writes: 1452, deadlines: 5046, body_deliveries: 2816, receipts: 1408, retired: 22 }) }
+stream bytes=8192 chunked=true: Outcome { elapsed: 1.150214ms, measured: 3, server: Counts { exchanges: 11, bytes: 90112, frames: 176 }, client: Counts { exchanges: 11, bytes: 90112, frames: 176 }, diagnostics: Some(Diagnostics { reads: 326, writes: 396, deadlines: 922, body_deliveries: 352, receipts: 352, retired: 22 }) }
+test timed_matrix_qualifies_bytes_counts_and_settlement_on_both_backends ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s

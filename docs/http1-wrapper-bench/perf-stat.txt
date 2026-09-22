@@ -1,0 +1,14 @@
+Benchmarking http1_wrapper/fixed_128b/native: Profiling for 3.0000 s
+Benchmarking http1_wrapper/fixed_128b/native: Complete (Analysis Disabled)
+
+
+ Performance counter stats for 'taskset -c 13 target/release/deps/roundtrip-52288ec443672fd6 --bench http1_wrapper/fixed_128b/native$ --profile-time 3':
+
+           3084.84 msec task-clock                       #    1.000 CPUs utilized
+   <not supported>      cycles
+   <not supported>      instructions
+
+       3.085848544 seconds time elapsed
+
+       1.941575000 seconds user
+       1.144157000 seconds sys

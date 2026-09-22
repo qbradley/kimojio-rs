@@ -1,0 +1,105 @@
+{
+  "chunked_1mib-native.stacks": {
+    "samples": 5842,
+    "percent": {
+      "HTTP1 core physical self symbols": 7.89,
+      "next_input self (includes inlines)": 19.1,
+      "async-event self symbols": 8.82,
+      "clock/time self symbols": 8.9,
+      "libc copy implementation": 16.42,
+      "copy under benchmark body source (inclusive)": 9.09,
+      "named allocator self symbols": 3.59,
+      "allocator under async waits (inclusive subset)": 2.52
+    }
+  },
+  "chunked_1mib-native_no_deadlines.stacks": {
+    "samples": 6550,
+    "percent": {
+      "named allocator self symbols": 2.96,
+      "next_input self (includes inlines)": 18.27,
+      "libc copy implementation": 20.53,
+      "copy under benchmark body source (inclusive)": 11.33,
+      "clock/time self symbols": 9.21,
+      "allocator under async waits (inclusive subset)": 2.41,
+      "HTTP1 core physical self symbols": 7.33,
+      "async-event self symbols": 10.66
+    }
+  },
+  "empty-native.stacks": {
+    "samples": 6810,
+    "percent": {
+      "clock/time self symbols": 7.3,
+      "libc copy implementation": 9.07,
+      "next_input self (includes inlines)": 17.21,
+      "named allocator self symbols": 4.99,
+      "HTTP1 core physical self symbols": 11.85,
+      "async-event self symbols": 7.52,
+      "allocator under async waits (inclusive subset)": 1.54
+    }
+  },
+  "fixed_128b-native.stacks": {
+    "samples": 6927,
+    "percent": {
+      "HTTP1 core physical self symbols": 10.78,
+      "next_input self (includes inlines)": 18.52,
+      "libc copy implementation": 9.4,
+      "async-event self symbols": 8.19,
+      "named allocator self symbols": 4.61,
+      "allocator under async waits (inclusive subset)": 1.99,
+      "clock/time self symbols": 8.1,
+      "copy under benchmark body source (inclusive)": 0.04
+    }
+  },
+  "fixed_128b-native_coalesced.stacks": {
+    "samples": 7156,
+    "percent": {
+      "HTTP1 core physical self symbols": 10.76,
+      "libc copy implementation": 9.98,
+      "clock/time self symbols": 8.82,
+      "next_input self (includes inlines)": 16.74,
+      "async-event self symbols": 7.94,
+      "named allocator self symbols": 4.7,
+      "allocator under async waits (inclusive subset)": 2.11,
+      "copy under benchmark body source (inclusive)": 0.01
+    }
+  },
+  "fixed_128b-native_no_deadlines.stacks": {
+    "samples": 7942,
+    "percent": {
+      "libc copy implementation": 10.77,
+      "named allocator self symbols": 4.96,
+      "next_input self (includes inlines)": 16.82,
+      "clock/time self symbols": 8.08,
+      "async-event self symbols": 10.16,
+      "HTTP1 core physical self symbols": 10.49,
+      "allocator under async waits (inclusive subset)": 2.61,
+      "copy under benchmark body source (inclusive)": 0.01
+    }
+  },
+  "fixed_128b-stream.stacks": {
+    "samples": 7747,
+    "percent": {
+      "async-event self symbols": 10.26,
+      "clock/time self symbols": 6.43,
+      "HTTP1 core physical self symbols": 6.98,
+      "next_input self (includes inlines)": 14.87,
+      "libc copy implementation": 9.13,
+      "named allocator self symbols": 5.29,
+      "allocator under async waits (inclusive subset)": 2.75,
+      "copy under benchmark body source (inclusive)": 0.01
+    }
+  },
+  "fragmented_8k-native.stacks": {
+    "samples": 5666,
+    "percent": {
+      "async-event self symbols": 8.05,
+      "next_input self (includes inlines)": 21.69,
+      "HTTP1 core physical self symbols": 9.8,
+      "clock/time self symbols": 9.78,
+      "libc copy implementation": 10.89,
+      "named allocator self symbols": 4.91,
+      "allocator under async waits (inclusive subset)": 3.25,
+      "copy under benchmark body source (inclusive)": 0.16
+    }
+  }
+}

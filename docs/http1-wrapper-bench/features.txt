@@ -1,0 +1,442 @@
+kimojio-http1 v0.17.0 (/workspace/kimojio-rs-2/kimojio-http1)
+├── kimojio v0.17.0 (/workspace/kimojio-rs-2/kimojio)
+│   ├── zerocopy feature "default"
+│   │   └── zerocopy v0.8.52
+│   │       └── zerocopy-derive feature "default"
+│   │           └── zerocopy-derive v0.8.52 (proc-macro)
+│   │               ├── proc-macro2 feature "default"
+│   │               │   ├── proc-macro2 v1.0.106
+│   │               │   │   └── unicode-ident feature "default"
+│   │               │   │       └── unicode-ident v1.0.24
+│   │               │   └── proc-macro2 feature "proc-macro"
+│   │               │       └── proc-macro2 v1.0.106 (*)
+│   │               ├── quote feature "default"
+│   │               │   ├── quote v1.0.45
+│   │               │   │   └── proc-macro2 v1.0.106 (*)
+│   │               │   └── quote feature "proc-macro"
+│   │               │       ├── quote v1.0.45 (*)
+│   │               │       └── proc-macro2 feature "proc-macro" (*)
+│   │               ├── syn feature "default"
+│   │               │   ├── syn v2.0.118
+│   │               │   │   ├── proc-macro2 v1.0.106 (*)
+│   │               │   │   ├── quote v1.0.45 (*)
+│   │               │   │   └── unicode-ident feature "default" (*)
+│   │               │   ├── syn feature "clone-impls"
+│   │               │   │   └── syn v2.0.118 (*)
+│   │               │   ├── syn feature "derive"
+│   │               │   │   └── syn v2.0.118 (*)
+│   │               │   ├── syn feature "parsing"
+│   │               │   │   └── syn v2.0.118 (*)
+│   │               │   ├── syn feature "printing"
+│   │               │   │   └── syn v2.0.118 (*)
+│   │               │   └── syn feature "proc-macro"
+│   │               │       ├── syn v2.0.118 (*)
+│   │               │       ├── proc-macro2 feature "proc-macro" (*)
+│   │               │       └── quote feature "proc-macro" (*)
+│   │               └── syn feature "full"
+│   │                   └── syn v2.0.118 (*)
+│   ├── zerocopy feature "derive"
+│   │   ├── zerocopy v0.8.52 (*)
+│   │   └── zerocopy feature "zerocopy-derive"
+│   │       └── zerocopy v0.8.52 (*)
+│   ├── libc feature "default"
+│   │   ├── libc v0.2.186
+│   │   └── libc feature "std"
+│   │       └── libc v0.2.186
+│   ├── futures feature "default"
+│   │   ├── futures v0.3.32
+│   │   │   ├── futures-core v0.3.32
+│   │   │   ├── futures-executor v0.3.32
+│   │   │   │   ├── futures-core v0.3.32
+│   │   │   │   ├── futures-task v0.3.32
+│   │   │   │   └── futures-util v0.3.32
+│   │   │   │       ├── futures-core v0.3.32
+│   │   │   │       ├── futures-macro v0.3.32 (proc-macro)
+│   │   │   │       │   ├── proc-macro2 feature "default" (*)
+│   │   │   │       │   ├── quote feature "default" (*)
+│   │   │   │       │   ├── syn feature "default" (*)
+│   │   │   │       │   └── syn feature "full" (*)
+│   │   │   │       ├── futures-sink v0.3.32
+│   │   │   │       ├── futures-task v0.3.32
+│   │   │   │       ├── slab v0.4.12
+│   │   │   │       ├── memchr feature "default"
+│   │   │   │       │   ├── memchr v2.8.2
+│   │   │   │       │   └── memchr feature "std"
+│   │   │   │       │       ├── memchr v2.8.2
+│   │   │   │       │       └── memchr feature "alloc"
+│   │   │   │       │           └── memchr v2.8.2
+│   │   │   │       ├── futures-channel feature "std"
+│   │   │   │       │   ├── futures-channel v0.3.32
+│   │   │   │       │   │   ├── futures-core v0.3.32
+│   │   │   │       │   │   └── futures-sink v0.3.32
+│   │   │   │       │   ├── futures-channel feature "alloc"
+│   │   │   │       │   │   ├── futures-channel v0.3.32 (*)
+│   │   │   │       │   │   └── futures-core feature "alloc"
+│   │   │   │       │   │       └── futures-core v0.3.32
+│   │   │   │       │   └── futures-core feature "std"
+│   │   │   │       │       ├── futures-core v0.3.32
+│   │   │   │       │       └── futures-core feature "alloc" (*)
+│   │   │   │       ├── futures-io feature "std"
+│   │   │   │       │   └── futures-io v0.3.32
+│   │   │   │       └── pin-project-lite feature "default"
+│   │   │   │           └── pin-project-lite v0.2.17
+│   │   │   ├── futures-io v0.3.32
+│   │   │   ├── futures-sink v0.3.32
+│   │   │   ├── futures-task v0.3.32
+│   │   │   ├── futures-channel feature "sink"
+│   │   │   │   ├── futures-channel v0.3.32 (*)
+│   │   │   │   └── futures-channel feature "futures-sink"
+│   │   │   │       └── futures-channel v0.3.32 (*)
+│   │   │   └── futures-util feature "sink"
+│   │   │       ├── futures-util v0.3.32 (*)
+│   │   │       └── futures-util feature "futures-sink"
+│   │   │           └── futures-util v0.3.32 (*)
+│   │   ├── futures feature "async-await"
+│   │   │   ├── futures v0.3.32 (*)
+│   │   │   ├── futures-util feature "async-await"
+│   │   │   │   └── futures-util v0.3.32 (*)
+│   │   │   └── futures-util feature "async-await-macro"
+│   │   │       ├── futures-util v0.3.32 (*)
+│   │   │       ├── futures-util feature "async-await" (*)
+│   │   │       └── futures-util feature "futures-macro"
+│   │   │           └── futures-util v0.3.32 (*)
+│   │   ├── futures feature "executor"
+│   │   │   ├── futures v0.3.32 (*)
+│   │   │   ├── futures feature "futures-executor"
+│   │   │   │   └── futures v0.3.32 (*)
+│   │   │   ├── futures feature "std"
+│   │   │   │   ├── futures v0.3.32 (*)
+│   │   │   │   ├── futures feature "alloc"
+│   │   │   │   │   ├── futures v0.3.32 (*)
+│   │   │   │   │   ├── futures-channel feature "alloc" (*)
+│   │   │   │   │   ├── futures-core feature "alloc" (*)
+│   │   │   │   │   ├── futures-sink feature "alloc"
+│   │   │   │   │   │   └── futures-sink v0.3.32
+│   │   │   │   │   ├── futures-task feature "alloc"
+│   │   │   │   │   │   └── futures-task v0.3.32
+│   │   │   │   │   └── futures-util feature "alloc"
+│   │   │   │   │       ├── futures-util v0.3.32 (*)
+│   │   │   │   │       ├── futures-core feature "alloc" (*)
+│   │   │   │   │       ├── futures-task feature "alloc" (*)
+│   │   │   │   │       └── futures-util feature "slab"
+│   │   │   │   │           └── futures-util v0.3.32 (*)
+│   │   │   │   ├── futures-core feature "std" (*)
+│   │   │   │   ├── futures-sink feature "std"
+│   │   │   │   │   ├── futures-sink v0.3.32
+│   │   │   │   │   └── futures-sink feature "alloc" (*)
+│   │   │   │   ├── futures-task feature "std"
+│   │   │   │   │   ├── futures-task v0.3.32
+│   │   │   │   │   └── futures-task feature "alloc" (*)
+│   │   │   │   ├── futures-util feature "channel"
+│   │   │   │   │   ├── futures-util v0.3.32 (*)
+│   │   │   │   │   ├── futures-util feature "futures-channel"
+│   │   │   │   │   │   └── futures-util v0.3.32 (*)
+│   │   │   │   │   └── futures-util feature "std"
+│   │   │   │   │       ├── futures-util v0.3.32 (*)
+│   │   │   │   │       ├── futures-core feature "std" (*)
+│   │   │   │   │       ├── futures-task feature "std" (*)
+│   │   │   │   │       ├── futures-util feature "alloc" (*)
+│   │   │   │   │       ├── futures-util feature "slab" (*)
+│   │   │   │   │       └── slab feature "std"
+│   │   │   │   │           └── slab v0.4.12
+│   │   │   │   ├── futures-util feature "io"
+│   │   │   │   │   ├── futures-util v0.3.32 (*)
+│   │   │   │   │   ├── futures-util feature "futures-io"
+│   │   │   │   │   │   └── futures-util v0.3.32 (*)
+│   │   │   │   │   ├── futures-util feature "memchr"
+│   │   │   │   │   │   └── futures-util v0.3.32 (*)
+│   │   │   │   │   └── futures-util feature "std" (*)
+│   │   │   │   ├── futures-util feature "std" (*)
+│   │   │   │   └── futures-io feature "std" (*)
+│   │   │   └── futures-executor feature "std"
+│   │   │       ├── futures-executor v0.3.32 (*)
+│   │   │       ├── futures-core feature "std" (*)
+│   │   │       ├── futures-task feature "std" (*)
+│   │   │       └── futures-util feature "std" (*)
+│   │   └── futures feature "std" (*)
+│   ├── pin-project-lite feature "default" (*)
+│   ├── impls feature "default"
+│   │   └── impls v1.0.3
+│   ├── intrusive-collections feature "default"
+│   │   ├── intrusive-collections v0.10.2
+│   │   │   └── memoffset feature "default"
+│   │   │       └── memoffset v0.9.1
+│   │   │           [build-dependencies]
+│   │   │           └── autocfg feature "default"
+│   │   │               └── autocfg v1.5.1
+│   │   └── intrusive-collections feature "alloc"
+│   │       └── intrusive-collections v0.10.2 (*)
+│   ├── kimojio-json feature "default"
+│   │   └── kimojio-json v0.17.0 (/workspace/kimojio-rs-2/kimojio-json)
+│   ├── kimojio-macros feature "default"
+│   │   └── kimojio-macros v0.17.0 (proc-macro) (/workspace/kimojio-rs-2/kimojio-macros)
+│   │       ├── quote feature "default" (*)
+│   │       ├── syn feature "default" (*)
+│   │       └── syn feature "full" (*)
+│   ├── rustix feature "default"
+│   │   ├── rustix v1.1.4
+│   │   │   ├── bitflags v2.13.0
+│   │   │   ├── linux-raw-sys feature "auxvec"
+│   │   │   │   └── linux-raw-sys v0.12.1
+│   │   │   ├── linux-raw-sys feature "elf"
+│   │   │   │   └── linux-raw-sys v0.12.1
+│   │   │   ├── linux-raw-sys feature "errno"
+│   │   │   │   └── linux-raw-sys v0.12.1
+│   │   │   ├── linux-raw-sys feature "general"
+│   │   │   │   └── linux-raw-sys v0.12.1
+│   │   │   ├── linux-raw-sys feature "ioctl"
+│   │   │   │   └── linux-raw-sys v0.12.1
+│   │   │   └── linux-raw-sys feature "no_std"
+│   │   │       └── linux-raw-sys v0.12.1
+│   │   └── rustix feature "std"
+│   │       ├── rustix v1.1.4 (*)
+│   │       ├── rustix feature "alloc"
+│   │       │   └── rustix v1.1.4 (*)
+│   │       └── bitflags feature "std"
+│   │           └── bitflags v2.13.0
+│   ├── rustix feature "event"
+│   │   └── rustix v1.1.4 (*)
+│   ├── rustix feature "fs"
+│   │   └── rustix v1.1.4 (*)
+│   ├── rustix feature "io_uring"
+│   │   ├── rustix v1.1.4 (*)
+│   │   ├── rustix feature "event" (*)
+│   │   ├── rustix feature "fs" (*)
+│   │   ├── rustix feature "net"
+│   │   │   ├── rustix v1.1.4 (*)
+│   │   │   ├── linux-raw-sys feature "if_ether"
+│   │   │   │   └── linux-raw-sys v0.12.1
+│   │   │   ├── linux-raw-sys feature "net"
+│   │   │   │   └── linux-raw-sys v0.12.1
+│   │   │   ├── linux-raw-sys feature "netlink"
+│   │   │   │   └── linux-raw-sys v0.12.1
+│   │   │   └── linux-raw-sys feature "xdp"
+│   │   │       └── linux-raw-sys v0.12.1
+│   │   ├── rustix feature "thread"
+│   │   │   ├── rustix v1.1.4 (*)
+│   │   │   └── linux-raw-sys feature "prctl"
+│   │   │       └── linux-raw-sys v0.12.1
+│   │   └── linux-raw-sys feature "io_uring"
+│   │       └── linux-raw-sys v0.12.1
+│   ├── rustix feature "mm"
+│   │   └── rustix v1.1.4 (*)
+│   ├── rustix feature "mount"
+│   │   └── rustix v1.1.4 (*)
+│   ├── rustix feature "process"
+│   │   ├── rustix v1.1.4 (*)
+│   │   └── linux-raw-sys feature "prctl" (*)
+│   ├── rustix feature "rand"
+│   │   └── rustix v1.1.4 (*)
+│   ├── rustix feature "system"
+│   │   ├── rustix v1.1.4 (*)
+│   │   └── linux-raw-sys feature "system"
+│   │       └── linux-raw-sys v0.12.1
+│   ├── rustix feature "thread" (*)
+│   ├── rustix feature "time"
+│   │   └── rustix v1.1.4 (*)
+│   ├── rustix-uring feature "default"
+│   │   └── rustix-uring v0.6.0
+│   │       ├── bitflags v2.13.0
+│   │       ├── rustix feature "io_uring" (*)
+│   │       ├── rustix feature "mm" (*)
+│   │       └── rustix feature "thread" (*)
+│   ├── scopeguard feature "default"
+│   │   ├── scopeguard v1.2.0
+│   │   └── scopeguard feature "use_std"
+│   │       └── scopeguard v1.2.0
+│   ├── static_assertions feature "default"
+│   │   └── static_assertions v1.1.0
+│   ├── uuid feature "default"
+│   │   ├── uuid v1.23.3
+│   │   │   └── getrandom feature "default"
+│   │   │       └── getrandom v0.4.3
+│   │   │           ├── libc v0.2.186
+│   │   │           └── cfg-if feature "default"
+│   │   │               └── cfg-if v1.0.4
+│   │   └── uuid feature "std"
+│   │       └── uuid v1.23.3 (*)
+│   └── uuid feature "v4"
+│       ├── uuid v1.23.3 (*)
+│       └── uuid feature "rng"
+│           └── uuid v1.23.3 (*)
+├── futures feature "default" (*)
+├── http feature "default"
+│   ├── http v1.5.0
+│   │   ├── itoa feature "default"
+│   │   │   └── itoa v1.0.18
+│   │   └── bytes feature "default"
+│   │       ├── bytes v1.12.1
+│   │       └── bytes feature "std"
+│   │           └── bytes v1.12.1
+│   └── http feature "std"
+│       └── http v1.5.0 (*)
+└── kimojio-fsm-http1 feature "default"
+    └── kimojio-fsm-http1 v0.17.0 (/workspace/kimojio-rs-2/kimojio-fsm-http1)
+        └── httparse feature "default"
+            ├── httparse v1.10.1
+            └── httparse feature "std"
+                └── httparse v1.10.1
+[dev-dependencies]
+├── criterion v0.8.2
+│   ├── alloca feature "default"
+│   │   └── alloca v0.4.0
+│   │       [build-dependencies]
+│   │       └── cc feature "default"
+│   │           └── cc v1.2.64
+│   │               ├── find-msvc-tools feature "default"
+│   │               │   └── find-msvc-tools v0.1.9
+│   │               └── shlex feature "default"
+│   │                   ├── shlex v2.0.1
+│   │                   └── shlex feature "std"
+│   │                       └── shlex v2.0.1
+│   ├── anes feature "default"
+│   │   └── anes v0.1.6
+│   ├── cast feature "default"
+│   │   └── cast v0.3.0
+│   ├── ciborium feature "default"
+│   │   ├── ciborium v0.2.2
+│   │   │   ├── ciborium-io feature "alloc"
+│   │   │   │   └── ciborium-io v0.2.2
+│   │   │   ├── ciborium-io feature "default"
+│   │   │   │   └── ciborium-io v0.2.2
+│   │   │   ├── ciborium-ll feature "default"
+│   │   │   │   └── ciborium-ll v0.2.2
+│   │   │   │       ├── half v2.7.1
+│   │   │   │       │   ├── cfg-if feature "default" (*)
+│   │   │   │       │   ├── zerocopy feature "derive" (*)
+│   │   │   │       │   └── zerocopy feature "simd"
+│   │   │   │       │       └── zerocopy v0.8.52 (*)
+│   │   │   │       └── ciborium-io feature "default" (*)
+│   │   │   ├── serde feature "alloc"
+│   │   │   │   ├── serde v1.0.228
+│   │   │   │   │   ├── serde_core feature "result"
+│   │   │   │   │   │   └── serde_core v1.0.228
+│   │   │   │   │   └── serde_derive feature "default"
+│   │   │   │   │       └── serde_derive v1.0.228 (proc-macro)
+│   │   │   │   │           ├── proc-macro2 feature "proc-macro" (*)
+│   │   │   │   │           ├── quote feature "proc-macro" (*)
+│   │   │   │   │           ├── syn feature "clone-impls" (*)
+│   │   │   │   │           ├── syn feature "derive" (*)
+│   │   │   │   │           ├── syn feature "parsing" (*)
+│   │   │   │   │           ├── syn feature "printing" (*)
+│   │   │   │   │           └── syn feature "proc-macro" (*)
+│   │   │   │   └── serde_core feature "alloc"
+│   │   │   │       └── serde_core v1.0.228
+│   │   │   └── serde feature "derive"
+│   │   │       ├── serde v1.0.228 (*)
+│   │   │       └── serde feature "serde_derive"
+│   │   │           └── serde v1.0.228 (*)
+│   │   └── ciborium feature "std"
+│   │       ├── ciborium v0.2.2 (*)
+│   │       ├── ciborium-io feature "std"
+│   │       │   ├── ciborium-io v0.2.2
+│   │       │   └── ciborium-io feature "alloc" (*)
+│   │       └── serde feature "std"
+│   │           ├── serde v1.0.228 (*)
+│   │           └── serde_core feature "std"
+│   │               └── serde_core v1.0.228
+│   ├── serde feature "default"
+│   │   ├── serde v1.0.228 (*)
+│   │   └── serde feature "std" (*)
+│   ├── serde feature "derive" (*)
+│   ├── clap feature "help"
+│   │   ├── clap v4.6.1
+│   │   │   └── clap_builder v4.6.0
+│   │   │       ├── anstyle feature "default"
+│   │   │       │   ├── anstyle v1.0.14
+│   │   │       │   └── anstyle feature "std"
+│   │   │       │       └── anstyle v1.0.14
+│   │   │       └── clap_lex feature "default"
+│   │   │           └── clap_lex v1.1.0
+│   │   └── clap_builder feature "help"
+│   │       └── clap_builder v4.6.0 (*)
+│   ├── clap feature "std"
+│   │   ├── clap v4.6.1 (*)
+│   │   └── clap_builder feature "std"
+│   │       ├── clap_builder v4.6.0 (*)
+│   │       └── anstyle feature "std" (*)
+│   ├── criterion-plot feature "default"
+│   │   └── criterion-plot v0.8.2
+│   │       ├── cast feature "default" (*)
+│   │       └── itertools feature "default"
+│   │           ├── itertools v0.13.0
+│   │           │   └── either v1.16.0
+│   │           └── itertools feature "use_std"
+│   │               ├── itertools v0.13.0 (*)
+│   │               ├── itertools feature "use_alloc"
+│   │               │   └── itertools v0.13.0 (*)
+│   │               └── either feature "use_std"
+│   │                   ├── either v1.16.0
+│   │                   └── either feature "std"
+│   │                       └── either v1.16.0
+│   ├── itertools feature "default" (*)
+│   ├── num-traits feature "std"
+│   │   └── num-traits v0.2.19
+│   │       [build-dependencies]
+│   │       └── autocfg feature "default" (*)
+│   ├── oorandom feature "default"
+│   │   └── oorandom v11.1.5
+│   ├── page_size feature "default"
+│   │   └── page_size v0.6.0
+│   │       └── libc feature "default" (*)
+│   ├── regex feature "std"
+│   │   ├── regex v1.12.4
+│   │   │   ├── regex-syntax v0.8.11
+│   │   │   ├── regex-automata feature "alloc"
+│   │   │   │   └── regex-automata v0.4.14
+│   │   │   │       └── regex-syntax v0.8.11
+│   │   │   ├── regex-automata feature "meta"
+│   │   │   │   ├── regex-automata v0.4.14 (*)
+│   │   │   │   ├── regex-automata feature "nfa-pikevm"
+│   │   │   │   │   ├── regex-automata v0.4.14 (*)
+│   │   │   │   │   └── regex-automata feature "nfa-thompson"
+│   │   │   │   │       ├── regex-automata v0.4.14 (*)
+│   │   │   │   │       └── regex-automata feature "alloc" (*)
+│   │   │   │   └── regex-automata feature "syntax"
+│   │   │   │       ├── regex-automata v0.4.14 (*)
+│   │   │   │       └── regex-automata feature "alloc" (*)
+│   │   │   ├── regex-automata feature "nfa-pikevm" (*)
+│   │   │   └── regex-automata feature "syntax" (*)
+│   │   ├── regex-automata feature "std"
+│   │   │   ├── regex-automata v0.4.14 (*)
+│   │   │   ├── regex-automata feature "alloc" (*)
+│   │   │   └── regex-syntax feature "std"
+│   │   │       └── regex-syntax v0.8.11
+│   │   └── regex-syntax feature "std" (*)
+│   ├── serde_json feature "default"
+│   │   ├── serde_json v1.0.150
+│   │   │   ├── memchr v2.8.2
+│   │   │   ├── serde_core v1.0.228
+│   │   │   ├── itoa feature "default" (*)
+│   │   │   └── zmij feature "default"
+│   │   │       └── zmij v1.0.21
+│   │   └── serde_json feature "std"
+│   │       ├── serde_json v1.0.150 (*)
+│   │       ├── serde_core feature "std" (*)
+│   │       └── memchr feature "std" (*)
+│   ├── tinytemplate feature "default"
+│   │   └── tinytemplate v1.2.1
+│   │       ├── serde feature "default" (*)
+│   │       └── serde_json feature "default" (*)
+│   └── walkdir feature "default"
+│       └── walkdir v2.5.0
+│           └── same-file feature "default"
+│               └── same-file v1.0.6
+├── base64 feature "default"
+│   ├── base64 v0.22.1
+│   └── base64 feature "std"
+│       ├── base64 v0.22.1
+│       └── base64 feature "alloc"
+│           └── base64 v0.22.1
+├── serde_json feature "default" (*)
+├── rustix feature "default" (*)
+├── rustix feature "event" (*)
+├── rustix feature "fs" (*)
+├── rustix feature "io_uring" (*)
+├── rustix feature "mm" (*)
+├── rustix feature "mount" (*)
+├── rustix feature "process" (*)
+├── rustix feature "rand" (*)
+├── rustix feature "system" (*)
+├── rustix feature "thread" (*)
+└── rustix feature "time" (*)

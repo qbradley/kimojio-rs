@@ -1,0 +1,138 @@
+INFO: detected rust-toolchain file /workspace/kimojio-rs-2/rust-toolchain.toml - default toolchain will be overridden by 1.98.1
+   Compiling kimojio-http1 v0.17.0 (/workspace/kimojio-rs-2/kimojio-http1)
+    Finished `bench` profile [optimized] target(s) in 8.91s
+     Running benches/roundtrip.rs (target/release/deps/roundtrip-52288ec443672fd6)
+Benchmarking http1_wrapper/empty/native
+Benchmarking http1_wrapper/empty/native: Warming up for 1.0000 s
+Benchmarking http1_wrapper/empty/native: Collecting 50 samples in estimated 3.0265 s (144k iterations)
+Benchmarking http1_wrapper/empty/native: Analyzing
+http1_wrapper/empty/native
+                        time:   [20.221 µs 20.262 µs 20.304 µs]
+                        thrpt:  [49.251 Kelem/s 49.353 Kelem/s 49.454 Kelem/s]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high mild
+
+Benchmarking http1_wrapper/empty/stream
+Benchmarking http1_wrapper/empty/stream: Warming up for 1.0000 s
+Benchmarking http1_wrapper/empty/stream: Collecting 50 samples in estimated 3.0309 s (116k iterations)
+Benchmarking http1_wrapper/empty/stream: Analyzing
+http1_wrapper/empty/stream
+                        time:   [25.973 µs 26.001 µs 26.034 µs]
+                        thrpt:  [38.411 Kelem/s 38.461 Kelem/s 38.501 Kelem/s]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high severe
+
+Benchmarking http1_wrapper/fixed_128b/native
+Benchmarking http1_wrapper/fixed_128b/native: Warming up for 1.0000 s
+Benchmarking http1_wrapper/fixed_128b/native: Collecting 50 samples in estimated 3.0407 s (82k iterations)
+Benchmarking http1_wrapper/fixed_128b/native: Analyzing
+http1_wrapper/fixed_128b/native
+                        time:   [37.044 µs 37.655 µs 38.878 µs]
+                        thrpt:  [25.721 Kelem/s 26.557 Kelem/s 26.995 Kelem/s]
+Found 2 outliers among 50 measurements (4.00%)
+  1 (2.00%) high mild
+  1 (2.00%) high severe
+
+Benchmarking http1_wrapper/fixed_128b/stream
+Benchmarking http1_wrapper/fixed_128b/stream: Warming up for 1.0000 s
+Benchmarking http1_wrapper/fixed_128b/stream: Collecting 50 samples in estimated 3.0584 s (60k iterations)
+Benchmarking http1_wrapper/fixed_128b/stream: Analyzing
+http1_wrapper/fixed_128b/stream
+                        time:   [49.256 µs 49.317 µs 49.379 µs]
+                        thrpt:  [20.252 Kelem/s 20.277 Kelem/s 20.302 Kelem/s]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high severe
+
+Benchmarking http1_wrapper/fixed_128b/native_coalesced
+Benchmarking http1_wrapper/fixed_128b/native_coalesced: Warming up for 1.0000 s
+Benchmarking http1_wrapper/fixed_128b/native_coalesced: Collecting 50 samples in estimated 3.0324 s (116k iterations)
+Benchmarking http1_wrapper/fixed_128b/native_coalesced: Analyzing
+http1_wrapper/fixed_128b/native_coalesced
+                        time:   [25.996 µs 26.031 µs 26.067 µs]
+                        thrpt:  [38.363 Kelem/s 38.415 Kelem/s 38.467 Kelem/s]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high mild
+
+Benchmarking http1_wrapper/fixed_128b/native_no_deadlines
+Benchmarking http1_wrapper/fixed_128b/native_no_deadlines: Warming up for 1.0000 s
+Benchmarking http1_wrapper/fixed_128b/native_no_deadlines: Collecting 50 samples in estimated 3.0083 s (119k iterations)
+Benchmarking http1_wrapper/fixed_128b/native_no_deadlines: Analyzing
+http1_wrapper/fixed_128b/native_no_deadlines
+                        time:   [25.298 µs 25.438 µs 25.592 µs]
+                        thrpt:  [39.074 Kelem/s 39.311 Kelem/s 39.529 Kelem/s]
+Found 2 outliers among 50 measurements (4.00%)
+  1 (2.00%) high mild
+  1 (2.00%) high severe
+
+Benchmarking http1_wrapper/chunked_1mib/native
+Benchmarking http1_wrapper/chunked_1mib/native: Warming up for 1.0000 s
+Benchmarking http1_wrapper/chunked_1mib/native: Collecting 50 samples in estimated 4.0277 s (2550 iterations)
+Benchmarking http1_wrapper/chunked_1mib/native: Analyzing
+http1_wrapper/chunked_1mib/native
+                        time:   [1.4588 ms 1.4679 ms 1.4866 ms]
+                        thrpt:  [672.70  elem/s 681.27  elem/s 685.51  elem/s]
+Found 4 outliers among 50 measurements (8.00%)
+  3 (6.00%) high mild
+  1 (2.00%) high severe
+
+Benchmarking http1_wrapper/chunked_1mib/stream
+Benchmarking http1_wrapper/chunked_1mib/stream: Warming up for 1.0000 s
+Benchmarking http1_wrapper/chunked_1mib/stream: Collecting 50 samples in estimated 5.6315 s (2550 iterations)
+Benchmarking http1_wrapper/chunked_1mib/stream: Analyzing
+http1_wrapper/chunked_1mib/stream
+                        time:   [1.9301 ms 1.9342 ms 1.9405 ms]
+                        thrpt:  [515.34  elem/s 517.00  elem/s 518.11  elem/s]
+Found 6 outliers among 50 measurements (12.00%)
+  2 (4.00%) low mild
+  1 (2.00%) high mild
+  3 (6.00%) high severe
+
+Benchmarking http1_wrapper/chunked_1mib/native_no_deadlines
+Benchmarking http1_wrapper/chunked_1mib/native_no_deadlines: Warming up for 1.0000 s
+Benchmarking http1_wrapper/chunked_1mib/native_no_deadlines: Collecting 50 samples in estimated 4.2193 s (3825 iterations)
+Benchmarking http1_wrapper/chunked_1mib/native_no_deadlines: Analyzing
+http1_wrapper/chunked_1mib/native_no_deadlines
+                        time:   [1.0124 ms 1.0154 ms 1.0204 ms]
+                        thrpt:  [980.02  elem/s 984.79  elem/s 987.76  elem/s]
+Found 5 outliers among 50 measurements (10.00%)
+  1 (2.00%) high mild
+  4 (8.00%) high severe
+
+Benchmarking http1_wrapper/chunked_1mib/native_forward
+Benchmarking http1_wrapper/chunked_1mib/native_forward: Warming up for 1.0000 s
+Benchmarking http1_wrapper/chunked_1mib/native_forward: Collecting 50 samples in estimated 5.2721 s (2550 iterations)
+Benchmarking http1_wrapper/chunked_1mib/native_forward: Analyzing
+http1_wrapper/chunked_1mib/native_forward
+                        time:   [1.7207 ms 1.7788 ms 1.8455 ms]
+                        thrpt:  [541.86  elem/s 562.19  elem/s 581.16  elem/s]
+Found 5 outliers among 50 measurements (10.00%)
+  1 (2.00%) high mild
+  4 (8.00%) high severe
+
+Benchmarking http1_wrapper/chunked_1mib/native_copy_forward
+Benchmarking http1_wrapper/chunked_1mib/native_copy_forward: Warming up for 1.0000 s
+Benchmarking http1_wrapper/chunked_1mib/native_copy_forward: Collecting 50 samples in estimated 4.6333 s (2550 iterations)
+Benchmarking http1_wrapper/chunked_1mib/native_copy_forward: Analyzing
+http1_wrapper/chunked_1mib/native_copy_forward
+                        time:   [1.6807 ms 1.6819 ms 1.6832 ms]
+                        thrpt:  [594.09  elem/s 594.57  elem/s 594.98  elem/s]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high severe
+
+Benchmarking http1_wrapper/fragmented_8k/native
+Benchmarking http1_wrapper/fragmented_8k/native: Warming up for 1.0000 s
+Benchmarking http1_wrapper/fragmented_8k/native: Collecting 50 samples in estimated 3.1101 s (13k iterations)
+Benchmarking http1_wrapper/fragmented_8k/native: Analyzing
+http1_wrapper/fragmented_8k/native
+                        time:   [236.38 µs 236.65 µs 236.97 µs]
+                        thrpt:  [4.2200 Kelem/s 4.2257 Kelem/s 4.2304 Kelem/s]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high mild
+
+Benchmarking http1_wrapper/fragmented_8k/stream
+Benchmarking http1_wrapper/fragmented_8k/stream: Warming up for 1.0000 s
+Benchmarking http1_wrapper/fragmented_8k/stream: Collecting 50 samples in estimated 3.1380 s (8925 iterations)
+Benchmarking http1_wrapper/fragmented_8k/stream: Analyzing
+http1_wrapper/fragmented_8k/stream
+                        time:   [343.43 µs 344.02 µs 344.64 µs]
+                        thrpt:  [2.9015 Kelem/s 2.9068 Kelem/s 2.9118 Kelem/s]

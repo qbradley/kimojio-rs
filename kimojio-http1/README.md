@@ -433,6 +433,22 @@ cargo clippy -p kimojio-http1 --all-targets --all-features -- -D warnings
 The regression suite uses native socket operations.
 It covers trailers, reuse, queued-request cancellation, source failure, partial-progress errors, explicit close, and virtual deadlines.
 
+## Steady-state wrapper benchmarks
+
+`cargo bench -p kimojio-http1 --bench roundtrip -- http1_wrapper --noplot`
+measures both public wrapper endpoints over an established Unix socket pair.
+It covers native and stream transports, empty/fixed/chunked/fragmented bodies,
+and explicit deadline, coalescing, and duplex-forwarding controls. Setup and
+warmup are excluded; successful shutdown is included once per batch. Full byte
+validation and diagnostics run outside timing, with status/length/count checks
+retained inside. This is real I/O with ordinary owned body production, **not** a
+no-copy replay or isolated core benchmark.
+
+See the [benchmark and performance report](../docs/http1-wrapper-bench/README.md)
+for the timing contract, qualification and allocation probes, perf commands,
+results, and remaining optimization opportunities. No wrapper production paths
+are replaced by mocks or benchmark-only implementations.
+
 ## Benchmark client
 
 The [`keepalive_bench`](examples/keepalive_bench.rs) example measures repeated exchanges through both wrapper endpoints on one established native socket pair.

@@ -609,6 +609,7 @@ name = "kimojio-http1"
 version = "0.17.0"
 dependencies = [
  "base64",
+ "criterion",
  "futures",
  "http",
  "kimojio",

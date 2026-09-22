@@ -1,0 +1,6 @@
+/tmp/http1-wrapper-bench/tests-all.txt: 107 passed, 0 failed across 12 suites
+docs/http1-wrapper-bench/qualification.txt: 6 passed, 0 failed across 1 suites
+docs/http1-wrapper-bench/qualification-release.txt: 6 passed, 0 failed across 1 suites
+docs/http1-wrapper-bench/allocations.txt: 1 passed, 0 failed across 1 suites
+cargo clippy -p kimojio-http1 --all-features --all-targets -- -D warnings: passed
+rustfmt check: new Rust files: passed
