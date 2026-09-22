@@ -15,16 +15,18 @@ use kimojio::{
 };
 use kimojio_fsm_http1 as core;
 
-use crate::body::{BodyDemand, OutgoingData, OutgoingSource};
+use crate::body::{BodyDemand, OutgoingData, OutgoingSource, SourceFrame};
 use crate::observation::BoundObservation;
 use crate::{
-    BodyChunk, Error, IncomingBody, OutgoingBody, OutgoingFrame,
+    BodyChunk, Error, IncomingBody, OutgoingBody,
     io::{self, WriteResult},
     io_driver::{IoDriver, WorkerIo, native_io, poll_receive},
     metadata,
     transport::{NativeTransport, StreamTransport, Transport},
 };
 
+#[cfg(test)]
+use crate::OutgoingFrame;
 #[cfg(test)]
 use crate::io::{Pending, WriteAction};
 
@@ -99,7 +101,7 @@ impl Drop for RequestQueue {
     }
 }
 
-struct DemandQueue(Receiver<BodyDemand>);
+struct DemandQueue(crate::receive_lane::ReceiveLane<BodyDemand>);
 
 impl Drop for DemandQueue {
     fn drop(&mut self) {
@@ -369,20 +371,25 @@ fn admit_eager(
     if !coalesce_full_bodies {
         return false;
     }
-    let OutgoingSource::Ready(slot) = &mut body.source else {
-        return false;
+    let bytes = match &mut body.source {
+        OutgoingSource::Ready(slot)
+            if slot
+                .as_ref()
+                .is_some_and(|bytes| bytes.capacity() <= max_buffer) =>
+        {
+            OutgoingData::Owned(slot.take().unwrap())
+        }
+        OutgoingSource::Shared(slot)
+            if slot.as_ref().is_some_and(|bytes| bytes.len() <= max_buffer) =>
+        {
+            OutgoingData::Shared(slot.take().unwrap())
+        }
+        _ => return false,
     };
-    if slot
-        .as_ref()
-        .is_none_or(|bytes| bytes.capacity() > max_buffer)
-    {
-        return false;
-    }
-    let bytes = slot.take().unwrap();
-    let len = bytes.len();
+    let len = bytes.as_ref().len();
     let command = core::SendBody {
         exchange,
-        buffer: OutgoingData::Owned(bytes),
+        buffer: bytes,
         range: 0..len,
         end: true,
     };
@@ -393,10 +400,11 @@ fn admit_eager(
     match result {
         Ok(_) => true,
         Err(rejected) => {
-            let OutgoingData::Owned(bytes) = rejected.value.buffer else {
-                unreachable!()
+            body.source = match rejected.value.buffer {
+                OutgoingData::Owned(bytes) => OutgoingSource::Ready(Some(bytes)),
+                OutgoingData::Shared(bytes) => OutgoingSource::Shared(Some(bytes)),
+                OutgoingData::Forward(_) => unreachable!("only full bodies use eager admission"),
             };
-            *slot = Some(bytes);
             false
         }
     }
@@ -541,6 +549,7 @@ struct Active {
     id: core::ExchangeId,
     cancel: Rc<CancellationToken>,
     cancellation_applied: bool,
+    cancel_wait: crate::receive_lane::CancelLane,
     duplex: bool,
     incoming_lease: bool,
     abandonment_applied: bool,
@@ -576,6 +585,7 @@ impl Active {
         );
         Self {
             id,
+            cancel_wait: crate::receive_lane::CancelLane::new(cancel.clone()),
             cancel,
             cancellation_applied: false,
             duplex: false,
@@ -610,7 +620,7 @@ enum Input {
     Release(core::BodyCompletion<Vec<u8>>),
     Demand(BodyDemand),
     Request(Result<SendRequest, kimojio::ChannelError>),
-    Source(Option<Result<OutgoingFrame, Error>>),
+    Source(Option<Result<SourceFrame, Error>>),
     Handler(Result<Response<OutgoingBody>, Error>),
     Timer(Result<(), kimojio::Errno>),
     Wake,
@@ -645,17 +655,19 @@ struct State {
     machine: Machine,
     active: Option<Active>,
     release_send: Sender<core::BodyCompletion<Vec<u8>>>,
-    released: Receiver<core::BodyCompletion<Vec<u8>>>,
+    released: crate::receive_lane::ReceiveLane<core::BodyCompletion<Vec<u8>>>,
     demand_send: Sender<BodyDemand>,
     demands: DemandQueue,
     pending_read: Option<core::OperationId>,
     pending_write: Option<core::OperationId>,
     pending_close: Option<core::CloseOp>,
     deadline: Option<core::Deadline>,
-    timer: Option<operations::SleepFuture<'static>>,
+    timer: crate::timer::DeadlineTimer,
     epoch: Instant,
     shutdown: Shutdown,
     shutdown_progress: ShutdownProgress,
+    graceful_wait: crate::receive_lane::CancelLane,
+    abort_wait: crate::receive_lane::CancelLane,
     server: bool,
     max_buffer: usize,
     receive_capacity: usize,
@@ -703,15 +715,17 @@ impl State {
             machine,
             active: None,
             release_send,
-            released,
+            released: crate::receive_lane::ReceiveLane::new(released),
             demand_send,
-            demands: DemandQueue(demands),
+            demands: DemandQueue(crate::receive_lane::ReceiveLane::new(demands)),
             pending_read: None,
             pending_write: None,
             pending_close: None,
             deadline: None,
-            timer: None,
+            timer: crate::timer::DeadlineTimer::default(),
             epoch: kimojio::clock_now(),
+            graceful_wait: crate::receive_lane::CancelLane::new(shutdown.graceful.clone()),
+            abort_wait: crate::receive_lane::CancelLane::new(shutdown.abort.clone()),
             shutdown,
             shutdown_progress: ShutdownProgress::Running,
             server,
@@ -750,7 +764,7 @@ impl State {
             && deadline.at <= now
         {
             self.deadline.take();
-            self.timer.take();
+            self.timer.set(None);
             let result = match &mut self.machine {
                 Machine::Client(inner) => inner.expire(deadline, now),
                 Machine::Server(inner) => inner.expire(deadline, now),
@@ -764,6 +778,10 @@ impl State {
             self.shutdown.abort.is_cancelled(),
             self.shutdown.graceful.is_cancelled(),
         ) {
+            self.graceful_wait.clear();
+            if mode == core::ShutdownMode::Abort {
+                self.abort_wait.clear();
+            }
             match &mut self.machine {
                 Machine::Client(inner) => inner.shutdown(mode),
                 Machine::Server(inner) => inner.shutdown(mode),
@@ -774,6 +792,7 @@ impl State {
             && !active.cancellation_applied
         {
             active.cancellation_applied = true;
+            active.cancel_wait.clear();
             active.data.take();
             if !self.server {
                 let _ = match &mut self.machine {
@@ -916,18 +935,13 @@ impl State {
         Ok(())
     }
 
-    fn source(&mut self, frame: Option<Result<OutgoingFrame, Error>>) -> Result<(), Error> {
+    fn source(&mut self, frame: Option<Result<SourceFrame, Error>>) -> Result<(), Error> {
         let active = self.active.as_mut().ok_or(Error::Closed)?;
         let capacity = active.capacity;
         active.capacity = 0;
         active.source_ready = false;
         match frame.transpose()? {
-            Some(frame @ (OutgoingFrame::Data(_) | OutgoingFrame::Forward(_))) => {
-                let buffer = match frame {
-                    OutgoingFrame::Data(bytes) => OutgoingData::Owned(bytes),
-                    OutgoingFrame::Forward(chunk) => OutgoingData::Forward(chunk),
-                    OutgoingFrame::Trailers(_) => unreachable!(),
-                };
+            Some(SourceFrame::Data(buffer)) => {
                 if buffer.retained_capacity() > self.max_buffer || buffer.as_ref().len() > capacity
                 {
                     return Err(Error::Limit);
@@ -955,9 +969,9 @@ impl State {
             trailers => {
                 active.source.take();
                 let trailers = match trailers {
-                    Some(OutgoingFrame::Trailers(trailers)) => trailers,
+                    Some(SourceFrame::Trailers(trailers)) => trailers,
                     None => HeaderMap::new(),
-                    Some(OutgoingFrame::Data(_) | OutgoingFrame::Forward(_)) => unreachable!(),
+                    Some(SourceFrame::Data(_)) => unreachable!(),
                 };
                 if trailers.len() > self.max_headers {
                     return Err(Error::Limit);
@@ -1190,16 +1204,16 @@ impl State {
             }
             Event::Deadline(deadline) => {
                 if self.deadline != deadline {
-                    self.timer = match deadline {
+                    self.timer.set(match deadline {
                         Some(deadline) => {
                             let at = self
                                 .epoch
                                 .checked_add(Duration::from_nanos(deadline.at.0))
                                 .ok_or(Error::Limit)?;
-                            Some(operations::sleep_until(at))
+                            Some(at)
                         }
                         None => None,
-                    };
+                    });
                     self.deadline = deadline;
                 }
             }
@@ -1359,19 +1373,7 @@ async fn next_input(
     runnable: bool,
 ) -> Option<Input> {
     let (read, write) = io.completions(runnable);
-    let release = state.released.recv();
-    let demand = state.demands.0.recv();
     let request = requests.recv();
-    let graceful = state.shutdown.graceful.cancelled();
-    let abort = state.shutdown.abort.cancelled();
-    let active_cancel = state.active.as_ref().map(|active| active.cancel.clone());
-    let cancelled = async {
-        if let Some(cancel) = &active_cancel {
-            let _ = cancel.cancelled().await;
-        } else {
-            std::future::pending::<()>().await;
-        }
-    };
     #[cfg(feature = "metrics")]
     let observation = state.observation.as_ref();
     #[cfg(feature = "metrics")]
@@ -1390,9 +1392,7 @@ async fn next_input(
     };
     #[cfg(feature = "metrics")]
     futures::pin_mut!(snapshot);
-    futures::pin_mut!(
-        read, write, release, demand, request, graceful, abort, cancelled
-    );
+    futures::pin_mut!(read, write, request);
     futures::future::poll_fn(|cx| {
         const LANES: usize = 10 + cfg!(feature = "metrics") as usize;
         for offset in 0..LANES {
@@ -1400,7 +1400,9 @@ async fn next_input(
             let ready = match index {
                 0 => read.as_mut().poll(cx).map(|r| Some(Input::Read(r))),
                 1 => write.as_mut().poll(cx).map(|r| Some(Input::Write(r))),
-                2 => poll_receive(&state.released, release.as_mut(), cx, runnable)
+                2 => state
+                    .released
+                    .poll(cx, runnable)
                     .map(|r| r.ok().map(Input::Release)),
                 3 if !state.server
                     && state.active.is_none()
@@ -1415,21 +1417,21 @@ async fn next_input(
                 6 if state.shutdown_progress == ShutdownProgress::Running
                     && (!runnable || state.shutdown.graceful.is_cancelled()) =>
                 {
-                    graceful.as_mut().poll(cx).map(|_| Some(Input::Wake))
+                    state.graceful_wait.poll(cx).map(|_| Some(Input::Wake))
                 }
                 7 if state.shutdown_progress != ShutdownProgress::Aborting
                     && (!runnable || state.shutdown.abort.is_cancelled()) =>
                 {
-                    abort.as_mut().poll(cx).map(|_| Some(Input::Wake))
+                    state.abort_wait.poll(cx).map(|_| Some(Input::Wake))
                 }
-                8 => match state.timer.as_mut().map(|timer| Pin::new(timer).poll(cx)) {
-                    Some(Poll::Ready(result)) => {
-                        state.timer.take();
-                        Poll::Ready(Some(Input::Timer(result)))
-                    }
-                    _ => Poll::Pending,
-                },
-                9 => poll_receive(&state.demands.0, demand.as_mut(), cx, runnable)
+                8 => state
+                    .timer
+                    .poll(cx)
+                    .map(|result| Some(Input::Timer(result))),
+                9 => state
+                    .demands
+                    .0
+                    .poll(cx, runnable)
                     .map(|r| r.ok().map(Input::Demand)),
                 #[cfg(feature = "metrics")]
                 10 => snapshot
@@ -1443,10 +1445,10 @@ async fn next_input(
                 return Poll::Ready(Some(input));
             }
         }
-        if let Some(active) = &state.active
+        if let Some(active) = &mut state.active
             && !active.cancellation_applied
             && (!runnable || active.cancel.is_cancelled())
-            && cancelled.as_mut().poll(cx).is_ready()
+            && active.cancel_wait.poll(cx).is_ready()
         {
             return Poll::Ready(Some(Input::Wake));
         }
@@ -1484,6 +1486,14 @@ fn poll_handler(active: &mut Option<Active>, cx: &mut Context<'_>) -> Poll<Optio
 }
 
 #[cfg(test)]
+#[path = "shared_body_tests.rs"]
+mod shared_body_tests;
+
+#[cfg(test)]
+#[path = "architecture_tests.rs"]
+mod architecture_tests;
+
+#[cfg(test)]
 #[path = "forwarding_tests.rs"]
 mod forwarding_tests;
 
@@ -1513,14 +1523,20 @@ mod tests {
             Shutdown::default(),
         )
         .unwrap();
-        state.timer = Some(operations::sleep_until(
-            kimojio::clock_now() + Duration::from_secs(60),
-        ));
-        assert!(futures::poll!(state.timer.as_mut().unwrap()).is_pending());
+        state
+            .timer
+            .set(Some(kimojio::clock_now() + Duration::from_secs(60)));
+        assert!(
+            futures::future::poll_fn(|cx| Poll::Ready(state.timer.poll(cx)))
+                .await
+                .is_pending()
+        );
         let mut moved = std::hint::black_box(state);
-        moved.timer = Some(operations::sleep_until(kimojio::clock_now()));
-        moved.timer.take().unwrap().await.unwrap();
-        assert!(moved.timer.is_none());
+        moved.timer.set(Some(kimojio::clock_now()));
+        futures::future::poll_fn(|cx| moved.timer.poll(cx))
+            .await
+            .unwrap();
+        moved.timer.set(None);
     }
 
     #[kimojio::test]
@@ -1575,7 +1591,7 @@ mod tests {
         }
     }
 
-    fn full_body_client(expect_continue: bool) -> (Machine, core::ExchangeId) {
+    pub(super) fn full_body_client(expect_continue: bool) -> (Machine, core::ExchangeId) {
         let mut client = core::Client::with_output_type(
             core::ConnectionId {
                 slot: 96,
@@ -1652,7 +1668,7 @@ mod tests {
             let pointer = bytes.as_ptr();
             let mut body = OutgoingBody::full(bytes);
             assert!(!admit_eager(&mut machine, id, &mut body, 1024, true));
-            let Some(Ok(OutgoingFrame::Data(bytes))) =
+            let Some(Ok(SourceFrame::Data(OutgoingData::Owned(bytes)))) =
                 futures::executor::block_on(body.source.next())
             else {
                 panic!()

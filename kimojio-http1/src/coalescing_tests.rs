@@ -140,7 +140,7 @@ fn deadline_boundaries(server_role: bool) {
                     panic!()
                 };
                 assert_eq!(id, exchange);
-                let Some(Ok(OutgoingFrame::Data(bytes))) =
+                let Some(Ok(SourceFrame::Data(OutgoingData::Owned(bytes)))) =
                     futures::executor::block_on(body.source.next())
                 else {
                     panic!()

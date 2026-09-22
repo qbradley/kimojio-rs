@@ -1,0 +1,65 @@
+diff --git a/kimojio/src/async_event.rs b/kimojio/src/async_event.rs
+index 16067864c9..88f40f5f67 100644
+--- a/kimojio/src/async_event.rs
++++ b/kimojio/src/async_event.rs
+@@ -26,7 +26,7 @@
+ use futures::future::FusedFuture;
+ use intrusive_collections::{LinkedList, LinkedListLink, intrusive_adapter};
+ use rustix_uring::Errno;
+-use std::cell::Cell;
++use std::cell::{Cell, RefCell};
+ use std::future::Future;
+ use std::pin::Pin;
+ use std::rc::Rc;
+@@ -251,6 +251,34 @@
+ 
+ intrusive_adapter!(pub WaitDataAdapter = Rc<WaitData>: WaitData { link => LinkedListLink });
+ 
++// PoC: bounded thread-local reuse. Entries contain no waker, source, or scope
++// ownership. Use a separate TLS cell so Drop never borrows TaskState recursively.
++const MAX_WAIT_POOL: usize = 256;
++thread_local! {
++    static WAIT_POOL: RefCell<Vec<Rc<WaitData>>> = const { RefCell::new(Vec::new()) };
++}
++fn new_wait_data(data: WaitData) -> Rc<WaitData> {
++    let spare = WAIT_POOL.try_with(|pool| pool.borrow_mut().pop()).ok().flatten();
++    if let Some(mut spare) = spare {
++        *Rc::get_mut(&mut spare).expect("pooled wait is exclusively owned") = data;
++        spare
++    } else {
++        Rc::new(data)
++    }
++}
++fn recycle_wait_data(mut wait: Rc<WaitData>) {
++    if wait.link.is_linked() || Rc::strong_count(&wait) != 1 || Rc::weak_count(&wait) != 0 { return; }
++    let data = Rc::get_mut(&mut wait).unwrap();
++    debug_assert!(data.scopes.use_mut(|s| matches!(s, WaitScopes::Empty)));
++    let waker = data.waker.use_mut(Option::take);
++    drop(waker); // arbitrary destruction must not run under a pool borrow
++    let mut wait = Some(wait);
++    let _ = WAIT_POOL.try_with(|pool| {
++        let mut pool = pool.borrow_mut();
++        if pool.len() < MAX_WAIT_POOL { pool.push(wait.take().unwrap()); }
++    });
++}
++
+ impl WaitData {
+     fn set_waker(&self, cx: &mut Context<'_>) {
+         let new = cx.waker().clone();
+@@ -433,6 +461,7 @@
+             if let Some(source) = &self.source {
+                 source.unregister(&wait);
+             }
++            recycle_wait_data(wait);
+         }
+     }
+ }
+@@ -487,7 +516,7 @@
+                 } else {
+                     let task_id = current_task.task_index;
+                     let activity_id = current_task.activity_id.get();
+-                    let new_wait_data = Rc::new(WaitData {
++                    let new_wait_data = new_wait_data(WaitData {
+                         activity_id,
+                         waker: MutInPlaceCell::new(Some(cx.waker().clone())),
+                         task_id,

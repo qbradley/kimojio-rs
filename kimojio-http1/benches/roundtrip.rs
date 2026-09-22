@@ -38,7 +38,26 @@ fn benchmark(c: &mut Criterion) {
         for backend in [Backend::Native, Backend::Stream] {
             case(c, &group, backend.name(), &fixture, Options::new(backend));
         }
+        if name == "fixed_128b" || name == "chunked_1mib" {
+            case(
+                c,
+                &group,
+                "native_shared",
+                &fixture.clone().shared(),
+                Options::new(Backend::Native),
+            );
+        }
         if name == "fixed_128b" {
+            case(
+                c,
+                &group,
+                "native_shared_coalesced",
+                &fixture.clone().shared(),
+                Options {
+                    coalesce: true,
+                    ..Options::new(Backend::Native)
+                },
+            );
             case(
                 c,
                 &group,

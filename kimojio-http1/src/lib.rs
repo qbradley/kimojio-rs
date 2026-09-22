@@ -9,6 +9,8 @@ mod io;
 mod io_driver;
 mod metadata;
 mod observation;
+mod receive_lane;
+mod timer;
 mod transport;
 
 pub use body::{BodyChunk, IncomingBody, IncomingFrame, OutgoingBody, OutgoingFrame};

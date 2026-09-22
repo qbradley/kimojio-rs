@@ -105,6 +105,12 @@ fn allocation_slopes_use_the_timing_driver_without_byte_comparison_or_logging() 
             4,
         ),
         (
+            "chunked/shared",
+            Fixture::new(1024 * 1024, true, IO_BYTES).shared(),
+            native,
+            4,
+        ),
+        (
             "chunked/no_deadlines",
             Fixture::new(1024 * 1024, true, IO_BYTES),
             Options {

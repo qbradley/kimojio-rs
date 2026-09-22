@@ -1,0 +1,795 @@
+diff --git a/kimojio-http1/benches/roundtrip.rs b/kimojio-http1/benches/roundtrip.rs
+index e6b635d5cf..04a542331a 100644
+--- a/kimojio-http1/benches/roundtrip.rs
++++ b/kimojio-http1/benches/roundtrip.rs
+@@ -38,7 +38,13 @@
+         for backend in [Backend::Native, Backend::Stream] {
+             case(c, &group, backend.name(), &fixture, Options::new(backend));
+         }
++        if name == "fixed_128b" || name == "chunked_1mib" {
++            case(c, &group, "native_shared", &fixture.clone().shared(), Options::new(Backend::Native));
++        }
+         if name == "fixed_128b" {
++            case(c, &group, "native_shared_coalesced", &fixture.clone().shared(), Options {
++                coalesce: true, ..Options::new(Backend::Native)
++            });
+             case(
+                 c,
+                 &group,
+diff --git a/kimojio-http1/benches/support/mod.rs b/kimojio-http1/benches/support/mod.rs
+index cd5d6723cd..eb05314f40 100644
+--- a/kimojio-http1/benches/support/mod.rs
++++ b/kimojio-http1/benches/support/mod.rs
+@@ -61,6 +61,8 @@
+ pub struct Fixture {
+     request: Rc<[u8]>,
+     response: Rc<[u8]>,
++    shared_request: Option<Rc<[Rc<[u8]>]>>,
++    shared_response: Option<Rc<[Rc<[u8]>]>>,
+     chunked: bool,
+     chunk_bytes: usize,
+ }
+@@ -74,10 +76,19 @@
+             response: (0..bytes)
+                 .map(|i| ((i % 251 * 19 + 7) % 251) as u8)
+                 .collect(),
++            shared_request: None,
++            shared_response: None,
+             chunked,
+             chunk_bytes,
+         }
+     }
++    pub fn shared(mut self) -> Self {
++        // Explicit shared-source control: prepare immutable per-frame buffers
++        // once. Default Vec-producing workloads remain unchanged.
++        self.shared_request = Some(self.request.chunks(self.chunk_bytes).map(Rc::from).collect());
++        self.shared_response = Some(self.response.chunks(self.chunk_bytes).map(Rc::from).collect());
++        self
++    }
+     pub fn bytes(&self) -> usize {
+         self.request.len()
+     }
+@@ -155,7 +166,17 @@
+     config
+ }
+ 
+-fn source(bytes: Rc<[u8]>, fixture: &Fixture) -> OutgoingBody {
++fn source(bytes: Rc<[u8]>, fixture: &Fixture, shared: Option<Rc<[Rc<[u8]>]>>) -> OutgoingBody {
++    if let Some(frames) = shared {
++        if !fixture.chunked && bytes.len() <= fixture.chunk_bytes {
++            return OutgoingBody::shared(bytes);
++        }
++        let length = (!fixture.chunked).then_some(bytes.len() as u64);
++        return OutgoingBody::from_shared_stream(length, futures::stream::unfold((frames, 0usize), |(frames, at)| async move {
++            let frame = frames.get(at)?.clone();
++            Some((Ok(frame), (frames, at + 1)))
++        }));
++    }
+     if !fixture.chunked && bytes.len() <= fixture.chunk_bytes {
+         return OutgoingBody::full(bytes.as_ref().to_vec());
+     }
+@@ -261,7 +282,7 @@
+         .uri("/bench")
+         .header("host", "benchmark")
+         .header("content-type", "application/octet-stream")
+-        .body(source(fixture.request.clone(), fixture))
++        .body(source(fixture.request.clone(), fixture, fixture.shared_request.clone()))
+         .unwrap();
+     let mut response = client.send(request).await?;
+     if response.status() != StatusCode::OK
+@@ -331,7 +352,7 @@
+                         let mut value = counts.get();
+                         value.received(fixture.bytes(), frames);
+                         counts.set(value);
+-                        source(fixture.response.clone(), &fixture)
++                        source(fixture.response.clone(), &fixture, fixture.shared_response.clone())
+                     }
+                     Mode::Forward | Mode::CopyForward => {
+                         request.body_mut().accept().await?;
+diff --git a/kimojio-http1/src/body.rs b/kimojio-http1/src/body.rs
+index e4c9843e0b..01fa775bf9 100644
+--- a/kimojio-http1/src/body.rs
++++ b/kimojio-http1/src/body.rs
+@@ -35,6 +35,7 @@
+ #[derive(Debug)]
+ pub(crate) enum OutgoingData {
+     Owned(Vec<u8>),
++    Shared(Rc<[u8]>),
+     Forward(BodyChunk),
+ }
+ 
+@@ -42,6 +43,7 @@
+     pub(crate) fn retained_capacity(&self) -> usize {
+         match self {
+             Self::Owned(bytes) => bytes.capacity(),
++            Self::Shared(bytes) => bytes.len(),
+             Self::Forward(chunk) => chunk.retained_capacity(),
+         }
+     }
+@@ -51,6 +53,7 @@
+     fn as_ref(&self) -> &[u8] {
+         match self {
+             Self::Owned(bytes) => bytes,
++            Self::Shared(bytes) => bytes,
+             Self::Forward(chunk) => chunk,
+         }
+     }
+@@ -67,20 +70,37 @@
+     pub(crate) continue_request: bool,
+ }
+ 
++#[derive(Debug)]
++pub(crate) enum SourceFrame {
++    Data(OutgoingData),
++    Trailers(HeaderMap),
++}
++impl From<OutgoingFrame> for SourceFrame {
++    fn from(frame: OutgoingFrame) -> Self {
++        match frame {
++            OutgoingFrame::Data(bytes) => Self::Data(OutgoingData::Owned(bytes)),
++            OutgoingFrame::Forward(chunk) => Self::Data(OutgoingData::Forward(chunk)),
++            OutgoingFrame::Trailers(headers) => Self::Trailers(headers),
++        }
++    }
++}
++
+ pub(crate) enum OutgoingSource {
+-    Ready(Option<Vec<u8>>),
++    Ready(Option<OutgoingData>),
+     Stream(LocalBoxStream<'static, Result<OutgoingFrame, Error>>),
++    SharedStream(LocalBoxStream<'static, Result<Rc<[u8]>, Error>>),
+ }
+ 
+ impl Stream for OutgoingSource {
+-    type Item = Result<OutgoingFrame, Error>;
++    type Item = Result<SourceFrame, Error>;
+ 
+     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+         match &mut *self {
+             Self::Ready(bytes) => {
+-                Poll::Ready(bytes.take().map(|bytes| Ok(OutgoingFrame::Data(bytes))))
++                Poll::Ready(bytes.take().map(|bytes| Ok(SourceFrame::Data(bytes))))
+             }
+-            Self::Stream(source) => source.as_mut().poll_next(cx),
++            Self::Stream(source) => source.as_mut().poll_next(cx).map(|frame| frame.map(|frame| frame.map(Into::into))),
++            Self::SharedStream(source) => source.as_mut().poll_next(cx).map(|frame| frame.map(|frame| frame.map(|bytes| SourceFrame::Data(OutgoingData::Shared(bytes))))),
+         }
+     }
+ }
+@@ -116,7 +136,34 @@
+         }
+         Self {
+             length: BodyLength::Known(bytes.len() as u64),
+-            source: OutgoingSource::Ready(Some(bytes)),
++            source: OutgoingSource::Ready(Some(OutgoingData::Owned(bytes))),
++            continue_request: false,
++        }
++    }
++
++    /// An immutable, shared full body without a payload copy.
++    ///
++    /// The complete allocation must fit `Config::protocol.max_buffer_bytes`.
++    /// Admission/partial writes retain a strong owner until the body receipt,
++    /// including cancellation. Cloning the source bytes does not clone payload.
++    pub fn shared(bytes: Rc<[u8]>) -> Self {
++        if bytes.is_empty() { return Self::empty(); }
++        Self {
++            length: BodyLength::Known(bytes.len() as u64),
++            source: OutgoingSource::Ready(Some(OutgoingData::Shared(bytes))),
++            continue_request: false,
++        }
++    }
++
++    /// Demand-driven immutable frames. Each complete allocation must fit the
++    /// configured buffer limit; a small view cannot hide a larger retained body.
++    /// `None` requests chunked framing; `Some(n)` declares exactly n bytes.
++    /// Use `from_stream` for sources that emit trailers or forward receive leases.
++    pub fn from_shared_stream<S>(length: Option<u64>, source: S) -> Self
++    where S: Stream<Item = Result<Rc<[u8]>, Error>> + 'static {
++        Self {
++            length: length.map_or(BodyLength::Streaming, BodyLength::Known),
++            source: OutgoingSource::SharedStream(source.boxed_local()),
+             continue_request: false,
+         }
+     }
+@@ -357,7 +404,7 @@
+             let mut full = OutgoingBody::full(b"payload");
+             assert!(matches!(full.source, OutgoingSource::Ready(Some(_))));
+             assert_eq!(full.length, BodyLength::Known(7));
+-            let Some(Ok(OutgoingFrame::Data(bytes))) = full.source.next().await else {
++            let Some(Ok(SourceFrame::Data(OutgoingData::Owned(bytes)))) = full.source.next().await else {
+                 panic!("missing full-body data");
+             };
+             assert_eq!(bytes, b"payload");
+diff --git a/kimojio-http1/src/coalescing_tests.rs b/kimojio-http1/src/coalescing_tests.rs
+index 487667991e..77f8dae199 100644
+--- a/kimojio-http1/src/coalescing_tests.rs
++++ b/kimojio-http1/src/coalescing_tests.rs
+@@ -140,7 +140,7 @@
+                     panic!()
+                 };
+                 assert_eq!(id, exchange);
+-                let Some(Ok(OutgoingFrame::Data(bytes))) =
++                let Some(Ok(SourceFrame::Data(OutgoingData::Owned(bytes)))) =
+                     futures::executor::block_on(body.source.next())
+                 else {
+                     panic!()
+diff --git a/kimojio-http1/src/driver.rs b/kimojio-http1/src/driver.rs
+index ac3916670a..758bc81eeb 100644
+--- a/kimojio-http1/src/driver.rs
++++ b/kimojio-http1/src/driver.rs
+@@ -15,10 +15,10 @@
+ };
+ use kimojio_fsm_http1 as core;
+ 
+-use crate::body::{BodyDemand, OutgoingData, OutgoingSource};
++use crate::body::{BodyDemand, OutgoingData, OutgoingSource, SourceFrame};
+ use crate::observation::BoundObservation;
+ use crate::{
+-    BodyChunk, Error, IncomingBody, OutgoingBody, OutgoingFrame,
++    BodyChunk, Error, IncomingBody, OutgoingBody,
+     io::{self, WriteResult},
+     io_driver::{IoDriver, WorkerIo, native_io, poll_receive},
+     metadata,
+@@ -27,6 +27,8 @@
+ 
+ #[cfg(test)]
+ use crate::io::{Pending, WriteAction};
++#[cfg(test)]
++use crate::OutgoingFrame;
+ 
+ #[derive(Clone, Debug)]
+ pub struct Config {
+@@ -99,7 +101,7 @@
+     }
+ }
+ 
+-struct DemandQueue(Receiver<BodyDemand>);
++struct DemandQueue(crate::receive_lane::ReceiveLane<BodyDemand>);
+ 
+ impl Drop for DemandQueue {
+     fn drop(&mut self) {
+@@ -374,15 +376,15 @@
+     };
+     if slot
+         .as_ref()
+-        .is_none_or(|bytes| bytes.capacity() > max_buffer)
++        .is_none_or(|bytes| bytes.retained_capacity() > max_buffer)
+     {
+         return false;
+     }
+     let bytes = slot.take().unwrap();
+-    let len = bytes.len();
++    let len = bytes.as_ref().len();
+     let command = core::SendBody {
+         exchange,
+-        buffer: OutgoingData::Owned(bytes),
++        buffer: bytes,
+         range: 0..len,
+         end: true,
+     };
+@@ -393,10 +395,7 @@
+     match result {
+         Ok(_) => true,
+         Err(rejected) => {
+-            let OutgoingData::Owned(bytes) = rejected.value.buffer else {
+-                unreachable!()
+-            };
+-            *slot = Some(bytes);
++            *slot = Some(rejected.value.buffer);
+             false
+         }
+     }
+@@ -541,6 +540,7 @@
+     id: core::ExchangeId,
+     cancel: Rc<CancellationToken>,
+     cancellation_applied: bool,
++    cancel_wait: crate::receive_lane::CancelLane,
+     duplex: bool,
+     incoming_lease: bool,
+     abandonment_applied: bool,
+@@ -576,6 +576,7 @@
+         );
+         Self {
+             id,
++            cancel_wait: crate::receive_lane::CancelLane::new(cancel.clone()),
+             cancel,
+             cancellation_applied: false,
+             duplex: false,
+@@ -610,7 +611,7 @@
+     Release(core::BodyCompletion<Vec<u8>>),
+     Demand(BodyDemand),
+     Request(Result<SendRequest, kimojio::ChannelError>),
+-    Source(Option<Result<OutgoingFrame, Error>>),
++    Source(Option<Result<SourceFrame, Error>>),
+     Handler(Result<Response<OutgoingBody>, Error>),
+     Timer(Result<(), kimojio::Errno>),
+     Wake,
+@@ -645,17 +646,19 @@
+     machine: Machine,
+     active: Option<Active>,
+     release_send: Sender<core::BodyCompletion<Vec<u8>>>,
+-    released: Receiver<core::BodyCompletion<Vec<u8>>>,
++    released: crate::receive_lane::ReceiveLane<core::BodyCompletion<Vec<u8>>>,
+     demand_send: Sender<BodyDemand>,
+     demands: DemandQueue,
+     pending_read: Option<core::OperationId>,
+     pending_write: Option<core::OperationId>,
+     pending_close: Option<core::CloseOp>,
+     deadline: Option<core::Deadline>,
+-    timer: Option<operations::SleepFuture<'static>>,
++    timer: crate::timer::DeadlineTimer,
+     epoch: Instant,
+     shutdown: Shutdown,
+     shutdown_progress: ShutdownProgress,
++    graceful_wait: crate::receive_lane::CancelLane,
++    abort_wait: crate::receive_lane::CancelLane,
+     server: bool,
+     max_buffer: usize,
+     receive_capacity: usize,
+@@ -703,15 +706,17 @@
+             machine,
+             active: None,
+             release_send,
+-            released,
++            released: crate::receive_lane::ReceiveLane::new(released),
+             demand_send,
+-            demands: DemandQueue(demands),
++            demands: DemandQueue(crate::receive_lane::ReceiveLane::new(demands)),
+             pending_read: None,
+             pending_write: None,
+             pending_close: None,
+             deadline: None,
+-            timer: None,
++            timer: crate::timer::DeadlineTimer::default(),
+             epoch: kimojio::clock_now(),
++            graceful_wait: crate::receive_lane::CancelLane::new(shutdown.graceful.clone()),
++            abort_wait: crate::receive_lane::CancelLane::new(shutdown.abort.clone()),
+             shutdown,
+             shutdown_progress: ShutdownProgress::Running,
+             server,
+@@ -750,7 +755,7 @@
+             && deadline.at <= now
+         {
+             self.deadline.take();
+-            self.timer.take();
++            self.timer.set(None);
+             let result = match &mut self.machine {
+                 Machine::Client(inner) => inner.expire(deadline, now),
+                 Machine::Server(inner) => inner.expire(deadline, now),
+@@ -916,18 +921,13 @@
+         Ok(())
+     }
+ 
+-    fn source(&mut self, frame: Option<Result<OutgoingFrame, Error>>) -> Result<(), Error> {
++    fn source(&mut self, frame: Option<Result<SourceFrame, Error>>) -> Result<(), Error> {
+         let active = self.active.as_mut().ok_or(Error::Closed)?;
+         let capacity = active.capacity;
+         active.capacity = 0;
+         active.source_ready = false;
+         match frame.transpose()? {
+-            Some(frame @ (OutgoingFrame::Data(_) | OutgoingFrame::Forward(_))) => {
+-                let buffer = match frame {
+-                    OutgoingFrame::Data(bytes) => OutgoingData::Owned(bytes),
+-                    OutgoingFrame::Forward(chunk) => OutgoingData::Forward(chunk),
+-                    OutgoingFrame::Trailers(_) => unreachable!(),
+-                };
++            Some(SourceFrame::Data(buffer)) => {
+                 if buffer.retained_capacity() > self.max_buffer || buffer.as_ref().len() > capacity
+                 {
+                     return Err(Error::Limit);
+@@ -955,9 +955,9 @@
+             trailers => {
+                 active.source.take();
+                 let trailers = match trailers {
+-                    Some(OutgoingFrame::Trailers(trailers)) => trailers,
++                    Some(SourceFrame::Trailers(trailers)) => trailers,
+                     None => HeaderMap::new(),
+-                    Some(OutgoingFrame::Data(_) | OutgoingFrame::Forward(_)) => unreachable!(),
++                    Some(SourceFrame::Data(_)) => unreachable!(),
+                 };
+                 if trailers.len() > self.max_headers {
+                     return Err(Error::Limit);
+@@ -1190,16 +1190,16 @@
+             }
+             Event::Deadline(deadline) => {
+                 if self.deadline != deadline {
+-                    self.timer = match deadline {
++                    self.timer.set(match deadline {
+                         Some(deadline) => {
+                             let at = self
+                                 .epoch
+                                 .checked_add(Duration::from_nanos(deadline.at.0))
+                                 .ok_or(Error::Limit)?;
+-                            Some(operations::sleep_until(at))
++                            Some(at)
+                         }
+                         None => None,
+-                    };
++                    });
+                     self.deadline = deadline;
+                 }
+             }
+@@ -1359,19 +1359,7 @@
+     runnable: bool,
+ ) -> Option<Input> {
+     let (read, write) = io.completions(runnable);
+-    let release = state.released.recv();
+-    let demand = state.demands.0.recv();
+     let request = requests.recv();
+-    let graceful = state.shutdown.graceful.cancelled();
+-    let abort = state.shutdown.abort.cancelled();
+-    let active_cancel = state.active.as_ref().map(|active| active.cancel.clone());
+-    let cancelled = async {
+-        if let Some(cancel) = &active_cancel {
+-            let _ = cancel.cancelled().await;
+-        } else {
+-            std::future::pending::<()>().await;
+-        }
+-    };
+     #[cfg(feature = "metrics")]
+     let observation = state.observation.as_ref();
+     #[cfg(feature = "metrics")]
+@@ -1390,9 +1378,7 @@
+     };
+     #[cfg(feature = "metrics")]
+     futures::pin_mut!(snapshot);
+-    futures::pin_mut!(
+-        read, write, release, demand, request, graceful, abort, cancelled
+-    );
++    futures::pin_mut!(read, write, request);
+     futures::future::poll_fn(|cx| {
+         const LANES: usize = 10 + cfg!(feature = "metrics") as usize;
+         for offset in 0..LANES {
+@@ -1400,7 +1386,7 @@
+             let ready = match index {
+                 0 => read.as_mut().poll(cx).map(|r| Some(Input::Read(r))),
+                 1 => write.as_mut().poll(cx).map(|r| Some(Input::Write(r))),
+-                2 => poll_receive(&state.released, release.as_mut(), cx, runnable)
++                2 => state.released.poll(cx, runnable)
+                     .map(|r| r.ok().map(Input::Release)),
+                 3 if !state.server
+                     && state.active.is_none()
+@@ -1415,21 +1401,18 @@
+                 6 if state.shutdown_progress == ShutdownProgress::Running
+                     && (!runnable || state.shutdown.graceful.is_cancelled()) =>
+                 {
+-                    graceful.as_mut().poll(cx).map(|_| Some(Input::Wake))
++                    state.graceful_wait.poll(cx).map(|_| Some(Input::Wake))
+                 }
+                 7 if state.shutdown_progress != ShutdownProgress::Aborting
+                     && (!runnable || state.shutdown.abort.is_cancelled()) =>
+                 {
+-                    abort.as_mut().poll(cx).map(|_| Some(Input::Wake))
++                    state.abort_wait.poll(cx).map(|_| Some(Input::Wake))
+                 }
+-                8 => match state.timer.as_mut().map(|timer| Pin::new(timer).poll(cx)) {
+-                    Some(Poll::Ready(result)) => {
+-                        state.timer.take();
+-                        Poll::Ready(Some(Input::Timer(result)))
+-                    }
+-                    _ => Poll::Pending,
+-                },
+-                9 => poll_receive(&state.demands.0, demand.as_mut(), cx, runnable)
++                8 => state
++                    .timer
++                    .poll(cx)
++                    .map(|result| Some(Input::Timer(result))),
++                9 => state.demands.0.poll(cx, runnable)
+                     .map(|r| r.ok().map(Input::Demand)),
+                 #[cfg(feature = "metrics")]
+                 10 => snapshot
+@@ -1443,10 +1426,10 @@
+                 return Poll::Ready(Some(input));
+             }
+         }
+-        if let Some(active) = &state.active
++        if let Some(active) = &mut state.active
+             && !active.cancellation_applied
+             && (!runnable || active.cancel.is_cancelled())
+-            && cancelled.as_mut().poll(cx).is_ready()
++            && active.cancel_wait.poll(cx).is_ready()
+         {
+             return Poll::Ready(Some(Input::Wake));
+         }
+@@ -1513,14 +1496,20 @@
+             Shutdown::default(),
+         )
+         .unwrap();
+-        state.timer = Some(operations::sleep_until(
+-            kimojio::clock_now() + Duration::from_secs(60),
+-        ));
+-        assert!(futures::poll!(state.timer.as_mut().unwrap()).is_pending());
++        state
++            .timer
++            .set(Some(kimojio::clock_now() + Duration::from_secs(60)));
++        assert!(
++            futures::future::poll_fn(|cx| Poll::Ready(state.timer.poll(cx)))
++                .await
++                .is_pending()
++        );
+         let mut moved = std::hint::black_box(state);
+-        moved.timer = Some(operations::sleep_until(kimojio::clock_now()));
+-        moved.timer.take().unwrap().await.unwrap();
+-        assert!(moved.timer.is_none());
++        moved.timer.set(Some(kimojio::clock_now()));
++        futures::future::poll_fn(|cx| moved.timer.poll(cx))
++            .await
++            .unwrap();
++        moved.timer.set(None);
+     }
+ 
+     #[kimojio::test]
+@@ -1652,7 +1641,7 @@
+             let pointer = bytes.as_ptr();
+             let mut body = OutgoingBody::full(bytes);
+             assert!(!admit_eager(&mut machine, id, &mut body, 1024, true));
+-            let Some(Ok(OutgoingFrame::Data(bytes))) =
++            let Some(Ok(SourceFrame::Data(OutgoingData::Owned(bytes)))) =
+                 futures::executor::block_on(body.source.next())
+             else {
+                 panic!()
+diff --git a/kimojio-http1/src/lib.rs b/kimojio-http1/src/lib.rs
+index 5cc745d297..8fa2348cb6 100644
+--- a/kimojio-http1/src/lib.rs
++++ b/kimojio-http1/src/lib.rs
+@@ -9,6 +9,8 @@
+ mod io_driver;
+ mod metadata;
+ mod observation;
++mod receive_lane;
++mod timer;
+ mod transport;
+ 
+ pub use body::{BodyChunk, IncomingBody, IncomingFrame, OutgoingBody, OutgoingFrame};
+diff --git a/kimojio-http1/src/receive_lane.rs b/kimojio-http1/src/receive_lane.rs
+new file mode 100644
+index 0000000000..170913e01c
+--- /dev/null
++++ b/kimojio-http1/src/receive_lane.rs
+@@ -0,0 +1,93 @@
++//! PoC: keep a receive future (and its runtime wait registration) across
++//! unrelated driver inputs. One boxed stream per lane, not per message.
++use std::{rc::Rc, task::{Context, Poll}};
++use futures::{StreamExt, stream::LocalBoxStream};
++use kimojio::{ChannelError, Receiver, CancellationToken};
++
++pub(crate) struct CancelLane {
++    token: Rc<CancellationToken>,
++    wait: Option<futures::future::LocalBoxFuture<'static, Result<(), kimojio::CanceledError>>>,
++}
++impl CancelLane {
++    pub(crate) fn new(token: Rc<CancellationToken>) -> Self { Self { token, wait: None } }
++    pub(crate) fn poll(&mut self, cx: &mut Context<'_>) -> Poll<()> {
++        let wait = self.wait.get_or_insert_with(|| {
++            let token = self.token.clone();
++            Box::pin(async move { token.cancelled().await })
++        });
++        let result = wait.as_mut().poll(cx);
++        if result.is_ready() { self.wait = None; }
++        result.map(|_| ())
++    }
++}
++
++pub(crate) struct ReceiveLane<T> {
++    receiver: Rc<Receiver<T>>,
++    stream: LocalBoxStream<'static, Result<T, ChannelError>>,
++    waiting: bool,
++}
++impl<T: 'static> ReceiveLane<T> {
++    pub(crate) fn new(receiver: Receiver<T>) -> Self {
++        let receiver = Rc::new(receiver);
++        let stream = futures::stream::unfold(receiver.clone(), |receiver| async {
++            let value = receiver.recv().await;
++            Some((value, receiver))
++        }).boxed_local();
++        Self { receiver, stream, waiting: false }
++    }
++    pub(crate) fn try_recv(&self) -> Result<Option<T>, ChannelError> {
++        self.receiver.try_recv()
++    }
++    pub(crate) fn poll(&mut self, cx: &mut Context<'_>, runnable: bool) -> Poll<Result<T, ChannelError>> {
++        if runnable && !self.waiting {
++            return match self.receiver.try_recv() {
++                Ok(Some(item)) => Poll::Ready(Ok(item)),
++                Ok(None) => Poll::Pending,
++                Err(error) => Poll::Ready(Err(error)),
++            };
++        }
++        let result = self.stream.as_mut().poll_next(cx).map(|item| item.expect("unending receive lane"));
++        self.waiting = result.is_pending();
++        result
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn runnable_empty_lane_does_not_register_a_runtime_wait() {
++        let (send, receive) = kimojio::async_channel();
++        let mut lane = ReceiveLane::new(receive);
++        let mut cx = Context::from_waker(std::task::Waker::noop());
++        assert!(lane.poll(&mut cx, true).is_pending());
++        send.try_send(7).unwrap();
++        assert_eq!(lane.poll(&mut cx, true), Poll::Ready(Ok(7)));
++    }
++    #[kimojio::test]
++    async fn pending_lane_survives_other_inputs_wakes_and_channel_close() {
++        let (send, receive) = kimojio::async_channel();
++        let mut lane = ReceiveLane::new(receive);
++        for value in 0..32 {
++            for _ in 0..3 {
++                assert!(futures::future::poll_fn(|cx| Poll::Ready(lane.poll(cx, false))).await.is_pending());
++            }
++            send.try_send(value).unwrap();
++            assert_eq!(futures::future::poll_fn(|cx| lane.poll(cx, true)).await, Ok(value));
++        }
++        drop(send);
++        assert_eq!(futures::future::poll_fn(|cx| lane.poll(cx, false)).await, Err(ChannelError::Closed));
++    }
++    #[kimojio::test]
++    async fn canceled_scope_is_observed_then_a_new_receive_has_no_old_membership() {
++        let (send, receive) = kimojio::async_channel();
++        let mut lane = ReceiveLane::new(receive);
++        kimojio::operations::io_scope(async || {
++            assert!(futures::future::poll_fn(|cx| Poll::Ready(lane.poll(cx, false))).await.is_pending());
++            kimojio::operations::io_scope_cancel();
++            assert!(futures::future::poll_fn(|cx| lane.poll(cx, false)).await.is_err());
++        }).await;
++        send.try_send(7).unwrap();
++        assert_eq!(futures::future::poll_fn(|cx| lane.poll(cx, false)).await, Ok(7));
++    }
++}
+diff --git a/kimojio-http1/src/timer.rs b/kimojio-http1/src/timer.rs
+new file mode 100644
+index 0000000000..b0451119f9
+--- /dev/null
++++ b/kimojio-http1/src/timer.rs
+@@ -0,0 +1,146 @@
++//! One logical deadline and at most one physical wake per connection.
++//!
++//! A wake earlier than the logical deadline is harmless: recheck and arm the
++//! current deadline when it fires. Replacing it on every progress notification
++//! would cancel and recreate kernel timers unnecessarily. Never retain a wake
++//! later than the logical deadline, and never expose an early wake as expiry.
++
++use kimojio::{Errno, operations};
++use std::{
++    future::Future,
++    pin::Pin,
++    task::{Context, Poll},
++    time::Instant,
++};
++
++#[derive(Default)]
++pub(crate) struct DeadlineTimer {
++    desired: Option<Instant>,
++    armed: Option<(Instant, operations::SleepFuture<'static>)>,
++}
++
++impl DeadlineTimer {
++    pub(crate) fn set(&mut self, desired: Option<Instant>) {
++        self.desired = desired;
++        if desired.is_none()
++            || self
++                .armed
++                .as_ref()
++                .is_some_and(|(at, _)| Some(*at) > desired)
++        {
++            self.armed = None;
++        }
++        // Allocate only when the driver actually polls the timer lane.
++    }
++
++    pub(crate) fn poll(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Errno>> {
++        let Some(desired) = self.desired else {
++            return Poll::Pending;
++        };
++        loop {
++            let (at, timer) = self
++                .armed
++                .get_or_insert_with(|| (desired, operations::sleep_until(desired)));
++            let at = *at;
++            let result = std::task::ready!(Pin::new(timer).poll(cx));
++            self.armed = None;
++            match result {
++                Ok(()) if at < desired => continue,
++                result => return Poll::Ready(result),
++            }
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::time::Duration;
++
++    #[kimojio::test]
++    async fn dormant_timer_does_not_create_a_native_future_and_can_move() {
++        let mut timer = DeadlineTimer::default();
++        timer.set(Some(kimojio::clock_now() + Duration::from_secs(60)));
++        assert!(timer.armed.is_none());
++        assert!(
++            futures::future::poll_fn(|cx| Poll::Ready(timer.poll(cx)))
++                .await
++                .is_pending()
++        );
++        let mut moved = std::hint::black_box(timer);
++        moved.set(Some(kimojio::clock_now()));
++        futures::future::poll_fn(|cx| moved.poll(cx)).await.unwrap();
++        assert!(moved.armed.is_none());
++        moved.set(None);
++        assert!(
++            futures::future::poll_fn(|cx| Poll::Ready(moved.poll(cx)))
++                .await
++                .is_pending()
++        );
++    }
++
++    #[cfg(feature = "virtual-clock")]
++    #[kimojio::test]
++    async fn postponed_deadlines_reuse_one_wake_but_earlier_deadlines_replace_it() {
++        operations::virtual_clock_enable(true);
++        let epoch = kimojio::clock_now();
++        let mut timer = DeadlineTimer::default();
++        let poll = |timer: &mut DeadlineTimer| {
++            timer.poll(&mut Context::from_waker(std::task::Waker::noop()))
++        };
++        timer.set(Some(epoch + Duration::from_secs(10)));
++        assert!(poll(&mut timer).is_pending());
++        for n in 11..=100 {
++            timer.set(Some(epoch + Duration::from_secs(n)));
++            assert!(poll(&mut timer).is_pending());
++            assert_eq!(
++                operations::virtual_clock_next_deadline(),
++                Some(epoch + Duration::from_secs(10))
++            );
++            assert_eq!(operations::virtual_clock_pending_timers(), 1);
++        }
++        operations::virtual_clock_advance(Duration::from_secs(10));
++        assert!(
++            poll(&mut timer).is_pending(),
++            "virtual sleeps yield once when becoming ready"
++        );
++        assert!(poll(&mut timer).is_pending(), "obsolete early wake is not expiration");
++        assert_eq!(
++            operations::virtual_clock_next_deadline(),
++            Some(epoch + Duration::from_secs(100))
++        );
++        timer.set(Some(epoch + Duration::from_secs(20)));
++        assert!(poll(&mut timer).is_pending());
++        assert_eq!(operations::virtual_clock_pending_timers(), 1);
++        assert_eq!(
++            operations::virtual_clock_next_deadline(),
++            Some(epoch + Duration::from_secs(20))
++        );
++        operations::virtual_clock_advance(Duration::from_secs(10));
++        assert!(poll(&mut timer).is_pending());
++        assert_eq!(poll(&mut timer), Poll::Ready(Ok(())));
++        timer.set(None);
++        assert!(poll(&mut timer).is_pending());
++        assert_eq!(operations::virtual_clock_pending_timers(), 0);
++    }
++
++    #[cfg(feature = "virtual-clock")]
++    #[kimojio::test]
++    async fn clearing_or_replacing_a_fired_wake_never_expires_a_new_deadline() {
++        operations::virtual_clock_enable(true);
++        let now = kimojio::clock_now();
++        let mut timer = DeadlineTimer::default();
++        let poll = |timer: &mut DeadlineTimer| {
++            timer.poll(&mut Context::from_waker(std::task::Waker::noop()))
++        };
++        timer.set(Some(now + Duration::from_secs(1)));
++        assert!(poll(&mut timer).is_pending());
++        operations::virtual_clock_advance(Duration::from_secs(2));
++        timer.set(None);
++        timer.set(Some(now + Duration::from_secs(3)));
++        assert!(poll(&mut timer).is_pending());
++        operations::virtual_clock_advance(Duration::from_secs(1));
++        assert!(poll(&mut timer).is_pending());
++        assert_eq!(poll(&mut timer), Poll::Ready(Ok(())));
++    }
++}

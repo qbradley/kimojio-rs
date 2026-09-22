@@ -1,0 +1,23 @@
+INFO: detected rust-toolchain file /workspace/kimojio-rs-2/rust-toolchain.toml - default toolchain will be overridden by 1.98.1
+   Compiling kimojio-http1 v0.17.0 (/workspace/kimojio-rs-2/kimojio-http1)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.22s
+     Running unittests src/lib.rs (target/debug/deps/kimojio_http1-4720ddf8cf43b039)
+
+running 1 test
+test driver::architecture_tests::already_due_initial_deadline_is_applied_before_issuing_io ... FAILED
+
+failures:
+
+---- driver::architecture_tests::already_due_initial_deadline_is_applied_before_issuing_io stdout ----
+
+thread 'driver::architecture_tests::already_due_initial_deadline_is_applied_before_issuing_io' (3161698) panicked at kimojio-http1/src/architecture_tests.rs:8:9:
+expired deadline issued a read
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    driver::architecture_tests::already_due_initial_deadline_is_applied_before_issuing_io
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 41 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p kimojio-http1 --lib`

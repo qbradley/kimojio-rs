@@ -68,6 +68,32 @@ fn controls_and_duplex_forwarding_preserve_success_and_payloads() {
 }
 
 #[test]
+fn shared_bodies_preserve_payload_framing_and_reuse_on_both_transports() {
+    for backend in [Backend::Native, Backend::Stream] {
+        for coalesce in [false, true] {
+            for (bytes, chunked, chunk_bytes) in [
+                (0, false, IO_BYTES),
+                (128, false, IO_BYTES),
+                (65_537, true, 4096),
+            ] {
+                let fixture = Fixture::new(bytes, chunked, chunk_bytes).shared();
+                let result = run::<true>(
+                    &fixture,
+                    Options {
+                        coalesce,
+                        ..Options::new(backend)
+                    },
+                    3,
+                );
+                assert_eq!(result.server.bytes, (WARMUP + 3) * bytes as u64);
+                assert_eq!(result.client.bytes, result.server.bytes);
+                assert_eq!(result.diagnostics.unwrap().retired, 2 * (WARMUP + 3));
+            }
+        }
+    }
+}
+
+#[test]
 fn qualification_diagnostics_identify_coalescing_and_deadline_controls() {
     let fixture = Fixture::new(128, false, IO_BYTES);
     for (coalesce, deadlines) in [(false, true), (true, true), (false, false)] {

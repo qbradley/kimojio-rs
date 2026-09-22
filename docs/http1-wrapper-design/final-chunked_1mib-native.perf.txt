@@ -1,0 +1,44 @@
+# Total Lost Samples: 0
+# Samples: 6K of event 'cpu-clock:u'
+# Event count (approx.): 6399197420
+    15.42%  [.] <futures_util::future::poll_fn::PollFn<kimojio_http1::driver::next_input<kimojio_http1::io_driver::NativeIo<kimojio_http1::io_driver::read_once::{closure#0}, kimojio_http1::io_driver::read_once, kimojio_http1::io_driver::write_once::{closure#0}, kimojio_http1::io_driver::write_once>>::{closure#0}::{closure#0}> as core::future::future::Future>::poll
+    10.03%  [.] 0x0000000000169b09
+     5.78%  [.] <kimojio::async_event::WaitAsyncEventFuture as core::future::future::Future>::poll
+     3.90%  [.] 0x000000000000065a
+     2.60%  [.] kimojio_http1::driver::next_input::<kimojio_http1::io_driver::NativeIo<kimojio_http1::io_driver::read_once::{closure#0}, kimojio_http1::io_driver::read_once, kimojio_http1::io_driver::write_once::{closure#0}, kimojio_http1::io_driver::write_once>>::{closure#0}
+     2.54%  [.] <kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, kimojio_http1::body::OutgoingData>>::next::<kimojio_http1::driver::Ports>
+     2.54%  [.] <kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, kimojio_http1::body::OutgoingData>>::next::<kimojio_http1::driver::Ports>
+     2.51%  [.] 0x00000000001697d3
+     2.13%  [.] <kimojio::task_ref::VTABLE::{closure#3} as core::ops::function::FnOnce<(*const (),)>>::call_once
+     1.83%  [.] kimojio::runtime::submit_and_complete_io
+     1.82%  [.] <kimojio::task_ref::VTABLE::{closure#0} as core::ops::function::FnOnce<(*const (),)>>::call_once
+     1.54%  [.] <kimojio::ring_future::RingFuture<usize, kimojio::ring_future::ResultToUsize> as core::future::future::Future>::poll
+     1.52%  [.] <kimojio_http1::driver::State>::observe
+     1.52%  [.] <kimojio::ring_future::RingFuture<(), kimojio::ring_future::ResultToUnit> as core::future::future::Future>::poll
+     1.50%  [.] __vdso_clock_gettime
+     1.41%  [.] <futures_util::stream::unfold::Unfold<alloc::rc::Rc<kimojio::async_channel::Receiver<kimojio_http1::body::BodyDemand>>, <kimojio_http1::receive_lane::ReceiveLane<kimojio_http1::body::BodyDemand>>::new::{closure#0}, <kimojio_http1::receive_lane::ReceiveLane<kimojio_http1::body::BodyDemand>>::new::{closure#0}::{closure#0}> as futures_core::stream::Stream>::poll_next
+     1.35%  [.] <futures_util::stream::unfold::Unfold<alloc::rc::Rc<kimojio::async_channel::Receiver<kimojio_fsm_http1::operations::BodyCompletion<alloc::vec::Vec<u8>>>>, <kimojio_http1::receive_lane::ReceiveLane<kimojio_fsm_http1::operations::BodyCompletion<alloc::vec::Vec<u8>>>>::new::{closure#0}, <kimojio_http1::receive_lane::ReceiveLane<kimojio_fsm_http1::operations::BodyCompletion<alloc::vec::Vec<u8>>>>::new::{closure#0}::{closure#0}> as futures_core::stream::Stream>::poll_next
+     1.21%  [.] 0x0000000000169986
+     1.11%  [.] <core::pin::Pin<alloc::boxed::Box<kimojio_http1::driver::run_native<<kimojio_http1::driver::NativeConnection>::run::{closure#0}::{closure#0}, core::future::ready::Ready<core::result::Result<http::response::Response<kimojio_http1::body::OutgoingBody>, kimojio_http1::Error>>>::{closure#0}>> as core::future::future::Future>::poll
+     1.07%  [.] <rustix_uring::submit::Submitter>::submit_and_wait
+     1.05%  [.] <kimojio_http1::receive_lane::ReceiveLane<kimojio_fsm_http1::operations::BodyCompletion<alloc::vec::Vec<u8>>>>::poll
+     1.03%  [.] <core::pin::Pin<alloc::boxed::Box<kimojio_http1::driver::run_native<roundtrip::support::pair<false>::{closure#0}::{closure#2}, roundtrip::support::pair<false>::{closure#0}::{closure#2}::{closure#0}>::{closure#0}>> as core::future::future::Future>::poll
+     0.91%  [.] roundtrip::support::pair::<false>::{closure#0}::{closure#2}::{closure#0}
+     0.91%  [.] <kimojio_http1::body::IncomingBody>::frame::{closure#0}
+     0.86%  [.] <kimojio_http1::body::IncomingBody>::frame::{closure#0}
+     0.86%  [.] <kimojio_http1::timer::DeadlineTimer>::poll
+     0.85%  [.] <kimojio_http1::driver::State>::input::<kimojio_http1::io_driver::NativeIo<kimojio_http1::io_driver::read_once::{closure#0}, kimojio_http1::io_driver::read_once, kimojio_http1::io_driver::write_once::{closure#0}, kimojio_http1::io_driver::write_once>>
+     0.80%  [.] 0x00000000001697c0
+     0.78%  [.] <kimojio_http1::receive_lane::ReceiveLane<kimojio_http1::body::BodyDemand>>::poll
+     0.74%  [.] <kimojio_http1::receive_lane::CancelLane>::poll::{closure#0}::{closure#0}
+     0.74%  [.] kimojio::runtime::poll_task
+     0.71%  [.] <kimojio::runtime::Runtime>::block_on::<roundtrip::support::run<false>::{closure#0}>
+     0.71%  [.] <kimojio_http1::driver::State>::event::<<kimojio_http1::driver::NativeConnection>::run::{closure#0}::{closure#0}, core::future::ready::Ready<core::result::Result<http::response::Response<kimojio_http1::body::OutgoingBody>, kimojio_http1::Error>>, kimojio_http1::io_driver::NativeIo<kimojio_http1::io_driver::read_once::{closure#0}, kimojio_http1::io_driver::read_once, kimojio_http1::io_driver::write_once::{closure#0}, kimojio_http1::io_driver::write_once>>
+     0.71%  [.] <std::time::Instant>::saturating_duration_since
+     0.69%  [.] <kimojio_http1::driver::State>::event::<roundtrip::support::pair<false>::{closure#0}::{closure#2}, roundtrip::support::pair<false>::{closure#0}::{closure#2}::{closure#0}, kimojio_http1::io_driver::NativeIo<kimojio_http1::io_driver::read_once::{closure#0}, kimojio_http1::io_driver::read_once, kimojio_http1::io_driver::write_once::{closure#0}, kimojio_http1::io_driver::write_once>>
+     0.69%  [.] roundtrip::support::exchange::<false>::{closure#0}
+     0.64%  [.] <std::sys::pal::unix::time::Timespec>::sub_timespec
+     0.64%  [.] clock_gettime
+     0.63%  [.] kimojio_http1::driver::poll_handler
+     0.53%  [.] <kimojio_http1::driver::NativeConnection>::run::{closure#0}
+     0.50%  [.] malloc

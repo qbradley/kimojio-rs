@@ -35,6 +35,7 @@ pub enum OutgoingFrame {
 #[derive(Debug)]
 pub(crate) enum OutgoingData {
     Owned(Vec<u8>),
+    Shared(Rc<[u8]>),
     Forward(BodyChunk),
 }
 
@@ -42,6 +43,7 @@ impl OutgoingData {
     pub(crate) fn retained_capacity(&self) -> usize {
         match self {
             Self::Owned(bytes) => bytes.capacity(),
+            Self::Shared(bytes) => bytes.len(),
             Self::Forward(chunk) => chunk.retained_capacity(),
         }
     }
@@ -51,6 +53,7 @@ impl AsRef<[u8]> for OutgoingData {
     fn as_ref(&self) -> &[u8] {
         match self {
             Self::Owned(bytes) => bytes,
+            Self::Shared(bytes) => bytes,
             Self::Forward(chunk) => chunk,
         }
     }
@@ -67,20 +70,50 @@ pub struct OutgoingBody {
     pub(crate) continue_request: bool,
 }
 
+#[derive(Debug)]
+pub(crate) enum SourceFrame {
+    Data(OutgoingData),
+    Trailers(HeaderMap),
+}
+impl From<OutgoingFrame> for SourceFrame {
+    fn from(frame: OutgoingFrame) -> Self {
+        match frame {
+            OutgoingFrame::Data(bytes) => Self::Data(OutgoingData::Owned(bytes)),
+            OutgoingFrame::Forward(chunk) => Self::Data(OutgoingData::Forward(chunk)),
+            OutgoingFrame::Trailers(headers) => Self::Trailers(headers),
+        }
+    }
+}
+
 pub(crate) enum OutgoingSource {
     Ready(Option<Vec<u8>>),
+    Shared(Option<Rc<[u8]>>),
     Stream(LocalBoxStream<'static, Result<OutgoingFrame, Error>>),
+    SharedStream(LocalBoxStream<'static, Result<Rc<[u8]>, Error>>),
 }
 
 impl Stream for OutgoingSource {
-    type Item = Result<OutgoingFrame, Error>;
+    type Item = Result<SourceFrame, Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match &mut *self {
-            Self::Ready(bytes) => {
-                Poll::Ready(bytes.take().map(|bytes| Ok(OutgoingFrame::Data(bytes))))
-            }
-            Self::Stream(source) => source.as_mut().poll_next(cx),
+            Self::Ready(bytes) => Poll::Ready(
+                bytes
+                    .take()
+                    .map(|bytes| Ok(SourceFrame::Data(OutgoingData::Owned(bytes)))),
+            ),
+            Self::Shared(bytes) => Poll::Ready(
+                bytes
+                    .take()
+                    .map(|bytes| Ok(SourceFrame::Data(OutgoingData::Shared(bytes)))),
+            ),
+            Self::Stream(source) => source
+                .as_mut()
+                .poll_next(cx)
+                .map(|frame| frame.map(|frame| frame.map(Into::into))),
+            Self::SharedStream(source) => source.as_mut().poll_next(cx).map(|frame| {
+                frame.map(|frame| frame.map(|bytes| SourceFrame::Data(OutgoingData::Shared(bytes))))
+            }),
         }
     }
 }
@@ -117,6 +150,37 @@ impl OutgoingBody {
         Self {
             length: BodyLength::Known(bytes.len() as u64),
             source: OutgoingSource::Ready(Some(bytes)),
+            continue_request: false,
+        }
+    }
+
+    /// An immutable, shared full body without a payload copy.
+    ///
+    /// The complete allocation must fit `Config::protocol.max_buffer_bytes`.
+    /// Admission/partial writes retain a strong owner until the body receipt,
+    /// including cancellation. Cloning the source bytes does not clone payload.
+    pub fn shared(bytes: Rc<[u8]>) -> Self {
+        if bytes.is_empty() {
+            return Self::empty();
+        }
+        Self {
+            length: BodyLength::Known(bytes.len() as u64),
+            source: OutgoingSource::Shared(Some(bytes)),
+            continue_request: false,
+        }
+    }
+
+    /// Demand-driven immutable frames. Each complete allocation must fit the
+    /// configured buffer limit; a small view cannot hide a larger retained body.
+    /// `None` requests chunked framing; `Some(n)` declares exactly n bytes.
+    /// Use `from_stream` for sources that emit trailers or forward receive leases.
+    pub fn from_shared_stream<S>(length: Option<u64>, source: S) -> Self
+    where
+        S: Stream<Item = Result<Rc<[u8]>, Error>> + 'static,
+    {
+        Self {
+            length: length.map_or(BodyLength::Streaming, BodyLength::Known),
+            source: OutgoingSource::SharedStream(source.boxed_local()),
             continue_request: false,
         }
     }
@@ -351,13 +415,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shared_source_keeps_payload_after_source_drop_and_does_not_inflate_ready_storage() {
+        #[allow(dead_code)]
+        enum OriginalSource {
+            Ready(Option<Vec<u8>>),
+            Stream(LocalBoxStream<'static, Result<OutgoingFrame, Error>>),
+        }
+        assert_eq!(size_of::<OutgoingSource>(), size_of::<OriginalSource>());
+        futures::executor::block_on(async {
+            let bytes: Rc<[u8]> = Rc::from(b"abc".as_slice());
+            let mut body = OutgoingBody::shared(bytes.clone());
+            let SourceFrame::Data(data) = body.source.next().await.unwrap().unwrap() else {
+                panic!()
+            };
+            assert_eq!(data.as_ref().as_ptr(), bytes.as_ptr());
+            assert_eq!(data.retained_capacity(), 3);
+            assert!(body.source.next().await.is_none());
+            drop(body);
+            assert_eq!(Rc::strong_count(&bytes), 2);
+            drop(data);
+            assert_eq!(Rc::strong_count(&bytes), 1);
+            let calls = Rc::new(Cell::new(0));
+            let n = calls.clone();
+            let payload = bytes.clone();
+            let mut body = OutgoingBody::from_shared_stream(
+                None,
+                futures::stream::poll_fn(move |_| {
+                    n.set(n.get() + 1);
+                    Poll::Ready((n.get() == 1).then(|| Ok(payload.clone())))
+                }),
+            );
+            assert_eq!(calls.get(), 0);
+            let frame = body.source.next().await.unwrap().unwrap();
+            assert_eq!(calls.get(), 1);
+            assert!(body.source.next().await.is_none());
+            drop(body);
+            let SourceFrame::Data(data) = frame else {
+                panic!()
+            };
+            assert_eq!(data.as_ref().as_ptr(), bytes.as_ptr());
+            assert_eq!(Rc::strong_count(&bytes), 2);
+            drop(data);
+            assert_eq!(Rc::strong_count(&bytes), 1);
+        });
+    }
+
+    #[test]
     fn empty_full_and_fallible_sources() {
         futures::executor::block_on(async {
             assert!(OutgoingBody::empty().source.next().await.is_none());
             let mut full = OutgoingBody::full(b"payload");
             assert!(matches!(full.source, OutgoingSource::Ready(Some(_))));
             assert_eq!(full.length, BodyLength::Known(7));
-            let Some(Ok(OutgoingFrame::Data(bytes))) = full.source.next().await else {
+            let Some(Ok(SourceFrame::Data(OutgoingData::Owned(bytes)))) = full.source.next().await
+            else {
                 panic!("missing full-body data");
             };
             assert_eq!(bytes, b"payload");

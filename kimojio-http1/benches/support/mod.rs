@@ -61,6 +61,8 @@ impl Options {
 pub struct Fixture {
     request: Rc<[u8]>,
     response: Rc<[u8]>,
+    shared_request: Option<Rc<[Rc<[u8]>]>>,
+    shared_response: Option<Rc<[Rc<[u8]>]>>,
     chunked: bool,
     chunk_bytes: usize,
 }
@@ -74,9 +76,28 @@ impl Fixture {
             response: (0..bytes)
                 .map(|i| ((i % 251 * 19 + 7) % 251) as u8)
                 .collect(),
+            shared_request: None,
+            shared_response: None,
             chunked,
             chunk_bytes,
         }
+    }
+    pub fn shared(mut self) -> Self {
+        // Explicit shared-source control: prepare immutable per-frame buffers
+        // once. Default Vec-producing workloads remain unchanged.
+        self.shared_request = Some(
+            self.request
+                .chunks(self.chunk_bytes)
+                .map(Rc::from)
+                .collect(),
+        );
+        self.shared_response = Some(
+            self.response
+                .chunks(self.chunk_bytes)
+                .map(Rc::from)
+                .collect(),
+        );
+        self
     }
     pub fn bytes(&self) -> usize {
         self.request.len()
@@ -155,7 +176,20 @@ fn config(slot: u64, options: Options, diagnostics: Option<Rc<Cell<Diagnostics>>
     config
 }
 
-fn source(bytes: Rc<[u8]>, fixture: &Fixture) -> OutgoingBody {
+fn source(bytes: Rc<[u8]>, fixture: &Fixture, shared: Option<Rc<[Rc<[u8]>]>>) -> OutgoingBody {
+    if let Some(frames) = shared {
+        if !fixture.chunked && bytes.len() <= fixture.chunk_bytes {
+            return OutgoingBody::shared(bytes);
+        }
+        let length = (!fixture.chunked).then_some(bytes.len() as u64);
+        return OutgoingBody::from_shared_stream(
+            length,
+            futures::stream::unfold((frames, 0usize), |(frames, at)| async move {
+                let frame = frames.get(at)?.clone();
+                Some((Ok(frame), (frames, at + 1)))
+            }),
+        );
+    }
     if !fixture.chunked && bytes.len() <= fixture.chunk_bytes {
         return OutgoingBody::full(bytes.as_ref().to_vec());
     }
@@ -261,7 +295,11 @@ async fn exchange<const CHECK: bool>(
         .uri("/bench")
         .header("host", "benchmark")
         .header("content-type", "application/octet-stream")
-        .body(source(fixture.request.clone(), fixture))
+        .body(source(
+            fixture.request.clone(),
+            fixture,
+            fixture.shared_request.clone(),
+        ))
         .unwrap();
     let mut response = client.send(request).await?;
     if response.status() != StatusCode::OK
@@ -331,7 +369,11 @@ async fn pair<const CHECK: bool>(
                         let mut value = counts.get();
                         value.received(fixture.bytes(), frames);
                         counts.set(value);
-                        source(fixture.response.clone(), &fixture)
+                        source(
+                            fixture.response.clone(),
+                            &fixture,
+                            fixture.shared_response.clone(),
+                        )
                     }
                     Mode::Forward | Mode::CopyForward => {
                         request.body_mut().accept().await?;

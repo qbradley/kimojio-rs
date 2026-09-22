@@ -1,0 +1,10 @@
+final-tests: 122 passed, 0 failed
+final-release-tests: 122 passed, 0 failed
+final-default-tests: 103 passed, 0 failed
+core-tests: 144 passed, 0 failed
+composition-tests: 316 passed, 0 failed
+pool-event-tests: 9 passed, 0 failed
+pool-scope-tests: 26 passed, 0 failed
+clippy --all-targets --all-features -- -D warnings: passed for kimojio-http1
+rustfmt --check: changed Rust files passed
+Runtime async_event.rs restored byte-for-byte; no retained runtime source changes.

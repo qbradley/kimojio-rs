@@ -1,0 +1,47 @@
+{
+  "baseline": {
+    "http1_wrapper/empty/native": 20.426000000000002,
+    "http1_wrapper/empty/stream": 26.1755,
+    "http1_wrapper/fixed_128b/native": 36.942,
+    "http1_wrapper/fixed_128b/stream": 49.926500000000004,
+    "http1_wrapper/fixed_128b/native_coalesced": 25.706000000000003,
+    "http1_wrapper/fixed_128b/native_no_deadlines": 25.3455,
+    "http1_wrapper/chunked_1mib/native": 1459.35,
+    "http1_wrapper/chunked_1mib/stream": 1950.9,
+    "http1_wrapper/chunked_1mib/native_no_deadlines": 1001.625,
+    "http1_wrapper/chunked_1mib/native_forward": 1721.85,
+    "http1_wrapper/chunked_1mib/native_copy_forward": 1697.5,
+    "http1_wrapper/fragmented_8k/native": 237.88,
+    "http1_wrapper/fragmented_8k/stream": 350.985
+  },
+  "timer": {
+    "http1_wrapper/empty/native": 14.8635,
+    "http1_wrapper/empty/stream": 20.3285,
+    "http1_wrapper/fixed_128b/native": 27.464,
+    "http1_wrapper/fixed_128b/stream": 38.863,
+    "http1_wrapper/fixed_128b/native_coalesced": 18.892000000000003,
+    "http1_wrapper/fixed_128b/native_no_deadlines": 25.131500000000003,
+    "http1_wrapper/chunked_1mib/native": 1106.0500000000002,
+    "http1_wrapper/chunked_1mib/stream": 1538.55,
+    "http1_wrapper/chunked_1mib/native_no_deadlines": 1005.52,
+    "http1_wrapper/chunked_1mib/native_forward": 1284.4,
+    "http1_wrapper/chunked_1mib/native_copy_forward": 1295.6999999999998,
+    "http1_wrapper/fragmented_8k/native": 181.28,
+    "http1_wrapper/fragmented_8k/stream": 271.71
+  },
+  "final": {
+    "http1_wrapper/empty/native": 15.151,
+    "http1_wrapper/empty/stream": 20.8675,
+    "http1_wrapper/fixed_128b/native": 26.7115,
+    "http1_wrapper/fixed_128b/stream": 38.7845,
+    "http1_wrapper/fixed_128b/native_coalesced": 18.9385,
+    "http1_wrapper/fixed_128b/native_no_deadlines": 23.902500000000003,
+    "http1_wrapper/chunked_1mib/native": 1068.6,
+    "http1_wrapper/chunked_1mib/stream": 1525.7,
+    "http1_wrapper/chunked_1mib/native_no_deadlines": 965.0550000000001,
+    "http1_wrapper/chunked_1mib/native_forward": 1246.75,
+    "http1_wrapper/chunked_1mib/native_copy_forward": 1246.9,
+    "http1_wrapper/fragmented_8k/native": 172.055,
+    "http1_wrapper/fragmented_8k/stream": 272.38
+  }
+}

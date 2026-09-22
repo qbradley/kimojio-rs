@@ -1,0 +1,475 @@
+diff --git a/kimojio-http1/src/driver.rs b/kimojio-http1/src/driver.rs
+index ac3916670a..7a211da141 100644
+--- a/kimojio-http1/src/driver.rs
++++ b/kimojio-http1/src/driver.rs
+@@ -99,7 +99,7 @@
+     }
+ }
+ 
+-struct DemandQueue(Receiver<BodyDemand>);
++struct DemandQueue(crate::receive_lane::ReceiveLane<BodyDemand>);
+ 
+ impl Drop for DemandQueue {
+     fn drop(&mut self) {
+@@ -541,6 +541,7 @@
+     id: core::ExchangeId,
+     cancel: Rc<CancellationToken>,
+     cancellation_applied: bool,
++    cancel_wait: crate::receive_lane::CancelLane,
+     duplex: bool,
+     incoming_lease: bool,
+     abandonment_applied: bool,
+@@ -576,6 +577,7 @@
+         );
+         Self {
+             id,
++            cancel_wait: crate::receive_lane::CancelLane::new(cancel.clone()),
+             cancel,
+             cancellation_applied: false,
+             duplex: false,
+@@ -645,17 +647,19 @@
+     machine: Machine,
+     active: Option<Active>,
+     release_send: Sender<core::BodyCompletion<Vec<u8>>>,
+-    released: Receiver<core::BodyCompletion<Vec<u8>>>,
++    released: crate::receive_lane::ReceiveLane<core::BodyCompletion<Vec<u8>>>,
+     demand_send: Sender<BodyDemand>,
+     demands: DemandQueue,
+     pending_read: Option<core::OperationId>,
+     pending_write: Option<core::OperationId>,
+     pending_close: Option<core::CloseOp>,
+     deadline: Option<core::Deadline>,
+-    timer: Option<operations::SleepFuture<'static>>,
++    timer: crate::timer::DeadlineTimer,
+     epoch: Instant,
+     shutdown: Shutdown,
+     shutdown_progress: ShutdownProgress,
++    graceful_wait: crate::receive_lane::CancelLane,
++    abort_wait: crate::receive_lane::CancelLane,
+     server: bool,
+     max_buffer: usize,
+     receive_capacity: usize,
+@@ -703,15 +707,17 @@
+             machine,
+             active: None,
+             release_send,
+-            released,
++            released: crate::receive_lane::ReceiveLane::new(released),
+             demand_send,
+-            demands: DemandQueue(demands),
++            demands: DemandQueue(crate::receive_lane::ReceiveLane::new(demands)),
+             pending_read: None,
+             pending_write: None,
+             pending_close: None,
+             deadline: None,
+-            timer: None,
++            timer: crate::timer::DeadlineTimer::default(),
+             epoch: kimojio::clock_now(),
++            graceful_wait: crate::receive_lane::CancelLane::new(shutdown.graceful.clone()),
++            abort_wait: crate::receive_lane::CancelLane::new(shutdown.abort.clone()),
+             shutdown,
+             shutdown_progress: ShutdownProgress::Running,
+             server,
+@@ -750,7 +756,7 @@
+             && deadline.at <= now
+         {
+             self.deadline.take();
+-            self.timer.take();
++            self.timer.set(None);
+             let result = match &mut self.machine {
+                 Machine::Client(inner) => inner.expire(deadline, now),
+                 Machine::Server(inner) => inner.expire(deadline, now),
+@@ -1190,16 +1196,16 @@
+             }
+             Event::Deadline(deadline) => {
+                 if self.deadline != deadline {
+-                    self.timer = match deadline {
++                    self.timer.set(match deadline {
+                         Some(deadline) => {
+                             let at = self
+                                 .epoch
+                                 .checked_add(Duration::from_nanos(deadline.at.0))
+                                 .ok_or(Error::Limit)?;
+-                            Some(operations::sleep_until(at))
++                            Some(at)
+                         }
+                         None => None,
+-                    };
++                    });
+                     self.deadline = deadline;
+                 }
+             }
+@@ -1359,19 +1365,7 @@
+     runnable: bool,
+ ) -> Option<Input> {
+     let (read, write) = io.completions(runnable);
+-    let release = state.released.recv();
+-    let demand = state.demands.0.recv();
+     let request = requests.recv();
+-    let graceful = state.shutdown.graceful.cancelled();
+-    let abort = state.shutdown.abort.cancelled();
+-    let active_cancel = state.active.as_ref().map(|active| active.cancel.clone());
+-    let cancelled = async {
+-        if let Some(cancel) = &active_cancel {
+-            let _ = cancel.cancelled().await;
+-        } else {
+-            std::future::pending::<()>().await;
+-        }
+-    };
+     #[cfg(feature = "metrics")]
+     let observation = state.observation.as_ref();
+     #[cfg(feature = "metrics")]
+@@ -1390,9 +1384,7 @@
+     };
+     #[cfg(feature = "metrics")]
+     futures::pin_mut!(snapshot);
+-    futures::pin_mut!(
+-        read, write, release, demand, request, graceful, abort, cancelled
+-    );
++    futures::pin_mut!(read, write, request);
+     futures::future::poll_fn(|cx| {
+         const LANES: usize = 10 + cfg!(feature = "metrics") as usize;
+         for offset in 0..LANES {
+@@ -1400,7 +1392,7 @@
+             let ready = match index {
+                 0 => read.as_mut().poll(cx).map(|r| Some(Input::Read(r))),
+                 1 => write.as_mut().poll(cx).map(|r| Some(Input::Write(r))),
+-                2 => poll_receive(&state.released, release.as_mut(), cx, runnable)
++                2 => state.released.poll(cx, runnable)
+                     .map(|r| r.ok().map(Input::Release)),
+                 3 if !state.server
+                     && state.active.is_none()
+@@ -1415,21 +1407,18 @@
+                 6 if state.shutdown_progress == ShutdownProgress::Running
+                     && (!runnable || state.shutdown.graceful.is_cancelled()) =>
+                 {
+-                    graceful.as_mut().poll(cx).map(|_| Some(Input::Wake))
++                    state.graceful_wait.poll(cx).map(|_| Some(Input::Wake))
+                 }
+                 7 if state.shutdown_progress != ShutdownProgress::Aborting
+                     && (!runnable || state.shutdown.abort.is_cancelled()) =>
+                 {
+-                    abort.as_mut().poll(cx).map(|_| Some(Input::Wake))
++                    state.abort_wait.poll(cx).map(|_| Some(Input::Wake))
+                 }
+-                8 => match state.timer.as_mut().map(|timer| Pin::new(timer).poll(cx)) {
+-                    Some(Poll::Ready(result)) => {
+-                        state.timer.take();
+-                        Poll::Ready(Some(Input::Timer(result)))
+-                    }
+-                    _ => Poll::Pending,
+-                },
+-                9 => poll_receive(&state.demands.0, demand.as_mut(), cx, runnable)
++                8 => state
++                    .timer
++                    .poll(cx)
++                    .map(|result| Some(Input::Timer(result))),
++                9 => state.demands.0.poll(cx, runnable)
+                     .map(|r| r.ok().map(Input::Demand)),
+                 #[cfg(feature = "metrics")]
+                 10 => snapshot
+@@ -1443,10 +1432,10 @@
+                 return Poll::Ready(Some(input));
+             }
+         }
+-        if let Some(active) = &state.active
++        if let Some(active) = &mut state.active
+             && !active.cancellation_applied
+             && (!runnable || active.cancel.is_cancelled())
+-            && cancelled.as_mut().poll(cx).is_ready()
++            && active.cancel_wait.poll(cx).is_ready()
+         {
+             return Poll::Ready(Some(Input::Wake));
+         }
+@@ -1513,14 +1502,20 @@
+             Shutdown::default(),
+         )
+         .unwrap();
+-        state.timer = Some(operations::sleep_until(
+-            kimojio::clock_now() + Duration::from_secs(60),
+-        ));
+-        assert!(futures::poll!(state.timer.as_mut().unwrap()).is_pending());
++        state
++            .timer
++            .set(Some(kimojio::clock_now() + Duration::from_secs(60)));
++        assert!(
++            futures::future::poll_fn(|cx| Poll::Ready(state.timer.poll(cx)))
++                .await
++                .is_pending()
++        );
+         let mut moved = std::hint::black_box(state);
+-        moved.timer = Some(operations::sleep_until(kimojio::clock_now()));
+-        moved.timer.take().unwrap().await.unwrap();
+-        assert!(moved.timer.is_none());
++        moved.timer.set(Some(kimojio::clock_now()));
++        futures::future::poll_fn(|cx| moved.timer.poll(cx))
++            .await
++            .unwrap();
++        moved.timer.set(None);
+     }
+ 
+     #[kimojio::test]
+diff --git a/kimojio-http1/src/lib.rs b/kimojio-http1/src/lib.rs
+index 5cc745d297..8fa2348cb6 100644
+--- a/kimojio-http1/src/lib.rs
++++ b/kimojio-http1/src/lib.rs
+@@ -9,6 +9,8 @@
+ mod io_driver;
+ mod metadata;
+ mod observation;
++mod receive_lane;
++mod timer;
+ mod transport;
+ 
+ pub use body::{BodyChunk, IncomingBody, IncomingFrame, OutgoingBody, OutgoingFrame};
+diff --git a/kimojio-http1/src/receive_lane.rs b/kimojio-http1/src/receive_lane.rs
+new file mode 100644
+index 0000000000..170913e01c
+--- /dev/null
++++ b/kimojio-http1/src/receive_lane.rs
+@@ -0,0 +1,93 @@
++//! PoC: keep a receive future (and its runtime wait registration) across
++//! unrelated driver inputs. One boxed stream per lane, not per message.
++use std::{rc::Rc, task::{Context, Poll}};
++use futures::{StreamExt, stream::LocalBoxStream};
++use kimojio::{ChannelError, Receiver, CancellationToken};
++
++pub(crate) struct CancelLane {
++    token: Rc<CancellationToken>,
++    wait: Option<futures::future::LocalBoxFuture<'static, Result<(), kimojio::CanceledError>>>,
++}
++impl CancelLane {
++    pub(crate) fn new(token: Rc<CancellationToken>) -> Self { Self { token, wait: None } }
++    pub(crate) fn poll(&mut self, cx: &mut Context<'_>) -> Poll<()> {
++        let wait = self.wait.get_or_insert_with(|| {
++            let token = self.token.clone();
++            Box::pin(async move { token.cancelled().await })
++        });
++        let result = wait.as_mut().poll(cx);
++        if result.is_ready() { self.wait = None; }
++        result.map(|_| ())
++    }
++}
++
++pub(crate) struct ReceiveLane<T> {
++    receiver: Rc<Receiver<T>>,
++    stream: LocalBoxStream<'static, Result<T, ChannelError>>,
++    waiting: bool,
++}
++impl<T: 'static> ReceiveLane<T> {
++    pub(crate) fn new(receiver: Receiver<T>) -> Self {
++        let receiver = Rc::new(receiver);
++        let stream = futures::stream::unfold(receiver.clone(), |receiver| async {
++            let value = receiver.recv().await;
++            Some((value, receiver))
++        }).boxed_local();
++        Self { receiver, stream, waiting: false }
++    }
++    pub(crate) fn try_recv(&self) -> Result<Option<T>, ChannelError> {
++        self.receiver.try_recv()
++    }
++    pub(crate) fn poll(&mut self, cx: &mut Context<'_>, runnable: bool) -> Poll<Result<T, ChannelError>> {
++        if runnable && !self.waiting {
++            return match self.receiver.try_recv() {
++                Ok(Some(item)) => Poll::Ready(Ok(item)),
++                Ok(None) => Poll::Pending,
++                Err(error) => Poll::Ready(Err(error)),
++            };
++        }
++        let result = self.stream.as_mut().poll_next(cx).map(|item| item.expect("unending receive lane"));
++        self.waiting = result.is_pending();
++        result
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn runnable_empty_lane_does_not_register_a_runtime_wait() {
++        let (send, receive) = kimojio::async_channel();
++        let mut lane = ReceiveLane::new(receive);
++        let mut cx = Context::from_waker(std::task::Waker::noop());
++        assert!(lane.poll(&mut cx, true).is_pending());
++        send.try_send(7).unwrap();
++        assert_eq!(lane.poll(&mut cx, true), Poll::Ready(Ok(7)));
++    }
++    #[kimojio::test]
++    async fn pending_lane_survives_other_inputs_wakes_and_channel_close() {
++        let (send, receive) = kimojio::async_channel();
++        let mut lane = ReceiveLane::new(receive);
++        for value in 0..32 {
++            for _ in 0..3 {
++                assert!(futures::future::poll_fn(|cx| Poll::Ready(lane.poll(cx, false))).await.is_pending());
++            }
++            send.try_send(value).unwrap();
++            assert_eq!(futures::future::poll_fn(|cx| lane.poll(cx, true)).await, Ok(value));
++        }
++        drop(send);
++        assert_eq!(futures::future::poll_fn(|cx| lane.poll(cx, false)).await, Err(ChannelError::Closed));
++    }
++    #[kimojio::test]
++    async fn canceled_scope_is_observed_then_a_new_receive_has_no_old_membership() {
++        let (send, receive) = kimojio::async_channel();
++        let mut lane = ReceiveLane::new(receive);
++        kimojio::operations::io_scope(async || {
++            assert!(futures::future::poll_fn(|cx| Poll::Ready(lane.poll(cx, false))).await.is_pending());
++            kimojio::operations::io_scope_cancel();
++            assert!(futures::future::poll_fn(|cx| lane.poll(cx, false)).await.is_err());
++        }).await;
++        send.try_send(7).unwrap();
++        assert_eq!(futures::future::poll_fn(|cx| lane.poll(cx, false)).await, Ok(7));
++    }
++}
+diff --git a/kimojio-http1/src/timer.rs b/kimojio-http1/src/timer.rs
+new file mode 100644
+index 0000000000..b0451119f9
+--- /dev/null
++++ b/kimojio-http1/src/timer.rs
+@@ -0,0 +1,146 @@
++//! One logical deadline and at most one physical wake per connection.
++//!
++//! A wake earlier than the logical deadline is harmless: recheck and arm the
++//! current deadline when it fires. Replacing it on every progress notification
++//! would cancel and recreate kernel timers unnecessarily. Never retain a wake
++//! later than the logical deadline, and never expose an early wake as expiry.
++
++use kimojio::{Errno, operations};
++use std::{
++    future::Future,
++    pin::Pin,
++    task::{Context, Poll},
++    time::Instant,
++};
++
++#[derive(Default)]
++pub(crate) struct DeadlineTimer {
++    desired: Option<Instant>,
++    armed: Option<(Instant, operations::SleepFuture<'static>)>,
++}
++
++impl DeadlineTimer {
++    pub(crate) fn set(&mut self, desired: Option<Instant>) {
++        self.desired = desired;
++        if desired.is_none()
++            || self
++                .armed
++                .as_ref()
++                .is_some_and(|(at, _)| Some(*at) > desired)
++        {
++            self.armed = None;
++        }
++        // Allocate only when the driver actually polls the timer lane.
++    }
++
++    pub(crate) fn poll(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Errno>> {
++        let Some(desired) = self.desired else {
++            return Poll::Pending;
++        };
++        loop {
++            let (at, timer) = self
++                .armed
++                .get_or_insert_with(|| (desired, operations::sleep_until(desired)));
++            let at = *at;
++            let result = std::task::ready!(Pin::new(timer).poll(cx));
++            self.armed = None;
++            match result {
++                Ok(()) if at < desired => continue,
++                result => return Poll::Ready(result),
++            }
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::time::Duration;
++
++    #[kimojio::test]
++    async fn dormant_timer_does_not_create_a_native_future_and_can_move() {
++        let mut timer = DeadlineTimer::default();
++        timer.set(Some(kimojio::clock_now() + Duration::from_secs(60)));
++        assert!(timer.armed.is_none());
++        assert!(
++            futures::future::poll_fn(|cx| Poll::Ready(timer.poll(cx)))
++                .await
++                .is_pending()
++        );
++        let mut moved = std::hint::black_box(timer);
++        moved.set(Some(kimojio::clock_now()));
++        futures::future::poll_fn(|cx| moved.poll(cx)).await.unwrap();
++        assert!(moved.armed.is_none());
++        moved.set(None);
++        assert!(
++            futures::future::poll_fn(|cx| Poll::Ready(moved.poll(cx)))
++                .await
++                .is_pending()
++        );
++    }
++
++    #[cfg(feature = "virtual-clock")]
++    #[kimojio::test]
++    async fn postponed_deadlines_reuse_one_wake_but_earlier_deadlines_replace_it() {
++        operations::virtual_clock_enable(true);
++        let epoch = kimojio::clock_now();
++        let mut timer = DeadlineTimer::default();
++        let poll = |timer: &mut DeadlineTimer| {
++            timer.poll(&mut Context::from_waker(std::task::Waker::noop()))
++        };
++        timer.set(Some(epoch + Duration::from_secs(10)));
++        assert!(poll(&mut timer).is_pending());
++        for n in 11..=100 {
++            timer.set(Some(epoch + Duration::from_secs(n)));
++            assert!(poll(&mut timer).is_pending());
++            assert_eq!(
++                operations::virtual_clock_next_deadline(),
++                Some(epoch + Duration::from_secs(10))
++            );
++            assert_eq!(operations::virtual_clock_pending_timers(), 1);
++        }
++        operations::virtual_clock_advance(Duration::from_secs(10));
++        assert!(
++            poll(&mut timer).is_pending(),
++            "virtual sleeps yield once when becoming ready"
++        );
++        assert!(poll(&mut timer).is_pending(), "obsolete early wake is not expiration");
++        assert_eq!(
++            operations::virtual_clock_next_deadline(),
++            Some(epoch + Duration::from_secs(100))
++        );
++        timer.set(Some(epoch + Duration::from_secs(20)));
++        assert!(poll(&mut timer).is_pending());
++        assert_eq!(operations::virtual_clock_pending_timers(), 1);
++        assert_eq!(
++            operations::virtual_clock_next_deadline(),
++            Some(epoch + Duration::from_secs(20))
++        );
++        operations::virtual_clock_advance(Duration::from_secs(10));
++        assert!(poll(&mut timer).is_pending());
++        assert_eq!(poll(&mut timer), Poll::Ready(Ok(())));
++        timer.set(None);
++        assert!(poll(&mut timer).is_pending());
++        assert_eq!(operations::virtual_clock_pending_timers(), 0);
++    }
++
++    #[cfg(feature = "virtual-clock")]
++    #[kimojio::test]
++    async fn clearing_or_replacing_a_fired_wake_never_expires_a_new_deadline() {
++        operations::virtual_clock_enable(true);
++        let now = kimojio::clock_now();
++        let mut timer = DeadlineTimer::default();
++        let poll = |timer: &mut DeadlineTimer| {
++            timer.poll(&mut Context::from_waker(std::task::Waker::noop()))
++        };
++        timer.set(Some(now + Duration::from_secs(1)));
++        assert!(poll(&mut timer).is_pending());
++        operations::virtual_clock_advance(Duration::from_secs(2));
++        timer.set(None);
++        timer.set(Some(now + Duration::from_secs(3)));
++        assert!(poll(&mut timer).is_pending());
++        operations::virtual_clock_advance(Duration::from_secs(1));
++        assert!(poll(&mut timer).is_pending());
++        assert_eq!(poll(&mut timer), Poll::Ready(Ok(())));
++    }
++}

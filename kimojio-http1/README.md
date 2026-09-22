@@ -193,14 +193,22 @@ Neither interface grants permission to issue protocol commands.
 
 ## Bodies and metadata
 
-`OutgoingBody` supports four sources:
+`OutgoingBody` supports these sources:
 
 - `empty()` supplies no body.
 - `full(bytes)` owns a complete, fixed-length body.
+- `shared(Rc<[u8]>)` retains a complete immutable fixed-length body without copying it.
+- `from_shared_stream(length, stream)` polls bounded immutable `Rc<[u8]>` frames.
 - `from_stream(length, stream)` polls a fallible source directly.
 - `from_incoming(body)` forwards data leases and trailers with streaming framing.
 
-`empty` and `full` retain their state directly instead of boxing a body stream.
+`empty`, `full`, and `shared` retain their state directly instead of boxing a body stream.
+A shared frame's entire allocation length must fit the buffer limit; no small
+view can hide a larger retained allocation. Pending writes keep a strong owner
+through original completion and body receipt, even if the source ends or is
+canceled. `from_shared_stream` does not emit trailers; use `from_stream` for
+trailers or incoming-lease forwarding. No new variant was added to the public
+`OutgoingFrame` enum.
 By default, it preserves separate metadata and payload writes through the normal demand path.
 `Config::coalesce_full_bodies` defaults to `false` for both client and server connections.
 When this option is `true`, the wrapper asks the core to attach eligible full payloads through `send_body_eager`.
@@ -339,7 +347,12 @@ The wrapper rejects an oversized data frame after the source returns it.
 It cannot prevent the source itself from allocating excessive memory.
 
 Input selection rotates between ready work sources.
-On runnable turns, channel and cancellation probes do not register temporary waits.
+On runnable turns, fresh channel and cancellation probes avoid temporary waits.
+Body-release and demand lanes retain their pending receive futures across unrelated
+inputs, and cancellation waits live with their connection or active exchange.
+An already-registered wait is still polled to observe scope cancellation, even on
+a runnable turn. Retired waits release their scope memberships; cancellation
+schedules another pass so queued data or a replacement wait cannot be stranded.
 Native slots still poll the original I/O futures directly.
 Before suspension, ordinary channel and cancellation futures register wake sources.
 
@@ -349,7 +362,12 @@ If the core rejects a late data frame after revocation, the wrapper drops its un
 The wrapper preserves the response and all previously admitted transport operations.
 Each turn has a configurable progress budget.
 The driver uses `kimojio::clock_now()` and `operations::sleep_until`.
-It retains one timer for the current core deadline across unrelated events.
+The authoritative core deadline remains separate from its physical wake.
+A physical timer is created only when polled. Progress that postpones a deadline
+can reuse an earlier wake; that wake rechecks the latest deadline rather than
+expiring an obsolete generation. Earlier deadlines replace later wakes, and
+clearing the deadline retires its timer. Core deadline notifications still yield
+to the driver so already-due deadlines are applied before further I/O.
 It records current time before each command or completion.
 The `virtual-clock` feature preserves the runtime's virtual time domain.
 
@@ -362,6 +380,9 @@ The generic `OwnedFdStream` also copies received bytes through its own 16-KiB bu
 The explicit native backend omits that buffer and copy.
 These costs belong in adapter measurements, separate from core measurements.
 The [wrapper assessment](../docs/http1-wrapper-lab/REPORT.md) records measured costs, independent peer results, and remaining limits.
+The [architecture follow-up](../docs/http1-wrapper-design/README.md) contains the
+new timer/wait/shared-body experiments, rejected PoCs, paired results, and proposals
+for future FSM and runtime interfaces.
 
 ## Runnable examples
 

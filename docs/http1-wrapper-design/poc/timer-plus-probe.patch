@@ -1,0 +1,317 @@
+diff --git a/kimojio-http1/src/driver.rs b/kimojio-http1/src/driver.rs
+index ac3916670a..129edc73cf 100644
+--- a/kimojio-http1/src/driver.rs
++++ b/kimojio-http1/src/driver.rs
+@@ -652,7 +652,7 @@
+     pending_write: Option<core::OperationId>,
+     pending_close: Option<core::CloseOp>,
+     deadline: Option<core::Deadline>,
+-    timer: Option<operations::SleepFuture<'static>>,
++    timer: crate::timer::DeadlineTimer,
+     epoch: Instant,
+     shutdown: Shutdown,
+     shutdown_progress: ShutdownProgress,
+@@ -710,7 +710,7 @@
+             pending_write: None,
+             pending_close: None,
+             deadline: None,
+-            timer: None,
++            timer: crate::timer::DeadlineTimer::default(),
+             epoch: kimojio::clock_now(),
+             shutdown,
+             shutdown_progress: ShutdownProgress::Running,
+@@ -750,7 +750,7 @@
+             && deadline.at <= now
+         {
+             self.deadline.take();
+-            self.timer.take();
++            self.timer.set(None);
+             let result = match &mut self.machine {
+                 Machine::Client(inner) => inner.expire(deadline, now),
+                 Machine::Server(inner) => inner.expire(deadline, now),
+@@ -1190,16 +1190,16 @@
+             }
+             Event::Deadline(deadline) => {
+                 if self.deadline != deadline {
+-                    self.timer = match deadline {
++                    self.timer.set(match deadline {
+                         Some(deadline) => {
+                             let at = self
+                                 .epoch
+                                 .checked_add(Duration::from_nanos(deadline.at.0))
+                                 .ok_or(Error::Limit)?;
+-                            Some(operations::sleep_until(at))
++                            Some(at)
+                         }
+                         None => None,
+-                    };
++                    });
+                     self.deadline = deadline;
+                 }
+             }
+@@ -1395,44 +1395,45 @@
+     );
+     futures::future::poll_fn(|cx| {
+         const LANES: usize = 10 + cfg!(feature = "metrics") as usize;
++        // PoC: poll custom/native futures once, but defer channel/cancellation
++        // registrations until a complete rotated ready-only pass found no input.
++        for register in [false, true] {
+         for offset in 0..LANES {
+             let index = (state.rotation + offset) % LANES;
++            if register && matches!(index, 0 | 1 | 4 | 5 | 8) { continue; }
+             let ready = match index {
+                 0 => read.as_mut().poll(cx).map(|r| Some(Input::Read(r))),
+                 1 => write.as_mut().poll(cx).map(|r| Some(Input::Write(r))),
+-                2 => poll_receive(&state.released, release.as_mut(), cx, runnable)
++                2 => poll_receive(&state.released, release.as_mut(), cx, runnable || !register)
+                     .map(|r| r.ok().map(Input::Release)),
+                 3 if !state.server
+                     && state.active.is_none()
+                     && state.shutdown_progress == ShutdownProgress::Running =>
+                 {
+-                    poll_receive(requests, request.as_mut(), cx, runnable)
++                    poll_receive(requests, request.as_mut(), cx, runnable || !register)
+                         .map(|r| Some(Input::Request(r)))
+                 }
+                 // Drain notifications that can revoke previously advertised capacity.
+                 4 if !runnable => poll_source(&mut state.active, cx),
+                 5 => poll_handler(&mut state.active, cx),
+                 6 if state.shutdown_progress == ShutdownProgress::Running
+-                    && (!runnable || state.shutdown.graceful.is_cancelled()) =>
++                    && ((!runnable && register) || state.shutdown.graceful.is_cancelled()) =>
+                 {
+                     graceful.as_mut().poll(cx).map(|_| Some(Input::Wake))
+                 }
+                 7 if state.shutdown_progress != ShutdownProgress::Aborting
+-                    && (!runnable || state.shutdown.abort.is_cancelled()) =>
++                    && ((!runnable && register) || state.shutdown.abort.is_cancelled()) =>
+                 {
+                     abort.as_mut().poll(cx).map(|_| Some(Input::Wake))
+                 }
+-                8 => match state.timer.as_mut().map(|timer| Pin::new(timer).poll(cx)) {
+-                    Some(Poll::Ready(result)) => {
+-                        state.timer.take();
+-                        Poll::Ready(Some(Input::Timer(result)))
+-                    }
+-                    _ => Poll::Pending,
+-                },
+-                9 => poll_receive(&state.demands.0, demand.as_mut(), cx, runnable)
++                8 => state
++                    .timer
++                    .poll(cx)
++                    .map(|result| Some(Input::Timer(result))),
++                9 => poll_receive(&state.demands.0, demand.as_mut(), cx, runnable || !register)
+                     .map(|r| r.ok().map(Input::Demand)),
+                 #[cfg(feature = "metrics")]
+-                10 => snapshot
++                10 if !register => snapshot
+                     .as_mut()
+                     .poll(cx)
+                     .map(|reply| Some(Input::Snapshot(reply))),
+@@ -1445,11 +1446,13 @@
+         }
+         if let Some(active) = &state.active
+             && !active.cancellation_applied
+-            && (!runnable || active.cancel.is_cancelled())
++            && ((!runnable && register) || active.cancel.is_cancelled())
+             && cancelled.as_mut().poll(cx).is_ready()
+         {
+             return Poll::Ready(Some(Input::Wake));
+         }
++        if runnable { break; }
++        }
+         if runnable {
+             Poll::Ready(None)
+         } else {
+@@ -1513,14 +1516,20 @@
+             Shutdown::default(),
+         )
+         .unwrap();
+-        state.timer = Some(operations::sleep_until(
+-            kimojio::clock_now() + Duration::from_secs(60),
+-        ));
+-        assert!(futures::poll!(state.timer.as_mut().unwrap()).is_pending());
++        state
++            .timer
++            .set(Some(kimojio::clock_now() + Duration::from_secs(60)));
++        assert!(
++            futures::future::poll_fn(|cx| Poll::Ready(state.timer.poll(cx)))
++                .await
++                .is_pending()
++        );
+         let mut moved = std::hint::black_box(state);
+-        moved.timer = Some(operations::sleep_until(kimojio::clock_now()));
+-        moved.timer.take().unwrap().await.unwrap();
+-        assert!(moved.timer.is_none());
++        moved.timer.set(Some(kimojio::clock_now()));
++        futures::future::poll_fn(|cx| moved.timer.poll(cx))
++            .await
++            .unwrap();
++        moved.timer.set(None);
+     }
+ 
+     #[kimojio::test]
+diff --git a/kimojio-http1/src/lib.rs b/kimojio-http1/src/lib.rs
+index 5cc745d297..9e42b0b802 100644
+--- a/kimojio-http1/src/lib.rs
++++ b/kimojio-http1/src/lib.rs
+@@ -9,6 +9,7 @@
+ mod io_driver;
+ mod metadata;
+ mod observation;
++mod timer;
+ mod transport;
+ 
+ pub use body::{BodyChunk, IncomingBody, IncomingFrame, OutgoingBody, OutgoingFrame};
+diff --git a/kimojio-http1/src/timer.rs b/kimojio-http1/src/timer.rs
+new file mode 100644
+index 0000000000..b0451119f9
+--- /dev/null
++++ b/kimojio-http1/src/timer.rs
+@@ -0,0 +1,146 @@
++//! One logical deadline and at most one physical wake per connection.
++//!
++//! A wake earlier than the logical deadline is harmless: recheck and arm the
++//! current deadline when it fires. Replacing it on every progress notification
++//! would cancel and recreate kernel timers unnecessarily. Never retain a wake
++//! later than the logical deadline, and never expose an early wake as expiry.
++
++use kimojio::{Errno, operations};
++use std::{
++    future::Future,
++    pin::Pin,
++    task::{Context, Poll},
++    time::Instant,
++};
++
++#[derive(Default)]
++pub(crate) struct DeadlineTimer {
++    desired: Option<Instant>,
++    armed: Option<(Instant, operations::SleepFuture<'static>)>,
++}
++
++impl DeadlineTimer {
++    pub(crate) fn set(&mut self, desired: Option<Instant>) {
++        self.desired = desired;
++        if desired.is_none()
++            || self
++                .armed
++                .as_ref()
++                .is_some_and(|(at, _)| Some(*at) > desired)
++        {
++            self.armed = None;
++        }
++        // Allocate only when the driver actually polls the timer lane.
++    }
++
++    pub(crate) fn poll(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Errno>> {
++        let Some(desired) = self.desired else {
++            return Poll::Pending;
++        };
++        loop {
++            let (at, timer) = self
++                .armed
++                .get_or_insert_with(|| (desired, operations::sleep_until(desired)));
++            let at = *at;
++            let result = std::task::ready!(Pin::new(timer).poll(cx));
++            self.armed = None;
++            match result {
++                Ok(()) if at < desired => continue,
++                result => return Poll::Ready(result),
++            }
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::time::Duration;
++
++    #[kimojio::test]
++    async fn dormant_timer_does_not_create_a_native_future_and_can_move() {
++        let mut timer = DeadlineTimer::default();
++        timer.set(Some(kimojio::clock_now() + Duration::from_secs(60)));
++        assert!(timer.armed.is_none());
++        assert!(
++            futures::future::poll_fn(|cx| Poll::Ready(timer.poll(cx)))
++                .await
++                .is_pending()
++        );
++        let mut moved = std::hint::black_box(timer);
++        moved.set(Some(kimojio::clock_now()));
++        futures::future::poll_fn(|cx| moved.poll(cx)).await.unwrap();
++        assert!(moved.armed.is_none());
++        moved.set(None);
++        assert!(
++            futures::future::poll_fn(|cx| Poll::Ready(moved.poll(cx)))
++                .await
++                .is_pending()
++        );
++    }
++
++    #[cfg(feature = "virtual-clock")]
++    #[kimojio::test]
++    async fn postponed_deadlines_reuse_one_wake_but_earlier_deadlines_replace_it() {
++        operations::virtual_clock_enable(true);
++        let epoch = kimojio::clock_now();
++        let mut timer = DeadlineTimer::default();
++        let poll = |timer: &mut DeadlineTimer| {
++            timer.poll(&mut Context::from_waker(std::task::Waker::noop()))
++        };
++        timer.set(Some(epoch + Duration::from_secs(10)));
++        assert!(poll(&mut timer).is_pending());
++        for n in 11..=100 {
++            timer.set(Some(epoch + Duration::from_secs(n)));
++            assert!(poll(&mut timer).is_pending());
++            assert_eq!(
++                operations::virtual_clock_next_deadline(),
++                Some(epoch + Duration::from_secs(10))
++            );
++            assert_eq!(operations::virtual_clock_pending_timers(), 1);
++        }
++        operations::virtual_clock_advance(Duration::from_secs(10));
++        assert!(
++            poll(&mut timer).is_pending(),
++            "virtual sleeps yield once when becoming ready"
++        );
++        assert!(poll(&mut timer).is_pending(), "obsolete early wake is not expiration");
++        assert_eq!(
++            operations::virtual_clock_next_deadline(),
++            Some(epoch + Duration::from_secs(100))
++        );
++        timer.set(Some(epoch + Duration::from_secs(20)));
++        assert!(poll(&mut timer).is_pending());
++        assert_eq!(operations::virtual_clock_pending_timers(), 1);
++        assert_eq!(
++            operations::virtual_clock_next_deadline(),
++            Some(epoch + Duration::from_secs(20))
++        );
++        operations::virtual_clock_advance(Duration::from_secs(10));
++        assert!(poll(&mut timer).is_pending());
++        assert_eq!(poll(&mut timer), Poll::Ready(Ok(())));
++        timer.set(None);
++        assert!(poll(&mut timer).is_pending());
++        assert_eq!(operations::virtual_clock_pending_timers(), 0);
++    }
++
++    #[cfg(feature = "virtual-clock")]
++    #[kimojio::test]
++    async fn clearing_or_replacing_a_fired_wake_never_expires_a_new_deadline() {
++        operations::virtual_clock_enable(true);
++        let now = kimojio::clock_now();
++        let mut timer = DeadlineTimer::default();
++        let poll = |timer: &mut DeadlineTimer| {
++            timer.poll(&mut Context::from_waker(std::task::Waker::noop()))
++        };
++        timer.set(Some(now + Duration::from_secs(1)));
++        assert!(poll(&mut timer).is_pending());
++        operations::virtual_clock_advance(Duration::from_secs(2));
++        timer.set(None);
++        timer.set(Some(now + Duration::from_secs(3)));
++        assert!(poll(&mut timer).is_pending());
++        operations::virtual_clock_advance(Duration::from_secs(1));
++        assert!(poll(&mut timer).is_pending());
++        assert_eq!(poll(&mut timer), Poll::Ready(Ok(())));
++    }
++}
