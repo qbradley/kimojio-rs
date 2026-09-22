@@ -136,6 +136,90 @@ fn response_head_sizes_cover_suppression_and_generated_connection_fields() {
 }
 
 #[test]
+fn specialized_numbers_match_standard_formatting_at_digit_boundaries() {
+    let mut values = vec![0, 1, u64::MAX];
+    let mut power = 10u64;
+    loop {
+        values.extend([power - 1, power, power + 1]);
+        let Some(next) = power.checked_mul(10) else {
+            break;
+        };
+        power = next;
+    }
+    for value in values {
+        let expected = value.to_string();
+        let mut out = HeadWriter::new(expected.len());
+        out.decimal(value).unwrap();
+        assert_eq!(out.bytes, expected.as_bytes());
+        assert_eq!(
+            HeadWriter::new(expected.len() - 1).decimal(value),
+            Err(CommandError::Limit)
+        );
+    }
+    let mut values = vec![0, 1, usize::MAX];
+    for shift in (4..usize::BITS).step_by(4) {
+        let power = 1usize << shift;
+        values.extend([power - 1, power, power + 1]);
+    }
+    for value in values {
+        let mut prefix = [0xa5; 24];
+        let len = encode_chunk_size(value, &mut prefix);
+        assert_eq!(&prefix[..len], format!("{value:x}\r\n").as_bytes());
+        assert!(prefix[len..].iter().all(|byte| *byte == 0xa5));
+    }
+}
+
+#[test]
+fn status_and_start_lines_have_exact_wire_bytes() {
+    for version in [Version::Http10, Version::Http11] {
+        let version_text = super::version(version);
+        for status in 100..=599 {
+            let response = Response {
+                head: ResponseHead {
+                    version,
+                    status,
+                    reason: "Reason\twith space",
+                    headers: &[],
+                },
+                body: BodyLength::Empty,
+            };
+            let (bytes, _) =
+                encode_response(response, false, false, false, &Config::default()).unwrap();
+            assert!(
+                bytes.starts_with(
+                    format!("{version_text} {status} Reason\twith space\r\n").as_bytes()
+                )
+            );
+        }
+        let headers = [Header {
+            name: "host",
+            value: b"example",
+        }];
+        let request = Request {
+            head: RequestHead {
+                method: "POST",
+                target: "/a?b=c",
+                version,
+                headers: &headers,
+            },
+            body: BodyLength::Known(1234567890),
+            expect_continue: true,
+        };
+        let (bytes, _) = encode_request(
+            request,
+            &Config {
+                max_body_bytes: u64::MAX,
+                ..Config::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(bytes, format!(
+            "POST /a?b=c {version_text}\r\nhost: example\r\ncontent-length: 1234567890\r\nexpect: 100-continue\r\n\r\n"
+        ).as_bytes());
+    }
+}
+
+#[test]
 fn head_size_arithmetic_rejects_overflow_before_allocation() {
     assert_eq!(
         head_length(usize::MAX, &[usize::MAX, 1]),

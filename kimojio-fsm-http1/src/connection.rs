@@ -5,7 +5,6 @@ use crate::state::{
     Notification, ReceiveStorage, TimerPhase, Timers, Transmit, Upgrade,
 };
 use crate::*;
-use std::io::Write;
 use std::mem::MaybeUninit;
 
 #[path = "coordinator.rs"]

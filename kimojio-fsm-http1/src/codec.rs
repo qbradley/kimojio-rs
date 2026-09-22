@@ -1,5 +1,4 @@
 use crate::*;
-use std::io::{self, Write};
 
 #[cfg(test)]
 #[path = "codec_tests.rs"]
@@ -175,33 +174,61 @@ impl HeadWriter {
             limit,
         }
     }
-}
 
-impl Write for HeadWriter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+    fn append(&mut self, bytes: &[u8]) -> Result<(), CommandError> {
         let len = self
             .bytes
             .len()
             .checked_add(bytes.len())
             .filter(|n| *n <= self.limit)
-            .ok_or_else(|| io::Error::from(io::ErrorKind::OutOfMemory))?;
+            .ok_or(CommandError::Limit)?;
         if len > self.bytes.capacity() {
             let capacity = len.saturating_mul(2).min(self.limit);
             self.bytes.reserve_exact(capacity - self.bytes.len());
         }
         self.bytes.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
+
+    fn decimal(&mut self, mut value: u64) -> Result<(), CommandError> {
+        // A u64 needs at most 20 decimal digits, including zero.
+        let mut digits = [0; 20];
+        let mut start = digits.len();
+        loop {
+            start -= 1;
+            digits[start] = b'0' + (value % 10) as u8;
+            value /= 10;
+            if value == 0 {
+                break;
+            }
+        }
+        self.append(&digits[start..])
+    }
+}
+
+/// Encode the chunk prefix in the operation's existing inline storage.
+/// The payload and trailing CRLF remain separate scatter/gather slices.
+pub(crate) fn encode_chunk_size(mut size: usize, prefix: &mut [u8; 24]) -> usize {
+    let digits = (size.max(1).ilog2() / 4 + 1) as usize;
+    let mut at = digits;
+    loop {
+        at -= 1;
+        prefix[at] = b"0123456789abcdef"[size & 15];
+        size >>= 4;
+        if at == 0 {
+            break;
+        }
+    }
+    prefix[digits..digits + 2].copy_from_slice(b"\r\n");
+    digits + 2
 }
 
 fn append_headers(out: &mut HeadWriter, headers: Headers<'_>) -> Result<(), CommandError> {
     for h in headers {
-        write!(out, "{}: ", h.name).map_err(|_| CommandError::Limit)?;
-        out.write_all(h.value).map_err(|_| CommandError::Limit)?;
-        out.write_all(b"\r\n").map_err(|_| CommandError::Limit)?;
+        out.append(h.name.as_bytes())?;
+        out.append(b": ")?;
+        out.append(h.value)?;
+        out.append(b"\r\n")?;
     }
     Ok(())
 }
@@ -212,12 +239,15 @@ fn append_framing(
     framing: Framing,
 ) -> Result<(), CommandError> {
     match (body, framing) {
-        (_, Framing::Chunked) => out.write_all(b"transfer-encoding: chunked\r\n"),
-        (BodyLength::Known(n), _) => write!(out, "content-length: {n}\r\n"),
-        (BodyLength::Empty, _) => out.write_all(b"content-length: 0\r\n"),
+        (_, Framing::Chunked) => out.append(b"transfer-encoding: chunked\r\n"),
+        (BodyLength::Known(n), _) => {
+            out.append(b"content-length: ")?;
+            out.decimal(n)?;
+            out.append(b"\r\n")
+        }
+        (BodyLength::Empty, _) => out.append(b"content-length: 0\r\n"),
         _ => Ok(()),
     }
-    .map_err(|_| CommandError::Limit)
 }
 
 fn framing_length(body: BodyLength, framing: Framing) -> usize {
@@ -285,21 +315,18 @@ pub(crate) fn encode_request(
         ],
     )?;
     let mut out = HeadWriter::with_capacity(config.max_head_bytes, length);
-    write!(
-        out,
-        "{} {} {}\r\n",
-        request.head.method,
-        request.head.target,
-        version(request.head.version)
-    )
-    .map_err(|_| CommandError::Limit)?;
+    out.append(request.head.method.as_bytes())?;
+    out.append(b" ")?;
+    out.append(request.head.target.as_bytes())?;
+    out.append(b" ")?;
+    out.append(version(request.head.version).as_bytes())?;
+    out.append(b"\r\n")?;
     append_headers(&mut out, request.head.headers)?;
     append_framing(&mut out, request.body, framing)?;
     if expect {
-        out.write_all(b"expect: 100-continue\r\n")
-            .map_err(|_| CommandError::Limit)?;
+        out.append(b"expect: 100-continue\r\n")?;
     }
-    out.write_all(b"\r\n").map_err(|_| CommandError::Limit)?;
+    out.append(b"\r\n")?;
     debug_assert_eq!(out.bytes.len(), length);
     Ok((out.bytes, framing))
 }
@@ -377,22 +404,23 @@ pub(crate) fn encode_response(
         ],
     )?;
     let mut out = HeadWriter::with_capacity(config.max_head_bytes, length);
-    write!(
-        out,
-        "{} {} {}\r\n",
-        version(response.head.version),
-        response.head.status,
-        response.head.reason
-    )
-    .map_err(|_| CommandError::Limit)?;
+    out.append(version(response.head.version).as_bytes())?;
+    let status = response.head.status;
+    out.append(&[
+        b' ',
+        b'0' + (status / 100) as u8,
+        b'0' + (status / 10 % 10) as u8,
+        b'0' + (status % 10) as u8,
+        b' ',
+    ])?;
+    out.append(response.head.reason.as_bytes())?;
+    out.append(b"\r\n")?;
     append_headers(&mut out, response.head.headers)?;
     if !body_forbidden {
         append_framing(&mut out, response.body, framing)?;
     }
-    if !connection.is_empty() {
-        out.write_all(connection).map_err(|_| CommandError::Limit)?;
-    }
-    out.write_all(b"\r\n").map_err(|_| CommandError::Limit)?;
+    out.append(connection)?;
+    out.append(b"\r\n")?;
     debug_assert_eq!(out.bytes.len(), length);
     Ok((out.bytes, framing))
 }
@@ -623,8 +651,8 @@ pub(crate) fn encode_trailers(
         return Err(CommandError::InvalidHead);
     }
     let mut out = HeadWriter::new(config.max_head_bytes);
-    out.write_all(b"0\r\n").map_err(|_| CommandError::Limit)?;
+    out.append(b"0\r\n")?;
     append_headers(&mut out, headers)?;
-    out.write_all(b"\r\n").map_err(|_| CommandError::Limit)?;
+    out.append(b"\r\n")?;
     Ok(out.bytes)
 }

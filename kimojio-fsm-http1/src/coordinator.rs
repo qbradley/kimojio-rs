@@ -571,9 +571,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         let mut prefix = [0; 24];
         let chunked = self.tx.framing() == Framing::Chunked;
         let prefix_len = if chunked {
-            let mut target = &mut prefix[..];
-            write!(target, "{:x}\r\n", command.range.len()).unwrap();
-            24 - target.len()
+            codec::encode_chunk_size(command.range.len(), &mut prefix)
         } else {
             0
         };
