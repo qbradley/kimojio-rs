@@ -1,0 +1,257 @@
+INFO: detected rust-toolchain file /workspace/kimojio-rs-2/rust-toolchain.toml - default toolchain will be overridden by 1.98.1
+   Compiling kimojio-fsm-http1 v0.17.0 (/workspace/kimojio-rs-2/kimojio-fsm-http1)
+    Finished `release` profile [optimized] target(s) in 6.04s
+     Running unittests src/lib.rs (target/release/deps/kimojio_fsm_http1-76a571be2ceb0d5a)
+
+running 33 tests
+test benchmark::tests::swap_preserves_operation_identity_and_range ... ok
+test codec::tests::head_size_arithmetic_rejects_overflow_before_allocation ... ok
+test benchmark::tests::wrong_length_is_rejected_before_either_buffer_changes ... ok
+test codec::tests::head_size_preflight_preserves_validation_error_precedence ... ok
+test codec::tests::request_head_sizes_cover_decimal_boundaries_and_generated_expect ... ok
+test codec::tests::specialized_numbers_match_standard_formatting_at_digit_boundaries ... ok
+test codec::tests::status_and_start_lines_have_exact_wire_bytes ... ok
+test connection::coordinator::tests::clean_idle_eof_cancels_the_deadline_before_close_issuance ... ok
+test connection::tests::deadline_selection_pairs_kind_and_generation_across_all_timer_combinations ... ok
+test connection::coordinator::tests::metadata_batches_only_until_a_section_or_deadline_boundary ... ok
+test connection::coordinator::tests::upgrade_callback_none_does_not_hide_pending_deadline_cancellation ... ok
+test connection::tests::generation_exhaustion_uses_reserved_close_without_false_quiescence ... ok
+test connection::coordinator::tests::bulk_metadata_preserves_limit_error_precedence_and_consumed_prefix ... ok
+test connection::coordinator::tests::boundary_policy_preserves_completions_batched_before_drive ... ok
+test connection::tests::rejected_request_never_changes_sequences_timers_or_owned_slots ... ok
+test connection::tests::request_reuses_the_accepted_count_including_generated_fields ... ok
+test connection::tests::head_scratch_obeys_capacity_and_exposes_only_parsed_headers ... ok
+test connection::tests::informational_completion_cannot_settle_queued_final_metadata ... ok
+test observation::tests::counters_saturate_without_wrapping_other_fields ... ok
+test codec::tests::response_head_sizes_cover_suppression_and_generated_connection_fields ... ok
+test operations::eager_layout_tests::eager_variant_does_not_grow_existing_write_storage ... ok
+test state::tests::an_early_response_can_stop_requested_or_already_ended_production ... ok
+test state::tests::cancellation_retains_the_original_operation_until_completion ... ok
+test state::tests::clearing_timers_retains_a_pending_cancellation_notification ... ok
+test state::tests::closing_preserves_outstanding_close_and_emits_one_terminal_notification ... ok
+test connection::coordinator::tests::buffered_response_preempts_both_queued_upload_and_producer_demand ... ok
+test state::tests::receive_storage_has_one_owner_and_does_not_clone_payloads ... ok
+test state::tests::source_completion_does_not_settle_transport ... ok
+test state::tests::upgrade_and_handoff_have_no_close_authority_after_transfer ... ok
+test connection::coordinator::tests::fused_body_write_matches_unfused_successor_and_sequence_exhaustion ... ok
+test connection::coordinator::tests::bulk_metadata_matches_scalar_for_all_short_crlf_sequences ... ok
+test connection::coordinator::tests::bounded_ownership_model_matches_all_completion_orders_and_callback_yields ... ok
+test connection::coordinator::tests::bulk_metadata_matches_scalar_across_long_and_binary_fragments ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+
+     Running tests/application_boundary.rs (target/release/deps/application_boundary-47cdbb3ad8263202)
+
+running 5 tests
+test credit_authorizes_exactly_one_continue_without_header_scanning_by_application ... ok
+test final_response_suppresses_unissued_continue_and_wire_version_is_machine_owned ... ok
+test fully_buffered_or_empty_bodies_never_receive_an_unsolicited_continue ... ok
+test one_final_response_is_accepted_behind_queued_or_inflight_informational_output ... ok
+test unsupported_expectations_are_owned_by_http_and_never_dispatch_to_application ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/benchmark_workloads.rs (target/release/deps/benchmark_workloads-9c51025a6e25a5f5)
+
+running 6 tests
+test driver_handles_fragmented_metadata_and_short_scatter_gather_writes ... ok
+test reusable_sessions_outlive_the_default_request_limit ... ok
+test all_timed_workloads_validate_bytes_and_reuse_the_connection ... ok
+test replay_workloads::replay_preserves_fragmentation_and_can_rebuild_with_a_pending_read ... ok
+test replay_workloads::replay_matches_copy_for_all_timed_workloads_and_callback_modes ... ok
+test replay_workloads::replay_reuses_single_and_multiple_fixture_slots_without_replenishing_bytes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/client_unsolicited.rs (target/release/deps/client_unsolicited-ad47add8c06a843f)
+
+running 2 tests
+test clean_response_boundary_permits_a_subsequently_requested_response ... ok
+test buffered_unsolicited_bytes_disable_reuse_and_cannot_become_a_later_response ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/contract.rs (target/release/deps/contract-61846eb93d5b5962)
+
+running 12 tests
+test abort_does_not_close_before_original_read_settles ... ok
+test bodyless_responses_finish_without_delivery_credit ... ok
+test fixed_response_survives_every_partial_write ... ok
+test client_reads_while_request_write_is_outstanding ... ok
+test impossible_read_count_does_not_settle_the_read ... ok
+test fragmented_request_never_reports_early_success ... ok
+test source_failure_settles_pending_demand_and_closes ... ok
+test unknown_write_progress_is_terminal_and_keeps_acceptance_uncertainty ... ok
+test would_block_waits_once_and_rejects_duplicate_readiness ... ok
+test wrong_owner_completion_returns_live_resource ... ok
+test zero_consumption_withholds_credit_without_blocking_writes ... ok
+test zero_write_is_not_success ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/duplex.rs (target/release/deps/duplex-a9c55c3c7b9d59a0)
+
+running 1 test
+test successful_response_streams_while_request_source_waits_for_response_head ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/duplex_policy.rs (target/release/deps/duplex_policy-958d265de6280b6a)
+
+running 11 tests
+test conservative_response_still_abandons_and_cancels_unread_request ... ok
+test both_completion_orders_preserve_leases_credit_and_pipelined_reuse ... ok
+test duplex_body_timeout_remains_armed_after_final_output_and_held_lease ... ok
+test duplex_abandonment_cancels_original_operations_and_never_reuses ... ok
+test duplex_continue_limit_preserves_conservative_rejection_fallback ... ok
+test duplex_continue_precedes_even_an_empty_final_without_prior_credit ... ok
+test duplex_does_not_override_connection_close_request_limit_or_shutdown ... ok
+test duplex_failure_after_final_output_preserves_body_limits_and_framing_checks ... ok
+test duplex_is_not_an_upgrade_path_and_invalid_selection_does_not_change_default ... ok
+test final_payload_receipt_does_not_release_input_or_change_the_next_response_policy ... ok
+test response_first_preserves_pending_read_and_stale_readiness_is_rejected_after_reuse ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/eager_body.rs (target/release/deps/eager_body-b9e34bc75d8fd3da)
+
+running 9 tests
+test eager_cancellation_before_issuance_returns_one_zero_receipt_without_a_write ... ok
+test eager_cancellation_counts_only_payload_and_preserves_unknown_acceptance ... ok
+test eager_client_preserves_expect_gate_and_upload_timeout_after_head_prefix ... ok
+test eager_cancellation_retains_late_positive_progress_without_reissuing_output ... ok
+test eager_duplex_output_does_not_release_a_separate_incoming_lease ... ok
+test eager_early_response_cancels_original_upload_without_replay ... ok
+test eager_rejection_is_transactional_and_keeps_suppression_and_chunk_framing ... ok
+test eager_upload_timeout_covers_an_outstanding_combined_write_without_head_deadline ... ok
+test eager_scatter_write_survives_every_partial_boundary_and_reuses_connection ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/error_responses.rs (target/release/deps/error_responses-b59996b6505adb6f)
+
+running 6 tests
+test already_started_final_response_never_gets_a_second_final ... ok
+test invalid_chunk_after_inflight_continue_preserves_continue_then_error ... ok
+test mandatory_bad_request_cases_respond_without_eof_or_application_dispatch ... ok
+test malformed_request_gets_one_complete_bounded_error_before_close ... ok
+test ordinary_idle_eof_closes_without_error_response_or_request_callback ... ok
+test unusable_transport_and_insufficient_error_budget_do_not_emit_error_writes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/handoff_terminal.rs (target/release/deps/handoff_terminal-e74f2f4dacd3dd08)
+
+running 5 tests
+test client_shutdown_excludes_handoff_before_and_after_upgrade_notification ... ok
+test graceful_shutdown_before_upgrade_acceptance_preserves_normal_response_path ... ok
+test handshake_timeout_cannot_be_revived_by_late_successful_write_completion ... ok
+test terminal_commands_revoke_ready_handoff_before_close_issue_and_after_close_completion ... ok
+test untouched_delayed_handoff_preserves_exact_bytes_and_excludes_all_later_close_authority ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/large_duplex.rs (target/release/deps/large_duplex-2edd8fcc5bd73577)
+
+running 2 tests
+test fixed_eight_mib_upload_continues_after_early_response_head_and_prefix ... ok
+test chunked_eight_mib_upload_continues_after_early_response_head_and_prefix ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/lifecycle.rs (target/release/deps/lifecycle-76447646d6308054)
+
+running 16 tests
+test buffered_final_response_suppresses_a_queued_unsent_body ... ok
+test canceled_upgrade_cannot_transfer_transport ... ok
+test continue_and_final_in_one_read_do_not_start_an_upload ... ok
+test final_response_can_follow_queued_or_inflight_continue_without_loss ... ok
+test early_final_upload_cross_product_never_reissues_unaccepted_suffix ... ok
+test cancellation_settles_read_and_write_in_both_completion_orders ... ok
+test graceful_shutdown_flushes_body_and_disallows_reuse ... ok
+test head_timeout_is_not_a_continue_fallback_and_stale_time_does_not_advance_clock ... ok
+test idle_head_body_and_continue_deadlines_keep_their_own_policies ... ok
+test invalid_body_finish_and_response_commands_leave_valid_work_intact ... ok
+test late_body_release_after_failure_does_not_revive_exchange ... ok
+test partial_body_release_preserves_tail_and_metadata_order ... ok
+test reused_server_head_deadline_does_not_depend_on_an_idle_timer ... ok
+test server_eof_before_request_body_end_and_transport_reset_fail_explicitly ... ok
+test server_idle_timer_becomes_head_timer_on_first_new_byte ... ok
+test upgrade_waits_for_every_handshake_byte_and_preserves_received_suffix ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/observation.rs (target/release/deps/observation-87ddf7e22b7bc4df)
+
+running 5 tests
+test client_logs_informational_final_and_readiness_boundaries ... ok
+test counters_follow_acceptance_consumption_and_uncertain_write_progress ... ok
+test diagnostics_are_drive_boundaries_not_an_api_attempt_queue ... ok
+test expiry_and_cancellation_count_once_and_originals_still_settle ... ok
+test logs_precede_matching_callbacks_without_adding_yields ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/outbound.rs (target/release/deps/outbound-16a8600e509968ab)
+
+running 4 tests
+test http10_persistence_and_close_delimited_streams_follow_wire_framing ... ok
+test outgoing_head_limits_count_generated_headers_and_reject_before_acceptance ... ok
+test rejected_outgoing_storage_and_aggregate_limits_preserve_demand ... ok
+test chunk_prefix_payload_suffix_and_terminator_survive_all_short_write_sizes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/protocol.rs (target/release/deps/protocol-8bda43a20f3c9886)
+
+running 8 tests
+test aggregate_head_trailer_chunk_and_body_limits ... ok
+test independent_static_fixture_survives_bytewise_chunks_and_pipelining ... ok
+test informational_response_sequences_are_bounded_and_preserve_final_framing ... ok
+test reset_content_accepts_only_empty_framing_at_every_split ... ok
+test historical_request_smuggling_negatives_at_every_split ... ok
+test duplicate_lengths_and_chunk_extensions_are_delimited_exactly ... ok
+test independent_response_corpus_at_every_transport_split ... ok
+test malformed_chunks_and_forbidden_trailers_never_complete ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/shared_output.rs (target/release/deps/shared_output-1cb712b3b4470337)
+
+running 1 test
+test readonly_shared_payload_keeps_its_address_across_partial_writes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/source_lifecycle.rs (target/release/deps/source_lifecycle-1aa91bd5925dfa9c)
+
+running 4 tests
+test eager_source_ends_before_combined_write_but_receipt_waits_for_settlement ... ok
+test suppressed_source_releases_retained_request_body_without_status_policy_in_adapter ... ok
+test producer_failure_finishes_source_before_retirement ... ok
+test source_completion_precedes_pending_body_receipt_and_occurs_once ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/state_composition.rs (target/release/deps/state_composition-d8872dbee51ea62e)
+
+running 4 tests
+test closing_waits_for_both_receive_lease_and_write_receipt_in_either_order ... ok
+test empty_stream_can_end_while_the_continue_gate_is_still_waiting ... ok
+test informational_completion_does_not_abandon_input_before_final_output_settles ... ok
+test repeated_shutdown_preserves_the_original_close_and_single_notification ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kimojio_fsm_http1
+
+running 5 tests
+test kimojio-fsm-http1/src/../README.md - readme (line 193) ... ok
+test kimojio-fsm-http1/src/../README.md - readme (line 154) ... ok
+test kimojio-fsm-http1/src/../README.md - readme (line 21) ... ok
+test kimojio-fsm-http1/src/../README.md - readme (line 495) ... ok
+test kimojio-fsm-http1/src/../README.md - readme (line 460) ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.19s; merged doctests compilation took 0.19s

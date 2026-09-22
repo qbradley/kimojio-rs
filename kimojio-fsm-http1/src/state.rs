@@ -208,6 +208,7 @@ impl IoState {
         }
     }
 
+    #[inline]
     pub(crate) fn issue(&mut self, id: OperationId) {
         assert!(match self {
             Self::Idle => matches!(id.kind(), OperationKind::Read | OperationKind::Write),
@@ -284,7 +285,7 @@ impl Transmit {
     }
 
     pub(crate) fn started(self) -> bool {
-        self != Self::Idle
+        !matches!(self, Self::Idle)
     }
 
     pub(crate) fn settled(self) -> bool {

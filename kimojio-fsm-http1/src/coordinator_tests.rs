@@ -166,6 +166,7 @@ enum Drive {
 struct Observer {
     drive: Drive,
     trace: Vec<String>,
+    logs: Vec<(ConnectionId, Tick, LogEvent)>,
     read: Option<ReadOp<Vec<u8>>>,
     read_ready: Option<ReadinessOp>,
     write: Option<WriteOp<Vec<u8>>>,
@@ -189,6 +190,7 @@ impl Observer {
         Self {
             drive,
             trace: Vec::new(),
+            logs: Vec::new(),
             read: None,
             read_ready: None,
             write: None,
@@ -225,6 +227,9 @@ impl Observer {
 
 impl Ports<Vec<u8>> for Observer {
     type Output = ();
+    fn log(&mut self, connection: ConnectionId, now: Tick, event: LogEvent) {
+        self.logs.push((connection, now, event));
+    }
     fn read(&mut self, op: ReadOp<Vec<u8>>) -> Option<()> {
         assert!(self.read.is_none() && self.read_ready.is_none() && self.body.is_none());
         self.issue(op.id());
@@ -354,7 +359,14 @@ fn drive<const SERVER: bool>(core: &mut Core<Vec<u8>, Vec<u8>, SERVER>, observer
                     visited.len() <= 512,
                     "internal progress exceeded the fixture bound"
                 );
-                core.advance(transition, observer, head);
+                if transition == Transition::PrepareBody {
+                    // Keep the unfused path as the reference for the ownership
+                    // model and its continue/yield/mixed callback trace checks.
+                    core.prepare_body();
+                    assert_eq!(core.next_transition(), Some(Transition::Write));
+                } else {
+                    core.advance(transition, observer, head);
+                }
                 core.assert_invariants();
             }
         }
@@ -443,7 +455,11 @@ fn fixture(input: Input, mode: Drive) -> (Core<Vec<u8>, Vec<u8>, true>, Observer
     (core, observer)
 }
 
-fn replay(input: Input, script: &[Stimulus], mode: Drive) -> Vec<String> {
+fn replay(
+    input: Input,
+    script: &[Stimulus],
+    mode: Drive,
+) -> (Vec<String>, Vec<(ConnectionId, Tick, LogEvent)>) {
     let (mut core, mut observer) = fixture(input, mode);
     let mut model = Model::new(input);
     for &stimulus in script {
@@ -550,7 +566,7 @@ fn replay(input: Input, script: &[Stimulus], mode: Drive) -> Vec<String> {
     assert_eq!(observer.receipts.len(), 1);
     assert_eq!(observer.finished, 1);
     assert!(observer.deadline.is_none());
-    observer.trace
+    (observer.trace, observer.logs)
 }
 
 fn explore(input: Input, model: Model, script: &mut Vec<Stimulus>, count: &mut usize) {
@@ -629,6 +645,62 @@ fn client_fixture(
     let size = op.remaining();
     core.complete_write(op.complete(Ok(size))).unwrap();
     (core, observer)
+}
+
+#[test]
+fn fused_body_write_matches_unfused_successor_and_sequence_exhaustion() {
+    for body in [BodyLength::Known(2), BodyLength::Streaming] {
+        for end in [false, true] {
+            for exhausted in [false, true] {
+                let mut reference = None;
+                for mode in [Drive::Steps, Drive::Continue, Drive::Yield, Drive::Mixed] {
+                    let (mut core, mut observer) = client_fixture(mode, "POST", body);
+                    // Streaming uses the configured capacity, not a fixed remainder.
+                    // Admit the body before driving so this test needs no demand.
+                    core.send_body(SendBody {
+                        exchange: core.exchange.as_ref().unwrap().id,
+                        buffer: b"xy".to_vec(),
+                        range: 0..2,
+                        end,
+                    })
+                    .unwrap();
+                    // Flush notifications using the same callbacks, stopping at
+                    // the internal boundary whose successor we are exercising.
+                    while core.next_transition() != Some(Transition::PrepareBody) {
+                        let step = core.next_transition().expect("body must become writable");
+                        core.advance(step, &mut observer, head);
+                    }
+                    if exhausted {
+                        core.sequence = u64::MAX - 1;
+                    }
+                    // One fused advance must have exactly the same externally
+                    // visible behavior and state as the two unfused advances.
+                    if matches!(mode, Drive::Steps) {
+                        core.prepare_body();
+                        assert_eq!(core.next_transition(), Some(Transition::Write));
+                        core.advance(Transition::Write, &mut observer, head);
+                    } else {
+                        let result = core.advance(Transition::PrepareBody, &mut observer, head);
+                        if matches!(mode, Drive::Yield) && !exhausted {
+                            assert_eq!(result, Some(()));
+                        }
+                    }
+                    core.assert_invariants();
+                    assert_eq!(observer.write.is_some(), !exhausted);
+                    assert_eq!(
+                        core.failure,
+                        exhausted.then_some(Failure::SequenceExhausted)
+                    );
+                    let actual = (format!("{core:?}"), observer.trace, observer.logs);
+                    if let Some(expected) = &reference {
+                        assert_eq!(&actual, expected);
+                    } else {
+                        reference = Some(actual);
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[test]

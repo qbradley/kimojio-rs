@@ -142,7 +142,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
 
     /// Selection is pure. Each lifecycle admits only its own transition vocabulary.
     fn next_transition(&self) -> Option<Transition> {
-        if self.lifecycle == Lifecycle::HandedOff {
+        if matches!(self.lifecycle, Lifecycle::HandedOff) {
             return None;
         }
         if self.timers.notification == Notification::Pending {
@@ -265,7 +265,13 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
     }
 
     fn continue_due(&self) -> bool {
+        // Most requests do not use Expect. Reject that common case before
+        // examining transmit state, credit, input, and I/O readiness.
         SERVER
+            && self
+                .exchange
+                .as_ref()
+                .is_some_and(|exchange| exchange.expect)
             && !self.tx.started()
             && self.credit != 0
             && self.start == self.end
@@ -273,10 +279,6 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             && !matches!(self.rx, Rx::Done | Rx::Paused)
             && self.write.operation().is_none()
             && self.output.is_none()
-            && self
-                .exchange
-                .as_ref()
-                .is_some_and(|exchange| exchange.expect)
     }
 
     fn transmit_transition(&self) -> Option<Transition> {
@@ -467,7 +469,12 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             Transition::Write => self.issue_write(ports),
             Transition::PrepareBody => {
                 self.prepare_body();
-                None
+                // Preparation only moves pending_body into output: no callback,
+                // sequence, timer, or cross-direction policy can intervene. The
+                // selector already honored receipts/source notifications and a
+                // buffered early response. Its guaranteed successor is Write.
+                debug_assert_eq!(self.next_transition(), Some(Transition::Write));
+                self.issue_write(ports)
             }
             Transition::BeginClosing => {
                 self.lifecycle.begin_closing();
@@ -499,14 +506,10 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             }
             Transition::Demand => {
                 self.tx.request_data();
-                self.log(
-                    ports,
-                    LogEvent::SendReady {
-                        exchange: self.exchange.as_ref().unwrap().id,
-                        capacity: self.send_capacity(),
-                    },
-                );
-                ports.send_ready(self.exchange.as_ref().unwrap().id, self.send_capacity())
+                let exchange = self.exchange.as_ref().unwrap().id;
+                let capacity = self.send_capacity();
+                self.log(ports, LogEvent::SendReady { exchange, capacity });
+                ports.send_ready(exchange, capacity)
             }
             Transition::Metadata => self.receive_metadata(ports, head_callback),
             Transition::Body => self.deliver_body(ports),

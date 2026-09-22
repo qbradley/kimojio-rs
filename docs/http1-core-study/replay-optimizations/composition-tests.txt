@@ -1,0 +1,401 @@
+INFO: detected rust-toolchain file /workspace/kimojio-rs-2/rust-toolchain.toml - default toolchain will be overridden by 1.98.1
+   Compiling rustix v1.1.4
+   Compiling linux-raw-sys v0.12.1
+   Compiling kimojio-fsm-http1 v0.17.0 (/workspace/kimojio-rs-2/kimojio-fsm-http1)
+   Compiling kimojio-fsm-http2 v0.17.0 (/workspace/kimojio-rs-2/kimojio-fsm-http2)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.70s
+     Running unittests src/lib.rs (target/debug/deps/kimojio_fsm_http2-061131731040087f)
+
+running 217 tests
+test engine::tests::operation_identifier_exhaustion_uses_reserved_settlement_identities ... ok
+test engine::tests::alarm_bound_reserves_three_cancellations_for_forced_shutdown ... ok
+test error::tests::classifies_representative_error_types ... ok
+test engine::tests::stream_identifier_exhaustion_does_not_wrap_or_reuse ... ok
+test hpack::static_table::tests::hash_is_perfect_for_static_names ... ok
+test hpack::static_table::tests::every_static_entry_has_exact_and_name_index ... ok
+test hpack::static_table::tests::unknown_names_and_values_miss ... ok
+test engine::tests::unexpected_planner_failure_resets_all_stream_layers_before_retirement ... ok
+test engine::tests::small_held_pages_hit_capacity_bound_not_only_payload_bound ... ok
+test hpack::tests::accepts_non_minimal_integer_forms_for_every_prefix_width ... ok
+test hpack::tests::accepts_non_minimal_and_rejects_overflowing_integers ... ok
+test hpack::tests::crossed_limit_incremental_literal_allocates_only_retained_state ... ok
+test hpack::tests::decoded_limit_accounting_overflow_is_a_local_limit_outcome ... ok
+test hpack::tests::chunked_table_preserves_order_across_chunk_boundaries ... ok
+test hpack::tests::decodes_every_representation_and_preserves_never_indexed ... ok
+test hpack::tests::encode_by_visits_each_field_once ... ok
+test hpack::tests::empty_huffman_value_decodes_without_poisoning_or_table_mutation ... ok
+test hpack::tests::empty_blocks_have_exact_zero_raw_effects ... ok
+test hpack::tests::encode_preflight_noop_does_not_fetch_fields_after_planning_failure ... ok
+test hpack::tests::encode_preflight_visitor_shares_the_single_field_fetch ... ok
+test hpack::tests::encode_plan_length_is_exact_inline_and_after_overflow ... ok
+test hpack::tests::encoder_allocation_failures_leave_logical_state_unchanged ... ok
+test hpack::tests::encode_preflight_rejection_precedes_allocation_and_is_retryable ... ok
+test hpack::tests::entry_metadata_fits_hpack_per_entry_overhead ... ok
+test hpack::tests::encoder_revalidates_exact_indexes_after_mutation_and_pending_resize ... ok
+test hpack::tests::encoder_reuses_dynamic_entries_and_preserves_sensitivity ... ok
+test hpack::tests::huffman_is_selected_only_when_shorter ... ok
+test hpack::tests::integer_zero_continuations_cover_platform_maximum_and_truncations ... ok
+test hpack::tests::clear_and_zero_capacity_release_history_storage ... ok
+test hpack::tests::lookup_collision_chains_are_complete_and_equality_safe ... ok
+test hpack::tests::huffman_round_trips_every_octet ... ok
+test hpack::tests::large_noninserting_blocks_do_not_allocate_planned_lookup_overflow ... ok
+test hpack::tests::output_reservation_failure_precedes_dynamic_table_mutation ... ok
+test hpack::tests::output_preflight_covers_worst_case_dynamic_name_index ... ok
+test hpack::tests::oversized_lists_advance_compression_state ... ok
+test hpack::tests::planned_dynamic_lookup_work_is_linear_in_fields ... ok
+test hpack::tests::planned_lookup_arithmetic_overflow_is_reported ... ok
+test hpack::tests::oversized_incremental_field_reuses_dynamic_name_before_clearing ... ok
+test hpack::tests::planned_dynamic_lookup_crosses_inline_overflow_and_eviction_boundaries ... ok
+test hpack::tests::planned_dynamic_name_lookup_crosses_inline_overflow_and_eviction_boundaries ... ok
+test hpack::tests::nibble_huffman_table_matches_each_bitwise_transition ... ok
+test hpack::tests::reduced_decoder_limit_requires_a_leading_minimum_update ... ok
+test hpack::tests::rejects_eos_and_invalid_padding ... ok
+test hpack::tests::planned_dynamic_lookup_ignores_evicted_staged_entries ... ok
+test hpack::tests::rfc_huffman_example ... ok
+test hpack::tests::rfc_integer_examples ... ok
+test hpack::tests::reused_indexed_output_needs_no_decoder_allocation ... ok
+test hpack::tests::planned_eviction_cursor_visits_each_staged_field_once ... ok
+test hpack::tests::reused_static_block_does_not_allocate_insertion_entry_storage ... ok
+test hpack::tests::sensitive_same_block_lookup_prefers_staged_exact_over_newer_name ... ok
+test hpack::tests::small_tables_scan_without_hash_indexes ... ok
+test hpack::tests::planned_dynamic_indexes_preserve_newest_first_offsets ... ok
+test hpack::tests::table_updates_must_lead_and_obey_limit ... ok
+test hpack::tests::table_eviction_removes_lookup_indexes ... ok
+test http::probe::tests::bytewise_preface_waits_for_the_complete_signature ... ok
+test http::probe::tests::rejected_input_leaves_the_prefix_unchanged ... ok
+test hpack::tests::rfc_request_examples_with_huffman ... ok
+test limits::tests::configures_the_http1_request_limit ... ok
+test hpack::tests::sensitive_name_selection_uses_exact_matches_in_required_order ... ok
+test limits::tests::hpack_field_size_includes_entry_overhead ... ok
+test http::probe::tests::every_three_part_preface_preserves_every_byte ... ok
+test limits::tests::parses_content_length_values ... ok
+test server::h2::client::prepared_request_tests::prepared_limit_rejection_is_transactional_and_retryable ... ok
+test server::h2::client::prepared_request_tests::prepared_open_rechecks_fused_facts_against_destination_limits ... ok
+test server::h2::compact_headers::tests::connection_decode_accepts_compact_output_sink ... ok
+test hpack::tests::planned_dynamic_lookup_overflow_grows_across_forced_collisions ... ok
+test hpack::tests::planned_dynamic_lookup_is_equality_safe_under_forced_hash_collisions ... ok
+test server::h2::compact_headers::tests::dynamic_index_views_survive_later_in_block_eviction ... ok
+test server::h2::client::prepared_request_tests::prepared_and_raw_paths_enforce_body_and_header_limits ... ok
+test server::h2::compact_headers::tests::eviction_materialization_failure_precedes_dynamic_table_mutation ... ok
+test server::h2::compact_headers::tests::indexed_get_with_dynamic_field_uses_only_inline_output ... ok
+test server::h2::client::prepared_request_tests::prepared_allocation_failure_is_transactional_and_retryable ... ok
+test server::h2::client::prepared_request_tests::prepared_open_visits_regular_fields_once_across_prepare_and_encode ... ok
+test engine::tests::alarm_replacement_bounds_originals_and_delayed_cancel_acknowledgments ... ok
+test server::h2::compact_headers::tests::inline_carrier_matches_owned_decode_for_every_field_representation ... ok
+test server::h2::compact_headers::tests::overflow_capacity_is_reused_and_released_at_lower_limits ... ok
+test server::h2::compact_headers::tests::raw_huffman_and_sensitive_literals_remain_in_the_arena ... ok
+test server::h2::compact_headers::tests::table_size_updates_and_oversized_sections_preserve_synchronization ... ok
+test http::probe::tests::every_mismatch_selects_http1_without_losing_the_read_tail ... ok
+test server::h2::compact_headers::tests::validated_compact_section_preserves_traversal_and_role_provenance ... ok
+test server::h2::endpoint::decoded_header_scratch_tests::excessive_recycled_byte_capacity_is_not_retained ... ok
+test server::h2::client::prepared_request_tests::preparation_errors_precede_stream_open_errors ... ok
+test server::h2::client::prepared_request_tests::prepared_validation_precedes_queue_and_encoder_allocation_failures ... ok
+test server::h2::endpoint::decoded_header_scratch_tests::excessive_recycled_field_capacity_is_not_retained ... ok
+test server::tests::h2_connection::h2_accept_assembles_headers_continuation ... ok
+test server::h2::compact_headers::tests::dynamic_index_survives_non_evicting_same_block_insert_without_copy ... ok
+test server::h2::compact_headers::tests::compact_spill_failure_precedes_dynamic_table_mutation ... ok
+test server::tests::h2_connection::h2_accept_frame_typed_rejects_priority_self_dependency ... ok
+test server::tests::h2_connection::h2_accept_parses_padded_data_payload ... ok
+test server::tests::h2_connection::h2_accept_rejects_interleaved_or_mismatched_continuation ... ok
+test server::tests::h2_connection::h2_accept_rejects_continuation_count_and_header_list_limits ... ok
+test server::tests::h2_connection::h2_accepts_curl_huffman_headers_after_window_update ... ok
+test server::tests::h2_connection::h2_accepts_preface_settings_and_get_headers ... ok
+test server::tests::h2_connection::h2_accept_frame_typed_reports_connection_scope_for_control_stream_id_errors ... ok
+test server::tests::h2_connection::h2_accepts_preface_split_across_inputs ... ok
+test server::tests::h2_connection::h2_client_accepts_response_frames_after_server_settings ... ok
+test server::tests::h2_connection::h2_accept_frame_typed_reports_scope_and_ignored_frames ... ok
+test server::tests::h2_connection::h2_client_allows_informational_response_before_final_headers ... ok
+test server::tests::h2_connection::h2_active_stream_limit_counts_end_stream_requests_until_response_finishes ... ok
+test server::tests::h2_connection::h2_client_control_frame_budget_rejects_ping_flood_and_does_not_reset_after_headers ... ok
+test server::tests::h2_connection::h2_client_data_plans_enforce_connection_window_and_zero_length_end_stream ... ok
+test server::tests::h2_connection::h2_accept_ignores_unknown_extension_frames_after_preface ... ok
+test server::h2::endpoint::decoded_header_scratch_tests::small_fields_are_retained_after_excess_capacity_is_dropped ... ok
+test server::tests::h2_connection::h2_client_data_plans_follow_stream_settings_and_window_updates ... ok
+test server::tests::h2_connection::h2_client_discarded_data_preserves_borrowed_and_owned_contracts ... ok
+test server::tests::h2_connection::h2_client_enforces_its_local_active_stream_limit ... ok
+test server::tests::h2_connection::h2_client_ignores_rst_stream_for_known_closed_stream ... ok
+test server::tests::h2_connection::h2_client_inbound_goaway_only_narrows_last_stream_id ... ok
+test server::tests::h2_connection::h2_accept_strips_headers_priority_metadata ... ok
+test server::h2::client::prepared_request_tests::prepared_validation_rejects_semantic_errors_before_state_changes ... ok
+test server::tests::h2_connection::h2_client_enforces_shared_header_and_body_limits ... ok
+test server::tests::h2_connection::h2_control_budget_refills_for_spaced_idle_ping ... ok
+test server::tests::h2_connection::h2_control_budget_rejects_rapid_ping_flood ... ok
+test server::tests::h2_connection::h2_client_rejects_control_churn_and_priority ... ok
+test server::tests::h2_connection::h2_closed_stream_tombstones_are_bounded ... ok
+test server::tests::h2_connection::h2_control_diagnostics_count_ping_and_goaway ... ok
+test hpack::tests::lookup_is_complete_and_work_is_bounded_by_input_size ... ok
+test server::tests::h2_connection::h2_control_settings_ack_state_and_timer_intent ... ok
+test server::tests::h2_connection::h2_client_rejects_response_frames_before_server_settings ... ok
+test server::tests::h2_connection::h2_client_enforces_stream_id_and_concurrency_limits ... ok
+test server::tests::h2_connection::h2_control_frame_budget_rejects_settings_window_reset_and_goaway_churn ... ok
+test server::tests::h2_connection::h2_data_after_a_local_reset_is_discarded ... ok
+test server::tests::h2_connection::h2_data_after_a_peer_reset_is_a_stream_closed_error ... ok
+test server::tests::h2_connection::h2_client_stream_record_keeps_halves_and_tombstones_disjoint ... ok
+test server::tests::h2_connection::h2_control_frame_budget_is_not_reset_by_immediate_external_progress ... ok
+test server::tests::h2_connection::h2_explicit_goaway_supersedes_graceful_ping_wait ... ok
+test server::tests::h2_connection::h2_graceful_shutdown_deadline_emits_final_goaway_without_ping_ack ... ok
+test server::tests::h2_connection::h2_control_frame_budget_rejects_ping_flood_and_does_not_reset_after_headers ... ok
+test server::tests::h2_connection::h2_goaway_frame_enforces_non_increasing_last_stream_id_and_reports_intent ... ok
+test server::tests::h2_connection::h2_graceful_shutdown_emits_two_goaways_around_round_trip_ping ... ok
+test server::tests::h2_connection::h2_graceful_shutdown_timer_intent_tracks_only_the_ping_wait ... ok
+test server::tests::h2_connection::h2_graceful_shutdown_final_boundary_includes_stream_opened_during_stage_one ... ok
+test server::tests::h2_connection::h2_progress_replenishes_only_bounded_window_update_credits ... ok
+test server::tests::h2_connection::h2_rejects_a_push_promise_sent_by_the_client ... ok
+test server::tests::h2_connection::h2_mixed_settings_overflow_preserves_all_state_for_both_roles ... ok
+test server::tests::h2_connection::h2_rejects_invalid_window_update_payloads ... ok
+test server::tests::h2_connection::h2_rejects_rst_stream_for_idle_stream ... ok
+test server::tests::h2_connection::h2_default_and_explicit_default_construction_match_startup_state ... ok
+test server::tests::h2_connection::h2_rejects_unexpected_frame_after_settings ... ok
+test server::tests::h2_connection::h2_client_streams_request_and_accepts_response_events ... ok
+test server::tests::h2_connection::h2_network_owners_accept_explicit_active_stream_limits_above_default ... ok
+test server::tests::h2_connection::h2_response_data_is_split_by_peer_frame_size ... ok
+test server::tests::h2_connection::h2_empty_end_stream_commit_rejects_negative_stream_windows ... ok
+test server::tests::h2_connection::h2_rst_stream_cancels_response_active_stream_after_tombstone_eviction ... ok
+test server::tests::h2_connection::h2_rejects_bad_preface_and_frame ... ok
+test server::tests::h2_connection::h2_data_commit_errors_preserve_role_specific_side_effect_order ... ok
+test server::tests::h2_connection::h2_server_decoded_frame_paths_require_initial_settings ... ok
+test server::tests::h2_connection::h2_rejects_invalid_settings_max_frame_size ... ok
+test server::tests::h2_connection::h2_rejects_data_after_normal_stream_close ... ok
+test server::tests::h2_connection::h2_server_accept_and_classify_share_one_dispatcher ... ok
+test server::tests::h2_connection::h2_server_data_plans_allow_zero_length_end_stream ... ok
+test server::tests::h2_connection::h2_server_discarded_data_preserves_borrowed_owned_and_wrapper_contracts ... ok
+test server::tests::h2_connection::h2_server_data_plans_share_response_stream_lifecycle ... ok
+test server::tests::h2_connection::h2_server_stream_events_cover_headers_data_trailers_and_reset ... ok
+test server::tests::h2_connection::h2_settings_ack_timeout_emits_settings_timeout_goaway ... ok
+test server::tests::h2_connection::h2_settings_ack_debt_counts_each_local_settings_frame ... ok
+test server::tests::h2_connection::h2_settings_and_graceful_timers_are_independent ... ok
+test server::tests::h2_connection::h2_server_stream_record_keeps_halves_and_tombstones_disjoint ... ok
+test server::tests::h2_connection::h2_settings_events_report_initial_window_size_changes ... ok
+test server::tests::h2_connection::h2_stream_events_cover_split_request_data_window_update_and_goaway ... ok
+test server::tests::h2_connection::h2_window_update_overflow_is_a_scoped_flow_control_error ... ok
+test server::tests::h2_connection::h2_window_update_distinguishes_unknown_and_known_without_send_half ... ok
+test server::tests::h2_connection::h2_stream_tracking_releases_completed_stream_ids ... ok
+test server::tests::h2_connection::h2_typed_continuation_ordering_errors_are_connection_scoped ... ok
+test server::tests::h2_flow::flow_backpressure_state_reports_queue_limits ... ok
+test server::tests::h2_connection::h2_zero_tombstone_capacity_does_not_retain_reset_tolerance ... ok
+test server::tests::h2_connection::h2_settings_send_window_overflow_is_a_connection_flow_control_error ... ok
+test server::tests::h2_flow::flow_control_window_tracks_signed_credit_and_debt ... ok
+test server::tests::h2_flow::flow_diagnostics_snapshot_classifies_updates_and_saturates ... ok
+test server::tests::h2_flow::flow_fair_scheduler_bounds_extreme_initial_capacity ... ok
+test server::tests::h2_connection::outbound_acknowledgement_rejects_invalid_state_distinctly ... ok
+test server::tests::h2_flow::flow_fair_scheduler_equality_ignores_diagnostic_history ... ok
+test server::tests::h2_connection::h2_typed_classify_continuation_ordering_errors_are_connection_scoped ... ok
+test server::tests::h2_flow::flow_fair_scheduler_rotates_ready_streams_and_skips_blocked ... ok
+test server::tests::h2_flow::flow_fair_scheduler_histogram_uses_every_inclusive_boundary ... ok
+test server::tests::h2_flow::flow_receive_window_counts_only_consumed_turnovers ... ok
+test server::tests::h2_flow::flow_fair_scheduler_retains_immediate_selection_distribution ... ok
+test server::tests::h2_flow::flow_receive_window_does_not_grow_slow_or_above_cap ... ok
+test server::tests::h2_flow::flow_fair_scheduler_uses_fx_hash ... ok
+test server::tests::h2_flow::flow_receive_window_rejects_invalid_adaptive_policy ... ok
+test server::tests::h2_flow::flow_receive_window_adapts_after_sustained_fast_turnovers ... ok
+test server::tests::h2_flow::flow_receive_window_rollback_does_not_create_future_credit_debt ... ok
+test server::tests::h2_flow::flow_receive_window_zero_amount_preserves_pending_first_sample_reanchor ... ok
+test server::tests::h2_flow::flow_receive_window_batches_refunds_and_extra_credit ... ok
+test server::tests::h2_flow::flow_fair_scheduler_requeue_does_not_duplicate_stale_turns ... ok
+test server::tests::h2_flow::flow_receive_window_rollback_removes_adaptive_sample_and_blockage ... ok
+test server::tests::h2_headers::corpus_hpack_errors_preserve_distinct_categories ... ok
+test server::tests::h2_headers::h2_pseudo_header_validation_rejects_invalid_requests ... ok
+test server::tests::h2_headers::h2_pseudo_header_validation_rejects_invalid_responses ... ok
+test server::tests::h2_headers::h2_content_length_finishes_on_trailers_but_not_reset_or_goaway ... ok
+test server::tests::h2_headers::h2_request_content_length_accepts_exact_and_duplicate_equivalent_values ... ok
+test server::tests::h2_headers::hpack_discard_block_preserves_decoder_dynamic_table_state ... ok
+test server::tests::h2_headers::h2_trailers_reject_pseudo_headers ... ok
+test server::tests::h2_headers::hpack_encoder_emits_table_size_update_once ... ok
+test server::tests::h2_headers::hpack_typed_error_preserves_decoder_category ... ok
+test server::tests::h2_headers::h2_response_content_length_honors_no_body_semantics ... ok
+test server::tests::h2_headers::h2_request_content_length_rejects_too_long_and_invalid_declarations ... ok
+test server::tests::h2_wire::h2_decode_preserves_unknown_extension_frames ... ok
+test server::tests::h2_flow::flow_receive_window_wholly_rolled_back_first_sample_reanchors_epoch ... ok
+test server::tests::h2_wire::h2_frame_type_five_decodes_as_push_promise ... ok
+test server::tests::h2_wire::h2_settings_decode_apply_and_encode_stack_compatible_fields ... ok
+test server::tests::h2_wire::h2_settings_payload_limit_rejects_too_many_entries ... ok
+test server::tests::h2_headers::h2_typed_malformed_header_errors_are_stream_protocol_errors ... ok
+test server::tests::h2_wire::corpus_frame_inputs_cover_unknown_incomplete_and_invalid_control_frames ... ok
+test server::tests::h2_headers::h2_content_length_mismatch_is_rejected ... ok
+test server::tests::h2_wire::h2_borrowed_decode_reuses_the_input_payload ... ok
+test server::tests::h2_flow::flow_receive_window_starts_first_sample_with_first_data ... ok
+test server::tests::h2_connection::h2_server_enforces_explicit_active_stream_limit_above_default ... ok
+test engine::tests::a_retained_small_fragment_does_not_monopolize_receive_storage ... ok
+test server::tests::h2_wire::h2_decode_with_max_frame_size_rejects_oversized_payload ... ok
+test engine::tests::retired_sources_do_not_accumulate_behind_one_held_permit ... ok
+test hpack::tests::lookup_work_does_not_scale_with_retained_entries_at_required_capacities ... ok
+test server::tests::h2_flow::flow_fair_scheduler_slot_storage_tracks_peak_live_streams ... ok
+test hpack::tests::planned_lookup_overflow_allocation_failures_are_transactional ... ok
+test hpack::tests::nibble_huffman_decoder_matches_bitwise_reference ... ok
+test hpack::tests::encoder_persistent_preflight_is_bounded_by_effective_capacity ... ok
+test server::tests::h2_flow::flow_fair_scheduler_churn_storage_remains_bound_to_live_state ... ok
+
+test result: ok. 217 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+     Running tests/abort_contract.rs (target/debug/deps/abort_contract-ab2a9639eaa3f1b7)
+
+running 8 tests
+test hard_abort_preserves_the_first_non_graceful_cause_through_close_failure ... ok
+test hard_abort_can_escalate_graceful_close_before_its_original_completion ... ok
+test abort_after_partial_receipt_returns_the_engine_owned_remainder ... ok
+test abort_accepts_original_completions_before_cancellation_dispatch ... ok
+test active_alarm_failure_is_recoverable_and_closes_without_advancing_time ... ok
+test stale_alarm_failure_preserves_protocol_cause_and_queued_goaway ... ok
+test late_successful_read_and_alarm_failure_cannot_replace_abort_or_deliver_headers ... ok
+test obsolete_alarm_failures_only_settle_the_original ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/admission_contract.rs (target/debug/deps/admission_contract-83e0cc60a007c24d)
+
+running 8 tests
+test reset_invalidates_blocked_response_with_original_write_and_body_still_owned ... ok
+test settings_and_reset_notify_changes_not_guaranteed_admission ... ok
+test protocol_slot_release_precedes_application_and_transport_joins ... ok
+test response_and_trailer_blockage_preserve_hpack_and_stream_state ... ok
+test terminal_commands_wake_without_waiting_for_body_retirement ... ok
+test permanent_metadata_bounds_do_not_arm_admission ... ok
+test queue_blockage_is_transactional_coalesced_and_released_at_write_issuance ... ok
+test control_bytes_remain_reserved_through_partial_write ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/alarm_contract.rs (target/debug/deps/alarm_contract-c18e037c7244330f)
+
+running 2 tests
+test shared_deadline_keeps_the_original_alarm_live_after_one_stream_moves ... ok
+test superseded_alarm_only_settles_before_or_after_cancellation_dispatch ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/completion_recovery.rs (target/debug/deps/completion_recovery-74d608c5be984504)
+
+running 3 tests
+test rejected_cancel_and_close_preserve_the_original_settlement_operations ... ok
+test rejected_release_recovers_the_original_body_page ... ok
+test rejected_wake_recovers_original_alarm_and_early_completion_rearms_it ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/http1_receive_phase.rs (target/debug/deps/http1_receive_phase-a082ac32837022c4)
+
+running 2 tests
+test selected_and_detected_reused_idle_eof_does_not_arm_a_head_deadline ... ok
+test selected_and_detected_reused_partial_heads_arm_and_expire ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/http_composition.rs (target/debug/deps/http_composition-75f0e777a6e6f8d6)
+
+running 17 tests
+test active_alarm_failure_waits_for_read_and_preserves_transport_cause ... ok
+test abort_after_detection_selection_never_activates_the_child ... ok
+test eof_and_abort_never_start_a_protocol_child ... ok
+test hard_abort_joins_detection_operations_and_preserves_an_earlier_timeout ... ok
+test detector_model_covers_batched_originals_and_both_cancel_join_orders ... ok
+test invalidated_alarm_cannot_reverse_protocol_selection ... ok
+test selected_client_preserves_http1_commands_and_callbacks ... ok
+test selected_client_forwards_metadata_readiness_before_original_write_settlement ... ok
+test selected_http2_client_has_the_direct_initial_wire_and_notifications ... ok
+test obsolete_alarm_failure_preserves_selection_before_and_after_cancel_dispatch ... ok
+test snapshots_require_a_selected_http1_child_and_do_not_drive_it ... ok
+test timeout_waits_for_originals_and_reports_close_failure_once ... ok
+test wrong_owner_and_invalid_count_return_the_original_operation ... ok
+test selected_clients_and_servers_hard_abort_without_starting_transport_work ... ok
+test wrong_owner_returns_a_failed_alarm_unchanged ... ok
+test http1_prefetch_is_lossless_and_keeps_the_connection_reusable ... ok
+test http2_preface_selects_the_binary_child_and_preserves_exact_output ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/late_outcomes.rs (target/debug/deps/late_outcomes-c67818d2f9b3c2c4)
+
+running 7 tests
+test shutdown_deadline_cancels_blocked_original_output_but_waits_for_its_receipt ... ok
+test queued_final_headers_do_not_report_success_when_the_transport_fails ... ok
+test goaway_never_makes_an_observed_response_retryable ... ok
+test frames_after_receive_end_reset_only_that_stream_and_preserve_hpack ... ok
+test completed_and_reset_outcomes_survive_late_connection_failure_and_release ... ok
+test response_end_closes_only_receive_while_upload_continues ... ok
+test original_final_write_receipt_decides_success_after_unrelated_read_failure ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/owned_contract.rs (target/debug/deps/owned_contract-60e85688d216c7f6)
+
+running 20 tests
+test cancellation_ack_does_not_settle_original_read_or_alarm ... ok
+test classic_connect_uses_only_method_and_authority ... ok
+test deadline_is_stream_local_and_old_wake_cannot_fire_replacement ... ok
+test early_response_arrives_with_original_upload_write_outstanding ... ok
+test empty_data_counts_as_an_item_and_reset_preserves_siblings ... ok
+test goaway_excludes_only_locally_initiated_streams_above_boundary ... ok
+test graceful_shutdown_sends_two_goaways_and_preserves_processed_request ... ok
+test initial_permit_and_retained_capacity_rejection_preserve_buffer ... ok
+test borrowed_commands_match_owned_wire_and_do_not_retain_field_borrows ... ok
+test informational_final_and_trailers_have_exact_semantic_order ... ok
+test negative_stream_window_after_settings_recovers_without_polling_source ... ok
+test padding_and_discard_have_exact_connection_credit ... ok
+test push_before_ack_preserves_hpack_and_after_ack_is_connection_error ... ok
+test revoked_permit_does_not_consume_capacity_of_a_sibling ... ok
+test wrong_owner_read_and_write_return_original_operations ... ok
+test unknown_write_progress_keeps_lower_bound_and_never_replays ... ok
+test each_partial_write_cut_preserves_frame_and_original_buffer_after_reset ... ok
+test fragmented_duplex_roundtrip_retirement_waits_for_release ... ok
+test release_and_transport_completion_orders_have_same_retirement_join ... ok
+test sustained_credit_exceeds_actual_connection_window ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/ownership_model.rs (target/debug/deps/ownership_model-12f8457baf734bc7)
+
+running 6 tests
+test blocked_output_coalesces_released_credit_without_exhausting_control_items ... ok
+test completed_response_survives_no_error_reset_in_the_same_read_batch ... ok
+test all_connection_original_and_cancellation_ack_orders ... ok
+test all_small_stream_settlement_orders_and_selective_callbacks ... ok
+test repeated_eight_stream_megabyte_duplex_preserves_bounded_credit_progress ... ok
+test hard_abort_joins_every_original_and_cancellation_ack_order ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+
+     Running tests/protocol_contract.rs (target/debug/deps/protocol_contract-65ad94c6b10ccf24)
+
+running 11 tests
+test continuation_interleaving_and_settings_ack_timeout_keep_connection_scope ... ok
+test content_length_and_trailer_rejection_do_not_mutate_encoder_or_permit ... ok
+test oversized_decoded_headers_preserve_hpack_for_following_stream ... ok
+test head_informational_response_does_not_end_stream_or_apply_representation_body_limit ... ok
+test read_failure_cancels_original_write_without_starting_an_uncancelled_continuation ... ok
+test streaming_body_limit_without_content_length_preserves_both_role_buffers ... ok
+test one_byte_connection_refunds_do_not_starve_siblings ... ok
+test concurrent_uploads_are_round_robin_and_ping_preempts_next_data ... ok
+test zero_byte_permit_allows_eof_or_trailers_with_both_wire_windows_exhausted ... ok
+test sequential_end_stream_fragments_refund_more_than_default_connection_window ... ok
+test both_directions_exceed_actual_default_windows_and_eight_megabytes ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.81s
+
+     Running tests/resource_contract.rs (target/debug/deps/resource_contract-f4544c7d8257c092)
+
+running 12 tests
+test decoded_byte_limit_refuses_one_stream_without_losing_dynamic_names ... ok
+test encoded_continuation_limit_is_a_terminal_connection_limit ... ok
+test graceful_ping_wait_starts_after_its_original_write_settles ... ok
+test classic_connect_tunnel_bytes_are_not_an_http_message_body_limit ... ok
+test blocked_write_control_pressure_has_one_bounded_emergency_goaway ... ok
+test protocol_completion_invalidates_deadline_while_the_application_retains_a_body ... ok
+test malformed_trailer_resets_only_its_stream_and_preserves_held_credit ... ok
+test rejected_shutdown_does_not_commit_a_partial_lifecycle_transition ... ok
+test settings_timeout_starts_after_the_last_exact_preface_write ... ok
+test settings_budget_uses_supplied_time_and_has_an_exact_flood_boundary ... ok
+test rejected_connect_response_allows_request_eof_with_zero_body_allowance ... ok
+test stream_deadline_under_control_pressure_has_an_explicit_aggregate_failure ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kimojio_fsm_http2
+
+running 3 tests
+test kimojio-fsm-http2/src/server/h2/headers.rs - server::h2::headers::H2HeaderBlockDecoder (line 459) ... ok
+test kimojio-fsm-http2/src/http/README.md - http (line 39) ... ok
+test kimojio-fsm-http2/src/server/h2/headers.rs - server::h2::headers::H2HeaderBlockEncoder (line 280) ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.25s; merged doctests compilation took 0.24s
