@@ -1,0 +1,77 @@
+Benchmarking http1_replay/fixed_128b/client/continue
+Benchmarking http1_replay/fixed_128b/client/continue: Warming up for 1.0000 s
+Benchmarking http1_replay/fixed_128b/client/continue: Collecting 50 samples in estimated 2.0011 s (2.3M iterations)
+Benchmarking http1_replay/fixed_128b/client/continue: Analyzing
+http1_replay/fixed_128b/client/continue
+                        time:   [887.01 ns 887.90 ns 888.83 ns]
+                        thrpt:  [274.68 MiB/s 274.96 MiB/s 275.24 MiB/s]
+Found 3 outliers among 50 measurements (6.00%)
+  1 (2.00%) low mild
+  2 (4.00%) high mild
+Benchmarking http1_replay/fixed_128b/client/yield
+Benchmarking http1_replay/fixed_128b/client/yield: Warming up for 1.0000 s
+Benchmarking http1_replay/fixed_128b/client/yield: Collecting 50 samples in estimated 2.0009 s (2.3M iterations)
+Benchmarking http1_replay/fixed_128b/client/yield: Analyzing
+http1_replay/fixed_128b/client/yield
+                        time:   [865.68 ns 866.80 ns 867.80 ns]
+                        thrpt:  [281.33 MiB/s 281.66 MiB/s 282.02 MiB/s]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high severe
+Benchmarking http1_replay/fixed_128b/server/continue
+Benchmarking http1_replay/fixed_128b/server/continue: Warming up for 1.0000 s
+Benchmarking http1_replay/fixed_128b/server/continue: Collecting 50 samples in estimated 2.0001 s (2.1M iterations)
+Benchmarking http1_replay/fixed_128b/server/continue: Analyzing
+http1_replay/fixed_128b/server/continue
+                        time:   [941.44 ns 955.48 ns 976.62 ns]
+                        thrpt:  [249.99 MiB/s 255.52 MiB/s 259.33 MiB/s]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high severe
+Benchmarking http1_replay/fixed_128b/server/yield
+Benchmarking http1_replay/fixed_128b/server/yield: Warming up for 1.0000 s
+Benchmarking http1_replay/fixed_128b/server/yield: Collecting 50 samples in estimated 2.0005 s (2.3M iterations)
+Benchmarking http1_replay/fixed_128b/server/yield: Analyzing
+http1_replay/fixed_128b/server/yield
+                        time:   [891.66 ns 893.16 ns 894.39 ns]
+                        thrpt:  [272.97 MiB/s 273.35 MiB/s 273.80 MiB/s]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) low mild
+
+Benchmarking http1_replay/chunked_1mib/client/continue
+Benchmarking http1_replay/chunked_1mib/client/continue: Warming up for 1.0000 s
+Benchmarking http1_replay/chunked_1mib/client/continue: Collecting 50 samples in estimated 2.0192 s (94k iterations)
+Benchmarking http1_replay/chunked_1mib/client/continue: Analyzing
+http1_replay/chunked_1mib/client/continue
+                        time:   [21.268 µs 21.319 µs 21.359 µs]
+                        thrpt:  [91.444 GiB/s 91.613 GiB/s 91.835 GiB/s]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high mild
+Benchmarking http1_replay/chunked_1mib/client/yield
+Benchmarking http1_replay/chunked_1mib/client/yield: Warming up for 1.0000 s
+Benchmarking http1_replay/chunked_1mib/client/yield: Collecting 50 samples in estimated 2.0047 s (97k iterations)
+Benchmarking http1_replay/chunked_1mib/client/yield: Analyzing
+http1_replay/chunked_1mib/client/yield
+                        time:   [20.460 µs 20.489 µs 20.520 µs]
+                        thrpt:  [95.183 GiB/s 95.325 GiB/s 95.462 GiB/s]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high mild
+Benchmarking http1_replay/chunked_1mib/server/continue
+Benchmarking http1_replay/chunked_1mib/server/continue: Warming up for 1.0000 s
+Benchmarking http1_replay/chunked_1mib/server/continue: Collecting 50 samples in estimated 2.0155 s (98k iterations)
+Benchmarking http1_replay/chunked_1mib/server/continue: Analyzing
+http1_replay/chunked_1mib/server/continue
+                        time:   [21.703 µs 21.938 µs 22.356 µs]
+                        thrpt:  [87.364 GiB/s 89.028 GiB/s 89.995 GiB/s]
+Found 6 outliers among 50 measurements (12.00%)
+  1 (2.00%) low severe
+  2 (4.00%) high mild
+  3 (6.00%) high severe
+Benchmarking http1_replay/chunked_1mib/server/yield
+Benchmarking http1_replay/chunked_1mib/server/yield: Warming up for 1.0000 s
+Benchmarking http1_replay/chunked_1mib/server/yield: Collecting 50 samples in estimated 2.0105 s (101k iterations)
+Benchmarking http1_replay/chunked_1mib/server/yield: Analyzing
+http1_replay/chunked_1mib/server/yield
+                        time:   [20.761 µs 20.785 µs 20.819 µs]
+                        thrpt:  [93.814 GiB/s 93.966 GiB/s 94.079 GiB/s]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high mild
+

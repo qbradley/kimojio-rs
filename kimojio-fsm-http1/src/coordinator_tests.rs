@@ -362,7 +362,7 @@ fn drive<const SERVER: bool>(core: &mut Core<Vec<u8>, Vec<u8>, SERVER>, observer
                 if transition == Transition::PrepareBody {
                     // Keep the unfused path as the reference for the ownership
                     // model and its continue/yield/mixed callback trace checks.
-                    core.prepare_body();
+                    core.output = Some(core.prepare_body());
                     assert_eq!(core.next_transition(), Some(Transition::Write));
                 } else {
                     core.advance(transition, observer, head);
@@ -648,10 +648,12 @@ fn client_fixture(
 }
 
 #[test]
-fn fused_body_write_matches_unfused_successor_and_sequence_exhaustion() {
+fn direct_body_write_matches_queued_path_including_readiness_and_exhaustion() {
     for body in [BodyLength::Known(2), BodyLength::Streaming] {
         for end in [false, true] {
-            for exhausted in [false, true] {
+            for (exhausted, readiness) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
                 let mut reference = None;
                 for mode in [Drive::Steps, Drive::Continue, Drive::Yield, Drive::Mixed] {
                     let (mut core, mut observer) = client_fixture(mode, "POST", body);
@@ -673,10 +675,13 @@ fn fused_body_write_matches_unfused_successor_and_sequence_exhaustion() {
                     if exhausted {
                         core.sequence = u64::MAX - 1;
                     }
+                    if readiness {
+                        core.write.wait_for_readiness();
+                    }
                     // One fused advance must have exactly the same externally
                     // visible behavior and state as the two unfused advances.
                     if matches!(mode, Drive::Steps) {
-                        core.prepare_body();
+                        core.output = Some(core.prepare_body());
                         assert_eq!(core.next_transition(), Some(Transition::Write));
                         core.advance(Transition::Write, &mut observer, head);
                     } else {
@@ -686,7 +691,8 @@ fn fused_body_write_matches_unfused_successor_and_sequence_exhaustion() {
                         }
                     }
                     core.assert_invariants();
-                    assert_eq!(observer.write.is_some(), !exhausted);
+                    assert_eq!(observer.write.is_some(), !exhausted && !readiness);
+                    assert_eq!(observer.write_ready.is_some(), !exhausted && readiness);
                     assert_eq!(
                         core.failure,
                         exhausted.then_some(Failure::SequenceExhausted)

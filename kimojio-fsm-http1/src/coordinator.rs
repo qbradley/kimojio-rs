@@ -467,15 +467,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                 None
             }
             Transition::Write => self.issue_write(ports),
-            Transition::PrepareBody => {
-                self.prepare_body();
-                // Preparation only moves pending_body into output: no callback,
-                // sequence, timer, or cross-direction policy can intervene. The
-                // selector already honored receipts/source notifications and a
-                // buffered early response. Its guaranteed successor is Write.
-                debug_assert_eq!(self.next_transition(), Some(Transition::Write));
-                self.issue_write(ports)
-            }
+            Transition::PrepareBody => self.issue_body(ports),
             Transition::BeginClosing => {
                 self.lifecycle.begin_closing();
                 self.boundary = Boundary::None;
@@ -525,6 +517,30 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         }
     }
 
+    /// Prepare directly for the port, without a round trip through self.output.
+    /// Selection has already honored notifications and buffered early responses.
+    #[inline]
+    fn issue_body<P: Ports<B, W>>(&mut self, ports: &mut P) -> Option<P::Output> {
+        debug_assert!(self.output.is_none());
+        debug_assert!(self.write.operation().is_none());
+        let mut op = self.prepare_body();
+        if self.write == IoState::NeedsReadiness {
+            self.output = Some(op);
+            return self.issue_write(ports);
+        }
+        let Some(id) = self.operation(OperationKind::Write) else {
+            // Allocation of an operation identity can fail. Retain the admitted
+            // body exactly as the queued path does, for cancellation settlement.
+            self.output = Some(op);
+            return None;
+        };
+        op.id = id;
+        self.write.issue(id);
+        self.log(ports, LogEvent::OperationIssued(id));
+        ports.write(op)
+    }
+
+    #[inline]
     fn issue_write<P: Ports<B, W>>(&mut self, ports: &mut P) -> Option<P::Output> {
         if self.write == IoState::NeedsReadiness {
             let id = self.operation(OperationKind::Writable)?;
@@ -569,7 +585,8 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         }
     }
 
-    fn prepare_body(&mut self) {
+    #[inline]
+    fn prepare_body(&mut self) -> WriteOp<W> {
         let (body_id, command) = self.pending_body.take().unwrap();
         let mut prefix = [0; 24];
         let chunked = self.tx.framing() == Framing::Chunked;
@@ -578,7 +595,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         } else {
             0
         };
-        self.output = Some(WriteOp {
+        WriteOp {
             id: OperationId {
                 connection: self.id,
                 sequence: 0,
@@ -592,7 +609,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                 chunked,
             },
             cursor: 0,
-        });
+        }
     }
 
     fn retire_exchange(&mut self) -> ExchangeFinished {
