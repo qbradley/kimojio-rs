@@ -1,0 +1,635 @@
+{
+  "description": "Previously temporary evidence for the retained HTTP/1 header-scratch optimization; archived while recording session lessons.",
+  "baseline_revision": "ed924a680a5d260abb07494051542e70daf399ff",
+  "candidate_revision": "7c101976fdba39df35c71ed7cde08fd38debeb46",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "build": "CARGO_PROFILE_RELEASE_DEBUG=2 CARGO_TARGET_DIR=target/http1-selection-study cargo build --release -p kimojio-fsm-http1 --example selection_profile_tmp",
+  "binary_sha256": {
+    "baseline-on": "979a82bc6dde3cd6bc437c9f9bc1277aac1bd63d6eb517f5f601f837f0a5b539",
+    "baseline-off": "4b6851aa147553a17d0f199b5e5b5a8a6812171bf75fc2fad41fb9ba7edaa42d",
+    "candidate-on": "96d1e748e2c46b8d1976d6f763f27c532fb2e0ee00cbd7d243b322143ad55b1a",
+    "candidate-off": "15a8db441b9544ef84681aa1b4d9f016ceda5e7432c6f3f52ee27d1645415e5a"
+  },
+  "samples_ns_per_exchange": {
+    "on": {
+      "small:client:continue": [
+        {
+          "base": 1782.92,
+          "base_output": "iterations=560900 elapsed_ns=1000041993 ns_per_exchange=1782.92",
+          "candidate": 1788.91,
+          "candidate_output": "iterations=559100 elapsed_ns=1000180194 ns_per_exchange=1788.91"
+        },
+        {
+          "candidate": 1957.4,
+          "candidate_output": "iterations=510900 elapsed_ns=1000035478 ns_per_exchange=1957.40",
+          "base": 1938.14,
+          "base_output": "iterations=516100 elapsed_ns=1000272280 ns_per_exchange=1938.14"
+        },
+        {
+          "base": 1929.43,
+          "base_output": "iterations=518300 elapsed_ns=1000022382 ns_per_exchange=1929.43",
+          "candidate": 1954.91,
+          "candidate_output": "iterations=511600 elapsed_ns=1000130889 ns_per_exchange=1954.91"
+        },
+        {
+          "candidate": 1982.62,
+          "candidate_output": "iterations=504400 elapsed_ns=1000031909 ns_per_exchange=1982.62",
+          "base": 1762.76,
+          "base_output": "iterations=567300 elapsed_ns=1000012309 ns_per_exchange=1762.76"
+        },
+        {
+          "base": 1771.1,
+          "base_output": "iterations=564700 elapsed_ns=1000137693 ns_per_exchange=1771.10",
+          "candidate": 1789.09,
+          "candidate_output": "iterations=559000 elapsed_ns=1000100838 ns_per_exchange=1789.09"
+        },
+        {
+          "candidate": 1789.14,
+          "candidate_output": "iterations=559000 elapsed_ns=1000130941 ns_per_exchange=1789.14",
+          "base": 1917.11,
+          "base_output": "iterations=521700 elapsed_ns=1000156440 ns_per_exchange=1917.11"
+        }
+      ],
+      "small:client:yield": [
+        {
+          "base": 1791.9,
+          "base_output": "iterations=558100 elapsed_ns=1000058893 ns_per_exchange=1791.90",
+          "candidate": 1745.41,
+          "candidate_output": "iterations=573000 elapsed_ns=1000122494 ns_per_exchange=1745.41"
+        },
+        {
+          "candidate": 1893.36,
+          "candidate_output": "iterations=528200 elapsed_ns=1000074160 ns_per_exchange=1893.36",
+          "base": 1945.15,
+          "base_output": "iterations=514100 elapsed_ns=1000002959 ns_per_exchange=1945.15"
+        },
+        {
+          "base": 1954.77,
+          "base_output": "iterations=511600 elapsed_ns=1000058782 ns_per_exchange=1954.77",
+          "candidate": 1896.89,
+          "candidate_output": "iterations=527200 elapsed_ns=1000042882 ns_per_exchange=1896.89"
+        },
+        {
+          "candidate": 1727.7,
+          "candidate_output": "iterations=578900 elapsed_ns=1000168411 ns_per_exchange=1727.70",
+          "base": 1777.87,
+          "base_output": "iterations=562500 elapsed_ns=1000051110 ns_per_exchange=1777.87"
+        },
+        {
+          "base": 1780.79,
+          "base_output": "iterations=561600 elapsed_ns=1000089957 ns_per_exchange=1780.79",
+          "candidate": 1728.53,
+          "candidate_output": "iterations=578600 elapsed_ns=1000126958 ns_per_exchange=1728.53"
+        },
+        {
+          "candidate": 1899.15,
+          "candidate_output": "iterations=526600 elapsed_ns=1000091585 ns_per_exchange=1899.15",
+          "base": 1940.17,
+          "base_output": "iterations=515500 elapsed_ns=1000158985 ns_per_exchange=1940.17"
+        }
+      ],
+      "small:server:continue": [
+        {
+          "base": 1973.81,
+          "base_output": "iterations=506700 elapsed_ns=1000127194 ns_per_exchange=1973.81",
+          "candidate": 1954.7,
+          "candidate_output": "iterations=511600 elapsed_ns=1000023117 ns_per_exchange=1954.70"
+        },
+        {
+          "candidate": 2124.57,
+          "candidate_output": "iterations=470700 elapsed_ns=1000034178 ns_per_exchange=2124.57",
+          "base": 2146.81,
+          "base_output": "iterations=465900 elapsed_ns=1000199401 ns_per_exchange=2146.81"
+        },
+        {
+          "base": 2125.14,
+          "base_output": "iterations=470600 elapsed_ns=1000090143 ns_per_exchange=2125.14",
+          "candidate": 2128.33,
+          "candidate_output": "iterations=469900 elapsed_ns=1000101492 ns_per_exchange=2128.33"
+        },
+        {
+          "candidate": 1948.38,
+          "candidate_output": "iterations=513300 elapsed_ns=1000103091 ns_per_exchange=1948.38",
+          "base": 1968.55,
+          "base_output": "iterations=508000 elapsed_ns=1000021590 ns_per_exchange=1968.55"
+        },
+        {
+          "base": 1965.15,
+          "base_output": "iterations=508900 elapsed_ns=1000062583 ns_per_exchange=1965.15",
+          "candidate": 1948.0,
+          "candidate_output": "iterations=513400 elapsed_ns=1000103883 ns_per_exchange=1948.00"
+        },
+        {
+          "candidate": 2138.73,
+          "candidate_output": "iterations=467600 elapsed_ns=1000069264 ns_per_exchange=2138.73",
+          "base": 2133.85,
+          "base_output": "iterations=468700 elapsed_ns=1000134489 ns_per_exchange=2133.85"
+        }
+      ],
+      "small:server:yield": [
+        {
+          "base": 1926.43,
+          "base_output": "iterations=519100 elapsed_ns=1000009867 ns_per_exchange=1926.43",
+          "candidate": 1899.3,
+          "candidate_output": "iterations=526600 elapsed_ns=1000172668 ns_per_exchange=1899.30"
+        },
+        {
+          "candidate": 2074.21,
+          "candidate_output": "iterations=482200 elapsed_ns=1000183460 ns_per_exchange=2074.21",
+          "base": 2102.22,
+          "base_output": "iterations=475800 elapsed_ns=1000236025 ns_per_exchange=2102.22"
+        },
+        {
+          "base": 2098.85,
+          "base_output": "iterations=476500 elapsed_ns=1000099925 ns_per_exchange=2098.85",
+          "candidate": 2077.74,
+          "candidate_output": "iterations=481300 elapsed_ns=1000016916 ns_per_exchange=2077.74"
+        },
+        {
+          "candidate": 1902.75,
+          "candidate_output": "iterations=525600 elapsed_ns=1000084110 ns_per_exchange=1902.75",
+          "base": 1923.74,
+          "base_output": "iterations=519900 elapsed_ns=1000150536 ns_per_exchange=1923.74"
+        },
+        {
+          "base": 1927.16,
+          "base_output": "iterations=518900 elapsed_ns=1000003883 ns_per_exchange=1927.16",
+          "candidate": 1895.88,
+          "candidate_output": "iterations=527500 elapsed_ns=1000074783 ns_per_exchange=1895.88"
+        },
+        {
+          "candidate": 2067.5,
+          "candidate_output": "iterations=483700 elapsed_ns=1000050784 ns_per_exchange=2067.50",
+          "base": 2092.46,
+          "base_output": "iterations=478000 elapsed_ns=1000196185 ns_per_exchange=2092.46"
+        }
+      ],
+      "chunked:client:continue": [
+        {
+          "base": 50378.94,
+          "base_output": "iterations=19900 elapsed_ns=1002540715 ns_per_exchange=50378.94",
+          "candidate": 41808.56,
+          "candidate_output": "iterations=24000 elapsed_ns=1003405522 ns_per_exchange=41808.56"
+        },
+        {
+          "candidate": 44815.43,
+          "candidate_output": "iterations=22400 elapsed_ns=1003865534 ns_per_exchange=44815.43",
+          "base": 52014.91,
+          "base_output": "iterations=19300 elapsed_ns=1003887744 ns_per_exchange=52014.91"
+        },
+        {
+          "base": 53418.09,
+          "base_output": "iterations=18800 elapsed_ns=1004260079 ns_per_exchange=53418.09",
+          "candidate": 44580.93,
+          "candidate_output": "iterations=22500 elapsed_ns=1003070870 ns_per_exchange=44580.93"
+        },
+        {
+          "candidate": 41060.13,
+          "candidate_output": "iterations=24400 elapsed_ns=1001867206 ns_per_exchange=41060.13",
+          "base": 47283.95,
+          "base_output": "iterations=21200 elapsed_ns=1002419711 ns_per_exchange=47283.95"
+        },
+        {
+          "base": 47323.94,
+          "base_output": "iterations=21200 elapsed_ns=1003267410 ns_per_exchange=47323.94",
+          "candidate": 42538.28,
+          "candidate_output": "iterations=23600 elapsed_ns=1003903416 ns_per_exchange=42538.28"
+        },
+        {
+          "candidate": 46876.29,
+          "candidate_output": "iterations=21400 elapsed_ns=1003152566 ns_per_exchange=46876.29",
+          "base": 52766.11,
+          "base_output": "iterations=19000 elapsed_ns=1002556062 ns_per_exchange=52766.11"
+        }
+      ],
+      "chunked:client:yield": [
+        {
+          "base": 48079.96,
+          "base_output": "iterations=20800 elapsed_ns=1000063268 ns_per_exchange=48079.96",
+          "candidate": 43622.47,
+          "candidate_output": "iterations=23000 elapsed_ns=1003316894 ns_per_exchange=43622.47"
+        },
+        {
+          "candidate": 42729.76,
+          "candidate_output": "iterations=23500 elapsed_ns=1004149337 ns_per_exchange=42729.76",
+          "base": 49531.44,
+          "base_output": "iterations=20200 elapsed_ns=1000535006 ns_per_exchange=49531.44"
+        },
+        {
+          "base": 52984.3,
+          "base_output": "iterations=18900 elapsed_ns=1001403256 ns_per_exchange=52984.30",
+          "candidate": 48722.7,
+          "candidate_output": "iterations=20600 elapsed_ns=1003687580 ns_per_exchange=48722.70"
+        },
+        {
+          "candidate": 45483.4,
+          "candidate_output": "iterations=22000 elapsed_ns=1000634714 ns_per_exchange=45483.40",
+          "base": 50115.68,
+          "base_output": "iterations=20000 elapsed_ns=1002313529 ns_per_exchange=50115.68"
+        },
+        {
+          "base": 50134.57,
+          "base_output": "iterations=20000 elapsed_ns=1002691478 ns_per_exchange=50134.57",
+          "candidate": 44878.33,
+          "candidate_output": "iterations=22300 elapsed_ns=1000786562 ns_per_exchange=44878.33"
+        },
+        {
+          "candidate": 46751.19,
+          "candidate_output": "iterations=21400 elapsed_ns=1000475344 ns_per_exchange=46751.19",
+          "base": 53627.42,
+          "base_output": "iterations=18700 elapsed_ns=1002832708 ns_per_exchange=53627.42"
+        }
+      ],
+      "chunked:server:continue": [
+        {
+          "base": 51105.39,
+          "base_output": "iterations=19600 elapsed_ns=1001665680 ns_per_exchange=51105.39",
+          "candidate": 44036.12,
+          "candidate_output": "iterations=22800 elapsed_ns=1004023499 ns_per_exchange=44036.12"
+        },
+        {
+          "candidate": 43420.61,
+          "candidate_output": "iterations=23100 elapsed_ns=1003016027 ns_per_exchange=43420.61",
+          "base": 51628.18,
+          "base_output": "iterations=19400 elapsed_ns=1001586515 ns_per_exchange=51628.18"
+        },
+        {
+          "base": 55705.48,
+          "base_output": "iterations=18000 elapsed_ns=1002698603 ns_per_exchange=55705.48",
+          "candidate": 48384.09,
+          "candidate_output": "iterations=20700 elapsed_ns=1001550594 ns_per_exchange=48384.09"
+        },
+        {
+          "candidate": 44132.92,
+          "candidate_output": "iterations=22700 elapsed_ns=1001817305 ns_per_exchange=44132.92",
+          "base": 50058.77,
+          "base_output": "iterations=20000 elapsed_ns=1001175373 ns_per_exchange=50058.77"
+        },
+        {
+          "base": 49715.83,
+          "base_output": "iterations=20200 elapsed_ns=1004259719 ns_per_exchange=49715.83",
+          "candidate": 43926.33,
+          "candidate_output": "iterations=22800 elapsed_ns=1001520347 ns_per_exchange=43926.33"
+        },
+        {
+          "candidate": 48045.61,
+          "candidate_output": "iterations=20900 elapsed_ns=1004153275 ns_per_exchange=48045.61",
+          "base": 57990.11,
+          "base_output": "iterations=17300 elapsed_ns=1003228867 ns_per_exchange=57990.11"
+        }
+      ],
+      "chunked:server:yield": [
+        {
+          "base": 52952.08,
+          "base_output": "iterations=18900 elapsed_ns=1000794173 ns_per_exchange=52952.08",
+          "candidate": 45600.11,
+          "candidate_output": "iterations=22000 elapsed_ns=1003202298 ns_per_exchange=45600.11"
+        },
+        {
+          "candidate": 45356.86,
+          "candidate_output": "iterations=22100 elapsed_ns=1002386421 ns_per_exchange=45356.86",
+          "base": 54205.8,
+          "base_output": "iterations=18500 elapsed_ns=1002807225 ns_per_exchange=54205.80"
+        },
+        {
+          "base": 55360.71,
+          "base_output": "iterations=18100 elapsed_ns=1002028761 ns_per_exchange=55360.71",
+          "candidate": 50571.99,
+          "candidate_output": "iterations=19800 elapsed_ns=1001325355 ns_per_exchange=50571.99"
+        },
+        {
+          "candidate": 44438.79,
+          "candidate_output": "iterations=22600 elapsed_ns=1004316627 ns_per_exchange=44438.79",
+          "base": 49681.89,
+          "base_output": "iterations=20200 elapsed_ns=1003574121 ns_per_exchange=49681.89"
+        },
+        {
+          "base": 51708.44,
+          "base_output": "iterations=19400 elapsed_ns=1003143682 ns_per_exchange=51708.44",
+          "candidate": 44739.21,
+          "candidate_output": "iterations=22400 elapsed_ns=1002158174 ns_per_exchange=44739.21"
+        },
+        {
+          "candidate": 49868.12,
+          "candidate_output": "iterations=20100 elapsed_ns=1002349204 ns_per_exchange=49868.12",
+          "base": 57810.23,
+          "base_output": "iterations=17400 elapsed_ns=1005897933 ns_per_exchange=57810.23"
+        }
+      ]
+    },
+    "off": {
+      "small:client:continue": [
+        {
+          "base": 1684.65,
+          "base_output": "iterations=593600 elapsed_ns=1000006119 ns_per_exchange=1684.65",
+          "candidate": 1693.98,
+          "candidate_output": "iterations=590400 elapsed_ns=1000124020 ns_per_exchange=1693.98"
+        },
+        {
+          "candidate": 1698.41,
+          "candidate_output": "iterations=588800 elapsed_ns=1000023159 ns_per_exchange=1698.41",
+          "base": 1699.86,
+          "base_output": "iterations=588300 elapsed_ns=1000029958 ns_per_exchange=1699.86"
+        },
+        {
+          "base": 1850.49,
+          "base_output": "iterations=540500 elapsed_ns=1000187602 ns_per_exchange=1850.49",
+          "candidate": 1856.67,
+          "candidate_output": "iterations=538600 elapsed_ns=1000004301 ns_per_exchange=1856.67"
+        },
+        {
+          "candidate": 1854.9,
+          "candidate_output": "iterations=539200 elapsed_ns=1000161955 ns_per_exchange=1854.90",
+          "base": 1867.74,
+          "base_output": "iterations=535500 elapsed_ns=1000173555 ns_per_exchange=1867.74"
+        },
+        {
+          "base": 1691.88,
+          "base_output": "iterations=591100 elapsed_ns=1000068500 ns_per_exchange=1691.88",
+          "candidate": 1696.48,
+          "candidate_output": "iterations=589500 elapsed_ns=1000074001 ns_per_exchange=1696.48"
+        },
+        {
+          "candidate": 1939.82,
+          "candidate_output": "iterations=515600 elapsed_ns=1000168801 ns_per_exchange=1939.82",
+          "base": 1696.95,
+          "base_output": "iterations=589300 elapsed_ns=1000013418 ns_per_exchange=1696.95"
+        }
+      ],
+      "small:client:yield": [
+        {
+          "base": 1737.44,
+          "base_output": "iterations=575600 elapsed_ns=1000072285 ns_per_exchange=1737.44",
+          "candidate": 1681.47,
+          "candidate_output": "iterations=594800 elapsed_ns=1000138185 ns_per_exchange=1681.47"
+        },
+        {
+          "candidate": 1681.39,
+          "candidate_output": "iterations=594800 elapsed_ns=1000089170 ns_per_exchange=1681.39",
+          "base": 1737.4,
+          "base_output": "iterations=575600 elapsed_ns=1000048470 ns_per_exchange=1737.40"
+        },
+        {
+          "base": 1730.05,
+          "base_output": "iterations=578100 elapsed_ns=1000140802 ns_per_exchange=1730.05",
+          "candidate": 1700.49,
+          "candidate_output": "iterations=588100 elapsed_ns=1000058401 ns_per_exchange=1700.49"
+        },
+        {
+          "candidate": 1784.89,
+          "candidate_output": "iterations=560300 elapsed_ns=1000072654 ns_per_exchange=1784.89",
+          "base": 1716.79,
+          "base_output": "iterations=582500 elapsed_ns=1000028653 ns_per_exchange=1716.79"
+        },
+        {
+          "base": 1733.45,
+          "base_output": "iterations=576900 elapsed_ns=1000025200 ns_per_exchange=1733.45",
+          "candidate": 1772.69,
+          "candidate_output": "iterations=564200 elapsed_ns=1000149601 ns_per_exchange=1772.69"
+        },
+        {
+          "candidate": 1734.28,
+          "candidate_output": "iterations=576700 elapsed_ns=1000158944 ns_per_exchange=1734.28",
+          "base": 1782.55,
+          "base_output": "iterations=561000 elapsed_ns=1000010343 ns_per_exchange=1782.55"
+        }
+      ],
+      "small:server:continue": [
+        {
+          "base": 1850.77,
+          "base_output": "iterations=540400 elapsed_ns=1000157221 ns_per_exchange=1850.77",
+          "candidate": 1902.46,
+          "candidate_output": "iterations=525700 elapsed_ns=1000125620 ns_per_exchange=1902.46"
+        },
+        {
+          "candidate": 1909.91,
+          "candidate_output": "iterations=523600 elapsed_ns=1000030258 ns_per_exchange=1909.91",
+          "base": 1877.86,
+          "base_output": "iterations=532600 elapsed_ns=1000147760 ns_per_exchange=1877.86"
+        },
+        {
+          "base": 2039.42,
+          "base_output": "iterations=490400 elapsed_ns=1000129584 ns_per_exchange=2039.42",
+          "candidate": 1905.54,
+          "candidate_output": "iterations=524800 elapsed_ns=1000026903 ns_per_exchange=1905.54"
+        },
+        {
+          "candidate": 1904.02,
+          "candidate_output": "iterations=525300 elapsed_ns=1000179654 ns_per_exchange=1904.02",
+          "base": 1857.18,
+          "base_output": "iterations=538500 elapsed_ns=1000092612 ns_per_exchange=1857.18"
+        },
+        {
+          "base": 1876.63,
+          "base_output": "iterations=532900 elapsed_ns=1000057998 ns_per_exchange=1876.63",
+          "candidate": 1901.05,
+          "candidate_output": "iterations=526100 elapsed_ns=1000143398 ns_per_exchange=1901.05"
+        },
+        {
+          "candidate": 1903.76,
+          "candidate_output": "iterations=525300 elapsed_ns=1000045342 ns_per_exchange=1903.76",
+          "base": 1865.8,
+          "base_output": "iterations=536000 elapsed_ns=1000069442 ns_per_exchange=1865.80"
+        }
+      ],
+      "small:server:yield": [
+        {
+          "base": 1835.48,
+          "base_output": "iterations=544900 elapsed_ns=1000154390 ns_per_exchange=1835.48",
+          "candidate": 1833.18,
+          "candidate_output": "iterations=545600 elapsed_ns=1000182086 ns_per_exchange=1833.18"
+        },
+        {
+          "candidate": 1820.21,
+          "candidate_output": "iterations=549400 elapsed_ns=1000025058 ns_per_exchange=1820.21",
+          "base": 1837.85,
+          "base_output": "iterations=544200 elapsed_ns=1000159960 ns_per_exchange=1837.85"
+        },
+        {
+          "base": 1989.39,
+          "base_output": "iterations=502700 elapsed_ns=1000065275 ns_per_exchange=1989.39",
+          "candidate": 1981.58,
+          "candidate_output": "iterations=504700 elapsed_ns=1000103475 ns_per_exchange=1981.58"
+        },
+        {
+          "candidate": 1816.09,
+          "candidate_output": "iterations=550700 elapsed_ns=1000118655 ns_per_exchange=1816.09",
+          "base": 1836.76,
+          "base_output": "iterations=544500 elapsed_ns=1000113454 ns_per_exchange=1836.76"
+        },
+        {
+          "base": 1830.52,
+          "base_output": "iterations=546300 elapsed_ns=1000015397 ns_per_exchange=1830.52",
+          "candidate": 1823.26,
+          "candidate_output": "iterations=548500 elapsed_ns=1000059297 ns_per_exchange=1823.26"
+        },
+        {
+          "candidate": 1889.21,
+          "candidate_output": "iterations=529400 elapsed_ns=1000147043 ns_per_exchange=1889.21",
+          "base": 1906.75,
+          "base_output": "iterations=524500 elapsed_ns=1000088543 ns_per_exchange=1906.75"
+        }
+      ],
+      "chunked:client:continue": [
+        {
+          "base": 48645.85,
+          "base_output": "iterations=20600 elapsed_ns=1002104495 ns_per_exchange=48645.85",
+          "candidate": 44384.56,
+          "candidate_output": "iterations=22600 elapsed_ns=1003091044 ns_per_exchange=44384.56"
+        },
+        {
+          "candidate": 42829.7,
+          "candidate_output": "iterations=23400 elapsed_ns=1002214888 ns_per_exchange=42829.70",
+          "base": 45810.1,
+          "base_output": "iterations=21900 elapsed_ns=1003241096 ns_per_exchange=45810.10"
+        },
+        {
+          "base": 47160.21,
+          "base_output": "iterations=21300 elapsed_ns=1004512540 ns_per_exchange=47160.21",
+          "candidate": 42954.01,
+          "candidate_output": "iterations=23300 elapsed_ns=1000828275 ns_per_exchange=42954.01"
+        },
+        {
+          "candidate": 40678.04,
+          "candidate_output": "iterations=24600 elapsed_ns=1000679832 ns_per_exchange=40678.04",
+          "base": 48576.99,
+          "base_output": "iterations=20600 elapsed_ns=1000686033 ns_per_exchange=48576.99"
+        },
+        {
+          "base": 46710.79,
+          "base_output": "iterations=21500 elapsed_ns=1004281864 ns_per_exchange=46710.79",
+          "candidate": 42164.41,
+          "candidate_output": "iterations=23800 elapsed_ns=1003512817 ns_per_exchange=42164.41"
+        },
+        {
+          "candidate": 42008.53,
+          "candidate_output": "iterations=23900 elapsed_ns=1004003783 ns_per_exchange=42008.53",
+          "base": 45296.1,
+          "base_output": "iterations=22100 elapsed_ns=1001043660 ns_per_exchange=45296.10"
+        }
+      ],
+      "chunked:client:yield": [
+        {
+          "base": 45957.51,
+          "base_output": "iterations=21800 elapsed_ns=1001873800 ns_per_exchange=45957.51",
+          "candidate": 39187.18,
+          "candidate_output": "iterations=25600 elapsed_ns=1003191812 ns_per_exchange=39187.18"
+        },
+        {
+          "candidate": 40080.51,
+          "candidate_output": "iterations=25000 elapsed_ns=1002012771 ns_per_exchange=40080.51",
+          "base": 45306.19,
+          "base_output": "iterations=22100 elapsed_ns=1001266780 ns_per_exchange=45306.19"
+        },
+        {
+          "base": 51109.35,
+          "base_output": "iterations=19600 elapsed_ns=1001743291 ns_per_exchange=51109.35",
+          "candidate": 43737.58,
+          "candidate_output": "iterations=22900 elapsed_ns=1001590390 ns_per_exchange=43737.58"
+        },
+        {
+          "candidate": 42601.94,
+          "candidate_output": "iterations=23500 elapsed_ns=1001145585 ns_per_exchange=42601.94",
+          "base": 51763.21,
+          "base_output": "iterations=19400 elapsed_ns=1004206229 ns_per_exchange=51763.21"
+        },
+        {
+          "base": 44538.59,
+          "base_output": "iterations=22500 elapsed_ns=1002118314 ns_per_exchange=44538.59",
+          "candidate": 41052.99,
+          "candidate_output": "iterations=24400 elapsed_ns=1001693012 ns_per_exchange=41052.99"
+        },
+        {
+          "candidate": 39570.68,
+          "candidate_output": "iterations=25300 elapsed_ns=1001138060 ns_per_exchange=39570.68",
+          "base": 45213.32,
+          "base_output": "iterations=22200 elapsed_ns=1003735581 ns_per_exchange=45213.32"
+        }
+      ],
+      "chunked:server:continue": [
+        {
+          "base": 49185.08,
+          "base_output": "iterations=20400 elapsed_ns=1003375615 ns_per_exchange=49185.08",
+          "candidate": 43750.94,
+          "candidate_output": "iterations=22900 elapsed_ns=1001896603 ns_per_exchange=43750.94"
+        },
+        {
+          "candidate": 42407.9,
+          "candidate_output": "iterations=23600 elapsed_ns=1000826526 ns_per_exchange=42407.90",
+          "base": 51392.44,
+          "base_output": "iterations=19500 elapsed_ns=1002152637 ns_per_exchange=51392.44"
+        },
+        {
+          "base": 48996.96,
+          "base_output": "iterations=20500 elapsed_ns=1004437595 ns_per_exchange=48996.96",
+          "candidate": 43027.98,
+          "candidate_output": "iterations=23300 elapsed_ns=1002551886 ns_per_exchange=43027.98"
+        },
+        {
+          "candidate": 40648.43,
+          "candidate_output": "iterations=24700 elapsed_ns=1004016162 ns_per_exchange=40648.43",
+          "base": 49039.64,
+          "base_output": "iterations=20400 elapsed_ns=1000408530 ns_per_exchange=49039.64"
+        },
+        {
+          "base": 46681.17,
+          "base_output": "iterations=21500 elapsed_ns=1003645127 ns_per_exchange=46681.17",
+          "candidate": 44919.32,
+          "candidate_output": "iterations=22300 elapsed_ns=1001700711 ns_per_exchange=44919.32"
+        },
+        {
+          "candidate": 42906.23,
+          "candidate_output": "iterations=23400 elapsed_ns=1004005684 ns_per_exchange=42906.23",
+          "base": 53528.84,
+          "base_output": "iterations=18700 elapsed_ns=1000989259 ns_per_exchange=53528.84"
+        }
+      ],
+      "chunked:server:yield": [
+        {
+          "base": 50155.48,
+          "base_output": "iterations=20000 elapsed_ns=1003109511 ns_per_exchange=50155.48",
+          "candidate": 42764.06,
+          "candidate_output": "iterations=23400 elapsed_ns=1000679091 ns_per_exchange=42764.06"
+        },
+        {
+          "candidate": 41286.23,
+          "candidate_output": "iterations=24300 elapsed_ns=1003255397 ns_per_exchange=41286.23",
+          "base": 48275.23,
+          "base_output": "iterations=20800 elapsed_ns=1004124804 ns_per_exchange=48275.23"
+        },
+        {
+          "base": 52517.43,
+          "base_output": "iterations=19100 elapsed_ns=1003082804 ns_per_exchange=52517.43",
+          "candidate": 45880.97,
+          "candidate_output": "iterations=21800 elapsed_ns=1000205177 ns_per_exchange=45880.97"
+        },
+        {
+          "candidate": 40921.34,
+          "candidate_output": "iterations=24500 elapsed_ns=1002572949 ns_per_exchange=40921.34",
+          "base": 45803.6,
+          "base_output": "iterations=21900 elapsed_ns=1003098754 ns_per_exchange=45803.60"
+        },
+        {
+          "base": 47032.97,
+          "base_output": "iterations=21300 elapsed_ns=1001802215 ns_per_exchange=47032.97",
+          "candidate": 40748.61,
+          "candidate_output": "iterations=24600 elapsed_ns=1002415620 ns_per_exchange=40748.61"
+        },
+        {
+          "candidate": 44488.44,
+          "candidate_output": "iterations=22500 elapsed_ns=1000989958 ns_per_exchange=44488.44",
+          "base": 49448.37,
+          "base_output": "iterations=20300 elapsed_ns=1003801778 ns_per_exchange=49448.37"
+        }
+      ]
+    }
+  },
+  "summaries": {
+    "on": "timers on trial 1\ntimers on trial 2\ntimers on trial 3\ntimers on trial 4\ntimers on trial 5\ntimers on trial 6\nsmall:client:continue: reduction=-1.4% CI=[-6.5, 2.9] base=1850.0ns candidate=1872.0ns\nsmall:client:yield: reduction=2.7% CI=[2.4, 2.9] base=1866.0ns candidate=1819.4ns\nsmall:server:continue: reduction=0.6% CI=[0.2, 1.0] base=2049.5ns candidate=2039.6ns\nsmall:server:yield: reduction=1.3% CI=[1.1, 1.5] base=2009.8ns candidate=1985.1ns\nchunked:client:continue: reduction=13.7% CI=[11.6, 15.7] base=51196.9ns candidate=43559.6ns\nchunked:client:yield: reduction=10.6% CI=[9.1, 12.3] base=50125.1ns candidate=45180.9ns\nchunked:server:continue: reduction=13.9% CI=[12.4, 15.6] base=51366.8ns candidate=44084.5ns\nchunked:server:yield: reduction=12.8% CI=[10.7, 14.6] base=53578.9ns candidate=45478.5ns\n",
+    "off": "timers off trial 1\ntimers off trial 2\ntimers off trial 3\ntimers off trial 4\ntimers off trial 5\ntimers off trial 6\nsmall:client:continue: reduction=-2.3% CI=[-7.0, 0.2] base=1698.4ns candidate=1776.7ns\nsmall:client:yield: reduction=0.8% CI=[-1.6, 2.9] base=1735.4ns candidate=1717.4ns\nsmall:server:continue: reduction=-0.6% CI=[-2.4, 2.4] base=1871.2ns candidate=1903.9ns\nsmall:server:yield: reduction=0.7% CI=[0.4, 0.9] base=1837.3ns candidate=1828.2ns\nchunked:client:continue: reduction=9.6% CI=[7.5, 12.5] base=46935.5ns candidate=42497.1ns\nchunked:client:yield: reduction=13.2% CI=[10.6, 15.6] base=45631.9ns candidate=40566.8ns\nchunked:server:continue: reduction=13.7% CI=[9.1, 17.4] base=49112.4ns candidate=42967.1ns\nchunked:server:yield: reduction=12.7% CI=[11.2, 14.0] base=48861.8ns candidate=42025.1ns\n"
+  },
+  "comparison_script": "import itertools, json, math, random, re, statistics, subprocess, sys\nfrom pathlib import Path\nroot = Path(__file__).parent\nmode = sys.argv[1]\nrng = random.Random(1245)\ncases = list(itertools.product(['small', 'chunked'], ['client', 'server'], ['continue', 'yield']))\nresults = {':'.join(c): [] for c in cases}\nfor trial in range(6):\n    order = cases[:]\n    rng.shuffle(order)\n    for case in order:\n        pair = {}\n        for variant in (['base','candidate'] if trial % 2 == 0 else ['candidate','base']):\n            binary = (Path('/tmp/http1-selection-study') if variant == 'base' else root) / f'timers-{mode}'\n            output = subprocess.check_output(['taskset','-c','2',str(binary),*case,'1'],text=True,timeout=15)\n            pair[variant] = float(re.search(r'ns_per_exchange=([0-9.]+)',output)[1])\n            pair[variant+'_output'] = output.strip()\n        results[':'.join(case)].append(pair)\n        (root / f'comparison-{mode}.json').write_text(json.dumps(results,indent=2)+'\\n')\n    print('timers',mode,'trial',trial+1,flush=True)\nfor name, pairs in results.items():\n    logs=[math.log(p['candidate']/p['base']) for p in pairs]\n    ratios=sorted(math.exp(statistics.mean(rng.choices(logs,k=len(logs)))) for _ in range(10000))\n    saving=100*(1-math.exp(statistics.mean(logs)))\n    low,high=100*(1-ratios[9750]),100*(1-ratios[250])\n    print(f'{name}: reduction={saving:.1f}% CI=[{low:.1f}, {high:.1f}] base={statistics.median(p[\"base\"] for p in pairs):.1f}ns candidate={statistics.median(p[\"candidate\"] for p in pairs):.1f}ns',flush=True)\n",
+  "probe_source": "#[path = \"/tmp/http1-transition-study/support.rs.original\"]\nmod support;\nuse std::{hint::black_box, time::{Duration, Instant}};\nuse support::{Endpoint, Scenario, Session};\n\nfn run<'a, M: Endpoint<'a>, const YIELD: bool>(mut session: Session<'a, M, YIELD, false>, seconds: u64) {\n    for _ in 0..100 { black_box(session.round_trip()); }\n    let begin = Instant::now();\n    let mut iterations = 0u64;\n    while begin.elapsed() < Duration::from_secs(seconds) {\n        for _ in 0..100 {\n            black_box(session.round_trip());\n        }\n        iterations += 100;\n    }\n    println!(\"iterations={iterations} elapsed_ns={} ns_per_exchange={:.2}\", begin.elapsed().as_nanos(), begin.elapsed().as_nanos() as f64 / iterations as f64);\n}\n\nfn main() {\n    let args: Vec<_> = std::env::args().collect();\n    let scenario = match args[1].as_str() {\n        \"small\" => Scenario::fixed(128),\n        \"fixed\" => Scenario::fixed(1024 * 1024),\n        \"chunked\" => Scenario::chunked(1024 * 1024, support::IO_BYTES),\n        _ => panic!(\"scenario\"),\n    };\n    let seconds = args.get(4).map(|s| s.parse().unwrap()).unwrap_or(5);\n    match (args[2].as_str(), args[3].as_str()) {\n        (\"client\", \"continue\") => {\n            support::client::<false, true>(&scenario).round_trip();\n            run(support::client::<false, false>(&scenario), seconds);\n        }\n        (\"server\", \"continue\") => {\n            support::server::<false, true>(&scenario).round_trip();\n            run(support::server::<false, false>(&scenario), seconds);\n        }\n        (\"client\", \"yield\") => {\n            support::client::<true, true>(&scenario).round_trip();\n            run(support::client::<true, false>(&scenario), seconds);\n        }\n        (\"server\", \"yield\") => {\n            support::server::<true, true>(&scenario).round_trip();\n            run(support::server::<true, false>(&scenario), seconds);\n        }\n        _ => panic!(\"role/mode\"),\n    }\n}\n",
+  "method": "Six paired one-second trials per cell, CPU 2, alternating variant order and shuffled workloads. Geometric mean of paired ratios; nominal 95% paired-bootstrap intervals with 10000 resamples, no multiple-comparison adjustment. Validated simulated transport, 100 warmup exchanges, no profiling or counting allocator during timing. Timer-enabled support advances caller time by 1000 ns per drive turn.",
+  "limits": "Small fixed 128 B and chunked 1 MiB (16 KiB chunks/buffers), both roles and callback modes. Shared-host core microbenchmark, not network throughput. Script/probe paths refer to session-local support copies; original raw profiles and binaries are not embedded. Candidate binaries precede a formatting-only edit."
+}

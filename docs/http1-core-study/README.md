@@ -1,5 +1,14 @@
 # HTTP/1 state costs, observability, and adapter boxing
 
+## Later optimization session
+
+The [session summary](session-summary.md) records retained header-scratch, bulk-scanning,
+head-construction, and receive-replay improvements, plus the separate callback-driver
+experiments and their disposition. The [FSM performance lessons](../fsm-performance-lessons.md)
+provide a reusable checklist for HTTP/2, WebSocket, and other machines.
+Measurements below describe their stated historical revisions, not a fresh profile
+of the later optimized combination.
+
 ## Receive-phase promotion
 
 The explicit receive-phase correction is now integrated with role specialization and metadata batching.

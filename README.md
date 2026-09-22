@@ -64,6 +64,8 @@ The [HTTP/1 implementation plan](docs/http1-fsm-plan.md) applies that pattern
 through independent native-FSM and Kimojio consumers.
 The [standalone HTTP/1 crate](kimojio-fsm-http1/README.md) contains synchronous
 client and server machines with caller-owned I/O execution.
+Before performance work on any FSM, consult the [reusable performance lessons](docs/fsm-performance-lessons.md)
+and the [HTTP/1 optimization session record](docs/http1-core-study/session-summary.md).
 
 | Component | Purpose |
 | --- | --- |
