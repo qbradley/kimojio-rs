@@ -11,6 +11,10 @@ mod operations;
 mod state;
 mod types;
 
+#[cfg(feature = "bench-internals")]
+#[doc(hidden)]
+pub mod benchmark;
+
 pub use connection::{Client, Server};
 pub use observation::*;
 pub use operations::*;

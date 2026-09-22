@@ -13,6 +13,8 @@ httparse.workspace = true
 
 [features]
 metrics = []
+# Unstable, opt-in support for simulated-I/O benchmarks only.
+bench-internals = []
 
 [dev-dependencies]
 criterion.workspace = true

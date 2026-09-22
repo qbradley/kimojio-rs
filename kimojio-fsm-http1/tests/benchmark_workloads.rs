@@ -1,6 +1,10 @@
 #[path = "../benches/support/mod.rs"]
 mod support;
 
+#[cfg(feature = "bench-internals")]
+#[path = "support/replay_workloads.rs"]
+mod replay_workloads;
+
 use support::{IO_BYTES, Scenario, client, server};
 
 #[test]

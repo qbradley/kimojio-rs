@@ -707,8 +707,9 @@ The request limit permits continued reuse throughout warmup and measurement.
 
 Connection construction, payload generation, and peer-wire construction occur outside the timed loop.
 Outgoing payloads borrow prepared slices without payload allocation or copying.
-Incoming transport simulation copies bytes into the receive buffer during the timed loop.
-The measurements include those copies, FSM metadata allocations, callback handling, completion forwarding, and constant-time success checks.
+The historical `http1/...` groups copy incoming bytes into the receive buffer during the timed loop.
+The opt-in `http1_replay/...` groups remove that simulated transport copy, as described below.
+Both modes include FSM metadata allocations, callback handling, completion forwarding, and constant-time success checks.
 They exclude full payload comparisons and application processing.
 They measure FSM-plus-driver elapsed cost, not isolated CPU cycles or network throughput.
 
@@ -718,7 +719,7 @@ Both paths use `black_box` for wire slices, received payload views, and returned
 A failed or incomplete exchange stops the benchmark instead of contributing a timing sample.
 Criterion reports time per exchange and aggregate payload throughput across both directions: 256 B or 2 MiB per iteration.
 
-Run all measurements:
+Run the historical copy-in measurements:
 
 ```sh
 cargo bench -p kimojio-fsm-http1 --bench roundtrip
@@ -733,6 +734,49 @@ cargo test -p kimojio-fsm-http1 --test benchmark_workloads
 
 The workload tests include repeated connection reuse, one-byte reads and writes, and chunks with a short final payload.
 They also compare callback modes and the timed path against the full byte-checking path.
+
+### Preloaded receive replay
+
+Enable `bench-internals` to register the additional `http1_replay/...` groups:
+
+```sh
+# Recommended for isolating core costs from simulated receive copying:
+cargo bench -p kimojio-fsm-http1 --features bench-internals --bench roundtrip -- http1_replay
+# Both modes in the same executable:
+cargo bench -p kimojio-fsm-http1 --features bench-internals --bench roundtrip
+# Validate both modes without a full timing run:
+cargo bench -p kimojio-fsm-http1 --features bench-internals --bench roundtrip -- --test
+cargo test -p kimojio-fsm-http1 --features bench-internals --test benchmark_workloads
+```
+
+Replay prepares one initialized 16 KiB buffer per simulated read before timing,
+including padding for the last short read. At completion, a benchmark-only helper
+exchanges buffers without changing the original read's identity, range, or capacity.
+The previously used buffer returns to its fixture slot before the next is selected.
+The active slot survives exchange boundaries, including a server's prefetched next
+read. Repeating a single-slot fixture requires no exchange of buffers at all.
+No payload copying, fixture rebuilding, or receive-buffer allocation occurs inside
+the replay loop. Core-internal metadata copying and allocations remain measured.
+The core buffer type remains `Vec<u8>` in both modes; transport selection is static.
+
+The `bench-internals` feature exposes only a hidden, unstable simulated-I/O helper.
+It is disabled by default and must not be used with real outstanding I/O or
+registered buffers. The ordinary `ReadOp` API and production FSM are unchanged.
+
+Replay tests compare full wire/payload validation, statistics, and ordered core log
+events with copy-in mode. They cover both callback modes, short reads/writes,
+partial chunks, over 1,000 reused exchanges, and fixture reconfiguration while a
+next-exchange read is pending. Event tracing is disabled in timed `CHECK=false`
+instantiations.
+
+Replay changes cache behavior and working set: prepared buffer storage is roughly
+`ceil(wire_bytes / min(read_limit, 16 KiB)) * 16 KiB`, plus vector bookkeeping and
+the spare buffer. One-byte-read fixtures should therefore remain small. This is
+not a model of production buffer retention. Throughput still counts logical payload
+bytes, not bytes physically copied. Do not subtract the two modes to infer an exact
+copy cost or interpret replay speedups as network throughput gains. Keep copy-in
+as a complementary transport-inclusive control and compare revisions within a mode.
+Re-establish baselines when changing benchmark support code.
 
 ### Revision comparisons
 

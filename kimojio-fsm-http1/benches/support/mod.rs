@@ -2,6 +2,11 @@ use kimojio_fsm_http1::*;
 use std::hint::black_box;
 use std::io::Write;
 
+mod input;
+#[cfg(feature = "bench-internals")]
+pub use input::ReplayInput;
+pub use input::{CopyInput, ReceiveMode};
+
 pub const IO_BYTES: usize = 16 * 1024;
 const REQUEST_HEADERS: &[Header<'static>] = &[
     Header {
@@ -129,7 +134,8 @@ pub struct Stats {
     pub trailers: usize,
 }
 
-pub struct Transport<'a, const YIELD: bool, const CHECK: bool> {
+pub struct Transport<'a, const YIELD: bool, const CHECK: bool, I = CopyInput> {
+    receive_mode: I,
     input: &'a [u8],
     incoming_body: &'a [u8],
     output: &'a [u8],
@@ -148,9 +154,11 @@ pub struct Transport<'a, const YIELD: bool, const CHECK: bool> {
     finished: Option<ExchangeFinished>,
     exchange: Option<ExchangeId>,
     stats: Stats,
+    #[cfg(test)]
+    trace: Vec<LogEvent>,
 }
 
-impl<'a, const YIELD: bool, const CHECK: bool> Transport<'a, YIELD, CHECK> {
+impl<'a, const YIELD: bool, const CHECK: bool, I: ReceiveMode> Transport<'a, YIELD, CHECK, I> {
     fn new(scenario: &'a Scenario, server: bool) -> Self {
         let (input, incoming_body, output, outgoing_body) = if server {
             (
@@ -168,6 +176,7 @@ impl<'a, const YIELD: bool, const CHECK: bool> Transport<'a, YIELD, CHECK> {
             )
         };
         Self {
+            receive_mode: I::new(input, IO_BYTES),
             input,
             incoming_body,
             output,
@@ -186,6 +195,8 @@ impl<'a, const YIELD: bool, const CHECK: bool> Transport<'a, YIELD, CHECK> {
             finished: None,
             exchange: None,
             stats: Stats::default(),
+            #[cfg(test)]
+            trace: Vec::new(),
         }
     }
 
@@ -207,18 +218,29 @@ impl<'a, const YIELD: bool, const CHECK: bool> Transport<'a, YIELD, CHECK> {
         assert!(self.write.is_none() && self.body.is_none() && self.head.is_none());
         assert!(self.demand.is_none() && self.incoming.is_none() && self.finished.is_none());
         // A reusable server can already own the read for the following request.
+        self.receive_mode.begin();
         self.read_at = 0;
         self.write_at = 0;
         self.send_at = 0;
         self.exchange = None;
         self.stats = Stats::default();
+        #[cfg(test)]
+        if CHECK {
+            self.trace.clear();
+        }
     }
 }
 
-impl<'a, const YIELD: bool, const CHECK: bool> Ports<Vec<u8>, &'a [u8]>
-    for Transport<'a, YIELD, CHECK>
+impl<'a, const YIELD: bool, const CHECK: bool, I: ReceiveMode> Ports<Vec<u8>, &'a [u8]>
+    for Transport<'a, YIELD, CHECK, I>
 {
     type Output = ();
+    #[cfg(test)]
+    fn log(&mut self, _: ConnectionId, _: Tick, event: LogEvent) {
+        if CHECK {
+            self.trace.push(event);
+        }
+    }
     fn read(&mut self, op: ReadOp<Vec<u8>>) -> Option<()> {
         assert!(self.read.replace(op).is_none(), "overlapping reads");
         Self::callback()
@@ -332,8 +354,8 @@ impl<'a, const YIELD: bool, const CHECK: bool> Ports<Vec<u8>, &'a [u8]>
     }
 }
 
-impl<'a, const YIELD: bool, const CHECK: bool> ClientPorts<Vec<u8>, &'a [u8]>
-    for Transport<'a, YIELD, CHECK>
+impl<'a, const YIELD: bool, const CHECK: bool, I: ReceiveMode> ClientPorts<Vec<u8>, &'a [u8]>
+    for Transport<'a, YIELD, CHECK, I>
 {
     fn response(
         &mut self,
@@ -353,8 +375,8 @@ impl<'a, const YIELD: bool, const CHECK: bool> ClientPorts<Vec<u8>, &'a [u8]>
     }
 }
 
-impl<'a, const YIELD: bool, const CHECK: bool> ServerPorts<Vec<u8>, &'a [u8]>
-    for Transport<'a, YIELD, CHECK>
+impl<'a, const YIELD: bool, const CHECK: bool, I: ReceiveMode> ServerPorts<Vec<u8>, &'a [u8]>
+    for Transport<'a, YIELD, CHECK, I>
 {
     fn request(&mut self, exchange: ExchangeId, head: RequestHead<'_>) -> Option<()> {
         let head = black_box(head);
@@ -372,9 +394,9 @@ impl<'a, const YIELD: bool, const CHECK: bool> ServerPorts<Vec<u8>, &'a [u8]>
 // large operations or a dynamic-dispatch cost in each completion.
 pub trait Endpoint<'a> {
     const SERVER: bool;
-    fn next<const YIELD: bool, const CHECK: bool>(
+    fn next<const YIELD: bool, const CHECK: bool, I: ReceiveMode>(
         &mut self,
-        ports: &mut Transport<'a, YIELD, CHECK>,
+        ports: &mut Transport<'a, YIELD, CHECK, I>,
     ) -> Option<()>;
     fn begin(&mut self, scenario: &Scenario) -> Option<ExchangeId>;
     fn incoming(&mut self, exchange: ExchangeId, scenario: &Scenario);
@@ -387,9 +409,9 @@ pub trait Endpoint<'a> {
 
 impl<'a> Endpoint<'a> for Client<Vec<u8>, &'a [u8]> {
     const SERVER: bool = false;
-    fn next<const YIELD: bool, const CHECK: bool>(
+    fn next<const YIELD: bool, const CHECK: bool, I: ReceiveMode>(
         &mut self,
-        ports: &mut Transport<'a, YIELD, CHECK>,
+        ports: &mut Transport<'a, YIELD, CHECK, I>,
     ) -> Option<()> {
         self.next(ports)
     }
@@ -416,9 +438,9 @@ impl<'a> Endpoint<'a> for Client<Vec<u8>, &'a [u8]> {
 
 impl<'a> Endpoint<'a> for Server<Vec<u8>, &'a [u8]> {
     const SERVER: bool = true;
-    fn next<const YIELD: bool, const CHECK: bool>(
+    fn next<const YIELD: bool, const CHECK: bool, I: ReceiveMode>(
         &mut self,
-        ports: &mut Transport<'a, YIELD, CHECK>,
+        ports: &mut Transport<'a, YIELD, CHECK, I>,
     ) -> Option<()> {
         self.next(ports)
     }
@@ -445,10 +467,10 @@ impl<'a> Endpoint<'a> for Server<Vec<u8>, &'a [u8]> {
     }
 }
 
-pub struct Session<'a, M, const YIELD: bool, const CHECK: bool> {
+pub struct Session<'a, M, const YIELD: bool, const CHECK: bool, I = CopyInput> {
     machine: M,
     scenario: &'a Scenario,
-    transport: Transport<'a, YIELD, CHECK>,
+    transport: Transport<'a, YIELD, CHECK, I>,
 }
 
 fn config(scenario: &Scenario) -> Config {
@@ -467,6 +489,19 @@ fn config(scenario: &Scenario) -> Config {
 pub fn client<const YIELD: bool, const CHECK: bool>(
     scenario: &Scenario,
 ) -> Session<'_, Client<Vec<u8>, &[u8]>, YIELD, CHECK> {
+    client_with_input::<CopyInput, YIELD, CHECK>(scenario)
+}
+
+#[cfg(feature = "bench-internals")]
+pub fn replay_client<const YIELD: bool, const CHECK: bool>(
+    scenario: &Scenario,
+) -> Session<'_, Client<Vec<u8>, &[u8]>, YIELD, CHECK, ReplayInput> {
+    client_with_input::<ReplayInput, YIELD, CHECK>(scenario)
+}
+
+fn client_with_input<I: ReceiveMode, const YIELD: bool, const CHECK: bool>(
+    scenario: &Scenario,
+) -> Session<'_, Client<Vec<u8>, &[u8]>, YIELD, CHECK, I> {
     Session {
         machine: Client::with_output_type(
             ConnectionId {
@@ -486,6 +521,19 @@ pub fn client<const YIELD: bool, const CHECK: bool>(
 pub fn server<const YIELD: bool, const CHECK: bool>(
     scenario: &Scenario,
 ) -> Session<'_, Server<Vec<u8>, &[u8]>, YIELD, CHECK> {
+    server_with_input::<CopyInput, YIELD, CHECK>(scenario)
+}
+
+#[cfg(feature = "bench-internals")]
+pub fn replay_server<const YIELD: bool, const CHECK: bool>(
+    scenario: &Scenario,
+) -> Session<'_, Server<Vec<u8>, &[u8]>, YIELD, CHECK, ReplayInput> {
+    server_with_input::<ReplayInput, YIELD, CHECK>(scenario)
+}
+
+fn server_with_input<I: ReceiveMode, const YIELD: bool, const CHECK: bool>(
+    scenario: &Scenario,
+) -> Session<'_, Server<Vec<u8>, &[u8]>, YIELD, CHECK, I> {
     Session {
         machine: Server::with_output_type(
             ConnectionId {
@@ -502,7 +550,9 @@ pub fn server<const YIELD: bool, const CHECK: bool>(
     }
 }
 
-impl<'a, M: Endpoint<'a>, const YIELD: bool, const CHECK: bool> Session<'a, M, YIELD, CHECK> {
+impl<'a, M: Endpoint<'a>, const YIELD: bool, const CHECK: bool, I: ReceiveMode>
+    Session<'a, M, YIELD, CHECK, I>
+{
     pub fn round_trip(&mut self) -> Stats {
         let t = &mut self.transport;
         t.begin();
@@ -553,8 +603,7 @@ impl<'a, M: Endpoint<'a>, const YIELD: bool, const CHECK: bool> Session<'a, M, Y
                     .min(read.bytes_mut().len())
                     .min(t.read_limit);
                 assert!(count > 0);
-                read.bytes_mut()[..count]
-                    .copy_from_slice(black_box(&t.input[t.read_at..t.read_at + count]));
+                t.receive_mode.fill(&mut read, t.input, t.read_at, count);
                 t.read_at += count;
                 t.stats.reads += 1;
                 self.machine.read(read.complete(Ok(count)));
@@ -587,11 +636,21 @@ impl<'a, M: Endpoint<'a>, const YIELD: bool, const CHECK: bool> Session<'a, M, Y
 }
 
 #[cfg(test)]
-impl<'a, M: Endpoint<'a>, const YIELD: bool, const CHECK: bool> Session<'a, M, YIELD, CHECK> {
+impl<'a, M: Endpoint<'a>, const YIELD: bool, const CHECK: bool, I: ReceiveMode>
+    Session<'a, M, YIELD, CHECK, I>
+{
+    #[allow(dead_code)]
+    pub fn trace(&self) -> &[LogEvent] {
+        &self.transport.trace
+    }
+
     // Cargo also sets cfg(test) for the harness-free benchmark.
     #[allow(dead_code)]
     pub fn fragment(&mut self, read: usize, write: usize) {
         assert!(read > 0 && write > 0);
+        // Rebuilding fixtures is setup, outside round_trip and timing. A pending
+        // next-exchange read still owns its buffer; that becomes the new spare.
+        self.transport.receive_mode = I::new(self.transport.input, read);
         self.transport.read_limit = read;
         self.transport.write_limit = write;
     }
