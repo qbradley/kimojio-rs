@@ -1,0 +1,14 @@
+INFO: detected rust-toolchain file /workspace/kimojio-rs-2/rust-toolchain.toml - default toolchain will be overridden by 1.98.1
+   Compiling kimojio-fsm-http1 v0.17.0 (/workspace/kimojio-rs-2/kimojio-fsm-http1)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
+     Running tests/benchmark_workloads.rs (target/debug/deps/benchmark_workloads-9c5b9a39d4c1aa1c)
+
+running 6 tests
+test driver_handles_fragmented_metadata_and_short_scatter_gather_writes ... ok
+test replay_workloads::replay_preserves_fragmentation_and_can_rebuild_with_a_pending_read ... ok
+test reusable_sessions_outlive_the_default_request_limit ... ok
+test all_timed_workloads_validate_bytes_and_reuse_the_connection ... ok
+test replay_workloads::replay_matches_copy_for_all_timed_workloads_and_callback_modes ... ok
+test replay_workloads::replay_reuses_single_and_multiple_fixture_slots_without_replenishing_bytes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s

@@ -1,0 +1,28 @@
+# Total Lost Samples: 0
+# Samples: 10K of event 'cpu-clock:u'
+# Event count (approx.): 10552657689
+    19.94%  [.] <kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::next::<false, false, roundtrip::support::input::ReplayInput>
+    14.27%  [.] <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition
+    13.42%  [.] <roundtrip::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, false, false, roundtrip::support::input::ReplayInput>>::round_trip
+     4.95%  [.] <kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::release
+     4.70%  [.] <roundtrip::support::Transport<false, false, roundtrip::support::input::ReplayInput> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body
+     3.93%  [.] <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body
+     3.38%  [.] <roundtrip::support::Transport<false, false, roundtrip::support::input::ReplayInput> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write
+     3.37%  [.] <kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::send
+     3.36%  [.] <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::settle_write
+     3.15%  [.] kimojio_fsm_http1::codec::chunk_size
+     2.63%  [.] kimojio_fsm_http1::connection::coordinator::metadata_span
+     2.55%  [.] <kimojio_fsm_http1::operations::WriteOp<&[u8]>>::slices
+     2.52%  [.] 0x00000000001697d3
+     2.08%  [.] <kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::write
+     1.49%  [.] 0x00000000001697c0
+     1.43%  [.] <roundtrip::support::input::ReplayInput as roundtrip::support::input::ReceiveMode>::fill
+     1.33%  [.] <kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::read
+     1.24%  [.] kimojio_fsm_http1::codec::encode_chunk_size
+     1.14%  [.] 0x000000000016989d
+     0.74%  [.] 0x00000000001698bc
+     0.70%  [.] 0x0000000000169896
+     0.67%  [.] <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::progress
+     0.65%  [.] 0x00000000001698f7
+     0.62%  [.] <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::issue_write::<roundtrip::support::Transport<false, false, roundtrip::support::input::ReplayInput>>
+     0.58%  [.] 0x00000000001698d4

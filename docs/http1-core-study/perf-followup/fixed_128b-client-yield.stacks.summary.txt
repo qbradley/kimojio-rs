@@ -1,0 +1,53 @@
+fixed_128b-client-yield.stacks: 10573 samples; weighted by recorded cpu-clock period
+
+SELF/INLINE REGIONS (non-additive where nested)
+ 13.00% libc total
+ 12.09% httparse
+ 11.79% libc copy implementation
+  9.10% metadata_span
+  7.42% header validation
+  7.24% semantic header checks
+  4.78% HeadWriter append
+  4.71% selector
+  4.09% receive metadata (inlined)
+  1.44% prepare_body
+  1.08% deliver_body
+  0.77% release_body
+
+PHYSICAL SELF SYMBOLS
+ 12.08% [unknown]
+ 12.02% <kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::next::<true, false, roundtrip::support::input::ReplayInput>
+  9.10% kimojio_fsm_http1::connection::coordinator::metadata_span
+  7.62% <roundtrip::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, true, false, roundtrip::support::input::ReplayInput>>::round_trip
+  7.42% kimojio_fsm_http1::codec::valid_headers
+  4.78% <kimojio_fsm_http1::codec::HeadWriter>::append
+  4.71% <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::next_transition
+  4.28% httparse::parse_headers_iter_uninit
+  3.68% kimojio_fsm_http1::codec::encode_request
+  3.23% kimojio_fsm_http1::codec::framing
+  2.68% <kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::begin
+  2.24% <roundtrip::support::Transport<true, false, roundtrip::support::input::ReplayInput> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write
+  1.73% <kimojio_fsm_http1::operations::WriteOp<&[u8]>>::slices
+  1.73% <httparse::Response>::parse_with_config_and_uninit_headers
+  1.65% <kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::write
+  1.49% <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::settle_write
+  1.44% <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body
+  1.41% httparse::simd::avx2::match_header_value_vectored
+  1.32% kimojio_fsm_http1::codec::host
+  1.24% <kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::send
+  1.10% <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::retire_exchange
+  1.09% kimojio_fsm_http1::codec::has_token
+  0.95% <roundtrip::support::Transport<true, false, roundtrip::support::input::ReplayInput> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body
+  0.90% kimojio_fsm_http1::codec::append_framing
+  0.87% kimojio_fsm_http1::codec::connection_fields
+
+COPY IMPLEMENTATION: IMMEDIATE CALLERS (percent of all samples; incomplete unwind caveat)
+  3.40% <kimojio_fsm_http1::codec::HeadWriter>::append+0xc1
+  2.54% <roundtrip::support::Session<kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]>, true, false, roundtrip::support::input::ReplayInput>>::round_trip+0x327
+  1.85% <roundtrip::support::Transport<true, false, roundtrip::support::input::ReplayInput> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write+0x9b
+  1.74% <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::issue_write::<roundtrip::support::Transport<true, false, roundtrip::support::input::ReplayInput>>+0x250
+  1.05% <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::issue_write::<roundtrip::support::Transport<true, false, roundtrip::support::input::ReplayInput>>+0x10b
+  0.44% <kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::next::<true, false, roundtrip::support::input::ReplayInput>+0x9c4
+  0.29% <kimojio_fsm_http1::connection::Client<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::write+0x101
+  0.29% <roundtrip::support::Transport<true, false, roundtrip::support::input::ReplayInput> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write+0xc2
+  0.19% <roundtrip::support::Transport<true, false, roundtrip::support::input::ReplayInput> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body+0xdc

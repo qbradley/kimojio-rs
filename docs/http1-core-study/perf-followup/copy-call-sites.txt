@@ -1,0 +1,6 @@
+<core::option::Option<kimojio_fsm_http1::operations::WriteOp<&[u8]>>>::unwrap
+/rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/option.rs:1013
+<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::issue_write::<roundtrip::support::Transport<false, false, roundtrip::support::input::ReplayInput>>
+/workspace/kimojio-rs-2/kimojio-fsm-http1/src/coordinator.rs:539
+<kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::issue_write::<roundtrip::support::Transport<false, false, roundtrip::support::input::ReplayInput>>
+/workspace/kimojio-rs-2/kimojio-fsm-http1/src/coordinator.rs:543

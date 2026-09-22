@@ -1,0 +1,179 @@
+{
+  "chunked_1mib-client-continue.stacks": {
+    "samples": 10521,
+    "percent": {
+      "selector": 14.27,
+      "deliver_body": 4.99,
+      "libc total": 9.93,
+      "libc copy implementation": 9.83,
+      "metadata_span": 2.63,
+      "encode_chunk_size": 1.24,
+      "receive metadata (inlined)": 6.11,
+      "prepare_body": 3.93,
+      "release_body": 4.79,
+      "chunk_size": 3.15,
+      "HeadWriter append": 0.21,
+      "httparse": 0.67,
+      "semantic header checks": 0.29,
+      "header validation": 0.27
+    }
+  },
+  "chunked_1mib-client-yield.stacks": {
+    "samples": 10706,
+    "percent": {
+      "prepare_body": 4.77,
+      "selector": 9.98,
+      "libc total": 11.62,
+      "libc copy implementation": 11.52,
+      "chunk_size": 3.29,
+      "deliver_body": 4.66,
+      "release_body": 4.16,
+      "header validation": 0.28,
+      "metadata_span": 2.88,
+      "receive metadata (inlined)": 5.57,
+      "HeadWriter append": 0.21,
+      "encode_chunk_size": 1.24,
+      "httparse": 0.83,
+      "semantic header checks": 0.3
+    }
+  },
+  "chunked_1mib-server-continue.stacks": {
+    "samples": 9331,
+    "percent": {
+      "selector": 15.74,
+      "receive metadata (inlined)": 6.12,
+      "libc total": 9.1,
+      "libc copy implementation": 8.97,
+      "metadata_span": 3.12,
+      "chunk_size": 2.81,
+      "release_body": 4.89,
+      "deliver_body": 5.06,
+      "prepare_body": 6.52,
+      "httparse": 0.71,
+      "header validation": 0.18,
+      "encode_chunk_size": 1.05,
+      "semantic header checks": 0.28,
+      "HeadWriter append": 0.08
+    }
+  },
+  "chunked_1mib-server-yield.stacks": {
+    "samples": 10373,
+    "percent": {
+      "libc total": 10.63,
+      "libc copy implementation": 10.55,
+      "selector": 10.93,
+      "release_body": 5.29,
+      "deliver_body": 5.08,
+      "chunk_size": 2.94,
+      "receive metadata (inlined)": 5.6,
+      "prepare_body": 4.57,
+      "metadata_span": 3.1,
+      "encode_chunk_size": 1.52,
+      "httparse": 0.74,
+      "header validation": 0.27,
+      "HeadWriter append": 0.04,
+      "semantic header checks": 0.23
+    }
+  },
+  "fixed_128b-client-continue.stacks": {
+    "samples": 10205,
+    "percent": {
+      "libc total": 14.01,
+      "libc copy implementation": 12.04,
+      "metadata_span": 8.23,
+      "selector": 7.92,
+      "httparse": 11.68,
+      "prepare_body": 1.02,
+      "semantic header checks": 7.83,
+      "receive metadata (inlined)": 3.44,
+      "header validation": 7.33,
+      "HeadWriter append": 4.81,
+      "release_body": 0.89,
+      "deliver_body": 0.91
+    }
+  },
+  "fixed_128b-client-yield.stacks": {
+    "samples": 10573,
+    "percent": {
+      "deliver_body": 1.08,
+      "header validation": 7.42,
+      "libc total": 13.0,
+      "libc copy implementation": 11.79,
+      "metadata_span": 9.1,
+      "httparse": 12.09,
+      "HeadWriter append": 4.78,
+      "receive metadata (inlined)": 4.09,
+      "semantic header checks": 7.24,
+      "prepare_body": 1.44,
+      "selector": 4.71,
+      "release_body": 0.77
+    }
+  },
+  "fixed_128b-server-continue.stacks": {
+    "samples": 10607,
+    "percent": {
+      "httparse": 13.31,
+      "receive metadata (inlined)": 3.25,
+      "metadata_span": 11.11,
+      "libc total": 9.64,
+      "libc copy implementation": 7.77,
+      "selector": 10.25,
+      "semantic header checks": 7.64,
+      "release_body": 0.74,
+      "header validation": 4.74,
+      "deliver_body": 1.11,
+      "HeadWriter append": 3.7,
+      "prepare_body": 1.09
+    }
+  },
+  "fixed_128b-server-yield.stacks": {
+    "samples": 10551,
+    "percent": {
+      "libc total": 10.77,
+      "libc copy implementation": 9.71,
+      "semantic header checks": 7.67,
+      "metadata_span": 12.86,
+      "httparse": 13.54,
+      "receive metadata (inlined)": 3.57,
+      "selector": 5.19,
+      "HeadWriter append": 3.04,
+      "header validation": 5.55,
+      "deliver_body": 1.45,
+      "release_body": 1.01,
+      "prepare_body": 1.14
+    }
+  },
+  "fp-chunk-server.stacks": {
+    "samples": 10563,
+    "percent": {
+      "selector": 18.07,
+      "libc total": 9.25,
+      "libc copy implementation": 9.15,
+      "metadata_span": 3.87,
+      "httparse": 0.59,
+      "prepare_body": 4.33,
+      "chunk_size": 3.01,
+      "encode_chunk_size": 1.05,
+      "header validation": 0.27,
+      "semantic header checks": 0.23,
+      "HeadWriter append": 0.17
+    }
+  },
+  "fp-fixed-client.stacks": {
+    "samples": 10499,
+    "percent": {
+      "selector": 7.43,
+      "httparse": 11.29,
+      "semantic header checks": 6.67,
+      "metadata_span": 8.16,
+      "header validation": 6.9,
+      "release_body": 0.85,
+      "libc total": 9.16,
+      "libc copy implementation": 8.0,
+      "HeadWriter append": 5.44,
+      "receive metadata (inlined)": 3.64,
+      "deliver_body": 0.89,
+      "prepare_body": 1.16
+    }
+  }
+}

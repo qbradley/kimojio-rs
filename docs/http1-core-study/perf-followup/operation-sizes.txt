@@ -1,0 +1,10 @@
+ConnectionId: 16 bytes
+ExchangeId: 24 bytes
+BodyId: 24 bytes
+OperationId: 32 bytes
+SendBody<&[u8]>: 64 bytes
+WriteOp<&[u8]>: 168 bytes
+WriteCompletion<&[u8]>: 184 bytes
+ReadOp<Vec<u8>>: 72 bytes
+BodyOp<Vec<u8>>: 104 bytes
+BodyCompletion<Vec<u8>>: 112 bytes
