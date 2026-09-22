@@ -111,3 +111,76 @@ The fixed cases improve about 0.5–4%. Chunked runs vary considerably between
 trials; the paired means range from essentially unchanged to 5% lower. Do not
 claim the whole metadata CPU share was eliminated: delimiter scanning and HTTP
 semantic validation still occur.
+
+## Change 3: local chunk continuations (`uwoyuprr`)
+
+After accepting a chunk CRLF or size, buffered input can continue directly to
+Size/Trailers metadata or body delivery (with credit), instead of traversing the
+full selector again. No continuation is cached in the core. This optimization
+is limited to internal actions with no callback, timer update, or cross-direction
+policy change; it returns at a body/head/trailer callback and at any error or
+input/credit boundary. Debug builds compare every chosen successor with the full
+selector. Read sizes, body delivery segmentation, and separate release/credit
+commands are unchanged. No new public batching API was added.
+
+Differential streaming tests use the old full-selection, buffering-only driver
+as the reference for both roles, all callback policies, credit suspension after
+zero consumption, advancing timers, chunk metadata limits, and abort with an
+outstanding body lease. They compare consumed payload, complete core state,
+callback traces, and logs. Existing fragmentation, reuse, short-write, early-
+response, cancellation, and handoff tests continue to pass.
+
+For `metadata-control-a/b.txt` versus `continuations-a/b.txt`, paired mean
+chunked times improve by 6–8%. Fixed-message results are mixed: client/continue
+and server/continue means are about 2% higher, client/yield about 1% lower, and
+server/yield about 0.5% higher. Retain this small-message tradeoff explicitly;
+do not infer that every scheduler optimization helps every workload.
+
+### Final baseline-to-stack comparison
+
+Fresh before/final/final/before runs, same optimized + debug-info build settings
+on CPU 13 (`before-final-a/b.txt`, `final-a/b.txt`). Means of point estimates in us:
+
+| Case | Before stack | Final stack | Time change |
+| --- | ---: | ---: | ---: |
+| fixed/client/continue | 0.88669 | 0.85850 | -3.2% |
+| fixed/client/yield | 0.85605 | 0.82692 | -3.4% |
+| fixed/server/continue | 0.93716 | 0.89199 | -4.8% |
+| fixed/server/yield | 0.88191 | 0.84158 | -4.6% |
+| chunked/client/continue | 20.7725 | 18.0040 | -13.3% |
+| chunked/client/yield | 19.9075 | 17.3620 | -12.8% |
+| chunked/server/continue | 21.0665 | 18.4930 | -12.2% |
+| chunked/server/yield | 20.1890 | 17.8100 | -11.8% |
+
+These are matched end-to-end comparisons, not sums of per-change percentages.
+The shared host still creates run-to-run variation, particularly in large cases.
+
+### Validation and perf reassessment
+
+- HTTP/1 all features: 144 tests passed in debug and 144 in release.
+- HTTP/1 default features: 136 tests passed.
+- HTTP/2 all features, including composition: 316 tests passed.
+- Clippy, all HTTP/1 targets/features, warnings denied: passed.
+- New/changed Rust files pass rustfmt checks with toolchain 1.98.1.
+
+`before-perf.self.txt` and `final-perf.self.txt` are fresh server/continue 1 MiB
+profiles. Both use `cpu-clock:u`, 997 Hz, DWARF 16 KiB stacks, a one-second recording
+delay, eight seconds of replay, CPU 13, and the same two debug-info binaries as
+the final comparison. No samples were reported lost. Hardware counters remain
+unavailable, and normal-build DWARF stacks have the same limitations documented
+in the previous perf report; use self-PC attribution rather than deep inclusive
+stacks.
+
+Summing all sampled PCs in this host's resolved libc copy implementation gives
+approximately **10% before versus 5% after**. The retained self reports show only
+symbols at least 0.5%; the total was computed with percent-limit zero, so cannot
+be recovered by adding just those displayed rows. The selector remains important
+(about 15% before versus 14% after), while chunk_size falls from about 2.8% to
+1.6%. Inlining changes symbol attribution, so disappearing prepare_body/issue_write
+symbols do not mean their entire work vanished.
+
+Operation sizes and public ownership contracts remain unchanged. Completion and
+port-side movement still exist; not all residual libc-copy samples belong to the
+core. This is the evidence for the next stable-slot/owned-lease decision—not a
+claim that such a redesign is now necessary. This stack deliberately does not
+implement stable storage, pointer-owning operations, or per-chunk allocation.

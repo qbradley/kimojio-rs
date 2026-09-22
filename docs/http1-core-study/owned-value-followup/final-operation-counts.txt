@@ -1,0 +1,8 @@
+fixed client continue Stats { reads: 1, writes: 2, received: 128, sent: 128, body_deliveries: 1, receipts: 1, heads: 1, incoming: 1, sources: 1, trailers: 0 }
+fixed client yield Stats { reads: 1, writes: 2, received: 128, sent: 128, body_deliveries: 1, receipts: 1, heads: 1, incoming: 1, sources: 1, trailers: 0 }
+fixed server continue Stats { reads: 1, writes: 2, received: 128, sent: 128, body_deliveries: 1, receipts: 1, heads: 1, incoming: 1, sources: 1, trailers: 0 }
+fixed server yield Stats { reads: 1, writes: 2, received: 128, sent: 128, body_deliveries: 1, receipts: 1, heads: 1, incoming: 1, sources: 1, trailers: 0 }
+chunked client continue Stats { reads: 65, writes: 66, received: 1048576, sent: 1048576, body_deliveries: 128, receipts: 64, heads: 1, incoming: 1, sources: 1, trailers: 1 }
+chunked client yield Stats { reads: 65, writes: 66, received: 1048576, sent: 1048576, body_deliveries: 128, receipts: 64, heads: 1, incoming: 1, sources: 1, trailers: 1 }
+chunked server continue Stats { reads: 65, writes: 66, received: 1048576, sent: 1048576, body_deliveries: 128, receipts: 64, heads: 1, incoming: 1, sources: 1, trailers: 1 }
+chunked server yield Stats { reads: 65, writes: 66, received: 1048576, sent: 1048576, body_deliveries: 128, receipts: 64, heads: 1, incoming: 1, sources: 1, trailers: 1 }

@@ -143,6 +143,102 @@ fn contiguous_and_fragmented_metadata_match_buffered_reference_at_every_split() 
 }
 
 #[test]
+fn chunk_continuations_match_full_selection_with_credit_deadlines_and_abort() {
+    #[derive(Debug, Eq, PartialEq)]
+    struct Outcome {
+        state: String,
+        callbacks: Vec<String>,
+        logs: Vec<(ConnectionId, Tick, LogEvent)>,
+        consumed: Vec<u8>,
+    }
+    fn run<const SERVER: bool>(mode: Drive, limit: usize, abort: bool, timers: bool) -> Outcome {
+        let wire = b"2\r\nab\r\n2\r\nab\r\n2\r\nab\r\n0\r\n\r\nTAIL";
+        let (mut core, mut observer) = metadata_fixture::<SERVER>(Rx::Size, 128, mode);
+        if !SERVER {
+            // Model a client whose bodyless upload has already settled; the
+            // independently arriving chunked response is now ready to consume.
+            core.output = None;
+            core.tx = Transmit::begin(Framing::Empty);
+            core.tx.settle();
+            core.exchange.as_mut().unwrap().source_notification = Notification::Delivered;
+            core.close_after = true;
+            observer.sources = 1;
+        }
+        observer.expected_receipts = 0;
+        let ReceiveStorage::Available(buffer) = &mut core.receive else {
+            unreachable!()
+        };
+        buffer[..wire.len()].copy_from_slice(wire);
+        core.end = wire.len();
+        core.config.max_chunk_metadata_bytes = limit;
+        core.config.body_timeout_ns = timers.then_some(100);
+        core.set_deadline(TimerPhase::Body, core.config.body_timeout_ns)
+            .unwrap();
+        let exchange = core.exchange.as_ref().unwrap().id;
+        core.grant_body_credit(exchange, 2).unwrap();
+        let mut consumed = Vec::new();
+        let mut withheld = false;
+        for step in 0..8 {
+            drive(&mut core, &mut observer);
+            let Some(body) = observer.body.take() else {
+                break;
+            };
+            if !withheld {
+                // Returning zero must suspend delivery even with buffered data.
+                core.release_body(body.release(0)).unwrap();
+                drive(&mut core, &mut observer);
+                assert!(observer.body.is_none());
+                core.grant_body_credit(exchange, 2).unwrap();
+                withheld = true;
+                continue;
+            }
+            consumed.extend_from_slice(body.bytes());
+            if abort {
+                core.shutdown(ShutdownMode::Abort);
+                drive(&mut core, &mut observer);
+                assert!(observer.close.is_none(), "held body still owns storage");
+            }
+            core.observe_time(Tick(step + 1)).unwrap();
+            core.release_body(body.release(2)).unwrap();
+            if core.failure.is_none() {
+                core.grant_body_credit(exchange, 2).unwrap();
+            }
+        }
+        drive(&mut core, &mut observer);
+        assert!(observer.body.is_none());
+        if !abort && limit == usize::MAX {
+            assert_eq!(consumed, b"ababab");
+            assert_eq!(
+                &core.receive.buffer().unwrap()[core.start..core.end],
+                b"TAIL"
+            );
+        } else {
+            assert!(core.failure.is_some());
+        }
+        Outcome {
+            state: format!("{core:?}"),
+            callbacks: observer.trace,
+            logs: observer.logs,
+            consumed,
+        }
+    }
+    fn check<const SERVER: bool>() {
+        for limit in [4, 10, usize::MAX] {
+            for abort in [false, true] {
+                for timers in [false, true] {
+                    let expected = run::<SERVER>(Drive::Steps, limit, abort, timers);
+                    for mode in [Drive::Continue, Drive::Yield, Drive::Mixed] {
+                        assert_eq!(run::<SERVER>(mode, limit, abort, timers), expected);
+                    }
+                }
+            }
+        }
+    }
+    check::<true>();
+    check::<false>();
+}
+
+#[test]
 fn contiguous_head_borrows_input_and_restores_storage_before_yield() {
     let wire = b"GET /borrowed HTTP/1.1\r\nhost: a\r\n\r\nab";
     let (mut core, mut observer) = metadata_fixture::<true>(Rx::Head, 128, Drive::Yield);

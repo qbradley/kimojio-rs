@@ -1,0 +1,31 @@
+# Total Lost Samples: 0
+# Samples: 6K of event 'cpu-clock:u'
+# Event count (approx.): 6520561509
+    19.46%  [.] <kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::next::<false, false, roundtrip::support::input::ReplayInput>
+    15.14%  [.] <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::next_transition
+    13.78%  [.] <roundtrip::support::Session<kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]>, false, false, roundtrip::support::input::ReplayInput>>::round_trip
+     4.80%  [.] <kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::release
+     4.69%  [.] <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], false>>::prepare_body
+     4.49%  [.] <roundtrip::support::Transport<false, false, roundtrip::support::input::ReplayInput> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body
+     2.83%  [.] kimojio_fsm_http1::codec::chunk_size
+     2.72%  [.] kimojio_fsm_http1::connection::coordinator::metadata_span
+     2.66%  [.] <roundtrip::support::Transport<false, false, roundtrip::support::input::ReplayInput> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::write
+     2.66%  [.] <kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::send
+     2.65%  [.] <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::settle_body
+     2.65%  [.] 0x00000000001697d3
+     2.26%  [.] <kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::write
+     2.11%  [.] <kimojio_fsm_http1::operations::WriteOp<&[u8]>>::slices
+     1.60%  [.] <roundtrip::support::input::ReplayInput as roundtrip::support::input::ReceiveMode>::fill
+     1.54%  [.] 0x000000000016989d
+     1.45%  [.] kimojio_fsm_http1::codec::encode_chunk_size
+     1.42%  [.] 0x00000000001697c0
+     1.08%  [.] <kimojio_fsm_http1::connection::Server<alloc::vec::Vec<u8>, &[u8]> as roundtrip::support::Endpoint>::read
+     0.94%  [.] <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::progress
+     0.82%  [.] 0x00000000001698bc
+     0.72%  [.] 0x0000000000169896
+     0.68%  [.] <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::issue_write::<roundtrip::support::Transport<false, false, roundtrip::support::input::ReplayInput>>
+     0.62%  [.] <roundtrip::support::Transport<false, false, roundtrip::support::input::ReplayInput> as kimojio_fsm_http1::Ports<alloc::vec::Vec<u8>, &[u8]>>::body_sent
+     0.57%  [.] 0x000000000016990f
+     0.55%  [.] 0x00000000001698f7
+     0.54%  [.] <kimojio_fsm_http1::connection::Core<alloc::vec::Vec<u8>, &[u8], true>>::settle_write
+     0.51%  [.] 0x00000000001698d4

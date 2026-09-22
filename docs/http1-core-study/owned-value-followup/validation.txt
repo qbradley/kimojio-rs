@@ -1,0 +1,10 @@
+continuations-release-tests.txt: 144 passed, 0 failed across 19 test suites (including doctests)
+continuations-tests.txt: 144 passed, 0 failed across 19 test suites (including doctests)
+direct-release-tests.txt: 139 passed, 0 failed across 19 test suites (including doctests)
+direct-tests.txt: 139 passed, 0 failed across 19 test suites (including doctests)
+final-composition-tests.txt: 316 passed, 0 failed across 13 test suites (including doctests)
+final-default-tests.txt: 136 passed, 0 failed across 19 test suites (including doctests)
+metadata-release-tests.txt: 143 passed, 0 failed across 19 test suites (including doctests)
+metadata-tests.txt: 143 passed, 0 failed across 19 test suites (including doctests)
+cargo clippy -p kimojio-fsm-http1 --all-features --all-targets -- -D warnings: passed
+rustfmt --check on changed Rust files: passed

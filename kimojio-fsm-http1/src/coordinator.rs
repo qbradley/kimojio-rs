@@ -691,7 +691,35 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         ports: &mut P,
         head_callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
     ) -> Option<P::Output> {
-        self.receive_metadata_with::<true, P>(ports, head_callback)
+        loop {
+            let previous = self.rx;
+            if let Some(output) = self.receive_metadata_with::<true, P>(ports, head_callback) {
+                return Some(output);
+            }
+            let next = self.chunk_successor(previous)?;
+            // No callback, timer update, or cross-direction boundary occurs
+            // while accepting chunk size/CRLF metadata. The selected receive
+            // lane still has priority while bytes remain buffered. Validate the
+            // proof against the full selector in debug builds.
+            debug_assert_eq!(self.next_transition(), Some(next));
+            match next {
+                Transition::Metadata => continue,
+                Transition::Body => return self.deliver_body(ports),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    /// A local continuation, never saved across a callback or a drive return.
+    fn chunk_successor(&self, previous: Rx) -> Option<Transition> {
+        if self.start >= self.end {
+            return None;
+        }
+        match (previous, self.rx) {
+            (Rx::ChunkCrlf, Rx::Size) | (Rx::Size, Rx::Trailers) => Some(Transition::Metadata),
+            (Rx::Size, Rx::Chunk(_)) if self.credit != 0 => Some(Transition::Body),
+            _ => None,
+        }
     }
 
     // Tests retain the buffering-only path as a differential reference. The
@@ -739,17 +767,14 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                 self.start += length;
                 // Aggregate metadata limits precede syntax/body-size errors,
                 // as in the buffering-only path.
-                let result = self
-                    .account_metadata(length)
-                    .and_then(|()| parsed)
-                    .and_then(|size| {
-                        if let Some(size) = size {
-                            self.accept_chunk_size(size)
-                        } else {
-                            self.rx = Rx::Size;
-                            Ok(())
-                        }
-                    });
+                let result = self.account_metadata(length).and(parsed).and_then(|size| {
+                    if let Some(size) = size {
+                        self.accept_chunk_size(size)
+                    } else {
+                        self.rx = Rx::Size;
+                        Ok(())
+                    }
+                });
                 return self.finish_metadata(result.map(|()| None));
             }
             let start = self.start;

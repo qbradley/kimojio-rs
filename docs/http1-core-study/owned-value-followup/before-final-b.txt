@@ -1,0 +1,65 @@
+Benchmarking http1_replay/fixed_128b/client/continue
+Benchmarking http1_replay/fixed_128b/client/continue: Warming up for 1.0000 s
+Benchmarking http1_replay/fixed_128b/client/continue: Collecting 50 samples in estimated 2.0001 s (2.2M iterations)
+Benchmarking http1_replay/fixed_128b/client/continue: Analyzing
+http1_replay/fixed_128b/client/continue
+                        time:   [885.95 ns 886.79 ns 887.68 ns]
+                        thrpt:  [275.03 MiB/s 275.31 MiB/s 275.57 MiB/s]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high mild
+Benchmarking http1_replay/fixed_128b/client/yield
+Benchmarking http1_replay/fixed_128b/client/yield: Warming up for 1.0000 s
+Benchmarking http1_replay/fixed_128b/client/yield: Collecting 50 samples in estimated 2.0003 s (2.3M iterations)
+Benchmarking http1_replay/fixed_128b/client/yield: Analyzing
+http1_replay/fixed_128b/client/yield
+                        time:   [855.83 ns 857.84 ns 859.54 ns]
+                        thrpt:  [284.04 MiB/s 284.60 MiB/s 285.27 MiB/s]
+Benchmarking http1_replay/fixed_128b/server/continue
+Benchmarking http1_replay/fixed_128b/server/continue: Warming up for 1.0000 s
+Benchmarking http1_replay/fixed_128b/server/continue: Collecting 50 samples in estimated 2.0002 s (2.1M iterations)
+Benchmarking http1_replay/fixed_128b/server/continue: Analyzing
+http1_replay/fixed_128b/server/continue
+                        time:   [937.29 ns 938.18 ns 939.14 ns]
+                        thrpt:  [259.96 MiB/s 260.23 MiB/s 260.47 MiB/s]
+Found 2 outliers among 50 measurements (4.00%)
+  1 (2.00%) low mild
+  1 (2.00%) high mild
+Benchmarking http1_replay/fixed_128b/server/yield
+Benchmarking http1_replay/fixed_128b/server/yield: Warming up for 1.0000 s
+Benchmarking http1_replay/fixed_128b/server/yield: Collecting 50 samples in estimated 2.0004 s (2.2M iterations)
+Benchmarking http1_replay/fixed_128b/server/yield: Analyzing
+http1_replay/fixed_128b/server/yield
+                        time:   [882.64 ns 883.63 ns 884.62 ns]
+                        thrpt:  [275.98 MiB/s 276.29 MiB/s 276.60 MiB/s]
+
+Benchmarking http1_replay/chunked_1mib/client/continue
+Benchmarking http1_replay/chunked_1mib/client/continue: Warming up for 1.0000 s
+Benchmarking http1_replay/chunked_1mib/client/continue: Collecting 50 samples in estimated 2.0204 s (89k iterations)
+Benchmarking http1_replay/chunked_1mib/client/continue: Analyzing
+http1_replay/chunked_1mib/client/continue
+                        time:   [20.578 µs 20.940 µs 21.491 µs]
+                        thrpt:  [90.879 GiB/s 93.272 GiB/s 94.914 GiB/s]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high severe
+Benchmarking http1_replay/chunked_1mib/client/yield
+Benchmarking http1_replay/chunked_1mib/client/yield: Warming up for 1.0000 s
+Benchmarking http1_replay/chunked_1mib/client/yield: Collecting 50 samples in estimated 2.0012 s (92k iterations)
+Benchmarking http1_replay/chunked_1mib/client/yield: Analyzing
+http1_replay/chunked_1mib/client/yield
+                        time:   [19.797 µs 19.929 µs 20.063 µs]
+                        thrpt:  [97.348 GiB/s 98.003 GiB/s 98.659 GiB/s]
+Benchmarking http1_replay/chunked_1mib/server/continue
+Benchmarking http1_replay/chunked_1mib/server/continue: Warming up for 1.0000 s
+Benchmarking http1_replay/chunked_1mib/server/continue: Collecting 50 samples in estimated 2.0018 s (93k iterations)
+Benchmarking http1_replay/chunked_1mib/server/continue: Analyzing
+http1_replay/chunked_1mib/server/continue
+                        time:   [21.121 µs 21.160 µs 21.208 µs]
+                        thrpt:  [92.094 GiB/s 92.301 GiB/s 92.471 GiB/s]
+Benchmarking http1_replay/chunked_1mib/server/yield
+Benchmarking http1_replay/chunked_1mib/server/yield: Warming up for 1.0000 s
+Benchmarking http1_replay/chunked_1mib/server/yield: Collecting 50 samples in estimated 2.0157 s (88k iterations)
+Benchmarking http1_replay/chunked_1mib/server/yield: Analyzing
+http1_replay/chunked_1mib/server/yield
+                        time:   [20.194 µs 20.236 µs 20.277 µs]
+                        thrpt:  [96.321 GiB/s 96.519 GiB/s 96.719 GiB/s]
+
