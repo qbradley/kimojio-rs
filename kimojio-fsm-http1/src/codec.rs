@@ -12,11 +12,21 @@ pub(crate) enum Framing {
     Eof,
 }
 
+const TOKEN_BYTES: [bool; 256] = {
+    let mut table = [false; 256];
+    let mut byte = 0;
+    while byte < table.len() {
+        table[byte] = matches!(byte as u8,
+            b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z'
+            | b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+'
+            | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~');
+        byte += 1;
+    }
+    table
+};
+
 pub(crate) fn token(bytes: &[u8]) -> bool {
-    !bytes.is_empty()
-        && bytes
-            .iter()
-            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(b))
+    !bytes.is_empty() && bytes.iter().all(|&byte| TOKEN_BYTES[usize::from(byte)])
 }
 
 pub(crate) fn has_token(headers: Headers<'_>, name: &str, value: &[u8]) -> bool {
@@ -446,17 +456,27 @@ pub(crate) fn encode_response(
 }
 
 pub(crate) fn chunk_size(line: &[u8]) -> Result<u64, Failure> {
-    let digits = line.iter().take_while(|b| b.is_ascii_hexdigit()).count();
+    // Classify and accumulate ordinary chunk sizes in one pass, without a
+    // preliminary digit scan or Unicode character conversion. Extensions still
+    // use the same strict parser below.
+    let mut digits = 0;
+    let mut value = 0u64;
+    for &byte in line {
+        let digit = match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'a'..=b'f' => byte - b'a' + 10,
+            b'A'..=b'F' => byte - b'A' + 10,
+            _ => break,
+        };
+        value = value
+            .checked_mul(16)
+            .and_then(|value| value.checked_add(u64::from(digit)))
+            .ok_or(Failure::Protocol)?;
+        digits += 1;
+    }
     if digits == 0 {
         return Err(Failure::Protocol);
     }
-    let value = line[..digits]
-        .iter()
-        .try_fold(0u64, |n, b| {
-            n.checked_mul(16)?
-                .checked_add(u64::from((*b as char).to_digit(16)?))
-        })
-        .ok_or(Failure::Protocol)?;
     let mut cursor = digits;
     while cursor < line.len() {
         skip_whitespace(line, &mut cursor);

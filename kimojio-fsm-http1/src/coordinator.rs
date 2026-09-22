@@ -691,6 +691,16 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         ports: &mut P,
         head_callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
     ) -> Option<P::Output> {
+        self.receive_metadata_with::<true, P>(ports, head_callback)
+    }
+
+    // Tests retain the buffering-only path as a differential reference. The
+    // choice is static; production carries no extra state or runtime option.
+    fn receive_metadata_with<const DIRECT: bool, P: Ports<B, W>>(
+        &mut self,
+        ports: &mut P,
+        head_callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
+    ) -> Option<P::Output> {
         if self.rx == Rx::AwaitingRequest && self.start_request_head().is_err() {
             self.fail(Failure::SequenceExhausted);
             return None;
@@ -715,6 +725,44 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         }
         let bytes = &self.receive.buffer().unwrap().as_ref()[self.start..self.start + count];
         let (length, end) = metadata_span(bytes, &self.head, self.rx);
+        if DIRECT && self.head.is_empty() && end == MetadataEnd::Complete && length <= remaining {
+            if matches!(self.rx, Rx::Size | Rx::ChunkCrlf) {
+                // Tiny chunk metadata has no borrowed callback. Parse in place
+                // without moving the receive buffer or preparing header scratch.
+                let parsed = if self.rx == Rx::Size {
+                    codec::chunk_size(&bytes[..length - 2]).map(Some)
+                } else if &bytes[..length] == b"\r\n" {
+                    Ok(None)
+                } else {
+                    Err(Failure::Protocol)
+                };
+                self.start += length;
+                // Aggregate metadata limits precede syntax/body-size errors,
+                // as in the buffering-only path.
+                let result = self
+                    .account_metadata(length)
+                    .and_then(|()| parsed)
+                    .and_then(|size| {
+                        if let Some(size) = size {
+                            self.accept_chunk_size(size)
+                        } else {
+                            self.rx = Rx::Size;
+                            Ok(())
+                        }
+                    });
+                return self.finish_metadata(result.map(|()| None));
+            }
+            let start = self.start;
+            self.start += length;
+            // Move the buffer handle, not its bytes. Borrowed heads/trailers
+            // expire at callback return; restore ownership before errors/yields
+            // can be observed by the next drive or application command.
+            let buffer = self.receive.parse();
+            let result =
+                self.checked_metadata(&buffer.as_ref()[start..self.start], ports, head_callback);
+            self.receive.parsed(buffer);
+            return self.finish_metadata(result);
+        }
         let accepted = length.min(remaining);
         let required = self.head.len() + accepted;
         if required > self.head.capacity() {

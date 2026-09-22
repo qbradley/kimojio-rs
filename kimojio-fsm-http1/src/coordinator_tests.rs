@@ -1,6 +1,9 @@
 use super::*;
 use std::collections::HashSet;
 
+#[path = "metadata_tests.rs"]
+mod metadata;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Input {
     Read,
@@ -291,8 +294,8 @@ impl Ports<Vec<u8>> for Observer {
         self.body = Some(op);
         self.record("body".into())
     }
-    fn trailers(&mut self, _: ExchangeId, _: Headers<'_>) -> Option<()> {
-        panic!("the model uses fixed framing")
+    fn trailers(&mut self, _: ExchangeId, headers: Headers<'_>) -> Option<()> {
+        self.record(format!("trailers {headers:?}"))
     }
     fn incoming_finished(&mut self, _: ExchangeId) -> Option<()> {
         self.incoming += 1;
@@ -364,6 +367,8 @@ fn drive<const SERVER: bool>(core: &mut Core<Vec<u8>, Vec<u8>, SERVER>, observer
                     // model and its continue/yield/mixed callback trace checks.
                     core.output = Some(core.prepare_body());
                     assert_eq!(core.next_transition(), Some(Transition::Write));
+                } else if transition == Transition::Metadata {
+                    core.receive_metadata_with::<false, _>(observer, head);
                 } else {
                     core.advance(transition, observer, head);
                 }

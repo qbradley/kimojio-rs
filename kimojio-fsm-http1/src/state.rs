@@ -21,6 +21,8 @@ impl MethodSemantics {
 #[derive(Debug)]
 pub(crate) enum ReceiveStorage<B> {
     Available(B),
+    // Temporarily owned by the synchronous metadata parser, never by a port.
+    Parsing,
     Reading,
     Leased(OperationId),
     Transferred,
@@ -47,6 +49,15 @@ impl<B> ReceiveStorage<B> {
             unreachable!()
         };
         buffer
+    }
+
+    pub(crate) fn parse(&mut self) -> B {
+        self.take(Self::Parsing)
+    }
+
+    pub(crate) fn parsed(&mut self, buffer: B) {
+        assert!(matches!(self, Self::Parsing));
+        *self = Self::Available(buffer);
     }
 
     pub(crate) fn read(&mut self) -> B {
@@ -609,6 +620,12 @@ mod tests {
         };
         let address = buffer.bytes.as_ptr();
         let mut storage = ReceiveStorage::Available(buffer);
+        let buffer = storage.parse();
+        assert!(matches!(storage, ReceiveStorage::Parsing));
+        assert!(storage.buffer().is_none() && storage.lease().is_none());
+        assert_eq!(buffer.bytes.as_ptr(), address);
+        assert_eq!(drops.get(), 0);
+        storage.parsed(buffer);
         let buffer = storage.read();
         assert!(matches!(storage, ReceiveStorage::Reading));
         assert!(storage.buffer().is_none());

@@ -65,3 +65,49 @@ inlined; it does not establish that every compiler-generated operation copy has
 vanished. Reassess remaining copies after all three changes before considering
 stable storage or changing the public API. Temporary profiles, binaries, and
 full test output are in `/tmp/http1-owned-value/`.
+
+## Change 2: contiguous metadata and tiny-line fast paths (`ozqvxqxk`)
+
+Complete metadata with no buffered prefix is parsed directly from receive storage.
+Strict CRLF scanning, section boundaries, limits, and first-byte deadline behavior
+are unchanged. Fragmented input uses the previous accumulation path. For borrowed
+head/trailer callbacks the buffer is owned locally by the synchronous parser and
+restored before returning or processing an error; no read/body lease is issued.
+The transient Parsing state cannot survive a normal drive/yield boundary.
+
+Chunk size/CRLF metadata with no prefix has a separate in-place path that does
+not even move the buffer handle. Chunk digits are classified and accumulated in
+one pass; extension syntax uses the existing parser. Token validation uses a
+256-entry ASCII lookup table, tested against the old grammar for every byte.
+We did not consolidate all HTTP semantic header checks: preserving their error
+precedence warrants a separate investigation, not a broad rewrite here.
+
+A test-only buffering reference remains available through a compile-time
+parameter. Differential tests cover both roles, every split of valid/invalid
+heads, informational responses, chunk sizes/extensions/overflow, chunk CRLFs,
+and trailers, at four byte limits and three callback policies. They compare
+full protocol state, cursor, unread suffix, callbacks, and logs. Another test
+checks that a borrowed target points into the original receive allocation and
+that contiguous heads need no metadata scratch allocation. Drop/address tests
+cover temporary parser ownership. HTTP/1 all-feature debug/release tests pass
+(143 tests each).
+
+Final paired runs are `direct-control-c/d.txt` and `metadata-c/d.txt`; a/b files
+record an earlier trial before the tiny-line specialization and token table.
+Mean central estimates, microseconds:
+
+| Case | Direct control | Metadata |
+| --- | ---: | ---: |
+| fixed/client/continue | 0.86427 | 0.85955 |
+| fixed/client/yield | 0.85357 | 0.81912 |
+| fixed/server/continue | 0.91998 | 0.88606 |
+| fixed/server/yield | 0.84944 | 0.82378 |
+| chunked/client/continue | 19.471 | 19.259 |
+| chunked/client/yield | 19.552 | 18.570 |
+| chunked/server/continue | 20.096 | 20.075 |
+| chunked/server/yield | 19.796 | 19.121 |
+
+The fixed cases improve about 0.5–4%. Chunked runs vary considerably between
+trials; the paired means range from essentially unchanged to 5% lower. Do not
+claim the whole metadata CPU share was eliminated: delimiter scanning and HTTP
+semantic validation still occur.

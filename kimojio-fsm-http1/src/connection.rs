@@ -1280,6 +1280,8 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
     }
 
     fn assert_invariants(&self) {
+        // Metadata borrowing must end before a drive boundary, including yields.
+        debug_assert!(!matches!(self.receive, ReceiveStorage::Parsing));
         if self.rx == Rx::AwaitingRequest {
             debug_assert!(SERVER && self.exchange.is_none() && self.head.is_empty());
         }
@@ -1367,25 +1369,61 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
     ) -> Option<P::Output> {
         let mut bytes = std::mem::take(&mut self.head);
-        // Only receive_metadata calls this, after metadata_span reports Complete.
-        // That scanner validates every CR/LF (including across read boundaries)
-        // before accepting bytes; a second full scan is redundant in release.
-        #[cfg(debug_assertions)]
-        debug_assert!(codec::strict_lines(&bytes));
-        let accounting = if matches!(self.rx, Rx::Head | Rx::Trailers) {
-            self.metadata_bytes = self.metadata_bytes.saturating_add(bytes.len());
-            self.metadata_bytes <= self.config.max_head_bytes
-        } else {
-            self.chunk_metadata_bytes = self.chunk_metadata_bytes.saturating_add(bytes.len());
-            self.chunk_metadata_bytes <= self.config.max_chunk_metadata_bytes
-        };
-        let result = if !accounting {
-            Err(Failure::Limit)
-        } else {
-            self.metadata(&bytes, ports, callback)
-        };
+        let result = self.checked_metadata(&bytes, ports, callback);
         bytes.clear();
         self.head = bytes;
+        self.finish_metadata(result)
+    }
+
+    fn checked_metadata<P: Ports<B, W>>(
+        &mut self,
+        bytes: &[u8],
+        ports: &mut P,
+        callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
+    ) -> Result<Option<P::Output>, Failure> {
+        // Both buffered and direct input have passed metadata_span's strict
+        // CRLF validation, including fragment joins and limit error precedence.
+        #[cfg(debug_assertions)]
+        debug_assert!(codec::strict_lines(bytes));
+        self.account_metadata(bytes.len())?;
+        self.metadata(bytes, ports, callback)
+    }
+
+    fn account_metadata(&mut self, len: usize) -> Result<(), Failure> {
+        let accounting = if matches!(self.rx, Rx::Head | Rx::Trailers) {
+            self.metadata_bytes = self.metadata_bytes.saturating_add(len);
+            self.metadata_bytes <= self.config.max_head_bytes
+        } else {
+            self.chunk_metadata_bytes = self.chunk_metadata_bytes.saturating_add(len);
+            self.chunk_metadata_bytes <= self.config.max_chunk_metadata_bytes
+        };
+        if accounting {
+            Ok(())
+        } else {
+            Err(Failure::Limit)
+        }
+    }
+
+    fn accept_chunk_size(&mut self, size: u64) -> Result<(), Failure> {
+        if self.no_content && size != 0 {
+            return Err(Failure::Protocol);
+        }
+        if self
+            .received
+            .checked_add(size)
+            .is_none_or(|n| n > self.config.max_body_bytes)
+        {
+            return Err(Failure::Limit);
+        }
+        self.rx = if size == 0 {
+            Rx::Trailers
+        } else {
+            Rx::Chunk(size)
+        };
+        Ok(())
+    }
+
+    fn finish_metadata<T>(&mut self, result: Result<Option<T>, Failure>) -> Option<T> {
         match result {
             Ok(output) => output,
             Err(error) => {
@@ -1405,21 +1443,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             Rx::Size => {
                 let line = &bytes[..bytes.len() - 2];
                 let size = codec::chunk_size(line)?;
-                if self.no_content && size != 0 {
-                    return Err(Failure::Protocol);
-                }
-                if self
-                    .received
-                    .checked_add(size)
-                    .is_none_or(|n| n > self.config.max_body_bytes)
-                {
-                    return Err(Failure::Limit);
-                }
-                self.rx = if size == 0 {
-                    Rx::Trailers
-                } else {
-                    Rx::Chunk(size)
-                };
+                self.accept_chunk_size(size)?;
                 Ok(None)
             }
             Rx::ChunkCrlf => {

@@ -229,6 +229,57 @@ fn status_and_start_lines_have_exact_wire_bytes() {
 }
 
 #[test]
+fn token_table_matches_ascii_grammar_for_every_byte() {
+    assert!(!token(b""));
+    for byte in 0..=255u8 {
+        let expected = byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte);
+        assert_eq!(token(&[byte]), expected);
+        assert_eq!(token(&[b'a', byte, b'Z']), expected);
+    }
+}
+
+#[test]
+fn single_pass_chunk_sizes_cover_hex_boundaries_and_extensions() {
+    for value in [
+        0,
+        1,
+        15,
+        16,
+        255,
+        256,
+        4095,
+        4096,
+        u32::MAX as u64,
+        u64::MAX,
+    ] {
+        for digits in [
+            format!("{value:x}"),
+            format!("{value:X}"),
+            format!("000000{value:x}"),
+        ] {
+            for extension in ["", ";name", " ;name=token", ";name=\"quoted\\\"value\""] {
+                assert_eq!(
+                    chunk_size(format!("{digits}{extension}").as_bytes()),
+                    Ok(value)
+                );
+            }
+        }
+    }
+    for line in [
+        "",
+        "x",
+        "-1",
+        "10000000000000000",
+        "fffffffffffffffff",
+        "2;",
+        "2 ",
+        "2;name=\"unterminated",
+    ] {
+        assert_eq!(chunk_size(line.as_bytes()), Err(Failure::Protocol));
+    }
+}
+
+#[test]
 fn head_size_arithmetic_rejects_overflow_before_allocation() {
     assert_eq!(
         head_length(usize::MAX, &[usize::MAX, 1]),
