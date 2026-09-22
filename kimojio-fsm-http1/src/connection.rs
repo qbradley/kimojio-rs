@@ -1,4 +1,4 @@
-use crate::codec::{self, Framing};
+use crate::codec::{self, EncodedHead, Framing};
 use crate::operations::{MetadataKind, WriteStorage};
 use crate::state::{
     Admission, ArmedDeadline, Closing, ContinueGate, IoState, Lifecycle, MethodSemantics,
@@ -402,14 +402,12 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                 },
                 body: BodyLength::Empty,
             };
-            if let Ok((bytes, _)) =
+            if let Ok(EncodedHead { bytes, fields, .. }) =
                 codec::encode_response(response, false, true, false, &self.config)
-                && self
-                    .check_outgoing_metadata(bytes.len(), header_count(&bytes))
-                    .is_ok()
+                && self.check_outgoing_metadata(bytes.len(), fields).is_ok()
             {
                 self.outgoing_metadata_bytes += bytes.len();
-                self.outgoing_metadata_fields += header_count(&bytes);
+                self.outgoing_metadata_fields += fields;
                 self.tx = Transmit::begin(Framing::Empty);
                 self.lifecycle = Lifecycle::ErrorResponse;
                 self.close_after = true;
@@ -459,8 +457,11 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         {
             return Err(CommandError::InvalidState);
         }
-        let (head, framing) = codec::encode_request(request, &self.config)?;
-        let fields = header_count(&head);
+        let EncodedHead {
+            bytes: head,
+            framing,
+            fields,
+        } = codec::encode_request(request, &self.config)?;
         self.check_outgoing_metadata(
             head.len()
                 .saturating_add(if framing == Framing::Chunked { 5 } else { 0 }),
@@ -550,14 +551,17 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             || (early && mode != ResponseMode::Duplex)
             || self.lifecycle.is_draining()
             || self.exchanges >= self.config.max_requests;
-        let (final_bytes, framing) = codec::encode_response(
+        let EncodedHead {
+            bytes: final_bytes,
+            framing,
+            fields,
+        } = codec::encode_response(
             response,
             current.method == MethodSemantics::Head,
             close && !upgrade,
             tunnel,
             &self.config,
         )?;
-        let fields = header_count(&final_bytes);
         let continue_first = current.expect
             && self.start == self.end
             && !self.eof
@@ -585,7 +589,8 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
                 false,
                 &self.config,
             )?
-            .0;
+            .bytes;
+            // The generated 100 Continue has no fields to add to `fields`.
             if bytes.len().saturating_add(final_bytes.len()) > self.config.max_head_bytes {
                 return Err(CommandError::Limit);
             }
@@ -655,7 +660,7 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         {
             return Err(CommandError::InvalidState);
         }
-        let (bytes, _) = codec::encode_response(
+        let EncodedHead { bytes, fields, .. } = codec::encode_response(
             Response {
                 head,
                 body: BodyLength::Empty,
@@ -665,7 +670,6 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             false,
             &self.config,
         )?;
-        let fields = header_count(&bytes);
         self.check_outgoing_metadata(bytes.len(), fields)?;
         if head.status == 100 {
             self.exchange.as_mut().unwrap().expect = false;
@@ -1363,6 +1367,11 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
     ) -> Option<P::Output> {
         let mut bytes = std::mem::take(&mut self.head);
+        // Only receive_metadata calls this, after metadata_span reports Complete.
+        // That scanner validates every CR/LF (including across read boundaries)
+        // before accepting bytes; a second full scan is redundant in release.
+        #[cfg(debug_assertions)]
+        debug_assert!(codec::strict_lines(&bytes));
         let accounting = if matches!(self.rx, Rx::Head | Rx::Trailers) {
             self.metadata_bytes = self.metadata_bytes.saturating_add(bytes.len());
             self.metadata_bytes <= self.config.max_head_bytes
@@ -1372,8 +1381,6 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         };
         let result = if !accounting {
             Err(Failure::Limit)
-        } else if !codec::strict_lines(&bytes) {
-            Err(Failure::Protocol)
         } else {
             self.metadata(&bytes, ports, callback)
         };
@@ -1693,14 +1700,6 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
             Ok(())
         }
     }
-}
-
-fn header_count(bytes: &[u8]) -> usize {
-    bytes
-        .windows(2)
-        .filter(|pair| *pair == b"\r\n")
-        .count()
-        .saturating_sub(2)
 }
 
 fn parse_error(error: httparse::Error) -> Failure {

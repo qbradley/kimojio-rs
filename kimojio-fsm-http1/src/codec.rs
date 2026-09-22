@@ -111,6 +111,7 @@ pub(crate) fn host(headers: Headers<'_>) -> bool {
     }) && hosts.next().is_none()
 }
 
+#[cfg(any(debug_assertions, test))]
 pub(crate) fn strict_lines(bytes: &[u8]) -> bool {
     bytes.iter().enumerate().all(|(i, b)| {
         (*b != b'\n' || (i > 0 && bytes[i - 1] == b'\r'))
@@ -269,10 +270,17 @@ fn version(version: Version) -> &'static str {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct EncodedHead {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) framing: Framing,
+    pub(crate) fields: usize,
+}
+
 pub(crate) fn encode_request(
     request: Request<'_>,
     config: &Config,
-) -> Result<(Vec<u8>, Framing), CommandError> {
+) -> Result<EncodedHead, CommandError> {
     let header_bytes = valid_headers(request.head.headers, config)?;
     if !token(request.head.method.as_bytes())
         || request.head.target.is_empty()
@@ -328,7 +336,12 @@ pub(crate) fn encode_request(
     }
     out.append(b"\r\n")?;
     debug_assert_eq!(out.bytes.len(), length);
-    Ok((out.bytes, framing))
+    Ok(EncodedHead {
+        bytes: out.bytes,
+        framing,
+        // Every accepted request emits exactly one framing field.
+        fields: request.head.headers.len() + 1 + usize::from(expect),
+    })
 }
 
 pub(crate) fn encode_response(
@@ -337,7 +350,7 @@ pub(crate) fn encode_response(
     close: bool,
     tunnel: bool,
     config: &Config,
-) -> Result<(Vec<u8>, Framing), CommandError> {
+) -> Result<EncodedHead, CommandError> {
     let header_bytes = valid_headers(response.head.headers, config)?;
     if !(100..=599).contains(&response.head.status)
         || response
@@ -387,6 +400,11 @@ pub(crate) fn encode_response(
     } else {
         b""
     };
+    let framing_bytes = if body_forbidden {
+        0
+    } else {
+        framing_length(response.body, framing)
+    };
     let length = head_length(
         config.max_head_bytes,
         &[
@@ -395,11 +413,7 @@ pub(crate) fn encode_response(
             response.head.reason.len(),
             6, // Two spaces, the status-line CRLF, and the final empty line.
             header_bytes,
-            if body_forbidden {
-                0
-            } else {
-                framing_length(response.body, framing)
-            },
+            framing_bytes,
             connection.len(),
         ],
     )?;
@@ -422,7 +436,13 @@ pub(crate) fn encode_response(
     out.append(connection)?;
     out.append(b"\r\n")?;
     debug_assert_eq!(out.bytes.len(), length);
-    Ok((out.bytes, framing))
+    Ok(EncodedHead {
+        bytes: out.bytes,
+        framing,
+        fields: response.head.headers.len()
+            + usize::from(framing_bytes != 0)
+            + usize::from(!connection.is_empty()),
+    })
 }
 
 pub(crate) fn chunk_size(line: &[u8]) -> Result<u64, Failure> {

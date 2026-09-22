@@ -1,12 +1,21 @@
 use super::*;
 
-fn check_exact_limit(encode: impl Fn(&Config) -> Result<(Vec<u8>, Framing), CommandError>) {
+fn check_exact_limit(encode: impl Fn(&Config) -> Result<EncodedHead, CommandError>) {
     let config = Config {
         max_body_bytes: u64::MAX,
         ..Config::default()
     };
     let expected = encode(&config).unwrap();
-    let length = expected.0.len();
+    let length = expected.bytes.len();
+    // Independent wire oracle: include generated fields, not the start line or
+    // terminating empty line. Exercise the complete request/response matrix.
+    let fields = expected
+        .bytes
+        .windows(2)
+        .filter(|pair| *pair == b"\r\n")
+        .count()
+        - 2;
+    assert_eq!(expected.fields, fields);
     for limit in [length - 1, length, length + 1] {
         let result = encode(&Config {
             max_head_bytes: limit,
@@ -183,7 +192,7 @@ fn status_and_start_lines_have_exact_wire_bytes() {
                 },
                 body: BodyLength::Empty,
             };
-            let (bytes, _) =
+            let EncodedHead { bytes, .. } =
                 encode_response(response, false, false, false, &Config::default()).unwrap();
             assert!(
                 bytes.starts_with(
@@ -205,7 +214,7 @@ fn status_and_start_lines_have_exact_wire_bytes() {
             body: BodyLength::Known(1234567890),
             expect_continue: true,
         };
-        let (bytes, _) = encode_request(
+        let EncodedHead { bytes, .. } = encode_request(
             request,
             &Config {
                 max_body_bytes: u64::MAX,

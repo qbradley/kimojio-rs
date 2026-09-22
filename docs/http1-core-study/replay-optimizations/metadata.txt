@@ -1,0 +1,72 @@
+INFO: detected rust-toolchain file /workspace/kimojio-rs-2/rust-toolchain.toml - default toolchain will be overridden by 1.98.1
+   Compiling kimojio-fsm-http1 v0.17.0 (/workspace/kimojio-rs-2/kimojio-fsm-http1)
+    Finished `bench` profile [optimized] target(s) in 5.53s
+     Running benches/roundtrip.rs (target/release/deps/roundtrip-3b78eeef334e60c7)
+Benchmarking http1_replay/fixed_128b/client/continue
+Benchmarking http1_replay/fixed_128b/client/continue: Warming up for 3.0000 s
+Benchmarking http1_replay/fixed_128b/client/continue: Collecting 100 samples in estimated 5.0002 s (5.7M iterations)
+Benchmarking http1_replay/fixed_128b/client/continue: Analyzing
+http1_replay/fixed_128b/client/continue
+                        time:   [881.78 ns 886.82 ns 894.59 ns]
+                        thrpt:  [272.91 MiB/s 275.30 MiB/s 276.87 MiB/s]
+Found 3 outliers among 100 measurements (3.00%)
+  1 (1.00%) high mild
+  2 (2.00%) high severe
+Benchmarking http1_replay/fixed_128b/client/yield
+Benchmarking http1_replay/fixed_128b/client/yield: Warming up for 3.0000 s
+Benchmarking http1_replay/fixed_128b/client/yield: Collecting 100 samples in estimated 5.0043 s (5.8M iterations)
+Benchmarking http1_replay/fixed_128b/client/yield: Analyzing
+http1_replay/fixed_128b/client/yield
+                        time:   [852.78 ns 853.25 ns 853.79 ns]
+                        thrpt:  [285.95 MiB/s 286.13 MiB/s 286.29 MiB/s]
+Benchmarking http1_replay/fixed_128b/server/continue
+Benchmarking http1_replay/fixed_128b/server/continue: Warming up for 3.0000 s
+Benchmarking http1_replay/fixed_128b/server/continue: Collecting 100 samples in estimated 5.0033 s (5.2M iterations)
+Benchmarking http1_replay/fixed_128b/server/continue: Analyzing
+http1_replay/fixed_128b/server/continue
+                        time:   [956.15 ns 956.61 ns 957.11 ns]
+                        thrpt:  [255.08 MiB/s 255.22 MiB/s 255.34 MiB/s]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high severe
+Benchmarking http1_replay/fixed_128b/server/yield
+Benchmarking http1_replay/fixed_128b/server/yield: Warming up for 3.0000 s
+Benchmarking http1_replay/fixed_128b/server/yield: Collecting 100 samples in estimated 5.0029 s (5.5M iterations)
+Benchmarking http1_replay/fixed_128b/server/yield: Analyzing
+http1_replay/fixed_128b/server/yield
+                        time:   [879.73 ns 880.75 ns 881.93 ns]
+                        thrpt:  [276.83 MiB/s 277.20 MiB/s 277.52 MiB/s]
+
+Benchmarking http1_replay/chunked_1mib/client/continue
+Benchmarking http1_replay/chunked_1mib/client/continue: Warming up for 3.0000 s
+Benchmarking http1_replay/chunked_1mib/client/continue: Collecting 100 samples in estimated 5.0454 s (237k iterations)
+Benchmarking http1_replay/chunked_1mib/client/continue: Analyzing
+http1_replay/chunked_1mib/client/continue
+                        time:   [20.719 µs 20.826 µs 20.956 µs]
+                        thrpt:  [93.199 GiB/s 93.781 GiB/s 94.268 GiB/s]
+Benchmarking http1_replay/chunked_1mib/client/yield
+Benchmarking http1_replay/chunked_1mib/client/yield: Warming up for 3.0000 s
+Benchmarking http1_replay/chunked_1mib/client/yield: Collecting 100 samples in estimated 5.0963 s (247k iterations)
+Benchmarking http1_replay/chunked_1mib/client/yield: Analyzing
+http1_replay/chunked_1mib/client/yield
+                        time:   [20.138 µs 20.254 µs 20.388 µs]
+                        thrpt:  [95.796 GiB/s 96.431 GiB/s 96.987 GiB/s]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking http1_replay/chunked_1mib/server/continue
+Benchmarking http1_replay/chunked_1mib/server/continue: Warming up for 3.0000 s
+Benchmarking http1_replay/chunked_1mib/server/continue: Collecting 100 samples in estimated 5.0915 s (212k iterations)
+Benchmarking http1_replay/chunked_1mib/server/continue: Analyzing
+http1_replay/chunked_1mib/server/continue
+                        time:   [22.726 µs 23.082 µs 23.583 µs]
+                        thrpt:  [82.820 GiB/s 84.616 GiB/s 85.942 GiB/s]
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) high mild
+  3 (3.00%) high severe
+Benchmarking http1_replay/chunked_1mib/server/yield
+Benchmarking http1_replay/chunked_1mib/server/yield: Warming up for 3.0000 s
+Benchmarking http1_replay/chunked_1mib/server/yield: Collecting 100 samples in estimated 5.0161 s (222k iterations)
+Benchmarking http1_replay/chunked_1mib/server/yield: Analyzing
+http1_replay/chunked_1mib/server/yield
+                        time:   [21.222 µs 21.330 µs 21.458 µs]
+                        thrpt:  [91.022 GiB/s 91.567 GiB/s 92.033 GiB/s]
+

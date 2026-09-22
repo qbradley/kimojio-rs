@@ -26,16 +26,16 @@ This is simulated I/O, not network or memory-copy throughput.
 
 Criterion central time estimates (microseconds per round trip):
 
-| Workload | Before | Serialization |
-| --- | ---: | ---: |
-| fixed/client/continue | 1.1456 | 1.0410 |
-| fixed/client/yield | 1.1042 | 1.0013 |
-| fixed/server/continue | 1.2064 | 1.1247 |
-| fixed/server/yield | 1.1442 | 1.0547 |
-| chunked/client/continue | 24.516 | 22.030 |
-| chunked/client/yield | 23.698 | 21.731 |
-| chunked/server/continue | 26.281 | 23.870 |
-| chunked/server/yield | 24.767 | 23.175 |
+| Workload | Before | Serialization | Metadata |
+| --- | ---: | ---: | ---: |
+| fixed/client/continue | 1.1456 | 1.0410 | 0.88682 |
+| fixed/client/yield | 1.1042 | 1.0013 | 0.85325 |
+| fixed/server/continue | 1.2064 | 1.1247 | 0.95661 |
+| fixed/server/yield | 1.1442 | 1.0547 | 0.88075 |
+| chunked/client/continue | 24.516 | 22.030 | 20.826 |
+| chunked/client/yield | 23.698 | 21.731 | 20.254 |
+| chunked/server/continue | 26.281 | 23.870 | 23.082 |
+| chunked/server/yield | 24.767 | 23.175 | 21.330 |
 
 Raw benchmark output, including confidence intervals, is in `before.txt` and
 `serialization.txt`. Qualification output is in `serialization-tests.txt`.
@@ -57,3 +57,25 @@ all 100..599 status lines, exact request wire bytes, and undersized numeric
 writer checks. Existing exact-head-limit, malformed-head, fragmentation,
 short-write, identity, cancellation, and replay-equivalence tests all pass with
 all features. The eight local replay estimates improved by roughly 6–10%.
+
+## Opportunity 1: reuse metadata validation and accounting
+
+- Encoders return an `EncodedHead` containing bytes, framing, and the emitted
+  field count. Include generated framing, Expect, and Connection fields and
+  exclude suppressed framing. Core admission and accounting use that count,
+  including informational and automatic error responses; remove `header_count`.
+- The only caller of `process_metadata` is the bulk receiver after
+  `metadata_span` returns Complete. Every accepted CR/LF has already been
+  validated, including fragment joins. Replace the duplicate `strict_lines`
+  scan with a debug-only assertion, retaining strict input rejection in release.
+- Keep the scalar delimiter scanner, fragmented accumulation, limits, and
+  callbacks unchanged. No new SIMD dependency or borrowed-buffer shortcut.
+
+The existing large encoder matrix now independently recounts wire CRLFs and
+checks predicted fields. The exhaustive short CR/LF and long/binary scanner
+oracles additionally verify that every completed section satisfies strict CRLF
+validation. All-feature tests pass in both debug and release (the latter without
+relying on the debug assertion). See `metadata-tests.txt` and
+`metadata-release-tests.txt`. Replay results are in `metadata.txt`: roughly
+15–16% lower fixed-message time and 3–8% lower chunked-message time than the
+serialization checkpoint, subject to the shared-host measurement caveat.

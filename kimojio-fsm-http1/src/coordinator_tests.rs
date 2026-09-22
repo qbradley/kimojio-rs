@@ -778,6 +778,22 @@ fn scalar_metadata_span(bytes: &[u8], prefix: &[u8], rx: Rx) -> (usize, Metadata
     (bytes.len(), MetadataEnd::Buffered)
 }
 
+fn check_metadata_span(bytes: &[u8], prefix: &[u8], rx: Rx) {
+    let actual = metadata_span(bytes, prefix, rx);
+    assert_eq!(
+        actual,
+        scalar_metadata_span(bytes, prefix, rx),
+        "rx={rx:?} prefix={prefix:?} bytes={bytes:?}"
+    );
+    if actual.1 == MetadataEnd::Complete {
+        let mut accepted = prefix.to_vec();
+        accepted.extend_from_slice(&bytes[..actual.0]);
+        // This is the invariant that permits process_metadata to omit its
+        // second CRLF scan, including in optimized builds of these tests.
+        assert!(codec::strict_lines(&accepted));
+    }
+}
+
 #[test]
 fn bulk_metadata_matches_scalar_for_all_short_crlf_sequences() {
     let prefixes: &[&[u8]] = &[
@@ -805,11 +821,7 @@ fn bulk_metadata_matches_scalar_for_all_short_crlf_sequences() {
                             byte
                         })
                         .collect();
-                    assert_eq!(
-                        metadata_span(&bytes, prefix, rx),
-                        scalar_metadata_span(&bytes, prefix, rx),
-                        "rx={rx:?} prefix={prefix:?} bytes={bytes:?}"
-                    );
+                    check_metadata_span(&bytes, prefix, rx);
                 }
             }
         }
@@ -831,11 +843,7 @@ fn bulk_metadata_matches_scalar_across_long_and_binary_fragments() {
                         if scalar_metadata_span(prefix, b"", rx).1 != MetadataEnd::Buffered {
                             continue;
                         }
-                        assert_eq!(
-                            metadata_span(input, prefix, rx),
-                            scalar_metadata_span(input, prefix, rx),
-                            "length={length} fill={fill} rx={rx:?} split={split}"
-                        );
+                        check_metadata_span(input, prefix, rx);
                     }
                 }
             }
