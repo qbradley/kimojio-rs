@@ -481,6 +481,17 @@ results, and remaining optimization opportunities. The
 the combined expiry-orchestration optimization and its compatibility tests. No wrapper production paths
 are replaced by mocks or benchmark-only implementations.
 
+## TCP comparison with Go
+
+The [`rest_bench`](examples/rest_bench.rs) example and
+[`interop/rest-bench`](../interop/rest-bench/README.md) provide a single fixed
+REST-shaped POST comparison against Go `net/http` with `GOMAXPROCS=1`.
+Both servers use persistent TCP, identical JSON fixtures, and full request/response
+validation. A separate fixed-wire client runs on other physical cores.
+See the [measured comparison](../docs/http1-rest-comparison/README.md) for the
+selected configuration, results, and limits; this is not a general application
+or JSON-serialization benchmark.
+
 ## Benchmark client
 
 The [`keepalive_bench`](examples/keepalive_bench.rs) example measures repeated exchanges through both wrapper endpoints on one established native socket pair.

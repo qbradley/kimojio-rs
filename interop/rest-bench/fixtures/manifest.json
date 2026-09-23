@@ -1,0 +1,86 @@
+{
+  "method": "POST",
+  "path": "/v1/quotes",
+  "request_headers": [
+    [
+      "host",
+      "rest-bench.local"
+    ],
+    [
+      "content-type",
+      "application/json"
+    ],
+    [
+      "accept",
+      "application/json"
+    ],
+    [
+      "user-agent",
+      "rest-comparison/1.0"
+    ],
+    [
+      "authorization",
+      "Bearer benchmark-only-not-a-credential-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    ],
+    [
+      "x-request-id",
+      "8af106e2-b569-4c6f-81f4-bb1400001042"
+    ],
+    [
+      "x-tenant-id",
+      "benchmark-company"
+    ],
+    [
+      "traceparent",
+      "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    ],
+    [
+      "cookie",
+      "session=benchmark-only-session; preferences=locale-en-US; cart=quote-1042-version-7"
+    ],
+    [
+      "accept-language",
+      "en-US,en;q=0.9"
+    ],
+    [
+      "x-client-version",
+      "2026.09"
+    ]
+  ],
+  "response_headers": [
+    [
+      "content-type",
+      "application/json"
+    ],
+    [
+      "cache-control",
+      "no-store"
+    ],
+    [
+      "date",
+      "Wed, 23 Sep 2026 12:00:00 GMT"
+    ],
+    [
+      "x-request-id",
+      "8af106e2-b569-4c6f-81f4-bb1400001042"
+    ],
+    [
+      "x-service-version",
+      "1.0"
+    ],
+    [
+      "x-content-type-options",
+      "nosniff"
+    ],
+    [
+      "x-region",
+      "us-west-2"
+    ],
+    [
+      "x-ratelimit-remaining",
+      "9999"
+    ]
+  ],
+  "request_bytes": 860,
+  "response_bytes": 3342
+}

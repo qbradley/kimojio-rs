@@ -1,0 +1,1035 @@
+{
+  "schema": 1,
+  "complete": true,
+  "valid": true,
+  "binary_sha256": {
+    "go": "8f6dbb47544380a1d930b2b9a247575276d0bf5932ce3cd0758471b5ce6d84d7",
+    "kimojio": "3114d28b2e87656ab18cd90b016b59f2af7b2f47dca3f38361fc9a76008f2267"
+  },
+  "fixture_sha256": {
+    "manifest.json": "b5fde25e35ae28ad3d448fedfd196621b019710c6635ad7d54320d872effc75f",
+    "response.json": "e77b560233f00abac5ee0a15d86075da36ccd64a255b7ad4e31d0b0faba95ccb",
+    "request.json": "395154e5bd83458ca5ac5b993fb9f95cb4d7ebbfea4c0d35921bb24c7bdc5cc2"
+  },
+  "server_cpu": 13,
+  "client_cpus": [
+    16,
+    18,
+    20,
+    22
+  ],
+  "concurrency": [
+    1,
+    16
+  ],
+  "duration_seconds": 10,
+  "warmup_seconds": 2,
+  "trials": 3,
+  "kernel": "6.6.137.mshv2-2.azl3",
+  "cpu_topology": {
+    "13": [
+      "0",
+      "6"
+    ],
+    "16": [
+      "0",
+      "8"
+    ],
+    "18": [
+      "0",
+      "9"
+    ],
+    "20": [
+      "0",
+      "10"
+    ],
+    "22": [
+      "0",
+      "11"
+    ]
+  },
+  "initial_load_average": [
+    0.91845703125,
+    3.5947265625,
+    5.25244140625
+  ],
+  "go_version": "go version go1.27.1 linux/amd64",
+  "rustc_version": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "rows": [
+    {
+      "server": "go",
+      "concurrency": 1,
+      "trial": 0,
+      "server_command": [
+        "taskset",
+        "-c",
+        "13",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "serve",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "valid": true,
+      "client_command": [
+        "taskset",
+        "-c",
+        "16,18,20,22",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "load",
+        "--address",
+        "127.0.0.1:35377",
+        "--concurrency",
+        "1",
+        "--warmup",
+        "2s",
+        "--duration",
+        "10s"
+      ],
+      "server_after_load": {
+        "unix_ns": 1790184753572396899,
+        "user": 4.36,
+        "system": 4.23,
+        "rss_bytes": 20463616,
+        "threads": 5
+      },
+      "result": {
+        "valid": true,
+        "concurrency": 1,
+        "warmup_seconds": 2,
+        "measured_seconds": 10.000067646,
+        "attempts": 145940,
+        "successes": 145940,
+        "errors": null,
+        "requests_per_second": 14593.901278095414,
+        "p50_us": 64.512,
+        "p95_us": 94.208,
+        "p99_us": 120.832,
+        "new_connections_total": 1,
+        "measured_new_connections": 0,
+        "warmup_successes": 29197,
+        "client_user_seconds": 1.642528,
+        "client_system_seconds": 2.967261,
+        "client_gomaxprocs": 4,
+        "start_unix_ns": 1790184743321945637,
+        "end_unix_ns": 1790184753322013283,
+        "latency_observations": 145940
+      },
+      "server_cpu": {
+        "user": 3.601004079824155,
+        "system": 3.561004079824155
+      },
+      "server_cpu_us_per_request": 49.07501822425866,
+      "server_cpu_utilization": 0.7161959711855643,
+      "server_peak_sampled_rss": 20463616,
+      "server_peak_threads": 5,
+      "client_cpu_utilization": 0.1152439454208068
+    },
+    {
+      "server": "kimojio",
+      "concurrency": 1,
+      "trial": 0,
+      "server_command": [
+        "taskset",
+        "-c",
+        "13",
+        "/workspace/kimojio-rs-2/target/rest-bench/rust/release/examples/rest_bench",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "valid": true,
+      "client_command": [
+        "taskset",
+        "-c",
+        "16,18,20,22",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "load",
+        "--address",
+        "127.0.0.1:33667",
+        "--concurrency",
+        "1",
+        "--warmup",
+        "2s",
+        "--duration",
+        "10s"
+      ],
+      "server_after_load": {
+        "unix_ns": 1790184765874151553,
+        "user": 2.66,
+        "system": 3.85,
+        "rss_bytes": 2621440,
+        "threads": 1
+      },
+      "result": {
+        "valid": true,
+        "concurrency": 1,
+        "warmup_seconds": 2,
+        "measured_seconds": 10.00010603,
+        "attempts": 156691,
+        "successes": 156691,
+        "errors": null,
+        "requests_per_second": 15668.93386229426,
+        "p50_us": 63.488,
+        "p95_us": 77.824,
+        "p99_us": 92.16,
+        "new_connections_total": 1,
+        "measured_new_connections": 0,
+        "warmup_successes": 31531,
+        "client_user_seconds": 1.695651,
+        "client_system_seconds": 3.699446,
+        "client_gomaxprocs": 4,
+        "start_unix_ns": 1790184755628782887,
+        "end_unix_ns": 1790184765628888917,
+        "latency_observations": 156691
+      },
+      "server_cpu": {
+        "user": 2.230057178839875,
+        "system": 3.1901143576797493
+      },
+      "server_cpu_us_per_request": 34.59146687761023,
+      "server_cpu_utilization": 0.5420114067050171,
+      "server_peak_sampled_rss": 2621440,
+      "server_peak_threads": 1,
+      "client_cpu_utilization": 0.13487599490982596
+    },
+    {
+      "server": "go",
+      "concurrency": 16,
+      "trial": 0,
+      "server_command": [
+        "taskset",
+        "-c",
+        "13",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "serve",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "valid": true,
+      "client_command": [
+        "taskset",
+        "-c",
+        "16,18,20,22",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "load",
+        "--address",
+        "127.0.0.1:42281",
+        "--concurrency",
+        "16",
+        "--warmup",
+        "2s",
+        "--duration",
+        "10s"
+      ],
+      "server_after_load": {
+        "unix_ns": 1790184778170372313,
+        "user": 7.01,
+        "system": 4.99,
+        "rss_bytes": 22466560,
+        "threads": 5
+      },
+      "result": {
+        "valid": true,
+        "concurrency": 16,
+        "warmup_seconds": 2,
+        "measured_seconds": 10.000763722,
+        "attempts": 356382,
+        "successes": 356382,
+        "errors": null,
+        "requests_per_second": 35635.478440113475,
+        "p50_us": 442.368,
+        "p95_us": 835.584,
+        "p99_us": 1114.112,
+        "new_connections_total": 16,
+        "measured_new_connections": 0,
+        "warmup_successes": 70637,
+        "client_user_seconds": 3.267383,
+        "client_system_seconds": 3.78417,
+        "client_gomaxprocs": 4,
+        "start_unix_ns": 1790184767929794536,
+        "end_unix_ns": 1790184777930558158,
+        "latency_observations": 356382
+      },
+      "server_cpu": {
+        "user": 5.875079495401994,
+        "system": 4.110381509015541
+      },
+      "server_cpu_us_per_request": 28.018982452586084,
+      "server_cpu_utilization": 0.9984698451030491,
+      "server_peak_sampled_rss": 22466560,
+      "server_peak_threads": 5,
+      "client_cpu_utilization": 0.17627536246276293
+    },
+    {
+      "server": "kimojio",
+      "concurrency": 16,
+      "trial": 0,
+      "server_command": [
+        "taskset",
+        "-c",
+        "13",
+        "/workspace/kimojio-rs-2/target/rest-bench/rust/release/examples/rest_bench",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "valid": true,
+      "client_command": [
+        "taskset",
+        "-c",
+        "16,18,20,22",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "load",
+        "--address",
+        "127.0.0.1:43909",
+        "--concurrency",
+        "16",
+        "--warmup",
+        "2s",
+        "--duration",
+        "10s"
+      ],
+      "server_after_load": {
+        "unix_ns": 1790184790431419782,
+        "user": 6.83,
+        "system": 5.15,
+        "rss_bytes": 3145728,
+        "threads": 1
+      },
+      "result": {
+        "valid": true,
+        "concurrency": 16,
+        "warmup_seconds": 2,
+        "measured_seconds": 10.000255013,
+        "attempts": 632121,
+        "successes": 632121,
+        "errors": null,
+        "requests_per_second": 63210.48805038108,
+        "p50_us": 241.664,
+        "p95_us": 360.448,
+        "p99_us": 450.56,
+        "new_connections_total": 16,
+        "measured_new_connections": 0,
+        "warmup_successes": 123866,
+        "client_user_seconds": 6.349936,
+        "client_system_seconds": 7.819501,
+        "client_gomaxprocs": 4,
+        "start_unix_ns": 1790184780228095663,
+        "end_unix_ns": 1790184790228350776,
+        "latency_observations": 632121
+      },
+      "server_cpu": {
+        "user": 5.741082068843557,
+        "system": 4.249788890503799
+      },
+      "server_cpu_us_per_request": 15.805314108133341,
+      "server_cpu_utilization": 0.9990616185646821,
+      "server_peak_sampled_rss": 3145728,
+      "server_peak_threads": 1,
+      "client_cpu_utilization": 0.35422689175376526
+    },
+    {
+      "server": "kimojio",
+      "concurrency": 1,
+      "trial": 1,
+      "server_command": [
+        "taskset",
+        "-c",
+        "13",
+        "/workspace/kimojio-rs-2/target/rest-bench/rust/release/examples/rest_bench",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "valid": true,
+      "client_command": [
+        "taskset",
+        "-c",
+        "16,18,20,22",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "load",
+        "--address",
+        "127.0.0.1:43781",
+        "--concurrency",
+        "1",
+        "--warmup",
+        "2s",
+        "--duration",
+        "10s"
+      ],
+      "server_after_load": {
+        "unix_ns": 1790184802735831110,
+        "user": 2.7,
+        "system": 3.71,
+        "rss_bytes": 2621440,
+        "threads": 1
+      },
+      "result": {
+        "valid": true,
+        "concurrency": 1,
+        "warmup_seconds": 2,
+        "measured_seconds": 10.000097966,
+        "attempts": 163430,
+        "successes": 163430,
+        "errors": null,
+        "requests_per_second": 16342.839895734676,
+        "p50_us": 62.464,
+        "p95_us": 67.584,
+        "p99_us": 86.016,
+        "new_connections_total": 1,
+        "measured_new_connections": 0,
+        "warmup_successes": 32855,
+        "client_user_seconds": 1.739676,
+        "client_system_seconds": 3.745079,
+        "client_gomaxprocs": 4,
+        "start_unix_ns": 1790184792488798279,
+        "end_unix_ns": 1790184802488896245,
+        "latency_observations": 163430
+      },
+      "server_cpu": {
+        "user": 2.2710438209278654,
+        "system": 3.070460144722352
+      },
+      "server_cpu_us_per_request": 32.68374206479971,
+      "server_cpu_utilization": 0.5341451637585104,
+      "server_peak_sampled_rss": 2621440,
+      "server_peak_threads": 1,
+      "client_cpu_utilization": 0.1371175317143888
+    },
+    {
+      "server": "go",
+      "concurrency": 1,
+      "trial": 1,
+      "server_command": [
+        "taskset",
+        "-c",
+        "13",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "serve",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "valid": true,
+      "client_command": [
+        "taskset",
+        "-c",
+        "16,18,20,22",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "load",
+        "--address",
+        "127.0.0.1:38499",
+        "--concurrency",
+        "1",
+        "--warmup",
+        "2s",
+        "--duration",
+        "10s"
+      ],
+      "server_after_load": {
+        "unix_ns": 1790184815001903574,
+        "user": 4.24,
+        "system": 4.02,
+        "rss_bytes": 22290432,
+        "threads": 5
+      },
+      "result": {
+        "valid": true,
+        "concurrency": 1,
+        "warmup_seconds": 2,
+        "measured_seconds": 10.00009114,
+        "attempts": 152468,
+        "successes": 152468,
+        "errors": null,
+        "requests_per_second": 15246.661041931264,
+        "p50_us": 63.488,
+        "p95_us": 79.872,
+        "p99_us": 112.64,
+        "new_connections_total": 1,
+        "measured_new_connections": 0,
+        "warmup_successes": 30591,
+        "client_user_seconds": 1.73112,
+        "client_system_seconds": 3.009755,
+        "client_gomaxprocs": 4,
+        "start_unix_ns": 1790184804793314118,
+        "end_unix_ns": 1790184814793405358,
+        "latency_observations": 152468
+      },
+      "server_cpu": {
+        "user": 3.5771252814407672,
+        "system": 3.3086772452955353
+      },
+      "server_cpu_us_per_request": 45.16228012918319,
+      "server_cpu_utilization": 0.6885739770104038,
+      "server_peak_sampled_rss": 22290432,
+      "server_peak_threads": 5,
+      "client_cpu_utilization": 0.11852079480147618
+    },
+    {
+      "server": "kimojio",
+      "concurrency": 16,
+      "trial": 1,
+      "server_command": [
+        "taskset",
+        "-c",
+        "13",
+        "/workspace/kimojio-rs-2/target/rest-bench/rust/release/examples/rest_bench",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "valid": true,
+      "client_command": [
+        "taskset",
+        "-c",
+        "16,18,20,22",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "load",
+        "--address",
+        "127.0.0.1:44163",
+        "--concurrency",
+        "16",
+        "--warmup",
+        "2s",
+        "--duration",
+        "10s"
+      ],
+      "server_after_load": {
+        "unix_ns": 1790184827268839585,
+        "user": 6.8,
+        "system": 5.18,
+        "rss_bytes": 3145728,
+        "threads": 1
+      },
+      "result": {
+        "valid": true,
+        "concurrency": 16,
+        "warmup_seconds": 2,
+        "measured_seconds": 10.000213258,
+        "attempts": 643547,
+        "successes": 643547,
+        "errors": null,
+        "requests_per_second": 64353.327613805974,
+        "p50_us": 237.568,
+        "p95_us": 344.064,
+        "p99_us": 425.984,
+        "new_connections_total": 16,
+        "measured_new_connections": 0,
+        "warmup_successes": 128425,
+        "client_user_seconds": 6.367728,
+        "client_system_seconds": 7.837106,
+        "client_gomaxprocs": 4,
+        "start_unix_ns": 1790184817060719293,
+        "end_unix_ns": 1790184827060932551,
+        "latency_observations": 643547
+      },
+      "server_cpu": {
+        "user": 5.7985557853895,
+        "system": 4.1878336780842496
+      },
+      "server_cpu_us_per_request": 15.5177313599065,
+      "server_cpu_utilization": 0.9986176500270939,
+      "server_peak_sampled_rss": 3145728,
+      "server_peak_threads": 1,
+      "client_cpu_utilization": 0.35511327692527894
+    },
+    {
+      "server": "go",
+      "concurrency": 16,
+      "trial": 1,
+      "server_command": [
+        "taskset",
+        "-c",
+        "13",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "serve",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "valid": true,
+      "client_command": [
+        "taskset",
+        "-c",
+        "16,18,20,22",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "load",
+        "--address",
+        "127.0.0.1:34829",
+        "--concurrency",
+        "16",
+        "--warmup",
+        "2s",
+        "--duration",
+        "10s"
+      ],
+      "server_after_load": {
+        "unix_ns": 1790184839541769468,
+        "user": 6.96,
+        "system": 5.04,
+        "rss_bytes": 22466560,
+        "threads": 5
+      },
+      "result": {
+        "valid": true,
+        "concurrency": 16,
+        "warmup_seconds": 2,
+        "measured_seconds": 10.000439593,
+        "attempts": 354827,
+        "successes": 354827,
+        "errors": null,
+        "requests_per_second": 35481.14027391036,
+        "p50_us": 442.368,
+        "p95_us": 835.584,
+        "p99_us": 1114.112,
+        "new_connections_total": 16,
+        "measured_new_connections": 0,
+        "warmup_successes": 71076,
+        "client_user_seconds": 3.241239,
+        "client_system_seconds": 3.729525,
+        "client_gomaxprocs": 4,
+        "start_unix_ns": 1790184829328054250,
+        "end_unix_ns": 1790184839328493843,
+        "latency_observations": 354827
+      },
+      "server_cpu": {
+        "user": 5.797545297785312,
+        "system": 4.1966383554759705
+      },
+      "server_cpu_us_per_request": 28.166356148943805,
+      "server_cpu_utilization": 0.9993744335255926,
+      "server_peak_sampled_rss": 22466560,
+      "server_peak_threads": 5,
+      "client_cpu_utilization": 0.1742614395890987
+    },
+    {
+      "server": "go",
+      "concurrency": 1,
+      "trial": 2,
+      "server_command": [
+        "taskset",
+        "-c",
+        "13",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "serve",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "valid": true,
+      "client_command": [
+        "taskset",
+        "-c",
+        "16,18,20,22",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "load",
+        "--address",
+        "127.0.0.1:36365",
+        "--concurrency",
+        "1",
+        "--warmup",
+        "2s",
+        "--duration",
+        "10s"
+      ],
+      "server_after_load": {
+        "unix_ns": 1790184851852230440,
+        "user": 4.32,
+        "system": 3.99,
+        "rss_bytes": 22294528,
+        "threads": 5
+      },
+      "result": {
+        "valid": true,
+        "concurrency": 1,
+        "warmup_seconds": 2,
+        "measured_seconds": 10.000089944,
+        "attempts": 152657,
+        "successes": 152657,
+        "errors": null,
+        "requests_per_second": 15265.56269542289,
+        "p50_us": 63.488,
+        "p95_us": 77.824,
+        "p99_us": 108.544,
+        "new_connections_total": 1,
+        "measured_new_connections": 0,
+        "warmup_successes": 30482,
+        "client_user_seconds": 1.639491,
+        "client_system_seconds": 3.124184,
+        "client_gomaxprocs": 4,
+        "start_unix_ns": 1790184841600902946,
+        "end_unix_ns": 1790184851600992890,
+        "latency_observations": 152657
+      },
+      "server_cpu": {
+        "user": 3.581894445581627,
+        "system": 3.36073447311742
+      },
+      "server_cpu_us_per_request": 45.47861492561132,
+      "server_cpu_utilization": 0.6942566474479148,
+      "server_peak_sampled_rss": 22294528,
+      "server_peak_threads": 5,
+      "client_cpu_utilization": 0.11909080384967384
+    },
+    {
+      "server": "kimojio",
+      "concurrency": 1,
+      "trial": 2,
+      "server_command": [
+        "taskset",
+        "-c",
+        "13",
+        "/workspace/kimojio-rs-2/target/rest-bench/rust/release/examples/rest_bench",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "valid": true,
+      "client_command": [
+        "taskset",
+        "-c",
+        "16,18,20,22",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "load",
+        "--address",
+        "127.0.0.1:46717",
+        "--concurrency",
+        "1",
+        "--warmup",
+        "2s",
+        "--duration",
+        "10s"
+      ],
+      "server_after_load": {
+        "unix_ns": 1790184864161338061,
+        "user": 2.55,
+        "system": 3.87,
+        "rss_bytes": 2621440,
+        "threads": 1
+      },
+      "result": {
+        "valid": true,
+        "concurrency": 1,
+        "warmup_seconds": 2,
+        "measured_seconds": 10.000058868,
+        "attempts": 164481,
+        "successes": 164481,
+        "errors": null,
+        "requests_per_second": 16448.003173894915,
+        "p50_us": 62.464,
+        "p95_us": 67.584,
+        "p99_us": 83.968,
+        "new_connections_total": 1,
+        "measured_new_connections": 0,
+        "warmup_successes": 32819,
+        "client_user_seconds": 1.721592,
+        "client_system_seconds": 3.760465,
+        "client_gomaxprocs": 4,
+        "start_unix_ns": 1790184853913524896,
+        "end_unix_ns": 1790184863913583764,
+        "latency_observations": 164481
+      },
+      "server_cpu": {
+        "user": 2.1109485493812294,
+        "system": 3.240474274690615
+      },
+      "server_cpu_us_per_request": 32.53520360450049,
+      "server_cpu_utilization": 0.5351391321501413,
+      "server_peak_sampled_rss": 2621440,
+      "server_peak_threads": 1,
+      "client_cpu_utilization": 0.13705061821042072
+    },
+    {
+      "server": "go",
+      "concurrency": 16,
+      "trial": 2,
+      "server_command": [
+        "taskset",
+        "-c",
+        "13",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "serve",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "valid": true,
+      "client_command": [
+        "taskset",
+        "-c",
+        "16,18,20,22",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "load",
+        "--address",
+        "127.0.0.1:43515",
+        "--concurrency",
+        "16",
+        "--warmup",
+        "2s",
+        "--duration",
+        "10s"
+      ],
+      "server_after_load": {
+        "unix_ns": 1790184876469258771,
+        "user": 7.12,
+        "system": 4.88,
+        "rss_bytes": 22323200,
+        "threads": 5
+      },
+      "result": {
+        "valid": true,
+        "concurrency": 16,
+        "warmup_seconds": 2,
+        "measured_seconds": 10.000485044,
+        "attempts": 357589,
+        "successes": 357589,
+        "errors": null,
+        "requests_per_second": 35757.1656201359,
+        "p50_us": 442.368,
+        "p95_us": 835.584,
+        "p99_us": 1114.112,
+        "new_connections_total": 16,
+        "measured_new_connections": 0,
+        "warmup_successes": 71530,
+        "client_user_seconds": 3.31157,
+        "client_system_seconds": 3.697965,
+        "client_gomaxprocs": 4,
+        "start_unix_ns": 1790184866222642938,
+        "end_unix_ns": 1790184876223127982,
+        "latency_observations": 357589
+      },
+      "server_cpu": {
+        "user": 5.941777747861701,
+        "system": 4.060912402437111
+      },
+      "server_cpu_us_per_request": 27.972589062579697,
+      "server_cpu_utilization": 1.0002204999346642,
+      "server_peak_sampled_rss": 22323200,
+      "server_peak_threads": 5,
+      "client_cpu_utilization": 0.17522987558002293
+    },
+    {
+      "server": "kimojio",
+      "concurrency": 16,
+      "trial": 2,
+      "server_command": [
+        "taskset",
+        "-c",
+        "13",
+        "/workspace/kimojio-rs-2/target/rest-bench/rust/release/examples/rest_bench",
+        "--bind",
+        "127.0.0.1:0"
+      ],
+      "valid": true,
+      "client_command": [
+        "taskset",
+        "-c",
+        "16,18,20,22",
+        "/workspace/kimojio-rs-2/target/rest-bench/go-rest",
+        "load",
+        "--address",
+        "127.0.0.1:34743",
+        "--concurrency",
+        "16",
+        "--warmup",
+        "2s",
+        "--duration",
+        "10s"
+      ],
+      "server_after_load": {
+        "unix_ns": 1790184888740668683,
+        "user": 6.64,
+        "system": 5.33,
+        "rss_bytes": 3145728,
+        "threads": 1
+      },
+      "result": {
+        "valid": true,
+        "concurrency": 16,
+        "warmup_seconds": 2,
+        "measured_seconds": 10.000244649,
+        "attempts": 637823,
+        "successes": 637823,
+        "errors": null,
+        "requests_per_second": 63780.7396105835,
+        "p50_us": 237.568,
+        "p95_us": 352.256,
+        "p99_us": 442.368,
+        "new_connections_total": 16,
+        "measured_new_connections": 0,
+        "warmup_successes": 128034,
+        "client_user_seconds": 6.543341,
+        "client_system_seconds": 7.956354,
+        "client_gomaxprocs": 4,
+        "start_unix_ns": 1790184878532085011,
+        "end_unix_ns": 1790184888532329660,
+        "latency_observations": 637823
+      },
+      "server_cpu": {
+        "user": 5.506410937153516,
+        "system": 4.470221447048199
+      },
+      "server_cpu_us_per_request": 15.641694301086218,
+      "server_cpu_utilization": 0.9976388312859278,
+      "server_peak_sampled_rss": 3145728,
+      "server_peak_threads": 1,
+      "client_cpu_utilization": 0.36248350687725256
+    }
+  ],
+  "summaries": [
+    {
+      "server": "go",
+      "concurrency": 1,
+      "rps": {
+        "median": 15246.661041931264,
+        "min": 14593.901278095414,
+        "max": 15265.56269542289
+      },
+      "p50_us": {
+        "median": 63.488,
+        "min": 63.488,
+        "max": 64.512
+      },
+      "p99_us": {
+        "median": 112.64,
+        "min": 108.544,
+        "max": 120.832
+      },
+      "server_cpu_us_per_request": {
+        "median": 45.47861492561132,
+        "min": 45.16228012918319,
+        "max": 49.07501822425866
+      },
+      "server_cpu_utilization": {
+        "median": 0.6942566474479148,
+        "min": 0.6885739770104038,
+        "max": 0.7161959711855643
+      },
+      "server_rss_mib": {
+        "median": 21.2578125,
+        "min": 19.515625,
+        "max": 21.26171875
+      },
+      "client_cpu_utilization": {
+        "median": 0.11852079480147618,
+        "min": 0.1152439454208068,
+        "max": 0.11909080384967384
+      }
+    },
+    {
+      "server": "kimojio",
+      "concurrency": 1,
+      "rps": {
+        "median": 16342.839895734676,
+        "min": 15668.93386229426,
+        "max": 16448.003173894915
+      },
+      "p50_us": {
+        "median": 62.464,
+        "min": 62.464,
+        "max": 63.488
+      },
+      "p99_us": {
+        "median": 86.016,
+        "min": 83.968,
+        "max": 92.16
+      },
+      "server_cpu_us_per_request": {
+        "median": 32.68374206479971,
+        "min": 32.53520360450049,
+        "max": 34.59146687761023
+      },
+      "server_cpu_utilization": {
+        "median": 0.5351391321501413,
+        "min": 0.5341451637585104,
+        "max": 0.5420114067050171
+      },
+      "server_rss_mib": {
+        "median": 2.5,
+        "min": 2.5,
+        "max": 2.5
+      },
+      "client_cpu_utilization": {
+        "median": 0.13705061821042072,
+        "min": 0.13487599490982596,
+        "max": 0.1371175317143888
+      }
+    },
+    {
+      "server": "go",
+      "concurrency": 16,
+      "rps": {
+        "median": 35635.478440113475,
+        "min": 35481.14027391036,
+        "max": 35757.1656201359
+      },
+      "p50_us": {
+        "median": 442.368,
+        "min": 442.368,
+        "max": 442.368
+      },
+      "p99_us": {
+        "median": 1114.112,
+        "min": 1114.112,
+        "max": 1114.112
+      },
+      "server_cpu_us_per_request": {
+        "median": 28.018982452586084,
+        "min": 27.972589062579697,
+        "max": 28.166356148943805
+      },
+      "server_cpu_utilization": {
+        "median": 0.9993744335255926,
+        "min": 0.9984698451030491,
+        "max": 1.0002204999346642
+      },
+      "server_rss_mib": {
+        "median": 21.42578125,
+        "min": 21.2890625,
+        "max": 21.42578125
+      },
+      "client_cpu_utilization": {
+        "median": 0.17522987558002293,
+        "min": 0.1742614395890987,
+        "max": 0.17627536246276293
+      }
+    },
+    {
+      "server": "kimojio",
+      "concurrency": 16,
+      "rps": {
+        "median": 63780.7396105835,
+        "min": 63210.48805038108,
+        "max": 64353.327613805974
+      },
+      "p50_us": {
+        "median": 237.568,
+        "min": 237.568,
+        "max": 241.664
+      },
+      "p99_us": {
+        "median": 442.368,
+        "min": 425.984,
+        "max": 450.56
+      },
+      "server_cpu_us_per_request": {
+        "median": 15.641694301086218,
+        "min": 15.5177313599065,
+        "max": 15.805314108133341
+      },
+      "server_cpu_utilization": {
+        "median": 0.9986176500270939,
+        "min": 0.9976388312859278,
+        "max": 0.9990616185646821
+      },
+      "server_rss_mib": {
+        "median": 3.0,
+        "min": 3.0,
+        "max": 3.0
+      },
+      "client_cpu_utilization": {
+        "median": 0.35511327692527894,
+        "min": 0.35422689175376526,
+        "max": 0.36248350687725256
+      }
+    }
+  ],
+  "load_generator": "fixed prebuilt HTTP/1.1 request; one owned TCP connection per worker; no retry or reconnect",
+  "server_environment": {
+    "GOMAXPROCS": "1",
+    "GOGC": "100",
+    "GOMEMLIMIT": "off"
+  },
+  "raw_artifacts": "target/rest-bench/wire-measured/"
+}
