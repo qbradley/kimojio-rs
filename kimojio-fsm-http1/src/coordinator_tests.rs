@@ -164,6 +164,9 @@ enum Drive {
     Continue,
     Yield,
     Mixed,
+    TimedContinue,
+    TimedYield,
+    TimedMixed,
 }
 
 struct Observer {
@@ -217,9 +220,9 @@ impl Observer {
         self.trace.push(value);
         assert!(self.trace.len() < 256, "unbounded callback sequence");
         match self.drive {
-            Drive::Steps | Drive::Continue => None,
-            Drive::Yield => Some(()),
-            Drive::Mixed => self.trace.len().is_multiple_of(3).then_some(()),
+            Drive::Steps | Drive::Continue | Drive::TimedContinue => None,
+            Drive::Yield | Drive::TimedYield => Some(()),
+            Drive::Mixed | Drive::TimedMixed => self.trace.len().is_multiple_of(3).then_some(()),
         }
     }
 
@@ -374,6 +377,9 @@ fn drive<const SERVER: bool>(core: &mut Core<Vec<u8>, Vec<u8>, SERVER>, observer
                 }
                 core.assert_invariants();
             }
+        }
+        Drive::TimedContinue | Drive::TimedYield | Drive::TimedMixed => {
+            while core.next_at(core.now, observer, head).unwrap().is_some() {}
         }
         _ => while core.next(observer, head).is_some() {},
     }
@@ -578,7 +584,14 @@ fn explore(input: Input, model: Model, script: &mut Vec<Stimulus>, count: &mut u
     assert!(script.len() <= 10, "model has an unbounded external cycle");
     if model.complete() {
         let expected = replay(input, script, Drive::Steps);
-        for mode in [Drive::Continue, Drive::Yield, Drive::Mixed] {
+        for mode in [
+            Drive::Continue,
+            Drive::Yield,
+            Drive::Mixed,
+            Drive::TimedContinue,
+            Drive::TimedYield,
+            Drive::TimedMixed,
+        ] {
             assert_eq!(
                 replay(input, script, mode),
                 expected,
@@ -606,7 +619,7 @@ fn bounded_ownership_model_matches_all_completion_orders_and_callback_yields() {
         explore(input, Model::new(input), &mut Vec::new(), &mut count);
     }
     assert_eq!(count, 474, "the bounded exploration changed");
-    eprintln!("explored {count} terminal schedules in four drive modes");
+    eprintln!("explored {count} terminal schedules in seven drive modes");
 }
 
 fn client_fixture(

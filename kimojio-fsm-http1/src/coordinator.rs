@@ -333,7 +333,31 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         ports: &mut P,
         head_callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
     ) -> Option<P::Output> {
+        self.drive_loop::<false, P>(ports, head_callback)
+    }
+
+    pub(super) fn next_at<P: Ports<B, W>>(
+        &mut self,
+        now: Tick,
+        ports: &mut P,
+        head_callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
+    ) -> Result<Option<P::Output>, CommandError> {
+        self.advance_time(now)?;
+        Ok(self.drive_loop::<true, P>(ports, head_callback))
+    }
+
+    fn drive_loop<const EXPIRE: bool, P: Ports<B, W>>(
+        &mut self,
+        ports: &mut P,
+        head_callback: fn(&mut P, ExchangeId, ParsedHead<'_>) -> Option<P::Output>,
+    ) -> Option<P::Output> {
         loop {
+            // Entry checked every existing deadline at the supplied time. The
+            // clock stays fixed during this call; only a changed earliest timer
+            // can become due now. update_deadline always marks such changes.
+            if EXPIRE && self.timers.notification == Notification::Pending {
+                self.expire_due();
+            }
             self.assert_invariants();
             let transition = self.next_transition()?;
             if let Some(output) = self.advance(transition, ports, head_callback) {

@@ -1,0 +1,21 @@
+INFO: detected rust-toolchain file /workspace/kimojio-rs-2/rust-toolchain.toml - default toolchain will be overridden by 1.98.1
+   Compiling kimojio-fsm-http1 v0.17.0 (/workspace/kimojio-rs-2/kimojio-fsm-http1)
+   Compiling kimojio-http1 v0.17.0 (/workspace/kimojio-rs-2/kimojio-http1)
+    Finished `release` profile [optimized] target(s) in 8.82s
+     Running tests/benchmark_allocations.rs (target/release/deps/benchmark_allocations-a76cd8de15bfe587)
+
+running 1 test
+test allocation_slopes_use_the_timing_driver_without_byte_comparison_or_logging ... empty/native: n=64 small=Counts { alloc: 3084, realloc: 1, requested: 409852 } large=Counts { alloc: 5759, realloc: 1, requested: 720540 } alloc/exchange=41.80 realloc/exchange=0.00 requested_bytes/exchange=4854.50
+fixed/native: n=64 small=Counts { alloc: 3876, realloc: 1, requested: 489340 } large=Counts { alloc: 7255, realloc: 1, requested: 870684 } alloc/exchange=52.80 realloc/exchange=0.00 requested_bytes/exchange=5958.50
+fixed/stream: n=64 small=Counts { alloc: 8952, realloc: 1, requested: 1076312 } large=Counts { alloc: 16823, realloc: 1, requested: 1856120 } alloc/exchange=122.98 realloc/exchange=0.00 requested_bytes/exchange=12184.50
+fixed/coalesced: n=64 small=Counts { alloc: 3742, realloc: 1, requested: 476476 } large=Counts { alloc: 7002, realloc: 1, requested: 846396 } alloc/exchange=50.94 realloc/exchange=0.00 requested_bytes/exchange=5780.00
+fixed/no_deadlines: n=64 small=Counts { alloc: 3883, realloc: 1, requested: 490076 } large=Counts { alloc: 7272, realloc: 1, requested: 872380 } alloc/exchange=52.95 realloc/exchange=0.00 requested_bytes/exchange=5973.50
+chunked/native: n=4 small=Counts { alloc: 7588, realloc: 1, requested: 25807036 } large=Counts { alloc: 10091, realloc: 1, requested: 34389132 } alloc/exchange=625.75 realloc/exchange=0.00 requested_bytes/exchange=2145524.00
+chunked/shared: n=4 small=Counts { alloc: 6052, realloc: 1, requested: 640828 } large=Counts { alloc: 8043, realloc: 1, requested: 834188 } alloc/exchange=497.75 realloc/exchange=0.00 requested_bytes/exchange=48340.00
+chunked/no_deadlines: n=4 small=Counts { alloc: 7561, realloc: 1, requested: 25804508 } large=Counts { alloc: 10057, realloc: 1, requested: 34385932 } alloc/exchange=624.00 realloc/exchange=0.00 requested_bytes/exchange=2145356.00
+chunked/forward: n=4 small=Counts { alloc: 8209, realloc: 1, requested: 13362892 } large=Counts { alloc: 10930, realloc: 1, requested: 17797916 } alloc/exchange=680.25 realloc/exchange=0.00 requested_bytes/exchange=1108756.00
+chunked/copy_forward: n=4 small=Counts { alloc: 9050, realloc: 1, requested: 25879020 } large=Counts { alloc: 12047, realloc: 1, requested: 34485756 } alloc/exchange=749.25 realloc/exchange=0.00 requested_bytes/exchange=2151684.00
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+

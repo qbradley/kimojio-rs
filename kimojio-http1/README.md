@@ -366,9 +366,18 @@ The authoritative core deadline remains separate from its physical wake.
 A physical timer is created only when polled. Progress that postpones a deadline
 can reuse an earlier wake; that wake rechecks the latest deadline rather than
 expiring an obsolete generation. Earlier deadlines replace later wakes, and
-clearing the deadline retires its timer. Core deadline notifications still yield
-to the driver so already-due deadlines are applied before further I/O.
-It records current time before each command or completion.
+clearing the deadline retires its timer. The wrapper uses the core's clock-aware
+`next_at` to enforce expiry even when a newly created deadline is already due.
+Ordinary deadline hints can therefore be coalesced before the next application/I/O
+event without a full input-selection round trip. Every notification still counts
+against the cooperative turn budget; logging and ownership boundaries remain.
+
+At drive entry, expiry precedes shutdown/cancel processing as before. After input
+selection, the wrapper updates time and applies the completion before the next
+expiry check, preserving the existing progress-first completion ordering. It no
+longer calls `expire` using a potentially stale wrapper-held deadline identity.
+When every protocol timeout is disabled and no observation handle is attached,
+it avoids unnecessary clock reads; observation handles still receive timestamps.
 The `virtual-clock` feature preserves the runtime's virtual time domain.
 
 The wrapper is not allocation-free.
@@ -467,7 +476,9 @@ no-copy replay or isolated core benchmark.
 
 See the [benchmark and performance report](../docs/http1-wrapper-bench/README.md)
 for the timing contract, qualification and allocation probes, perf commands,
-results, and remaining optimization opportunities. No wrapper production paths
+results, and remaining optimization opportunities. The
+[clock-aware FSM/wrapper follow-up](../docs/http1-expiry-drive/README.md) records
+the combined expiry-orchestration optimization and its compatibility tests. No wrapper production paths
 are replaced by mocks or benchmark-only implementations.
 
 ## Benchmark client

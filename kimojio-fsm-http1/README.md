@@ -176,7 +176,9 @@ An identity must remain unique while old completions can exist.
 
 `Config` has public resource limits and timeout durations.
 Durations and `Tick` values use nanoseconds in one monotonic domain.
-The caller supplies time through `observe_time` and exact deadline observations through `expire`.
+The caller supplies time explicitly. Use `next_at(now, ports)` for automatic
+expiry during driving, or retain the manual `observe_time` / `expire` / `next`
+sequence when the surrounding executor owns expiry policy.
 
 ## Separate payload storage
 
@@ -233,13 +235,19 @@ The existing callback and cancellation contracts do not change.
 
 The [interface PoC report](../docs/http1-wrapper-lab/poc-interface.md) records the experiment and its limits.
 
-## One progress method
+## Driving
 
 `next(&mut ports)` returns `Option<P::Output>`.
 Each callback has the same optional output contract.
 `Some(value)` suspends progress with the caller's value.
 `None` from a callback continues progress without settling an operation.
 `None` from `next` means that the machine has no immediate work.
+
+`next_at(now, ports)` is the clock-aware variant and returns
+`Result<Option<P::Output>, CommandError>`. It uses the same callback/ownership
+contract, but applies currently due deadlines before selecting work and rechecks
+when a transition creates a new earliest deadline. It does not read a clock.
+See [Deadline policies](#deadline-policies) for ordering and compatibility.
 
 An internal connector can use `Output = Infallible`.
 An executor can use its own enum for `Output`.
@@ -621,6 +629,52 @@ The executor schedules it without interpreting the policy.
 `expire(deadline, now)` rejects stale, early, wrong-owner, and regressed observations.
 `observe_time(now)` updates time but does not expire a deadline by itself.
 `None` disables an individual timeout policy.
+
+### Clock-aware driving
+
+For most standalone executors, `next_at(now, ports)` avoids manually comparing
+and expiring deadline identities. Supply a monotonically increasing `Tick` in the
+same domain as construction. The core handles initial deadlines, deadlines born
+during driving (such as a reused request's head deadline), and continue fallback
+that exposes another already-due phase. It applies expiry before the next protocol
+transition, not by asynchronously interrupting a callback. No extra state machine,
+clock dependency, or public event enum is introduced.
+
+```rust
+use kimojio_fsm_http1::{CommandError, Server, ServerPorts, Tick};
+fn drive_once<P: ServerPorts<Vec<u8>>>(
+    server: &mut Server<Vec<u8>>, now: Tick, ports: &mut P,
+) -> Result<Option<P::Output>, CommandError> {
+    server.next_at(now, ports)
+}
+```
+
+The time sample stays fixed for the synchronous call. Long-running application
+work should yield and resume driving with a fresh Tick. Ports still receive
+current/effective deadline changes and must arrange future wakes, but may return
+`None` from `deadline_changed`: the core checks newly due deadlines before issuing
+further operations. Already-expired/superseded deadline hints can be skipped;
+diagnostic logs remain drive-boundary observations, not an attempt queue.
+
+`advance_time(now)` applies time and all currently due phases without callbacks.
+It is useful before admitting commands when expiry must take precedence. A time
+regression is rejected without mutation. Sequence exhaustion while automatically
+expiring is a terminal `Failure::SequenceExhausted`, delivered on subsequent drive;
+outstanding storage still requires its original completion/return.
+
+Completion ordering is explicit:
+
+- **Expiry first:** `advance_time(now)`, then return a completion, then `next_at`.
+  Timeout can stop the exchange, but late positive progress is still accounted and
+  the original owned operation still settles.
+- **Progress first:** `observe_time(now)`, then return a completion, then `next_at`.
+  Accepted body progress can refresh its deadline before driving applies expiry.
+  Observing time alone never grants this refresh; the completion must do so.
+
+Existing `next` and `expire(deadline, now)` semantics are unchanged. Callers may
+mix the APIs deliberately, but must not assume legacy `next` expires deadlines.
+The [clocked-drive report](../docs/http1-expiry-drive/README.md) records wrapper
+integration, tests, and performance comparisons.
 
 ## Lifecycle and handoff
 

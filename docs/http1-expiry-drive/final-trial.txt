@@ -1,0 +1,104 @@
+Benchmarking http1_wrapper/empty/native
+Benchmarking http1_wrapper/empty/native: Warming up for 1.0000 s
+Benchmarking http1_wrapper/empty/native: Collecting 30 samples in estimated 2.0030 s (140k iterations)
+Benchmarking http1_wrapper/empty/native: Analyzing
+http1_wrapper/empty/native
+                        time:   [14.291 µs 14.322 µs 14.360 µs]
+                        thrpt:  [69.639 Kelem/s 69.822 Kelem/s 69.975 Kelem/s]
+
+Benchmarking http1_wrapper/empty/stream
+Benchmarking http1_wrapper/empty/stream: Warming up for 1.0000 s
+Benchmarking http1_wrapper/empty/stream: Collecting 30 samples in estimated 2.0005 s (100k iterations)
+Benchmarking http1_wrapper/empty/stream: Analyzing
+http1_wrapper/empty/stream
+                        time:   [19.915 µs 19.959 µs 20.002 µs]
+                        thrpt:  [49.995 Kelem/s 50.103 Kelem/s 50.214 Kelem/s]
+Found 1 outliers among 30 measurements (3.33%)
+  1 (3.33%) high mild
+
+Benchmarking http1_wrapper/fixed_128b/native
+Benchmarking http1_wrapper/fixed_128b/native: Warming up for 1.0000 s
+Benchmarking http1_wrapper/fixed_128b/native: Collecting 30 samples in estimated 2.0063 s (77k iterations)
+Benchmarking http1_wrapper/fixed_128b/native: Analyzing
+http1_wrapper/fixed_128b/native
+                        time:   [25.724 µs 25.775 µs 25.834 µs]
+                        thrpt:  [38.708 Kelem/s 38.797 Kelem/s 38.874 Kelem/s]
+Found 2 outliers among 30 measurements (6.67%)
+  2 (6.67%) high mild
+
+Benchmarking http1_wrapper/fixed_128b/stream
+Benchmarking http1_wrapper/fixed_128b/stream: Warming up for 1.0000 s
+Benchmarking http1_wrapper/fixed_128b/stream: Collecting 30 samples in estimated 2.0107 s (53k iterations)
+Benchmarking http1_wrapper/fixed_128b/stream: Analyzing
+http1_wrapper/fixed_128b/stream
+                        time:   [37.745 µs 37.825 µs 37.922 µs]
+                        thrpt:  [26.370 Kelem/s 26.437 Kelem/s 26.493 Kelem/s]
+Found 1 outliers among 30 measurements (3.33%)
+  1 (3.33%) high mild
+
+Benchmarking http1_wrapper/fixed_128b/native_shared
+Benchmarking http1_wrapper/fixed_128b/native_shared: Warming up for 1.0000 s
+Benchmarking http1_wrapper/fixed_128b/native_shared: Collecting 30 samples in estimated 2.0073 s (78k iterations)
+Benchmarking http1_wrapper/fixed_128b/native_shared: Analyzing
+http1_wrapper/fixed_128b/native_shared
+                        time:   [25.716 µs 25.783 µs 25.852 µs]
+                        thrpt:  [38.681 Kelem/s 38.786 Kelem/s 38.886 Kelem/s]
+Found 1 outliers among 30 measurements (3.33%)
+  1 (3.33%) high mild
+
+Benchmarking http1_wrapper/fixed_128b/native_coalesced
+Benchmarking http1_wrapper/fixed_128b/native_coalesced: Warming up for 1.0000 s
+Benchmarking http1_wrapper/fixed_128b/native_coalesced: Collecting 30 samples in estimated 2.0042 s (110k iterations)
+Benchmarking http1_wrapper/fixed_128b/native_coalesced: Analyzing
+http1_wrapper/fixed_128b/native_coalesced
+                        time:   [20.270 µs 21.274 µs 22.349 µs]
+                        thrpt:  [44.744 Kelem/s 47.005 Kelem/s 49.335 Kelem/s]
+
+Benchmarking http1_wrapper/fixed_128b/native_no_deadlines
+Benchmarking http1_wrapper/fixed_128b/native_no_deadlines: Warming up for 1.0000 s
+Benchmarking http1_wrapper/fixed_128b/native_no_deadlines: Collecting 30 samples in estimated 2.0044 s (88k iterations)
+Benchmarking http1_wrapper/fixed_128b/native_no_deadlines: Analyzing
+http1_wrapper/fixed_128b/native_no_deadlines
+                        time:   [22.518 µs 22.583 µs 22.657 µs]
+                        thrpt:  [44.136 Kelem/s 44.282 Kelem/s 44.410 Kelem/s]
+
+Benchmarking http1_wrapper/chunked_1mib/native
+Benchmarking http1_wrapper/chunked_1mib/native: Warming up for 1.0000 s
+Benchmarking http1_wrapper/chunked_1mib/native: Collecting 30 samples in estimated 2.0531 s (1860 iterations)
+Benchmarking http1_wrapper/chunked_1mib/native: Analyzing
+http1_wrapper/chunked_1mib/native
+                        time:   [1.0245 ms 1.0255 ms 1.0268 ms]
+                        thrpt:  [973.92  elem/s 975.10  elem/s 976.07  elem/s]
+Found 2 outliers among 30 measurements (6.67%)
+  2 (6.67%) high mild
+
+Benchmarking http1_wrapper/chunked_1mib/stream
+Benchmarking http1_wrapper/chunked_1mib/stream: Warming up for 1.0000 s
+Benchmarking http1_wrapper/chunked_1mib/stream: Collecting 30 samples in estimated 2.2077 s (1395 iterations)
+Benchmarking http1_wrapper/chunked_1mib/stream: Analyzing
+http1_wrapper/chunked_1mib/stream
+                        time:   [1.4707 ms 1.4722 ms 1.4737 ms]
+                        thrpt:  [678.57  elem/s 679.27  elem/s 679.93  elem/s]
+Found 2 outliers among 30 measurements (6.67%)
+  2 (6.67%) high mild
+
+Benchmarking http1_wrapper/chunked_1mib/native_shared
+Benchmarking http1_wrapper/chunked_1mib/native_shared: Warming up for 1.0000 s
+Benchmarking http1_wrapper/chunked_1mib/native_shared: Collecting 30 samples in estimated 2.4407 s (2325 iterations)
+Benchmarking http1_wrapper/chunked_1mib/native_shared: Analyzing
+http1_wrapper/chunked_1mib/native_shared
+                        time:   [973.43 µs 974.61 µs 976.12 µs]
+                        thrpt:  [1.0245 Kelem/s 1.0261 Kelem/s 1.0273 Kelem/s]
+Found 1 outliers among 30 measurements (3.33%)
+  1 (3.33%) high mild
+
+Benchmarking http1_wrapper/chunked_1mib/native_no_deadlines
+Benchmarking http1_wrapper/chunked_1mib/native_no_deadlines: Warming up for 1.0000 s
+Benchmarking http1_wrapper/chunked_1mib/native_no_deadlines: Collecting 30 samples in estimated 2.3104 s (2325 iterations)
+Benchmarking http1_wrapper/chunked_1mib/native_no_deadlines: Analyzing
+http1_wrapper/chunked_1mib/native_no_deadlines
+                        time:   [919.56 µs 920.80 µs 921.83 µs]
+                        thrpt:  [1.0848 Kelem/s 1.0860 Kelem/s 1.0875 Kelem/s]
+Found 2 outliers among 30 measurements (6.67%)
+  2 (6.67%) high mild
+

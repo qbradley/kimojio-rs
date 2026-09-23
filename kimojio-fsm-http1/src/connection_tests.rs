@@ -108,6 +108,44 @@ fn generation_exhaustion_uses_reserved_close_without_false_quiescence() {
 }
 
 #[test]
+fn automatic_continue_expiry_settles_sequence_exhaustion_without_wrapping() {
+    for upload_only in [false, true] {
+        let mut core = Core::<Vec<u8>, Vec<u8>, false>::new(
+            ConnectionId {
+                slot: 8,
+                generation: 2,
+            },
+            configuration(),
+            vec![0; 64],
+            Tick(0),
+        )
+        .unwrap();
+        core.request(Request {
+            body: BodyLength::Known(1),
+            expect_continue: true,
+            ..request()
+        })
+        .unwrap();
+        core.timers.upload_at = upload_only.then_some(Tick(20));
+        core.update_deadline(
+            (!upload_only).then_some((TimerPhase::Head, Tick(100))),
+            Some(Tick(10)),
+        )
+        .unwrap();
+        core.sequence = u64::MAX - 1;
+        core.advance_time(Tick(10)).unwrap();
+        assert_eq!(core.failure, Some(Failure::SequenceExhausted));
+        assert_eq!(core.sequence, u64::MAX - 1);
+        assert!(core.timers.deadline().is_none());
+        let close = core
+            .next_at(Tick(10), &mut CloseOnly, |_, _, _| None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(close.id().sequence(), u64::MAX);
+    }
+}
+
+#[test]
 fn rejected_request_never_changes_sequences_timers_or_owned_slots() {
     for timer_overflow in [false, true] {
         let mut config = configuration();

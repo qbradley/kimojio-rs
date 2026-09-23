@@ -1,0 +1,9 @@
+final-core-tests 156 passed, 0 failed
+final-core-release-tests 156 passed, 0 failed
+final-core-default-tests 148 passed, 0 failed
+final-wrapper-tests 126 passed, 0 failed
+final-wrapper-release-tests 126 passed, 0 failed
+wrapper-default-tests 107 passed, 0 failed
+composition-tests 316 passed, 0 failed
+Clippy: both crates, all targets and features, -D warnings: passed
+rustfmt check: changed Rust files passed

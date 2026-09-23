@@ -1,0 +1,98 @@
+[
+  {
+    "case": "http1_wrapper/empty/native",
+    "baseline_us": 15.0775,
+    "final_us": 14.224499999999999,
+    "change_percent": -5.657436577681985
+  },
+  {
+    "case": "http1_wrapper/empty/stream",
+    "baseline_us": 20.8545,
+    "final_us": 20.119500000000002,
+    "change_percent": -3.5244191901028565
+  },
+  {
+    "case": "http1_wrapper/fixed_128b/native",
+    "baseline_us": 26.738500000000002,
+    "final_us": 25.521,
+    "change_percent": -4.5533593881481815
+  },
+  {
+    "case": "http1_wrapper/fixed_128b/stream",
+    "baseline_us": 38.8625,
+    "final_us": 38.347,
+    "change_percent": -1.3264715342553801
+  },
+  {
+    "case": "http1_wrapper/fixed_128b/native_shared",
+    "baseline_us": 26.5715,
+    "final_us": 25.3925,
+    "change_percent": -4.437084846546124
+  },
+  {
+    "case": "http1_wrapper/fixed_128b/native_shared_coalesced",
+    "baseline_us": 18.716500000000003,
+    "final_us": 18.072,
+    "change_percent": -3.443485694440751
+  },
+  {
+    "case": "http1_wrapper/fixed_128b/native_coalesced",
+    "baseline_us": 18.868499999999997,
+    "final_us": 18.1045,
+    "change_percent": -4.049076503166626
+  },
+  {
+    "case": "http1_wrapper/fixed_128b/native_no_deadlines",
+    "baseline_us": 23.8475,
+    "final_us": 22.488500000000002,
+    "change_percent": -5.698710556662112
+  },
+  {
+    "case": "http1_wrapper/chunked_1mib/native",
+    "baseline_us": 1062.3000000000002,
+    "final_us": 1022.3000000000001,
+    "change_percent": -3.7654146662901344
+  },
+  {
+    "case": "http1_wrapper/chunked_1mib/stream",
+    "baseline_us": 1524.8500000000001,
+    "final_us": 1471.4,
+    "change_percent": -3.5052628127356766
+  },
+  {
+    "case": "http1_wrapper/chunked_1mib/native_shared",
+    "baseline_us": 1004.8999999999999,
+    "final_us": 968.97,
+    "change_percent": -3.5754801472783204
+  },
+  {
+    "case": "http1_wrapper/chunked_1mib/native_no_deadlines",
+    "baseline_us": 962.1700000000001,
+    "final_us": 917.24,
+    "change_percent": -4.6696529719280395
+  },
+  {
+    "case": "http1_wrapper/chunked_1mib/native_forward",
+    "baseline_us": 1237.6,
+    "final_us": 1184.8,
+    "change_percent": -4.266321913380732
+  },
+  {
+    "case": "http1_wrapper/chunked_1mib/native_copy_forward",
+    "baseline_us": 1244.85,
+    "final_us": 1182.65,
+    "change_percent": -4.9965859340482695
+  },
+  {
+    "case": "http1_wrapper/fragmented_8k/native",
+    "baseline_us": 171.17000000000002,
+    "final_us": 166.795,
+    "change_percent": -2.555938540632141
+  },
+  {
+    "case": "http1_wrapper/fragmented_8k/stream",
+    "baseline_us": 271.095,
+    "final_us": 260.83500000000004,
+    "change_percent": -3.7846511370552727
+  }
+]

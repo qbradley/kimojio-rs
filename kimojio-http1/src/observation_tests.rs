@@ -29,6 +29,7 @@ fn diagnostic_port_forwards_immediately_without_holding_a_handle_borrow() {
     let _bound = observation.bind().unwrap();
     let mut ports = Ports {
         observation: Some(observation),
+        ..Ports::default()
     };
     for expected in 1..=8 {
         core::Ports::log(&mut ports, id, core::Tick(71), event);

@@ -444,6 +444,11 @@ enum Event {
 #[derive(Default)]
 struct Ports {
     observation: Option<crate::Observation>,
+    // Clock-aware driving makes deadline callbacks wake hints, not mandatory
+    // scheduling boundaries. Leave room for one ordinary callback/quiescence.
+    deadline_budget: usize,
+    deferred_deadline: Option<Option<core::Deadline>>,
+    deferred_count: usize,
 }
 
 impl core::Ports<Vec<u8>, OutgoingData> for Ports {
@@ -496,7 +501,13 @@ impl core::Ports<Vec<u8>, OutgoingData> for Ports {
     }
 
     fn deadline_changed(&mut self, value: Option<core::Deadline>) -> Option<Event> {
-        Some(Event::Deadline(value))
+        if self.deferred_count + 1 < self.deadline_budget {
+            self.deferred_deadline = Some(value);
+            self.deferred_count += 1;
+            None
+        } else {
+            Some(Event::Deadline(value))
+        }
     }
 
     fn closed(&mut self, value: core::ConnectionResult) -> Option<Event> {
@@ -662,6 +673,7 @@ struct State {
     pending_write: Option<core::OperationId>,
     pending_close: Option<core::CloseOp>,
     deadline: Option<core::Deadline>,
+    uses_deadlines: bool,
     timer: crate::timer::DeadlineTimer,
     epoch: Instant,
     shutdown: Shutdown,
@@ -694,6 +706,14 @@ impl State {
         let receive_capacity = buffer.capacity();
         let max_buffer = config.protocol.max_buffer_bytes;
         let max_headers = config.protocol.max_headers;
+        let uses_deadlines = [
+            config.protocol.head_timeout_ns,
+            config.protocol.body_timeout_ns,
+            config.protocol.idle_timeout_ns,
+            config.protocol.continue_timeout_ns,
+        ]
+        .iter()
+        .any(Option::is_some);
         let machine = if server {
             Machine::Server(core::Server::with_output_type(
                 config.connection_id,
@@ -722,6 +742,7 @@ impl State {
             pending_write: None,
             pending_close: None,
             deadline: None,
+            uses_deadlines,
             timer: crate::timer::DeadlineTimer::default(),
             epoch: kimojio::clock_now(),
             graceful_wait: crate::receive_lane::CancelLane::new(shutdown.graceful.clone()),
@@ -746,11 +767,19 @@ impl State {
         }
     }
 
-    fn observe_time(&mut self) -> Result<core::Tick, Error> {
+    fn current_tick(&self) -> core::Tick {
         let nanos = kimojio::clock_now()
             .saturating_duration_since(self.epoch)
             .as_nanos();
-        let now = core::Tick(u64::try_from(nanos).unwrap_or(u64::MAX));
+        core::Tick(u64::try_from(nanos).unwrap_or(u64::MAX))
+    }
+
+    fn observe_time(&mut self) -> Result<core::Tick, Error> {
+        if !self.uses_deadlines && self.observation.is_none() {
+            // No policy or observer can consume a timestamp on this connection.
+            return Ok(core::Tick(0));
+        }
+        let now = self.current_tick();
         match &mut self.machine {
             Machine::Client(inner) => inner.observe_time(now),
             Machine::Server(inner) => inner.observe_time(now),
@@ -758,22 +787,20 @@ impl State {
         Ok(now)
     }
 
-    fn observe(&mut self) -> Result<(), Error> {
-        let now = self.observe_time()?;
-        if let Some(deadline) = self.deadline
-            && deadline.at <= now
-        {
-            self.deadline.take();
-            self.timer.set(None);
-            let result = match &mut self.machine {
-                Machine::Client(inner) => inner.expire(deadline, now),
-                Machine::Server(inner) => inner.expire(deadline, now),
-            };
-            match result {
-                Ok(()) | Err(core::CommandError::StaleDeadline) => {}
-                Err(error) => return Err(error.into()),
-            }
-        }
+    fn observe(&mut self) -> Result<core::Tick, Error> {
+        // Preserve expiry-before-shutdown/cancellation ordering at drive entry.
+        // Completion processing below deliberately uses observe_time instead:
+        // an accepted completion can refresh a deadline before the next drive.
+        let now = if self.uses_deadlines {
+            let now = self.current_tick();
+            match &mut self.machine {
+                Machine::Client(inner) => inner.advance_time(now),
+                Machine::Server(inner) => inner.advance_time(now),
+            }?;
+            now
+        } else {
+            self.observe_time()?
+        };
         if let Some(mode) = self.shutdown_progress.advance(
             self.shutdown.abort.is_cancelled(),
             self.shutdown.graceful.is_cancelled(),
@@ -801,7 +828,7 @@ impl State {
                 };
             }
         }
-        Ok(())
+        Ok(now)
     }
 
     fn fail(&mut self, error: Error) {
@@ -1329,16 +1356,43 @@ where
             .observation
             .as_ref()
             .map(|bound| bound.observation.clone()),
+        ..Ports::default()
     };
+    // A deferred hint must be convertible before an owned I/O event is issued.
+    // If this unusual clock epoch cannot represent every core Tick, keep the
+    // original yielding callback path so conversion errors precede issuance.
+    let can_defer = state
+        .epoch
+        .checked_add(Duration::from_nanos(u64::MAX))
+        .is_some();
     loop {
-        if let Err(error) = state.observe() {
-            state.fail(error);
+        ports.deadline_budget = if can_defer { budget - turns } else { 0 };
+        let event = match state.observe() {
+            Ok(now) if state.uses_deadlines => match &mut state.machine {
+                Machine::Client(inner) => inner.next_at(now, &mut ports),
+                Machine::Server(inner) => inner.next_at(now, &mut ports),
+            },
+            Ok(_) => Ok(match &mut state.machine {
+                Machine::Client(inner) => inner.next(&mut ports),
+                Machine::Server(inner) => inner.next(&mut ports),
+            }),
+            Err(error) => {
+                // A bad clock must not strand an outstanding owned operation.
+                state.fail(error);
+                Ok(match &mut state.machine {
+                    Machine::Client(inner) => inner.next(&mut ports),
+                    Machine::Server(inner) => inner.next(&mut ports),
+                })
+            }
         }
-        let event = match &mut state.machine {
-            Machine::Client(inner) => inner.next(&mut ports),
-            Machine::Server(inner) => inner.next(&mut ports),
-        };
-        let mut runnable = event.is_some();
+        .expect("drive uses the time just accepted by advance_time");
+        let deferred_count = std::mem::take(&mut ports.deferred_count);
+        if let Some(deadline) = ports.deferred_deadline.take() {
+            state
+                .event(Event::Deadline(deadline), handler, &mut io)
+                .expect("prechecked epoch can represent every deferred deadline");
+        }
+        let mut runnable = event.is_some() || deferred_count != 0;
         if let Some(event) = event {
             match state.event(event, handler, &mut io) {
                 Ok(Some(result)) => return result,
@@ -1350,8 +1404,8 @@ where
             // returns. Only a drained core can distinguish that from abandonment.
             runnable = true;
         }
-        turns += 1;
-        if turns == budget {
+        turns += 1 + deferred_count;
+        if turns >= budget {
             turns = 0;
             operations::yield_cpu().await;
         }

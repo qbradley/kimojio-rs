@@ -1227,6 +1227,46 @@ impl<B: Buffer, W: AsRef<[u8]>, const SERVER: bool> Core<B, W, SERVER> {
         Ok(())
     }
 
+    #[inline]
+    fn advance_time(&mut self, now: Tick) -> Result<(), CommandError> {
+        self.observe_time(now)?;
+        self.expire_due();
+        Ok(())
+    }
+
+    /// Consume due phases until the next deadline is in the future (or absent).
+    /// Continue fallback can expose another already-due phase. Failing a request
+    /// can also arm the error-response flush deadline, including a zero timeout.
+    #[inline]
+    fn expire_due(&mut self) {
+        if self
+            .timers
+            .armed
+            .as_ref()
+            .is_some_and(|armed| armed.deadline.at <= self.now)
+        {
+            self.expire_due_slow();
+        }
+    }
+
+    #[cold]
+    fn expire_due_slow(&mut self) {
+        while let Some(deadline) = self
+            .timers
+            .armed
+            .as_ref()
+            .filter(|armed| armed.deadline.at <= self.now)
+            .map(|armed| armed.deadline)
+        {
+            if let Err(error) = self.expire(deadline, self.now) {
+                // The deadline and time came from this core. The only fallible
+                // step is allocating a new identity after continue fallback.
+                debug_assert_eq!(error, CommandError::SequenceExhausted);
+                self.fail(Failure::SequenceExhausted);
+            }
+        }
+    }
+
     fn expire(&mut self, deadline: Deadline, now: Tick) -> Result<(), CommandError> {
         if self.timers.deadline() != Some(deadline) {
             return Err(CommandError::StaleDeadline);
@@ -1856,6 +1896,13 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
     pub fn observe_time(&mut self, now: Tick) -> Result<(), CommandError> {
         self.core.observe_time(now)
     }
+    /// Advances time and applies all currently due phases without invoking ports.
+    /// Use before commands when expiry must win over those commands. A time
+    /// regression leaves the machine unchanged; protocol failures are delivered
+    /// through subsequent driving, retaining outstanding operation ownership.
+    pub fn advance_time(&mut self, now: Tick) -> Result<(), CommandError> {
+        self.core.advance_time(now)
+    }
     pub fn expire(&mut self, deadline: Deadline, now: Tick) -> Result<(), CommandError> {
         self.core.expire(deadline, now)
     }
@@ -1988,6 +2035,13 @@ impl<B: Buffer, W: AsRef<[u8]>> Client<B, W> {
     pub fn observe_time(&mut self, now: Tick) -> Result<(), CommandError> {
         self.core.observe_time(now)
     }
+    /// Advances time and applies all currently due phases without invoking ports.
+    /// Use before commands when expiry must win over those commands. A time
+    /// regression leaves the machine unchanged; protocol failures are delivered
+    /// through subsequent driving, retaining outstanding operation ownership.
+    pub fn advance_time(&mut self, now: Tick) -> Result<(), CommandError> {
+        self.core.advance_time(now)
+    }
     pub fn expire(&mut self, deadline: Deadline, now: Tick) -> Result<(), CommandError> {
         self.core.expire(deadline, now)
     }
@@ -1997,6 +2051,35 @@ impl<B: Buffer, W: AsRef<[u8]>> Client<B, W> {
 }
 
 impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
+    /// Drives at the supplied time, applying due deadlines before selecting
+    /// each protocol transition, including deadlines created during this call.
+    /// Ports still receive effective deadline changes, but may return `None`
+    /// without risking issuance past a deadline already due at `now`.
+    ///
+    /// Time is fixed for this synchronous call; yield and call again with a
+    /// fresh Tick after asynchronous or lengthy application work. A backwards
+    /// Tick returns an error before any mutation/callback. Sequence exhaustion
+    /// during expiry is reported as a terminal protocol failure through ports.
+    ///
+    /// This does not change completion ordering: use `advance_time` before a
+    /// completion if expiry should win, or `observe_time` and then complete it
+    /// before driving if progress should be considered first. Legacy `next`
+    /// retains manual expiry semantics.
+    pub fn next_at<P: ServerPorts<B, W>>(
+        &mut self,
+        now: Tick,
+        ports: &mut P,
+    ) -> Result<Option<P::Output>, CommandError> {
+        let output = self
+            .core
+            .next_at(now, ports, |ports, id, head| match head {
+                ParsedHead::Request(head) => ports.request(id, head),
+                ParsedHead::Response(..) => unreachable!(),
+            })?;
+        self.core.assert_invariants();
+        Ok(output)
+    }
+
     pub fn next<P: ServerPorts<B, W>>(&mut self, ports: &mut P) -> Option<P::Output> {
         let output = self.core.next(ports, |ports, id, head| match head {
             ParsedHead::Request(head) => ports.request(id, head),
@@ -2058,6 +2141,31 @@ impl<B: Buffer, W: AsRef<[u8]>> Server<B, W> {
 }
 
 impl<B: Buffer, W: AsRef<[u8]>> Client<B, W> {
+    /// Drives with automatic deadline handling at a caller-supplied time.
+    ///
+    /// Like [`Server::next_at`], applies expiry between protocol transitions,
+    /// keeps time fixed during the call, and permits non-yielding deadline
+    /// callbacks. A backwards Tick is rejected without mutation or callbacks.
+    /// Completion/expiry ordering remains explicit via `advance_time` (expiry
+    /// first) or `observe_time` followed by a completion (progress first).
+    /// Legacy `next` retains manual expiry semantics.
+    pub fn next_at<P: ClientPorts<B, W>>(
+        &mut self,
+        now: Tick,
+        ports: &mut P,
+    ) -> Result<Option<P::Output>, CommandError> {
+        let output = self
+            .core
+            .next_at(now, ports, |ports, id, head| match head {
+                ParsedHead::Response(head, informational) => {
+                    ports.response(id, head, informational)
+                }
+                ParsedHead::Request(..) => unreachable!(),
+            })?;
+        self.core.assert_invariants();
+        Ok(output)
+    }
+
     pub fn next<P: ClientPorts<B, W>>(&mut self, ports: &mut P) -> Option<P::Output> {
         let output = self.core.next(ports, |ports, id, head| match head {
             ParsedHead::Response(head, informational) => ports.response(id, head, informational),
