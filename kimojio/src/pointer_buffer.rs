@@ -80,6 +80,10 @@ impl<T> IdPointerMsg<T> {
         (id, ptr)
     }
 
+    pub(crate) fn into_buffer(mut self) -> [u8; 2 * POINTER_SIZE] {
+        self.0.take().unwrap()
+    }
+
     pub fn from_id_box(id: u64, pointer: Box<T>) -> Self {
         let mut buff = [0_u8; 2 * POINTER_SIZE];
         let id_buf = id_to_buffer(id);

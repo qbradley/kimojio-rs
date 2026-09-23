@@ -8,7 +8,15 @@ use crate::{
     pointer_from_buffer, pointer_to_buffer,
 };
 use futures::future::FusedFuture;
-use std::{cell::RefCell, future::Future, marker::PhantomData, rc::Rc, time::Duration};
+use std::{
+    cell::RefCell,
+    future::Future,
+    marker::PhantomData,
+    pin::Pin,
+    rc::Rc,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 const POINTER_SIZE: usize = std::mem::size_of::<*const ()>();
 
@@ -81,22 +89,12 @@ impl<T: Send, R: Send> MessagePipe<T, R> {
 
     /// Send a message on the pipe from a uringruntime thread. Message must be
     /// boxed as it is sent in-process as a pointer.
+    ///
+    /// Cancellation waits for the I/O result. If transmission succeeded, the
+    /// receiver owns the message. Otherwise, cancellation drops the message.
     pub async fn send_message(&self, message: Box<T>) -> Result<(), Errno> {
         let buffer = pointer_to_buffer(message);
-        match operations::write(&self.pipe, &buffer).await {
-            Ok(amount) => {
-                assert!(amount == buffer.len());
-                Ok(())
-            }
-            Err(e) => {
-                // Reconstitute Box to prevent leaking on write failure
-                unsafe {
-                    // SAFETY: since write failed, buffer is only copy of the pointer
-                    pointer_from_buffer::<T>(buffer);
-                }
-                Err(e)
-            }
-        }
+        SendMessageFuture::<T>::new(&self.pipe, &buffer).await
     }
 
     /// Receive a message on the pipe. This must be called from a uringruntime thread.
@@ -107,29 +105,8 @@ impl<T: Send, R: Send> MessagePipe<T, R> {
     /// Receive a message on the pipe with an optional timeout.
     /// This must be called from a uringruntime thread.
     pub fn recv_message_with_timeout(&self, timeout: Option<Duration>) -> RecvMessageFuture<'_, R> {
-        use std::os::fd::AsRawFd;
-        let buffer = Rc::new(RefCell::new([0u8; POINTER_SIZE]));
-        let fd = self.pipe.as_raw_fd();
-        let entry = rustix_uring::opcode::Read::new(
-            rustix_uring::types::Fd(fd),
-            buffer.borrow_mut().as_mut_ptr(),
-            POINTER_SIZE as u32,
-        )
-        .offset(u64::MAX)
-        .build();
-        let fut = crate::ring_future::UsizeFuture::with_polled(
-            entry,
-            fd,
-            timeout,
-            IOType::Read,
-            false,
-            CompletionResources::Rc(buffer.clone()),
-        );
-
         RecvMessageFuture {
-            fut,
-            buffer,
-            _marker: PhantomData,
+            inner: ReadMessageFuture::new(&self.pipe, timeout),
         }
     }
 
@@ -206,29 +183,8 @@ impl<R: Send> MessagePipeReceiver<R> {
     /// Receive a message on the pipe with an optional timeout.
     /// This must be called from a uringruntime thread.
     pub fn recv_message_with_timeout(&self, timeout: Option<Duration>) -> RecvMessageFuture<'_, R> {
-        use std::os::fd::AsRawFd;
-        let buffer = Rc::new(RefCell::new([0u8; POINTER_SIZE]));
-        let fd = self.pipe.as_raw_fd();
-        let entry = rustix_uring::opcode::Read::new(
-            rustix_uring::types::Fd(fd),
-            buffer.borrow_mut().as_mut_ptr(),
-            POINTER_SIZE as u32,
-        )
-        .offset(u64::MAX)
-        .build();
-        let fut = crate::ring_future::UsizeFuture::with_polled(
-            entry,
-            fd,
-            timeout,
-            IOType::Read,
-            false,
-            CompletionResources::Rc(buffer.clone()),
-        );
-
         RecvMessageFuture {
-            fut,
-            buffer,
-            _marker: PhantomData,
+            inner: ReadMessageFuture::new(&self.pipe, timeout),
         }
     }
 }
@@ -272,24 +228,12 @@ impl<T: Send> MessagePipeSender<T> {
 
     /// Send a message on the pipe from a uringruntime thread. Message must be
     /// boxed as it is sent in-process as a pointer.
+    ///
+    /// Cancellation waits for the I/O result. If transmission succeeded, the
+    /// receiver owns the message. Otherwise, cancellation drops the message.
     pub async fn send_message(&self, message: Box<T>) -> Result<(), Errno> {
         let buffer = pointer_to_buffer(message);
-        match operations::write(&self.pipe, &buffer).await {
-            Ok(amount) => {
-                assert!(amount == buffer.len());
-                Ok(())
-            }
-            Err(e) => {
-                // Reconstitute Box to prevent leaking on write failure
-                unsafe {
-                    // SAFETY
-                    //
-                    // since write failed, buffer is only copy of the pointer
-                    pointer_from_buffer::<T>(buffer);
-                }
-                Err(e)
-            }
-        }
+        SendMessageFuture::<T>::new(&self.pipe, &buffer).await
     }
 
     /// Send a message on the pipe from any thread. `message` must be boxed as
@@ -324,13 +268,136 @@ impl<T: Send> Clone for MessagePipeSender<T> {
     }
 }
 
-pin_project_lite::pin_project! {
-    pub struct RecvMessageFuture<'a, T> {
-        #[pin]
-        fut: crate::ring_future::UsizeFuture<'a>,
-        buffer: Rc<RefCell<[u8; POINTER_SIZE]>>,
-        _marker: PhantomData<T>,
+struct SendMessageFuture<'a, T> {
+    fut: crate::ring_future::UsizeFuture<'a>,
+    buffer: &'a [u8],
+    completed: bool,
+    _marker: PhantomData<fn() -> T>,
+}
+
+impl<'a, T> SendMessageFuture<'a, T> {
+    fn new(pipe: &'a OwnedFd, buffer: &'a [u8]) -> Self {
+        Self {
+            fut: operations::write_with_timeout(pipe, buffer, None),
+            buffer,
+            completed: false,
+            _marker: PhantomData,
+        }
     }
+
+    fn finish(&mut self, result: Result<usize, Errno>) -> Result<(), Errno> {
+        self.completed = true;
+        match result {
+            Ok(amount) => {
+                assert_eq!(amount, self.buffer.len(), "partial message write");
+                Ok(())
+            }
+            Err(error) => {
+                // SAFETY: Failed writes do not transfer the pointer to the peer.
+                unsafe { drop(message_from_bytes::<T>(self.buffer)) };
+                Err(error)
+            }
+        }
+    }
+}
+
+impl<T> Future for SendMessageFuture<'_, T> {
+    type Output = Result<(), Errno>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.fut).poll(cx) {
+            Poll::Ready(result) => Poll::Ready(this.finish(result)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<T> Drop for SendMessageFuture<'_, T> {
+    fn drop(&mut self) {
+        if !self.completed {
+            let result = self.fut.cancel_and_complete().unwrap();
+            let _ = self.finish(result);
+        }
+    }
+}
+
+unsafe fn message_from_bytes<T>(buffer: &[u8]) -> Box<T> {
+    let pointer = buffer[buffer.len() - POINTER_SIZE..].try_into().unwrap();
+    // SAFETY: The caller owns the complete pointer in the final bytes.
+    unsafe { pointer_from_buffer_ref(pointer) }
+}
+
+struct ReadMessageFuture<'a, T, const N: usize> {
+    fut: crate::ring_future::UsizeFuture<'a>,
+    buffer: Rc<RefCell<[u8; N]>>,
+    _marker: PhantomData<fn() -> T>,
+}
+
+impl<'a, T, const N: usize> ReadMessageFuture<'a, T, N> {
+    fn new(pipe: &'a OwnedFd, timeout: Option<Duration>) -> Self {
+        use std::os::fd::AsRawFd;
+        let buffer = Rc::new(RefCell::new([0u8; N]));
+        let fd = pipe.as_raw_fd();
+        let entry = rustix_uring::opcode::Read::new(
+            rustix_uring::types::Fd(fd),
+            buffer.borrow_mut().as_mut_ptr(),
+            N as u32,
+        )
+        .offset(u64::MAX)
+        .build();
+        let fut = crate::ring_future::UsizeFuture::with_polled(
+            entry,
+            fd,
+            timeout,
+            IOType::Read,
+            false,
+            CompletionResources::Rc(buffer.clone()),
+        );
+        Self {
+            fut,
+            buffer,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T, const N: usize> Future for ReadMessageFuture<'_, T, N> {
+    type Output = Result<[u8; N], Errno>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.fut).poll(cx) {
+            Poll::Ready(Ok(0)) => Poll::Ready(Err(Errno::PIPE)),
+            Poll::Ready(Ok(amount)) => {
+                assert_eq!(amount, N, "partial message read");
+                Poll::Ready(Ok(*this.buffer.borrow()))
+            }
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<T, const N: usize> Drop for ReadMessageFuture<'_, T, N> {
+    fn drop(&mut self) {
+        if let Some(Ok(amount)) = self.fut.cancel_and_complete()
+            && amount != 0
+        {
+            assert_eq!(amount, N, "partial message read");
+            // SAFETY: The completed read consumed this pointer, but its caller
+            // never received it. Cancellation has finished all access to the buffer.
+            unsafe { drop(message_from_bytes::<T>(&*self.buffer.borrow())) };
+        }
+    }
+}
+
+/// A message receive operation.
+///
+/// Cancellation waits for the I/O result and drops any message already
+/// consumed by the read. Such a message is not available to a later receive.
+pub struct RecvMessageFuture<'a, T> {
+    inner: ReadMessageFuture<'a, T, POINTER_SIZE>,
 }
 
 impl<'a, T> Future for RecvMessageFuture<'a, T> {
@@ -342,17 +409,15 @@ impl<'a, T> Future for RecvMessageFuture<'a, T> {
     ) -> std::task::Poll<Self::Output> {
         use std::task::Poll;
 
-        let this = self.project();
-        match this.fut.poll(cx) {
-            Poll::Ready(Ok(0)) => Poll::Ready(Err(Errno::PIPE)),
-            Poll::Ready(Ok(POINTER_SIZE)) => {
+        let this = self.get_mut();
+        match Pin::new(&mut this.inner).poll(cx) {
+            Poll::Ready(Ok(buffer)) => {
                 let result = unsafe {
                     // SAFETY: The read bytes are the only copy of the pointer
-                    pointer_from_buffer_ref(&this.buffer.borrow())
+                    pointer_from_buffer(buffer)
                 };
                 Poll::Ready(Ok(result))
             }
-            Poll::Ready(Ok(amount)) => panic!("amount should be POINTER_SIZE, not {amount}"),
             Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
             Poll::Pending => Poll::Pending,
         }
@@ -361,7 +426,7 @@ impl<'a, T> Future for RecvMessageFuture<'a, T> {
 
 impl<'a, T> FusedFuture for RecvMessageFuture<'a, T> {
     fn is_terminated(&self) -> bool {
-        self.fut.is_terminated()
+        self.inner.fut.is_terminated()
     }
 }
 
@@ -386,29 +451,18 @@ impl<T: Send, R: Send> IdMessagePipe<T, R> {
 
     /// Send a message on the pipe from a uringruntime thread. Message must be
     /// boxed as it is sent in-process as a pointer.
+    ///
+    /// Cancellation waits for the I/O result before releasing ownership.
     pub async fn send_message(&self, id: u64, message: Box<T>) -> Result<(), Errno> {
-        let buffer = IdPointerMsg::from_id_box(id, message);
-        let buffer_ref = buffer.as_ref();
-        match operations::write(&self.pipe, buffer_ref).await {
-            Ok(amount) => {
-                assert!(amount == buffer_ref.len());
-                // If we succeeded in writing to pipe, then we no longer own the pointer and should
-                // not drop it.
-                std::mem::forget(buffer);
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
+        let buffer = IdPointerMsg::from_id_box(id, message).into_buffer();
+        SendMessageFuture::<T>::new(&self.pipe, &buffer).await
     }
 
     /// Receive a message on the pipe. This must be called from a uringruntime thread.
+    ///
+    /// Cancellation waits for the I/O result and drops any consumed message.
     pub async fn recv_message(&self) -> Result<(u64, Box<R>), Errno> {
-        let mut buffer = [0u8; 2 * POINTER_SIZE];
-        let amount = operations::read(&self.pipe, &mut buffer).await?;
-        if amount == 0 {
-            return Err(Errno::from_raw_os_error(libc::EPIPE));
-        }
-        assert_eq!(amount, buffer.len());
+        let buffer = ReadMessageFuture::<R, { 2 * POINTER_SIZE }>::new(&self.pipe, None).await?;
         Ok(IdPointerMsg::<R>::new(buffer).into_id_box())
     }
 
@@ -458,6 +512,154 @@ mod test {
     use crate::{MessagePipeReceiver, MessagePipeSender, make_message_pipe_oneway};
     use futures::{FutureExt, future::FusedFuture};
     use std::time::Duration;
+
+    struct DropCounter(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn tracked_message() -> (
+        Box<DropCounter>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        (Box::new(DropCounter(count.clone())), count)
+    }
+
+    fn fill_socket(fd: &crate::OwnedFd) {
+        rustix::fs::fcntl_setfl(fd, rustix::fs::OFlags::NONBLOCK).unwrap();
+        loop {
+            match rustix::net::send(fd, &[0; 4096], rustix::net::SendFlags::DONTWAIT) {
+                Ok(_) => {}
+                Err(crate::Errno::AGAIN) => break,
+                Err(error) => panic!("failed to fill socket: {error}"),
+            }
+        }
+    }
+
+    #[crate::test]
+    async fn canceled_sends_drop_unsent_messages() {
+        let (fd, _peer) = crate::pipe::bipipe();
+        fill_socket(&fd);
+        let sender = MessagePipe::<DropCounter, ()>::new(fd);
+        let (message, count) = tracked_message();
+        {
+            let mut send = std::pin::pin!(sender.send_message(message));
+            assert!(futures::poll!(send.as_mut()).is_pending());
+        }
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let (fd, _peer) = crate::pipe::bipipe();
+        fill_socket(&fd);
+        let sender = MessagePipeSender::<DropCounter>::new_sync(fd).unwrap();
+        let (message, count) = tracked_message();
+        {
+            let mut send = std::pin::pin!(sender.send_message(message));
+            assert!(futures::poll!(send.as_mut()).is_pending());
+        }
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let (fd, _peer) = crate::pipe::bipipe();
+        fill_socket(&fd);
+        let sender = IdMessagePipe::<DropCounter, ()>::new(fd);
+        let (message, count) = tracked_message();
+        {
+            let mut send = std::pin::pin!(sender.send_message(42, message));
+            assert!(futures::poll!(send.as_mut()).is_pending());
+        }
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[crate::test]
+    async fn dropped_sends_preserve_transmitted_messages() {
+        let (sender, receiver) = make_message_pipe::<DropCounter, ()>();
+        let (message, count) = tracked_message();
+        let mut send = Box::pin(sender.send_message(message));
+        assert!(futures::poll!(send.as_mut()).is_pending());
+        let received = receiver.recv_message().await.unwrap();
+        drop(send);
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
+        drop(received);
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let (fd, peer) = crate::pipe::bipipe();
+        let sender = IdMessagePipe::<DropCounter, ()>::new(fd);
+        let receiver = IdMessagePipe::<(), DropCounter>::new(peer);
+        let (message, count) = tracked_message();
+        let mut send = Box::pin(sender.send_message(42, message));
+        assert!(futures::poll!(send.as_mut()).is_pending());
+        let (id, received) = receiver.recv_message().await.unwrap();
+        assert_eq!(id, 42);
+        drop(send);
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
+        drop(received);
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[crate::test]
+    async fn dropped_receives_release_consumed_messages() {
+        let (sender, receiver) = make_message_pipe::<DropCounter, ()>();
+        let (message, count) = tracked_message();
+        sender.send_message_sync(message).unwrap();
+        {
+            let mut receive = std::pin::pin!(receiver.recv_message());
+            assert!(futures::poll!(receive.as_mut()).is_pending());
+            crate::operations::nop().await.unwrap();
+        }
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let (sender, receiver) = make_message_pipe_oneway_sync::<DropCounter>().unwrap();
+        let (message, count) = tracked_message();
+        sender.send_message_sync(message).unwrap();
+        {
+            let mut receive = std::pin::pin!(receiver.recv_message());
+            assert!(futures::poll!(receive.as_mut()).is_pending());
+            crate::operations::nop().await.unwrap();
+        }
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let (fd, peer) = crate::pipe::bipipe();
+        let sender = IdMessagePipe::<DropCounter, ()>::new(fd);
+        let receiver = IdMessagePipe::<(), DropCounter>::new(peer);
+        let (message, count) = tracked_message();
+        sender.send_message_sync(42, message).unwrap();
+        {
+            let mut receive = std::pin::pin!(receiver.recv_message());
+            assert!(futures::poll!(receive.as_mut()).is_pending());
+            crate::operations::nop().await.unwrap();
+        }
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[crate::test]
+    async fn unpolled_operations_preserve_ownership() {
+        let (sender, receiver) = make_message_pipe::<DropCounter, ()>();
+        let (message, count) = tracked_message();
+        drop(sender.send_message(message));
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let (message, count) = tracked_message();
+        sender.send_message_sync(message).unwrap();
+        drop(receiver.recv_message());
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
+        drop(receiver.recv_message().await.unwrap());
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[crate::test]
+    async fn pending_receive_cancellation_allows_reuse() {
+        let (sender, receiver) = make_message_pipe::<DropCounter, ()>();
+        {
+            let mut receive = std::pin::pin!(receiver.recv_message());
+            assert!(futures::poll!(receive.as_mut()).is_pending());
+        }
+        let (message, count) = tracked_message();
+        sender.send_message_sync(message).unwrap();
+        drop(receiver.recv_message().await.unwrap());
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
 
     #[crate::test]
     async fn test_message_pipe_behavior_send() {

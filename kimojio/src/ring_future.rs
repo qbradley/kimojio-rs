@@ -133,6 +133,36 @@ impl<'a, T: Unpin, C: MakeResult<T>> RingFuture<'a, T, C> {
             handle.cancel(&mut task_state)
         }
     }
+
+    /// Cancels outstanding I/O and consumes its actual result, including a
+    /// successful completion that raced with cancellation.
+    pub(crate) fn cancel_and_complete(&mut self) -> Option<Result<T, Errno>> {
+        let completion = self.handle.take()?;
+        let mut task_state = TaskState::get();
+        completion.cancel(&mut task_state);
+        while completion
+            .state
+            .use_mut(|state| matches!(state, CompletionState::Submitted { .. }))
+        {
+            task_state = submit_and_complete_io(task_state, false, completion.iopoll);
+        }
+        let result = completion.state.use_mut(|state| {
+            match std::mem::replace(state, CompletionState::Terminated) {
+                CompletionState::Completed {
+                    result,
+                    #[cfg(feature = "io_uring_cmd")]
+                    big_cqe,
+                } => {
+                    #[cfg(not(feature = "io_uring_cmd"))]
+                    let big_cqe = [0; 2];
+                    result.map(|value| C::make_success(value, &big_cqe))
+                }
+                _ => unreachable!("canceled I/O must have completed"),
+            }
+        });
+        task_state.return_completion(completion);
+        Some(result)
+    }
 }
 
 impl<'a, T: Unpin, C: MakeResult<T>> IsIoPoll for RingFuture<'a, T, C> {
