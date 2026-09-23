@@ -1,0 +1,25 @@
+[package]
+name = "kimojio-fsm-http1"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Owned-operation HTTP/1 client and server state machines"
+readme = "README.md"
+
+[dependencies]
+httparse.workspace = true
+
+[features]
+metrics = []
+# Unstable, opt-in support for simulated-I/O benchmarks only.
+bench-internals = []
+
+[dev-dependencies]
+criterion.workspace = true
+serde_json = "1"
+
+[[bench]]
+name = "roundtrip"
+harness = false
