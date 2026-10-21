@@ -1836,6 +1836,11 @@ pub async fn io_scope_drain_futures<Acc, T, E>(
 ///
 /// This does not wait for the I/O to complete, so the caller should
 /// continue to poll the canceled tasks until they are done.
+///
+/// Each call drains the registrations captured before cancellation callbacks
+/// run. Callbacks run outside TaskState and registry borrows; any work they
+/// register remains captured for a later cancellation or scope exit. The scope
+/// still keeps its existing Vec history between cancellation passes.
 pub fn io_scope_cancel() {
     let mut task_state = TaskState::get();
     let task = task_state.get_current_task();
@@ -1872,7 +1877,7 @@ fn io_scope_cancel_and_wait_internal(new_io_scope_completions: Option<IoScopeCom
         task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
 
         // 2. cancel the gathered completions
-        retain_incomplete(&mut gathered_completions.completions, &mut task_state);
+        task_state = retain_incomplete(&mut gathered_completions.completions, task_state);
 
         for completion in &gathered_completions.completions {
             completion.cancel(&mut task_state);
@@ -1880,18 +1885,19 @@ fn io_scope_cancel_and_wait_internal(new_io_scope_completions: Option<IoScopeCom
 
         for wait in gathered_completions.waits.drain(..) {
             wait.canceled.set(true);
-            wait.waker.use_mut(|waker| {
-                if let Some(waker) = waker {
-                    wake_task(&mut task_state, waker)
-                }
-            });
+            if let Some(waker) = wait.waker.use_mut(Option::take) {
+                task_state = wake_task(task_state, waker);
+            }
+            let cell = task_state.into_inner();
+            drop(wait);
+            task_state = cell.borrow_mut();
         }
 
         // 3. wait for them to finish.
         while !gathered_completions.completions.is_empty() {
             task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
 
-            retain_incomplete(&mut gathered_completions.completions, &mut task_state);
+            task_state = retain_incomplete(&mut gathered_completions.completions, task_state);
         }
     }
 }
@@ -2009,7 +2015,10 @@ impl<F: Future> Future for IoScopeFuture<F> {
     }
 }
 
-fn retain_incomplete(vec: &mut Vec<Rc<Completion>>, task_state: &mut TaskState) {
+fn retain_incomplete<'a>(
+    vec: &mut Vec<Rc<Completion>>,
+    mut task_state: crate::task_state_cell::TaskStateCellRef<'a>,
+) -> crate::task_state_cell::TaskStateCellRef<'a> {
     let mut index = 0;
     while index < vec.len() {
         let completion = vec.get(index).unwrap();
@@ -2021,11 +2030,15 @@ fn retain_incomplete(vec: &mut Vec<Rc<Completion>>, task_state: &mut TaskState) 
         });
         if !retain {
             let completion = vec.swap_remove(index);
-            task_state.return_completion(completion);
+            let unpooled = task_state.return_completion(completion);
+            let cell = task_state.into_inner();
+            drop(unpooled);
+            task_state = cell.borrow_mut();
         } else {
             index += 1;
         }
     }
+    task_state
 }
 
 // A future that either returns an error,

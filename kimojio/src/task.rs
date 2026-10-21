@@ -205,26 +205,38 @@ impl Task {
     }
 
     pub(crate) fn cancel_io_scope_completions(&self, mut task_state: TaskStateCellRef<'_>) {
-        self.io_scope_completions.use_mut(|io_scope_completions| {
-            let io_scope_completions = io_scope_completions
-                .as_mut()
-                .expect("must be called from an io_scope callback");
-            for completion in io_scope_completions.completions.drain(..) {
-                completion.cancel(&mut task_state);
-                task_state.return_completion(completion);
-            }
-            // flush the added SQE
-            task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
+        // Preserve the historical Vec registrations and drain only this batch.
+        // Leave an empty active scope installed so callbacks can register new
+        // work (or cancel recursively) without borrowing this batch or losing
+        // their registrations. No user callbacks run under the registry borrow.
+        let mut gathered = self.io_scope_completions.use_mut(|scope| {
+            std::mem::take(
+                scope
+                    .as_mut()
+                    .expect("must be called from an io_scope callback"),
+            )
+        });
+        for completion in gathered.completions.drain(..) {
+            completion.cancel(&mut task_state);
+            let unpooled = task_state.return_completion(completion);
+            let cell = task_state.into_inner();
+            drop(unpooled);
+            task_state = cell.borrow_mut();
+        }
+        // flush the added SQE
+        task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
 
-            for wait in io_scope_completions.waits.drain(..) {
-                wait.canceled.set(true);
-                wait.waker.use_mut(|waker| {
-                    if let Some(waker) = waker {
-                        wake_task(&mut task_state, waker)
-                    }
-                });
+        for wait in gathered.waits.drain(..) {
+            wait.canceled.set(true);
+            if let Some(waker) = wait.waker.use_mut(Option::take) {
+                task_state = wake_task(task_state, waker);
             }
-        })
+            // A callback may replace the stored waker and release other owners.
+            // Final waiter destruction must run outside TaskState as well.
+            let cell = task_state.into_inner();
+            drop(wait);
+            task_state = cell.borrow_mut();
+        }
     }
 
     pub(crate) fn register_wait(&self, wait: &Rc<WaitData>) {
@@ -864,7 +876,12 @@ impl TaskState {
         }
     }
 
-    pub(crate) fn return_completion(&mut self, completion: Rc<Completion>) {
+    /// Returns an unpooled owner for destruction after TaskState and registry
+    /// borrows end; the owner's resources may run arbitrary destructors.
+    pub(crate) fn return_completion(
+        &mut self,
+        completion: Rc<Completion>,
+    ) -> Option<Rc<Completion>> {
         debug_assert!(
             Rc::weak_count(&completion) == 0,
             "Completion should not have weak refs"
@@ -874,18 +891,25 @@ impl TaskState {
             // on our owned Rc<> indicates that we are the only owner of the completion.
             && Rc::strong_count(&completion) == 1
         {
-            self.completion_pool.push_back(completion)
+            self.completion_pool.push_back(completion);
+            None
+        } else {
+            Some(completion)
         }
     }
 
-    pub(crate) fn new_completion(&mut self, completion: Completion) -> Rc<Completion> {
+    /// Returns the replaced pooled contents for destruction outside borrows.
+    pub(crate) fn new_completion(
+        &mut self,
+        completion: Completion,
+    ) -> (Rc<Completion>, Option<Completion>) {
         if let Some(mut existing) = self.completion_pool.pop_front() {
             let ptr =
                 Rc::get_mut(&mut existing).expect("Pooled completion must have singular refcount");
-            *ptr = completion;
-            existing
+            let previous = std::mem::replace(ptr, completion);
+            (existing, Some(previous))
         } else {
-            Rc::new(completion)
+            (Rc::new(completion), None)
         }
     }
 }
@@ -895,3 +919,7 @@ impl Default for TaskState {
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[path = "task_state_reentry_tests.rs"]
+mod task_state_reentry_tests;

@@ -20,8 +20,10 @@ fn poll_task(task: Rc<Task>, mut task_state: TaskStateCellRef<'_>) -> TaskStateC
     if task.get_state() == TaskReadyState::Complete {
         // A running task could get "woken" while running, and then complete without
         // suspending.  In that case we should not repoll the task as it has nothing
-        // to do.
-        return task_state;
+        // to do. This queue entry can be the final owner of the task result.
+        let cell = task_state.into_inner();
+        drop(task);
+        return cell.borrow_mut();
     }
 
     let activity_id = task.activity_id.get();
@@ -142,12 +144,11 @@ fn process_completions(
                 panic!("You can't get a completion for an entry that is not submitted")
             }
             CompletionState::Submitted {
-                waker,
                 canceled,
                 activity_id,
                 tag,
+                ..
             } => {
-                let waker = waker.clone();
                 if result == Err(Errno::CANCELED) && !*canceled {
                     result = Err(Errno::TIME);
                 }
@@ -164,12 +165,17 @@ fn process_completions(
                     },
                 );
 
-                *state = CompletionState::Completed {
+                let completed = CompletionState::Completed {
                     result,
                     #[cfg(feature = "io_uring_cmd")]
                     big_cqe: *cqe.big_cqe(),
                 };
-
+                // Move the waker out rather than cloning/dropping it under
+                // either the completion-state or TaskState borrow.
+                let CompletionState::Submitted { waker, .. } = std::mem::replace(state, completed)
+                else {
+                    unreachable!()
+                };
                 waker
             }
             CompletionState::Terminated | CompletionState::Completed { .. } => {
@@ -177,11 +183,11 @@ fn process_completions(
             }
         });
 
-        task_state.return_completion(pool_handle);
+        let unpooled = task_state.return_completion(pool_handle);
 
-        // Drop and re-borrow task_state so that wake_by_ref has the option
-        // to access it via thread local storage.
+        // Resource destructors and wakers may access TaskState through TLS.
         let task_state_ref = task_state.into_inner();
+        drop(unpooled);
         waker.wake();
         task_state = task_state_ref.borrow_mut();
     }

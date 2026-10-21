@@ -253,9 +253,9 @@ intrusive_adapter!(pub WaitDataAdapter = Rc<WaitData>: WaitData { link => Linked
 
 impl WaitData {
     fn set_waker(&self, cx: &mut Context<'_>) {
-        self.waker.use_mut(|waker| {
-            *waker = Some(cx.waker().clone());
-        })
+        let new = cx.waker().clone();
+        let old = self.waker.use_mut(|waker| waker.replace(new));
+        drop(old);
     }
 }
 
@@ -327,11 +327,21 @@ impl WaitList {
                 );
             }
 
-            task.waker.use_mut(|waker| {
-                if let Some(waker) = waker {
-                    waker.wake_by_ref()
-                }
-            });
+            // Preserve the waker for later scope cancellation, but do not
+            // invoke it while borrowing its slot. A callback can replace it;
+            // in that case retain the replacement and drop the old one here.
+            if let Some(waker) = task.waker.use_mut(Option::take) {
+                waker.wake_by_ref();
+                let old = task.waker.use_mut(|slot| {
+                    if slot.is_none() {
+                        *slot = Some(waker);
+                        None
+                    } else {
+                        Some(waker)
+                    }
+                });
+                drop(old);
+            }
             true
         } else {
             false
