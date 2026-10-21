@@ -247,6 +247,7 @@ pub struct WaitData {
     pub canceled: Cell<bool>,
     pub tag: u32,
     pub link: LinkedListLink,
+    pub(crate) scopes: crate::scope_registry::WaitMemberships,
 }
 
 intrusive_adapter!(pub WaitDataAdapter = Rc<WaitData>: WaitData { link => LinkedListLink });
@@ -432,12 +433,15 @@ impl<Source: WaitSource> WaitFuture<Source> {
         self.source.as_ref()
     }
 
-    fn unregister_canceled_wait(&mut self) {
+    /// End this generation in the source and all scopes. Cancellation/drop
+    /// passes an available notification; a successful poll consumes it instead.
+    fn unregister_wait(&mut self, pass_notification: bool) {
         if let Some(wait_data) = self.wait_data.take()
             && let Some(source) = &self.source
         {
+            wait_data.scopes.retire();
             source.unregister(&wait_data);
-            if source.is_complete() {
+            if pass_notification && source.is_complete() {
                 source.wake_all();
             }
         }
@@ -451,8 +455,9 @@ impl<Source: WaitSource> Future for WaitFuture<Source> {
         if let Some(wait_data) = &self.wait_data
             && wait_data.canceled.get()
         {
-            wait_data.canceled.set(false);
-            self.get_mut().unregister_canceled_wait();
+            // Retire this generation before returning cancellation. A retry
+            // gets a fresh Rc, so an older scope snapshot cannot poison it.
+            self.get_mut().unregister_wait(true);
             return Poll::Ready(Err(CanceledError {}));
         }
 
@@ -476,7 +481,9 @@ impl<Source: WaitSource> Future for WaitFuture<Source> {
 
         if let Some(source) = &self.source {
             if source.is_complete() {
-                Poll::Ready(Ok(self.get_mut().source.take().unwrap()))
+                let this = self.get_mut();
+                this.unregister_wait(false);
+                Poll::Ready(Ok(this.source.take().unwrap()))
             } else {
                 // Location for this future is pinned, can use source address as a tag
                 let tag = source as *const Source as u32;
@@ -498,6 +505,7 @@ impl<Source: WaitSource> Future for WaitFuture<Source> {
                         canceled: Cell::new(false),
                         tag,
                         link: LinkedListLink::new(),
+                        scopes: Default::default(),
                     });
                     source.register(&new_wait_data, task_id, activity_id, tag);
                     current_task.register_wait(&new_wait_data);
@@ -519,7 +527,7 @@ impl<Source: WaitSource> FusedFuture for WaitFuture<Source> {
 
 impl<Source: WaitSource> Drop for WaitFuture<Source> {
     fn drop(&mut self) {
-        self.unregister_canceled_wait();
+        self.unregister_wait(true);
     }
 }
 

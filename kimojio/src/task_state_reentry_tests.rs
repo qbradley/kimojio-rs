@@ -1,7 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 use super::*;
-use crate::{AsyncEvent, CanceledError, CompletionResources, io_type::IOType, operations};
+use crate::{
+    AsyncEvent, CanceledError, CompletionResources, io_type::IOType, operations,
+    task_ref::wake_task,
+};
 use futures::{StreamExt, stream::FuturesUnordered};
 use std::{
     cell::RefCell,
@@ -165,8 +168,11 @@ async fn completed_self_woken_task_queue_owner_drops_outside_task_state() {
     panic!("completed task result was not released");
 }
 
+#[path = "scope_lifecycle_tests.rs"]
+mod scope_lifecycle_tests;
+
 // Single-threaded raw wakers deliberately reenter both TaskState and the
-// current Vec registry on clone, replacement/drop, and wake callbacks.
+// current live registry on clone, replacement/drop, and wake callbacks.
 struct ReentrantWaker {
     native: Waker,
     calls: Rc<Cell<usize>>,
@@ -181,7 +187,7 @@ fn touch(probe: &ReentrantWaker) {
         let waits = task.io_scope_completions.use_mut(|scope| {
             scope
                 .as_ref()
-                .map(|scope| scope.waits.clone())
+                .map(|scope| scope.test_waits())
                 .unwrap_or_default()
         });
         for wait in waits {
@@ -277,7 +283,7 @@ async fn wait_and_io_waker_callbacks_can_reenter() {
 }
 
 #[crate::test]
-async fn cancellation_callbacks_preserve_new_vec_registrations() {
+async fn cancellation_callbacks_preserve_new_live_registrations() {
     operations::io_scope(async || {
         let task = TaskState::get().get_current_task();
         let calls = Rc::new(Cell::new(0));
@@ -299,13 +305,12 @@ async fn cancellation_callbacks_preserve_new_vec_registrations() {
         })
         .await;
         operations::io_scope_cancel();
-        // The old batch was drained, but wake/drop callbacks created new NOPs
-        // in the still-installed registry. Both live work and dropped-operation
-        // history must survive this pass.
+        // Wake/drop callbacks created new NOPs in the still-installed registry.
+        // Only their live work survives; dropped-operation history is retired.
         let registrations = task.io_scope_completions.use_mut(|scope| {
             let scope = scope.as_ref().unwrap();
-            assert!(scope.waits.is_empty());
-            scope.completions.clone()
+            assert!(scope.test_waits().is_empty());
+            scope.test_completions()
         });
         assert!(!registrations.is_empty());
         assert_eq!(
@@ -318,18 +323,13 @@ async fn cancellation_callbacks_preserve_new_vec_registrations() {
             1,
             "the live callback NOP was not canceled by the old pass"
         );
-        assert!(
-            registrations.iter().any(|completion| completion
-                .state
-                .use_mut(|state| { matches!(state, crate::CompletionState::Terminated) })),
-            "dropped callback NOPs remain in the Vec history"
-        );
+        assert_eq!(registrations.len(), 1, "only the live callback NOP remains");
         assert_eq!(wait.await, Err(CanceledError {}));
         operations::io_scope_cancel();
         let pending_nop = pending.borrow_mut().take().unwrap();
         assert_eq!(pending_nop.await, Err(crate::Errno::CANCELED));
         task.io_scope_completions.use_mut(|scope| {
-            assert!(scope.as_ref().unwrap().completions.is_empty());
+            assert!(scope.as_ref().unwrap().test_completions().is_empty());
         });
     })
     .await;
@@ -390,18 +390,18 @@ async fn completion_pool_reuse_drops_resources_outside_borrows() {
     let drops = Rc::new(Cell::new(0));
     operations::io_scope(async || {
         resource_nop(drops.clone()).await.unwrap();
-        assert_eq!(drops.get(), 0, "Vec history still owns the resource");
+        assert_eq!(drops.get(), 0, "the completion pool retains the resource");
     })
     .await;
     assert_eq!(drops.get(), 0, "scope cleanup pooled the unique completion");
     operations::io_scope(async || {
         let nop = operations::nop();
         assert_eq!(drops.get(), 1, "pool reuse destroys old resources");
-        // The destructor's NOP was registered without recursively borrowing
-        // TaskState and was not overwritten by the outer registration.
+        // The destructor's NOP registered without recursively borrowing
+        // TaskState, then retired immediately on drop. The outer NOP is live.
         let task = TaskState::get().get_current_task();
         task.io_scope_completions.use_mut(|scope| {
-            assert_eq!(scope.as_ref().unwrap().completions.len(), 2);
+            assert_eq!(scope.as_ref().unwrap().test_completions().len(), 1);
         });
         nop.await.unwrap();
     })
@@ -412,6 +412,7 @@ fn fill_completion_pool() {
     let mut state = TaskState::get();
     while state.completion_pool.len() < MAX_COMPLETION_POOL_ENTRIES {
         state.completion_pool.push_back(Rc::new(Completion {
+            scope: Default::default(),
             state: MutInPlaceCell::new(crate::CompletionState::Terminated),
             owned_resources: CompletionResources::None,
             timespec: Default::default(),

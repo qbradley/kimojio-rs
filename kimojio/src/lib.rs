@@ -38,6 +38,7 @@ pub mod resolver;
 pub(crate) mod ring_future;
 mod runtime;
 mod runtime_handle;
+mod scope_registry;
 pub mod socket_helpers;
 #[cfg(feature = "ssl2")]
 pub mod ssl2;
@@ -129,6 +130,7 @@ enum CompletionState {
 
 pub(crate) struct Completion {
     state: MutInPlaceCell<CompletionState>,
+    scope: scope_registry::CompletionMembership,
     owned_resources: CompletionResources,
     // memory for timeouts
     timespec: rustix_uring::types::Timespec,
@@ -147,6 +149,10 @@ enum CompletionResources {
     InlineBuffer([u8; 8]),
 }
 
+// Original CQEs carry aligned Completion pointers; the low bit marks cancel ACKs.
+const CANCEL_ACK_TAG: usize = 1;
+static_assertions::const_assert!(std::mem::align_of::<Completion>() > CANCEL_ACK_TAG);
+
 impl Completion {
     fn finish_close(&self, result: Result<u32, Errno>) {
         if let CompletionResources::CloseFd(fd) = &self.owned_resources
@@ -164,7 +170,7 @@ impl Completion {
     }
 
     pub fn cancel(self: &Rc<Self>, task_state: &mut task::TaskState) {
-        let should_cancel = self.state.use_mut(|state| match state {
+        let (should_cancel, settled) = self.state.use_mut(|state| match state {
             CompletionState::Idle { .. } => {
                 // cancel immediately but skipping submission
                 *state = CompletionState::Completed {
@@ -172,24 +178,34 @@ impl Completion {
                     #[cfg(feature = "io_uring_cmd")]
                     big_cqe: [0; 2],
                 };
-                false
+                (false, true)
             }
             CompletionState::Submitted { canceled, .. } => {
                 if !*canceled {
                     *canceled = true;
-                    true
+                    (true, false)
                 } else {
-                    false
+                    (false, false)
                 }
             }
-            CompletionState::Terminated | CompletionState::Completed { .. } => false,
+            CompletionState::Terminated | CompletionState::Completed { .. } => (false, true),
         });
+        if settled {
+            self.scope.retire();
+        }
 
         if should_cancel {
             let user_data_ptr = Rc::as_ptr(self) as *mut libc::c_void;
             let user_data = io_uring_user_data::from_ptr(user_data_ptr);
+            // Pin the target's identity until the ACK, even if its original CQE
+            // arrives first. A tagged Rc owner needs no separate ACK allocation.
+            let ack = Rc::into_raw(self.clone()).cast_mut().cast::<libc::c_void>();
+            let ack = ack.map_addr(|address| address | CANCEL_ACK_TAG);
             #[allow(clippy::useless_conversion)]
-            let entry = AsyncCancel::new(user_data).build().into();
+            let entry = AsyncCancel::new(user_data)
+                .build()
+                .user_data(io_uring_user_data::from_ptr(ack))
+                .into();
             if self.iopoll {
                 task_state.submit_poll(&[entry]);
                 task_state.stats.increment_in_flight_io_poll(1);

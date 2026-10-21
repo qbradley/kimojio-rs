@@ -97,6 +97,7 @@ impl<'a, T: Unpin, C: MakeResult<T>> RingFuture<'a, T, C> {
         });
 
         let (handle, previous) = task_state.new_completion(Completion {
+            scope: Default::default(),
             state: MutInPlaceCell::new(CompletionState::Idle {
                 entry,
                 timespec: timespec.is_some(),

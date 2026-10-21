@@ -26,7 +26,7 @@ use crate::{
     Completion, EAGAIN, EBUSY, EINTR, HandleTable,
     async_event::{WaitData, WaitList},
     mut_in_place_cell::MutInPlaceCell,
-    task_ref::wake_task,
+    scope_registry::IoScopeCompletions,
     task_state_cell::{TaskStateCell, TaskStateCellRef},
     tracing::{EventEnvelope, Events},
     uring_stats::URingStats,
@@ -179,12 +179,6 @@ pub struct Task {
     pub task_state: *const TaskState,
 }
 
-#[derive(Default)]
-pub(crate) struct IoScopeCompletions {
-    pub completions: Vec<Rc<Completion>>,
-    pub waits: Vec<Rc<WaitData>>,
-}
-
 impl Task {
     pub(crate) fn replace_io_scope_completions(
         &self,
@@ -199,50 +193,25 @@ impl Task {
     pub(crate) fn register_io(&self, completion: &Rc<Completion>) {
         self.io_scope_completions.use_mut(|io_scope_completions| {
             if let Some(io_scope_completions) = io_scope_completions {
-                io_scope_completions.completions.push(completion.clone());
+                io_scope_completions.register_io(completion);
             }
         })
     }
 
-    pub(crate) fn cancel_io_scope_completions(&self, mut task_state: TaskStateCellRef<'_>) {
-        // Preserve the historical Vec registrations and drain only this batch.
-        // Leave an empty active scope installed so callbacks can register new
-        // work (or cancel recursively) without borrowing this batch or losing
-        // their registrations. No user callbacks run under the registry borrow.
-        let mut gathered = self.io_scope_completions.use_mut(|scope| {
-            std::mem::take(
-                scope
-                    .as_mut()
-                    .expect("must be called from an io_scope callback"),
-            )
+    pub(crate) fn cancel_io_scope_completions(&self, task_state: TaskStateCellRef<'_>) {
+        let snapshot = self.io_scope_completions.use_mut(|scope| {
+            scope
+                .as_ref()
+                .expect("must be called from an io_scope callback")
+                .snapshot()
         });
-        for completion in gathered.completions.drain(..) {
-            completion.cancel(&mut task_state);
-            let unpooled = task_state.return_completion(completion);
-            let cell = task_state.into_inner();
-            drop(unpooled);
-            task_state = cell.borrow_mut();
-        }
-        // flush the added SQE
-        task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
-
-        for wait in gathered.waits.drain(..) {
-            wait.canceled.set(true);
-            if let Some(waker) = wait.waker.use_mut(Option::take) {
-                task_state = wake_task(task_state, waker);
-            }
-            // A callback may replace the stored waker and release other owners.
-            // Final waiter destruction must run outside TaskState as well.
-            let cell = task_state.into_inner();
-            drop(wait);
-            task_state = cell.borrow_mut();
-        }
+        drop(snapshot.cancel(task_state, false));
     }
 
     pub(crate) fn register_wait(&self, wait: &Rc<WaitData>) {
         self.io_scope_completions.use_mut(|io_scope_completions| {
             if let Some(io_scope_completions) = io_scope_completions {
-                io_scope_completions.waits.push(wait.clone());
+                io_scope_completions.register_wait(wait);
             }
         })
     }

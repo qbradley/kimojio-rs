@@ -120,19 +120,27 @@ fn process_completions(
     let mut completions = 0;
     while let Some(cqe) = task_state.get_next_cqe(iopoll) {
         completions += 1;
-        // SAFETY: there was one Rc::into_raw when the SQE was successfully
-        // submitted and there will be one resulting CQE where we reconstitute
-        // the Rc. When a timeout is used, there is a compensating
-        // Rc::increment_strong_count() so the second CQE used for the timeout
-        // will hold a pointer to an Rc<> with a remaining ref count of 1,
-        // which is then still safe here.
         let user_data_ptr = cqe.user_data().ptr();
         // if user_data is None, then this is a timeout completion, we need to skip it
         if user_data_ptr.is_null() {
             // This is a timeout completion, we need to skip it
             continue;
         }
-        let pool_handle = unsafe { Rc::from_raw(user_data_ptr as *mut Completion) };
+        let cancel_ack = user_data_ptr.addr() & crate::CANCEL_ACK_TAG != 0;
+        let user_data_ptr = user_data_ptr.map_addr(|address| address & !crate::CANCEL_ACK_TAG);
+        // SAFETY: original SQEs and cancel SQEs each transfer one Rc owner to
+        // their one CQE. Timeout CQEs use null and were skipped above. Strip
+        // the ACK tag without changing the allocation's pointer provenance.
+        let pool_handle = unsafe { Rc::from_raw(user_data_ptr.cast::<Completion>()) };
+        if cancel_ack {
+            // ACKs only release their identity pin. They never settle the
+            // original I/O, retire its scope entry, or wake its future.
+            let unpooled = task_state.return_completion(pool_handle);
+            let cell = task_state.into_inner();
+            drop(unpooled);
+            task_state = cell.borrow_mut();
+            continue;
+        }
 
         let mut result: Result<u32, Errno> = cqe.result();
 
@@ -183,6 +191,7 @@ fn process_completions(
             }
         });
 
+        pool_handle.scope.retire();
         let unpooled = task_state.return_completion(pool_handle);
 
         // Resource destructors and wakers may access TaskState through TLS.
@@ -616,6 +625,10 @@ impl FutureOrResult for ShutdownFuture {
         std::pin::Pin::into_inner(self).result.take().map(Err)
     }
 }
+
+#[cfg(test)]
+#[path = "cancel_ack_tests.rs"]
+mod cancel_ack_tests;
 
 #[cfg(test)]
 mod test {
