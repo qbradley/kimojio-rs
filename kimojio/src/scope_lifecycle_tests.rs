@@ -3,6 +3,45 @@
 use super::*;
 
 #[crate::test]
+async fn scope_exit_settles_many_originals_retained_outside_its_snapshot() {
+    for explicitly_cancel_first in [false, true] {
+        let (readers, peers): (Vec<_>, Vec<_>) = (0..64).map(|_| crate::pipe::bipipe()).unzip();
+        let mut buffers = [[0; 1]; 64];
+        let mut pending = operations::io_scope(async || {
+            let mut reads: Vec<_> = readers
+                .iter()
+                .zip(buffers.iter_mut())
+                .map(|(reader, buffer)| operations::read(reader, buffer))
+                .collect();
+            futures::future::poll_fn(|cx| {
+                for read in &mut reads {
+                    assert!(std::pin::Pin::new(read).poll(cx).is_pending());
+                }
+                Poll::Ready(())
+            })
+            .await;
+            if explicitly_cancel_first {
+                operations::io_scope_cancel();
+            }
+            // Keep the real futures and their buffer borrows outside the scope.
+            // Exit must settle every original, not just its cancellation request.
+            reads
+        })
+        .await;
+        for read in &mut pending {
+            assert_eq!(
+                futures::poll!(std::pin::Pin::new(read)),
+                Poll::Ready(Err(crate::Errno::CANCELED)),
+                "scope exit returned before an original CQE was processed"
+            );
+        }
+        drop(pending);
+        assert!(buffers.iter().all(|buffer| *buffer == [0]));
+        drop((readers, peers));
+    }
+}
+
+#[crate::test]
 async fn long_scope_retires_4096_completed_operations_and_deduplicates_waits() {
     operations::io_scope(async || {
         let task = TaskState::get().get_current_task();

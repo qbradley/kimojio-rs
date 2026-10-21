@@ -1858,13 +1858,18 @@ pub fn io_scope_cancel() {
 /// I/O that do not respond quickly to cancellation then that could cause
 /// stalls.
 fn io_scope_cancel_and_wait_internal(new_io_scope_completions: Option<IoScopeCompletions>) {
-    let task_state = TaskState::get();
+    let mut task_state = TaskState::get();
     let task = task_state.get_current_task();
 
     // Restore the outer scope before any callback. New work belongs there,
     // never to the exiting scope's exact snapshot.
     if let Some(gathered) = task.replace_io_scope_completions(new_io_scope_completions) {
-        drop(gathered.snapshot().cancel(task_state, true));
+        task_state = gathered.snapshot().cancel(task_state);
+        // Snapshot owners are gone. Original CQEs retire live entries directly;
+        // checking this scope's I/O length avoids rescanning completion states.
+        while gathered.has_pending_io() {
+            task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
+        }
     }
 }
 

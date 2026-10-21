@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 use super::*;
-use crate::{CompletionResources, task::TaskState};
+use crate::{CompletionResources, CompletionState, task::TaskState};
 use intrusive_collections::LinkedListLink;
 use rustix::io_uring::io_uring_user_data;
 use rustix_uring::opcode;
@@ -54,6 +54,42 @@ fn check(scope: &IoScopeCompletions) {
             });
         }
     });
+}
+
+#[test]
+fn pending_io_query_ignores_waiters_and_retained_snapshot_owners() {
+    let mut scope = IoScopeCompletions::default();
+    assert!(!scope.has_pending_io());
+    assert!(
+        scope.registry.is_none(),
+        "a settlement query must not allocate a registry"
+    );
+
+    let wait = waiter();
+    scope.register_wait(&wait);
+    assert!(!scope.is_empty());
+    assert!(
+        !scope.has_pending_io(),
+        "event waiters are not original I/O"
+    );
+
+    let io = completion();
+    scope.register_io(&io);
+    let snapshot = scope.snapshot();
+    // Settlement must not inspect completion states, even when the entry is live.
+    io.state.use_mut(|_| assert!(scope.has_pending_io()));
+    // The query follows authoritative retirement, not temporary snapshot owners.
+    // Genuine original/ACK CQE behavior is covered by the runtime test below.
+    io.scope.retire();
+    assert!(!scope.has_pending_io());
+    assert_eq!(snapshot.completions.len(), 1);
+    assert_eq!(
+        Rc::strong_count(&io),
+        2,
+        "the snapshot still owns the retired I/O"
+    );
+    wait.scopes.retire();
+    assert!(scope.is_empty());
 }
 
 #[test]
@@ -247,6 +283,10 @@ async fn real_cancel_ack_cannot_settle_or_retire_the_original() {
         ))
     });
     assert!(!scope.is_empty());
+    assert!(
+        scope.has_pending_io(),
+        "a cancellation ACK cannot settle original I/O"
+    );
     assert_eq!(Rc::strong_count(&io), 2, "the ACK pin was released");
     check(&scope);
 
@@ -269,6 +309,7 @@ async fn real_cancel_ack_cannot_settle_or_retire_the_original() {
         }
     }
     assert!(scope.is_empty(), "only the original CQE retires its entry");
+    assert!(!scope.has_pending_io());
     io.state.use_mut(|state| {
         assert!(matches!(
             state,

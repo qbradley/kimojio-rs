@@ -8,7 +8,7 @@
 use std::rc::{Rc, Weak};
 
 use crate::{
-    Completion, CompletionState, MutInPlaceCell, async_event::WaitData, task_ref::wake_task,
+    Completion, MutInPlaceCell, async_event::WaitData, task_ref::wake_task,
     task_state_cell::TaskStateCellRef,
 };
 
@@ -163,6 +163,15 @@ impl IoScopeCompletions {
         })
     }
 
+    /// Whether this scope still has unsettled original I/O, including operations
+    /// not yet submitted. Waiters and cancellation ACKs do not affect this query;
+    /// only original-CQE retirement or pre-submission cancellation removes I/O.
+    pub(crate) fn has_pending_io(&self) -> bool {
+        self.registry
+            .as_ref()
+            .is_some_and(|scope| scope.completions.use_mut(|entries| !entries.is_empty()))
+    }
+
     #[cfg(test)]
     pub(crate) fn test_completions(&self) -> Vec<Rc<Completion>> {
         self.snapshot().completions.iter().cloned().collect()
@@ -275,13 +284,12 @@ pub(crate) struct ScopeSnapshot {
 }
 
 impl ScopeSnapshot {
-    /// Cancel this exact batch outside registry borrows. Scope exit also waits
-    /// for original CQEs, not merely cancellation ACKs. Destructors and wakers
-    /// run with TaskState released, just as they do on the ordinary I/O path.
+    /// Request cancellation of this exact batch without waiting for all originals.
+    /// The live registry retains unsettled I/O after snapshot owners are released.
+    /// Destructors and wakers run outside registry and TaskState borrows.
     pub(crate) fn cancel<'a>(
         mut self,
         mut task_state: TaskStateCellRef<'a>,
-        settle: bool,
     ) -> TaskStateCellRef<'a> {
         if self.completions.is_empty() && self.waits.is_empty() {
             return task_state;
@@ -300,30 +308,15 @@ impl ScopeSnapshot {
             drop(wait);
             task_state = cell.borrow_mut();
         }
-        loop {
-            task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
-            let mut index = 0;
-            while index < self.completions.len() {
-                let pending = settle
-                    && self.completions.get_mut(index).state.use_mut(|state| {
-                        matches!(
-                            state,
-                            CompletionState::Idle { .. } | CompletionState::Submitted { .. }
-                        )
-                    });
-                if pending {
-                    index += 1;
-                } else {
-                    let completion = self.completions.swap_remove(index);
-                    let unpooled = task_state.return_completion(completion);
-                    let cell = task_state.into_inner();
-                    drop(unpooled);
-                    task_state = cell.borrow_mut();
-                }
-            }
-            if self.completions.is_empty() {
-                return task_state;
-            }
+        // Preserve the cancellation progress pass, then release each temporary
+        // owner once. Original CQEs retire the authoritative live entries.
+        task_state = crate::runtime::submit_and_complete_io_all(task_state, true);
+        while let Some(completion) = self.completions.pop() {
+            let unpooled = task_state.return_completion(completion);
+            let cell = task_state.into_inner();
+            drop(unpooled);
+            task_state = cell.borrow_mut();
         }
+        task_state
     }
 }

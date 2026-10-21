@@ -205,7 +205,7 @@ impl Task {
                 .expect("must be called from an io_scope callback")
                 .snapshot()
         });
-        drop(snapshot.cancel(task_state, false));
+        drop(snapshot.cancel(task_state));
     }
 
     pub(crate) fn register_wait(&self, wait: &Rc<WaitData>) {
