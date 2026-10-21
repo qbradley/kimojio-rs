@@ -6,15 +6,27 @@ use std::rc::Rc;
 
 use crate::Task;
 use crate::task::TaskState;
+use crate::task_state_cell::TaskStateCellRef;
 
-/// wake_task can be used when you already have a &mut TaskState reference. This avoids
-/// recursive TaskState::get() calls.
-pub fn wake_task(task_state: &mut TaskState, waker: &std::task::Waker) {
+/// Schedule native wakers directly, but release TaskState before invoking an
+/// arbitrary waker or dropping its owner. Callers must also release registry
+/// borrows before calling this: callbacks may register more work.
+pub fn wake_task<'a>(
+    mut task_state: TaskStateCellRef<'a>,
+    waker: std::task::Waker,
+) -> TaskStateCellRef<'a> {
     if waker.vtable() == &VTABLE {
         let task = clone_waker_task(waker.data());
         task_state.schedule_io(task);
+        // A completed task may be owned only by this waker, and its result's
+        // destructor can reenter TaskState too.
+        let cell = task_state.into_inner();
+        drop(waker);
+        cell.borrow_mut()
     } else {
-        waker.wake_by_ref()
+        let cell = task_state.into_inner();
+        waker.wake();
+        cell.borrow_mut()
     }
 }
 
@@ -32,7 +44,9 @@ static VTABLE: std::task::RawWakerVTable = std::task::RawWakerVTable::new(
         // wake_by_ref followed by drop.
         let task = consume_waker_task(task);
         let mut task_state = TaskState::get();
-        task_state.schedule_io(task);
+        // Keep the final task owner until the TaskState borrow ends.
+        task_state.schedule_io(task.clone());
+        drop(task_state);
     },
     |task| {
         // wake_by_ref can potentially be called multiple times.

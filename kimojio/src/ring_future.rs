@@ -96,7 +96,7 @@ impl<'a, T: Unpin, C: MakeResult<T>> RingFuture<'a, T, C> {
                 .sec(timeout.as_secs())
         });
 
-        let handle = task_state.new_completion(Completion {
+        let (handle, previous) = task_state.new_completion(Completion {
             state: MutInPlaceCell::new(CompletionState::Idle {
                 entry,
                 timespec: timespec.is_some(),
@@ -120,6 +120,9 @@ impl<'a, T: Unpin, C: MakeResult<T>> RingFuture<'a, T, C> {
                 activity_id,
             },
         );
+
+        drop(task_state);
+        drop(previous);
 
         Self {
             handle: Some(handle),
@@ -149,6 +152,9 @@ impl<'a, T: Unpin, C: MakeResult<T>> Future for RingFuture<'a, T, C> {
     type Output = Result<T, Errno>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // RawWaker clone/drop callbacks may reenter the runtime or registry.
+        let mut new_waker = Some(cx.waker().clone());
+        let mut old_waker = None;
         let mut task_state = TaskState::get();
 
         #[cfg(feature = "fault_injection")]
@@ -222,7 +228,7 @@ impl<'a, T: Unpin, C: MakeResult<T>> Future for RingFuture<'a, T, C> {
                 };
 
                 *state = CompletionState::Submitted {
-                    waker: cx.waker().clone(),
+                    waker: new_waker.take().unwrap(),
                     activity_id,
                     tag,
                     canceled: false,
@@ -238,7 +244,7 @@ impl<'a, T: Unpin, C: MakeResult<T>> Future for RingFuture<'a, T, C> {
                 }
 
                 // Update the waker in case we were polled from a different task.
-                waker.clone_from(cx.waker());
+                old_waker = Some(std::mem::replace(waker, new_waker.take().unwrap()));
 
                 // still waiting for a completion
                 Poll::Pending
@@ -276,10 +282,16 @@ impl<'a, T: Unpin, C: MakeResult<T>> Future for RingFuture<'a, T, C> {
             }
         });
 
-        if matches!(result, Poll::Ready(_)) {
+        let unpooled = if matches!(result, Poll::Ready(_)) {
             let completion = handle_ref.take().unwrap();
-            task_state.return_completion(completion);
-        }
+            task_state.return_completion(completion)
+        } else {
+            None
+        };
+        drop(task_state);
+        drop(unpooled);
+        drop(old_waker);
+        drop(new_waker);
 
         result
     }
@@ -424,6 +436,118 @@ impl MakeResult<[u64; 2]> for ResultToCqe {
 mod test {
     use crate::{AsyncEvent, Errno, OwnedFd, operations};
     use std::rc::Rc;
+
+    #[crate::test]
+    async fn io_scope_drop_settles_borrowed_storage_with_wrapped_waker() {
+        use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
+
+        let (fd, peer) = crate::pipe::bipipe();
+        let event = AsyncEvent::new();
+        let mut buffer = [0; 1];
+        let mut completion = None;
+        let mut pending = FuturesUnordered::new();
+        let mut scope = Box::pin(operations::io_scope(async || {
+            let read = operations::read(&fd, &mut buffer);
+            completion = read.handle.clone();
+            pending.push(read.map(|result| result.map(|_| ())).boxed_local());
+            pending.push(
+                event
+                    .wait()
+                    .map(|result| result.map_err(|_| Errno::CANCELED))
+                    .boxed_local(),
+            );
+            assert!(futures::poll!(pending.next()).is_pending());
+            futures::future::pending::<()>().await;
+        }));
+        assert!(futures::poll!(scope.as_mut()).is_pending());
+        drop(scope);
+
+        // The read still owns its borrow. Cleanup must have received its real
+        // CQE before returning, not merely submitted a cancellation request.
+        completion.unwrap().state.use_mut(|state| {
+            assert!(matches!(
+                state,
+                crate::CompletionState::Completed {
+                    result: Err(Errno::CANCELED),
+                    ..
+                }
+            ));
+        });
+        assert_eq!(pending.next().await, Some(Err(Errno::CANCELED)));
+        assert_eq!(pending.next().await, Some(Err(Errno::CANCELED)));
+        assert_eq!(pending.next().await, None);
+        drop(pending);
+        buffer.fill(b'x');
+        assert_eq!(operations::write(&peer, b"s").await, Ok(1));
+        assert_eq!(operations::read(&fd, &mut buffer).await, Ok(1));
+        assert_eq!(buffer, *b"s");
+    }
+
+    #[crate::test]
+    async fn io_scope_wrapped_write_preserves_progress_and_cancels_continuation() {
+        use futures::{StreamExt, stream::FuturesUnordered};
+
+        for consume_before_cancel in [false, true] {
+            let (fd, peer) = crate::pipe::bipipe();
+            rustix::net::sockopt::set_socket_send_buffer_size(&fd, 4096).unwrap();
+            let payload = vec![b'w'; 1024 * 1024];
+            let (sibling_fd, sibling_peer) = crate::pipe::bipipe();
+            let mut sibling_byte = [0; 1];
+            let mut sibling = FuturesUnordered::new();
+            sibling.push(operations::read(&sibling_fd, &mut sibling_byte));
+            assert!(futures::poll!(sibling.next()).is_pending());
+
+            let written = operations::io_scope(async || {
+                let mut progress = FuturesUnordered::new();
+                progress.push(operations::write_with_timeout(&fd, &payload, None));
+                assert!(futures::poll!(progress.next()).is_pending());
+                let written = completion_result(progress.iter().next().unwrap())
+                    .await
+                    .unwrap() as usize;
+                assert!(written > 0 && written < payload.len());
+                if consume_before_cancel {
+                    assert_eq!(progress.next().await, Some(Ok(written)));
+                }
+
+                // No peer reads: the partial write filled the socket, so its
+                // continuation must remain pending and cannot report progress.
+                let mut continuation = FuturesUnordered::new();
+                continuation.push(operations::write_with_timeout(&fd, b"c", None));
+                assert!(futures::poll!(continuation.next()).is_pending());
+                operations::io_scope_cancel();
+                assert_eq!(continuation.next().await, Some(Err(Errno::CANCELED)));
+                assert_eq!(continuation.next().await, None);
+                if !consume_before_cancel {
+                    assert_eq!(progress.next().await, Some(Ok(written)));
+                }
+                assert_eq!(progress.next().await, None);
+                written
+            })
+            .await;
+
+            assert!(futures::poll!(sibling.next()).is_pending());
+            assert_eq!(operations::write(&sibling_peer, b"s").await, Ok(1));
+            assert_eq!(sibling.next().await, Some(Ok(1)));
+            drop(sibling);
+            assert_eq!(sibling_byte, *b"s");
+
+            let mut received = vec![0; written];
+            let mut offset = 0;
+            while offset < written {
+                let count = operations::read(&peer, &mut received[offset..])
+                    .await
+                    .unwrap();
+                assert!(count > 0);
+                offset += count;
+            }
+            assert_eq!(received, payload[..written]);
+            assert_eq!(
+                rustix::net::recv(&peer, &mut [0; 1], rustix::net::RecvFlags::DONTWAIT),
+                Err(Errno::AGAIN),
+                "the canceled continuation must not write a byte"
+            );
+        }
+    }
 
     async fn completion_result<T: Unpin, C: super::MakeResult<T>>(
         future: &super::RingFuture<'_, T, C>,
