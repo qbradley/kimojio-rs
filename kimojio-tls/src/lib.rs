@@ -268,6 +268,14 @@ impl ApplicationBio {
         &self,
         direction: ApplicationBioDirection,
     ) -> ApplicationBioCallbackGuard<'_> {
+        self.begin_callback(direction);
+        ApplicationBioCallbackGuard {
+            bio: self,
+            direction,
+        }
+    }
+
+    fn begin_callback(&self, direction: ApplicationBioDirection) {
         match direction {
             ApplicationBioDirection::Read => assert!(
                 !self.in_read_callback.replace(true),
@@ -279,10 +287,6 @@ impl ApplicationBio {
                     "reentrant OpenSSL BIO write-buffer access"
                 );
             }
-        }
-        ApplicationBioCallbackGuard {
-            bio: self,
-            direction,
         }
     }
 }
@@ -358,6 +362,136 @@ impl ApplicationBioReadLease<'_> {
         let mut buf = null_mut();
         let read = unsafe { BIO_nread(self.bio.as_ptr(), &mut buf, amount) };
         assert_eq!(read, amount);
+    }
+}
+
+/// An owned BIO write reservation that keeps TLS storage alive until released.
+pub struct OwnedApplicationBioWriteLease {
+    owner: TlsServerShared,
+    buffer: NonNull<u8>,
+    len: usize,
+}
+
+impl AsMut<[u8]> for OwnedApplicationBioWriteLease {
+    fn as_mut(&mut self) -> &mut [u8] {
+        // SAFETY: the owner retains the BIO and its write reservation.
+        unsafe { std::slice::from_raw_parts_mut(self.buffer.as_ptr(), self.len) }
+    }
+}
+
+impl OwnedApplicationBioWriteLease {
+    pub fn commit(self, amount: usize) {
+        assert!(amount <= self.len);
+        let amount = c_int_len(amount).expect("BIO write length exceeds c_int");
+        let mut buffer = null_mut();
+        let written = unsafe {
+            BIO_nwrite(
+                self.owner.inner.application_bio.bio.as_ptr(),
+                &mut buffer,
+                amount,
+            )
+        };
+        assert_eq!(written, amount);
+    }
+}
+
+impl Drop for OwnedApplicationBioWriteLease {
+    fn drop(&mut self) {
+        self.owner
+            .inner
+            .application_bio
+            .in_write_callback
+            .set(false);
+    }
+}
+
+/// An owned BIO read reservation that keeps TLS storage alive until released.
+pub struct OwnedApplicationBioReadLease {
+    owner: TlsServerShared,
+    buffer: NonNull<u8>,
+    len: usize,
+}
+
+impl AsRef<[u8]> for OwnedApplicationBioReadLease {
+    fn as_ref(&self) -> &[u8] {
+        // SAFETY: the owner retains the BIO and its unread reservation.
+        unsafe { std::slice::from_raw_parts(self.buffer.as_ptr(), self.len) }
+    }
+}
+
+impl OwnedApplicationBioReadLease {
+    pub fn consume(self, amount: usize) {
+        assert!(amount <= self.len);
+        let amount = c_int_len(amount).expect("BIO read length exceeds c_int");
+        let mut buffer = null_mut();
+        let read = unsafe {
+            BIO_nread(
+                self.owner.inner.application_bio.bio.as_ptr(),
+                &mut buffer,
+                amount,
+            )
+        };
+        assert_eq!(read, amount);
+    }
+}
+
+impl Drop for OwnedApplicationBioReadLease {
+    fn drop(&mut self) {
+        self.owner.inner.application_bio.in_read_callback.set(false);
+    }
+}
+
+impl TlsServerShared {
+    /// Returns `BUSY` while an earlier owned reservation is still in use.
+    pub fn owned_write_lease(&self) -> Result<Option<OwnedApplicationBioWriteLease>, Errno> {
+        if self.inner.application_bio.in_write_callback.get() {
+            return Err(Errno::BUSY);
+        }
+        self.inner
+            .application_bio
+            .begin_callback(ApplicationBioDirection::Write);
+        let mut lease = OwnedApplicationBioWriteLease {
+            owner: self.clone(),
+            buffer: NonNull::dangling(),
+            len: 0,
+        };
+        let mut buffer = null_mut();
+        let size = unsafe { BIO_nwrite0(self.inner.application_bio.bio.as_ptr(), &mut buffer) };
+        if size <= 0 {
+            return Ok(None);
+        }
+        let Some(buffer) = NonNull::new(buffer.cast()) else {
+            return Ok(None);
+        };
+        lease.buffer = buffer;
+        lease.len = size as usize;
+        Ok(Some(lease))
+    }
+
+    /// Returns `BUSY` while an earlier owned reservation is still in use.
+    pub fn owned_read_lease(&self) -> Result<Option<OwnedApplicationBioReadLease>, Errno> {
+        if self.inner.application_bio.in_read_callback.get() {
+            return Err(Errno::BUSY);
+        }
+        self.inner
+            .application_bio
+            .begin_callback(ApplicationBioDirection::Read);
+        let mut lease = OwnedApplicationBioReadLease {
+            owner: self.clone(),
+            buffer: NonNull::dangling(),
+            len: 0,
+        };
+        let mut buffer = null_mut();
+        let size = unsafe { BIO_nread0(self.inner.application_bio.bio.as_ptr(), &mut buffer) };
+        if size <= 0 {
+            return Ok(None);
+        }
+        let Some(buffer) = NonNull::new(buffer.cast()) else {
+            return Ok(None);
+        };
+        lease.buffer = buffer;
+        lease.len = size as usize;
+        Ok(Some(lease))
     }
 }
 
@@ -657,6 +791,42 @@ mod tests {
             drop(write_half);
             drop(clone);
         }
+    }
+
+    #[test]
+    fn owned_write_lease_keeps_bio_alive_and_excludes_reuse() {
+        let (server, other) = test_tls_server(false).split();
+        let lifetime = Rc::downgrade(&server.inner);
+        let mut lease = server.owned_write_lease().unwrap().unwrap();
+        assert!(matches!(other.owned_write_lease(), Err(Errno::BUSY)));
+        lease.as_mut()[..4].copy_from_slice(b"test");
+        drop(server);
+        drop(other);
+        assert!(lifetime.upgrade().is_some());
+        lease.commit(4);
+        assert!(lifetime.upgrade().is_none());
+    }
+
+    #[test]
+    fn owned_read_lease_keeps_bio_alive_and_releases_reservation() {
+        let (mut server, other) = test_tls_server(false).split();
+        assert!(matches!(
+            server.client_side_handshake(),
+            Response::WantWrite
+        ));
+        let lease = server.owned_read_lease().unwrap().unwrap();
+        assert!(!lease.as_ref().is_empty());
+        let expected = lease.as_ref().to_vec();
+        assert!(matches!(other.owned_read_lease(), Err(Errno::BUSY)));
+        drop(lease);
+        let lease = other.owned_read_lease().unwrap().unwrap();
+        assert_eq!(lease.as_ref(), expected);
+        let lifetime = Rc::downgrade(&server.inner);
+        drop(server);
+        drop(other);
+        assert!(lifetime.upgrade().is_some());
+        lease.consume(expected.len());
+        assert!(lifetime.upgrade().is_none());
     }
 
     #[test]

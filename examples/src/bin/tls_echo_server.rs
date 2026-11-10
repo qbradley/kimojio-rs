@@ -10,7 +10,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use kimojio::{
-    AsyncStreamRead, AsyncStreamWrite,
+    AsyncStreamRead, AsyncStreamWrite, BufferSlice,
     operations::{accept, spawn_task},
     socket_helpers::{create_server_socket, update_accept_socket},
     tlscontext::TlsContext,
@@ -101,7 +101,9 @@ async fn handle_client(
     // Echo loop: read data and write it back
     let mut buffer = [0u8; 8192];
     loop {
-        match tls_stream.try_read(&mut buffer, None).await {
+        let (result, returned) = tls_stream.try_read(buffer, None).await;
+        buffer = returned;
+        match result {
             Ok(0) => {
                 // EOF - client closed the connection
                 println!("[Client {}] Connection closed by client", client_id);
@@ -111,7 +113,11 @@ async fn handle_client(
                 println!("[Client {}] Received {} bytes", client_id, amount);
 
                 // Echo the data back
-                if let Err(e) = tls_stream.write(&buffer[..amount], None).await {
+                let (result, returned) = tls_stream
+                    .write(BufferSlice::new(buffer, 0..amount), None)
+                    .await;
+                buffer = returned.into_inner();
+                if let Err(e) = result {
                     eprintln!("[Client {}] Failed to write data: {:?}", client_id, e);
                     break;
                 }

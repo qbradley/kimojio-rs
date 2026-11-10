@@ -106,7 +106,6 @@ pub(crate) fn as_io_error(result: TlsServerError) -> Errno {
 #[cfg(test)]
 pub(crate) mod test {
     use std::ffi::CString;
-    use std::io::IoSlice;
     use std::net::ToSocketAddrs;
     use std::rc::Rc;
     use std::time::Duration;
@@ -124,7 +123,7 @@ pub(crate) mod test {
     use crate::socket_helpers::update_accept_socket;
     use crate::tlscontext::test::test_utils::CertAndKeyFileNames;
     use crate::tlsstream::TlsStream;
-    use crate::{AsyncStreamRead, AsyncStreamWrite};
+    use crate::{AsyncStreamRead, AsyncStreamWrite, BufferSlice};
     use futures::select;
     use test_utils::create_certs;
     use test_utils::create_crl_for_cert;
@@ -167,16 +166,13 @@ pub(crate) mod test {
         let client = client_ctx.client(16384, client_socket, None).await.unwrap();
         let (mut read, mut write) = client.split().await.unwrap();
 
-        let pending_read = operations::spawn_task(async move {
-            let mut read_buf = [0u8; 5];
-            read.read(&mut read_buf, None).await
-        });
+        let pending_read = operations::spawn_task(async move { read.read([0u8; 5], None).await.0 });
 
         // ensure previous task has a chance to run and block on read
         operations::yield_io().await;
 
         let one_second_earlier = Instant::now() - Duration::from_secs(1);
-        let result = write.write(b"hello", Some(one_second_earlier)).await;
+        let (result, _) = write.write(b"hello", Some(one_second_earlier)).await;
         assert!(result.is_err(), "Expecting timeout error");
         done.set();
         pending_read.abort();
@@ -231,26 +227,27 @@ pub(crate) mod test {
 
         // large
         let message = vec![42u8; 1024 * 1024];
-        write.write(&message, None).await.unwrap();
-        let mut buffer = vec![0u8; 1024 * 1024];
-        read.read(&mut buffer, None).await.unwrap();
+        write.write(message, None).await.0.unwrap();
+        read.read(vec![0u8; 1024 * 1024], None).await.0.unwrap();
 
         // try
-        let buf1 = [42u8; 512];
-        let buf2 = [43u8; 512];
         write
-            .writev(&mut [IoSlice::new(&buf1), IoSlice::new(&buf2)], None)
+            .writev(vec![[42u8; 512], [43u8; 512]], None)
             .await
+            .0
             .unwrap();
         let mut response = [0u8; 1024];
         let mut amount_read = 0;
         while amount_read < 512 {
-            amount_read += read
-                .try_read(&mut response[amount_read..], None)
-                .await
-                .unwrap();
+            let (result, returned) = read
+                .try_read(BufferSlice::new(response, amount_read..1024), None)
+                .await;
+            response = returned.into_inner();
+            amount_read += result.unwrap();
         }
-        read.read(&mut response[512..], None).await.unwrap();
+        let (result, response) = read.read(BufferSlice::new(response, 512..1024), None).await;
+        result.unwrap();
+        let response = response.into_inner();
         assert_eq!(&response[..512], [42u8; 512]);
         assert_eq!(&response[512..], [43u8; 512]);
 
@@ -261,26 +258,29 @@ pub(crate) mod test {
     async fn client_loop(mut stream: TlsStream) {
         // large
         let message = vec![42u8; 1024 * 1024];
-        stream.write(&message, None).await.unwrap();
-        let mut buffer = vec![0u8; 1024 * 1024];
-        stream.read(&mut buffer, None).await.unwrap();
+        stream.write(message, None).await.0.unwrap();
+        stream.read(vec![0u8; 1024 * 1024], None).await.0.unwrap();
 
         // try
-        let buf1 = [42u8; 512];
-        let buf2 = [43u8; 512];
         stream
-            .writev(&mut [IoSlice::new(&buf1), IoSlice::new(&buf2)], None)
+            .writev(vec![[42u8; 512], [43u8; 512]], None)
             .await
+            .0
             .unwrap();
         let mut response = [0u8; 1024];
         let mut amount_read = 0;
         while amount_read < 512 {
-            amount_read += stream
-                .try_read(&mut response[amount_read..], None)
-                .await
-                .unwrap();
+            let (result, returned) = stream
+                .try_read(BufferSlice::new(response, amount_read..1024), None)
+                .await;
+            response = returned.into_inner();
+            amount_read += result.unwrap();
         }
-        stream.read(&mut response[512..], None).await.unwrap();
+        let (result, response) = stream
+            .read(BufferSlice::new(response, 512..1024), None)
+            .await;
+        result.unwrap();
+        let response = response.into_inner();
         assert_eq!(&response[..512], [42u8; 512]);
         assert_eq!(&response[512..], [43u8; 512]);
 
@@ -325,11 +325,15 @@ pub(crate) mod test {
 
         let mut buffer = [0; 8192];
         loop {
-            let amount = read.try_read(&mut buffer, None).await.unwrap();
+            let (result, returned) = read.try_read(buffer, None).await;
+            buffer = returned;
+            let amount = result.unwrap();
             if amount == 0 {
                 break; // EOF
             }
-            write.write(&buffer[..amount], None).await.unwrap();
+            let (result, returned) = write.write(BufferSlice::new(buffer, 0..amount), None).await;
+            buffer = returned.into_inner();
+            result.unwrap();
         }
         write.shutdown().await.unwrap();
         write.close().await.unwrap();
@@ -557,9 +561,9 @@ pub(crate) mod test {
         })?;
         let mut stream = tls_context.client(bufsize, client_fd, deadline).await?;
 
-        stream.write("hello".as_bytes(), None).await.unwrap();
-        let mut response = [0; 7];
-        stream.read(&mut response, deadline).await?;
+        stream.write("hello".as_bytes(), None).await.0.unwrap();
+        let (result, response) = stream.read([0; 7], deadline).await;
+        result?;
         assert_eq!(response, "goodbye".as_bytes());
 
         stream.shutdown().await.unwrap();
@@ -588,10 +592,10 @@ pub(crate) mod test {
         })?;
         let mut stream = tls_context.server(bufsize, server_fd, deadline).await?;
 
-        let mut message = [0; 5];
-        stream.read(&mut message, deadline).await.unwrap();
+        let (result, message) = stream.read([0; 5], deadline).await;
+        result.unwrap();
         assert_eq!(message, "hello".as_bytes());
-        stream.write("goodbye".as_bytes(), None).await.unwrap();
+        stream.write("goodbye".as_bytes(), None).await.0.unwrap();
 
         stream.shutdown().await.unwrap();
 
@@ -817,10 +821,10 @@ pub(crate) mod test {
                     assert_eq!(&sans, &["admin.unit.tests".to_string()]);
                 }
 
-                let mut message = [0; 5];
-                stream.read(&mut message, None).await.unwrap();
+                let (result, message) = stream.read([0; 5], None).await;
+                result.unwrap();
                 assert_eq!(message, "hello".as_bytes());
-                stream.write("goodbye".as_bytes(), None).await.unwrap();
+                stream.write("goodbye".as_bytes(), None).await.0.unwrap();
 
                 stream.shutdown().await.unwrap();
             }

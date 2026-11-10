@@ -1,14 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 use std::cell::Cell;
-use std::io::IoSlice;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
 use kimojio::pipe::bipipe;
-use kimojio::{AsyncStreamRead, AsyncStreamWrite, OwnedFdStream};
+use kimojio::{AsyncStreamRead, AsyncStreamWrite, BufferSlice, OwnedFdStream};
 
 pub fn benchmark(c: &mut Criterion) {
     c.bench_function("async_stream", |b| {
@@ -23,9 +22,8 @@ pub fn benchmark(c: &mut Criterion) {
 
                 let start = Instant::now();
                 for iter in 0..iters {
-                    stream1.write(&iter.to_le_bytes(), None).await.unwrap();
-                    let mut buffer = [0; 8];
-                    stream2.read(&mut buffer, None).await.unwrap();
+                    stream1.write(iter.to_le_bytes(), None).await.0.unwrap();
+                    stream2.read([0; 8], None).await.0.unwrap();
                 }
                 dur_copy.set(start.elapsed());
 
@@ -46,28 +44,32 @@ pub fn benchmark(c: &mut Criterion) {
                 let mut stream1 = OwnedFdStream::new(client);
                 let mut stream2 = OwnedFdStream::new(server);
 
+                let mut buffers = vec![vec![0; 4], vec![0; 4], vec![0; 8]];
+                let mut response = [0; 128];
                 let start = Instant::now();
                 for iter in 0..iters {
                     let id = 1u32;
                     let length = 12u32;
-                    let length_bytes = length.to_le_bytes();
-                    let id_bytes = id.to_le_bytes();
-                    let iter_bytes = iter.to_le_bytes();
-                    let iov = &mut [
-                        IoSlice::new(&length_bytes),
-                        IoSlice::new(&id_bytes),
-                        IoSlice::new(&iter_bytes),
-                    ];
-                    stream1.writev(iov, None).await.unwrap();
+                    buffers[0].copy_from_slice(&length.to_le_bytes());
+                    buffers[1].copy_from_slice(&id.to_le_bytes());
+                    buffers[2].copy_from_slice(&iter.to_le_bytes());
+                    let (result, returned) = stream1.writev(buffers, None).await;
+                    buffers = returned;
+                    result.unwrap();
 
-                    let mut response = [0; 128];
-                    stream2.read(&mut response[0..4], None).await.unwrap();
+                    let (result, returned) =
+                        stream2.read(BufferSlice::new(response, 0..4), None).await;
+                    response = returned.into_inner();
+                    result.unwrap();
                     let length = u32::from_le_bytes(response[0..4].try_into().unwrap()) as usize;
-                    stream2.read(&mut response[0..length], None).await.unwrap();
+                    let (result, returned) = stream2
+                        .read(BufferSlice::new(response, 0..length), None)
+                        .await;
+                    response = returned.into_inner();
+                    result.unwrap();
                     let id = u32::from_le_bytes(response[0..4].try_into().unwrap()) as usize;
                     assert_eq!(id, 1);
-                    let response = &response[4..length];
-                    assert_eq!(&iter.to_le_bytes(), response);
+                    assert_eq!(&iter.to_le_bytes(), &response[4..length]);
                 }
                 dur_copy.set(start.elapsed());
 
@@ -101,12 +103,23 @@ pub fn benchmark(c: &mut Criterion) {
                     buffer[4..8].copy_from_slice(&id.to_le_bytes());
                     buffer[8..16].copy_from_slice(&iter.to_le_bytes());
 
-                    stream1.write(&buffer[0..16], None).await.unwrap();
+                    stream1
+                        .write(BufferSlice::new(buffer, 0..16), None)
+                        .await
+                        .0
+                        .unwrap();
 
                     let mut response = [0; 128];
-                    stream2.read(&mut response[0..4], None).await.unwrap();
+                    let (result, returned) =
+                        stream2.read(BufferSlice::new(response, 0..4), None).await;
+                    response = returned.into_inner();
+                    result.unwrap();
                     let length = u32::from_le_bytes(response[0..4].try_into().unwrap()) as usize;
-                    stream2.read(&mut response[0..length], None).await.unwrap();
+                    let (result, returned) = stream2
+                        .read(BufferSlice::new(response, 0..length), None)
+                        .await;
+                    response = returned.into_inner();
+                    result.unwrap();
                     let id = u32::from_le_bytes(response[0..4].try_into().unwrap()) as usize;
                     assert_eq!(id, 1);
                     let response = &response[4..length];

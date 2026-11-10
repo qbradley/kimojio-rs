@@ -316,6 +316,18 @@ impl<const SIZE: usize> Default for StaticBuffer<SIZE> {
     }
 }
 
+impl<const SIZE: usize> AsRef<[u8]> for StaticBuffer<SIZE> {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl<const SIZE: usize> AsMut<[u8]> for StaticBuffer<SIZE> {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.as_slice_mut()
+    }
+}
+
 /// A PrefixBuffer that allocates a fixed size array on the heap
 pub struct OwnedBuffer {
     head: usize,
@@ -403,6 +415,18 @@ impl PrefixBuffer for OwnedBuffer {
 
     fn view(&mut self) -> BufferView<'_> {
         BufferView::with_available(self.head, &mut self.data[..self.tail])
+    }
+}
+
+impl AsRef<[u8]> for OwnedBuffer {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl AsMut<[u8]> for OwnedBuffer {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.as_slice_mut()
     }
 }
 

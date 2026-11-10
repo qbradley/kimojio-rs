@@ -177,11 +177,13 @@ fn process_completions(
             }
         });
 
+        let abandoned_buffer = pool_handle.take_abandoned_buffer();
         task_state.return_completion(pool_handle);
 
         // Drop and re-borrow task_state so that wake_by_ref has the option
         // to access it via thread local storage.
         let task_state_ref = task_state.into_inner();
+        drop(abandoned_buffer);
         waker.wake();
         task_state = task_state_ref.borrow_mut();
     }
@@ -556,6 +558,11 @@ impl Runtime {
         // dropping `old_state`, because arbitrary Drop code may re-enter
         // TaskState::get().
         let mut task_state = TaskState::get();
+        while task_state.stats.in_flight_io.get() != 0
+            || task_state.stats.in_flight_io_poll.get() != 0
+        {
+            task_state = submit_and_complete_io_all(task_state, true);
+        }
         let old_state = std::mem::take(&mut *task_state);
         drop(task_state);
         drop(old_state);

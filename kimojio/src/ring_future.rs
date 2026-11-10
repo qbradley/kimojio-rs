@@ -23,7 +23,9 @@ use crate::io_type::IOType;
 use crate::operations::IsIoPoll;
 use crate::runtime::submit_and_complete_io;
 use crate::tracing::Events;
-use crate::{CompletionResources, CompletionState, Errno, MutInPlaceCell};
+use crate::{
+    BufferResult, CompletionBuffer, CompletionResources, CompletionState, Errno, MutInPlaceCell,
+};
 pub use rustix::fd::OwnedFd;
 
 use crate::Completion;
@@ -57,6 +59,8 @@ pub trait MakeResult<T: Unpin>: Unpin {
 
 pub struct RingFuture<'a, T: Unpin, C: MakeResult<T>> {
     handle: Option<Rc<Completion>>,
+    #[cfg(feature = "fault_injection")]
+    fault: Option<Errno>,
     _marker: std::marker::PhantomData<(&'a (), T, C)>,
 }
 
@@ -85,7 +89,24 @@ impl<'a, T: Unpin, C: MakeResult<T>> RingFuture<'a, T, C> {
         iopoll: bool,
         owned_resources: CompletionResources,
     ) -> Self {
-        let entry = Some(entry.into());
+        Self::with_resources(
+            |_| entry.into(),
+            fd,
+            timeout,
+            io_type,
+            iopoll,
+            owned_resources,
+        )
+    }
+
+    fn with_resources(
+        make_entry: impl FnOnce(&CompletionResources) -> SQE,
+        fd: i32,
+        timeout: Option<Duration>,
+        io_type: IOType,
+        iopoll: bool,
+        owned_resources: CompletionResources,
+    ) -> Self {
         let mut task_state = TaskState::get();
         let task = task_state.current_task.as_ref().unwrap().clone();
         let tag = task_state.get_next_tag();
@@ -98,7 +119,7 @@ impl<'a, T: Unpin, C: MakeResult<T>> RingFuture<'a, T, C> {
 
         let handle = task_state.new_completion(Completion {
             state: MutInPlaceCell::new(CompletionState::Idle {
-                entry,
+                entry: None,
                 timespec: timespec.is_some(),
             }),
             owned_resources,
@@ -107,8 +128,6 @@ impl<'a, T: Unpin, C: MakeResult<T>> RingFuture<'a, T, C> {
             task_index: task.task_index,
             iopoll,
         });
-
-        task.register_io(&handle);
 
         let activity_id = task.activity_id.get();
         task_state.write_event(
@@ -120,9 +139,21 @@ impl<'a, T: Unpin, C: MakeResult<T>> RingFuture<'a, T, C> {
                 activity_id,
             },
         );
+        drop(task_state);
+
+        let entry = make_entry(&handle.owned_resources);
+        handle.state.use_mut(|state| {
+            let CompletionState::Idle { entry: slot, .. } = state else {
+                unreachable!()
+            };
+            *slot = Some(entry);
+        });
+        task.register_io(&handle);
 
         Self {
             handle: Some(handle),
+            #[cfg(feature = "fault_injection")]
+            fault: None,
             _marker: std::marker::PhantomData,
         }
     }
@@ -148,7 +179,7 @@ impl<'a, T: Unpin, C: MakeResult<T>> IsIoPoll for RingFuture<'a, T, C> {
 impl<'a, T: Unpin, C: MakeResult<T>> Future for RingFuture<'a, T, C> {
     type Output = Result<T, Errno>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut task_state = TaskState::get();
 
         #[cfg(feature = "fault_injection")]
@@ -158,7 +189,8 @@ impl<'a, T: Unpin, C: MakeResult<T>> Future for RingFuture<'a, T, C> {
             } else {
                 let fault = *fault;
                 task_state.fault = None;
-                return Poll::Ready(Err(fault));
+                self.fault = Some(fault);
+                self.handle.as_ref().unwrap().cancel(&mut task_state);
             }
         }
 
@@ -169,7 +201,8 @@ impl<'a, T: Unpin, C: MakeResult<T>> Future for RingFuture<'a, T, C> {
         let trace_buffer = &task_state_ref.trace_buffer;
         let ring = &mut task_state_ref.ring;
         let ring_poll = &mut task_state_ref.ring_poll;
-        let handle_ref = &mut self.get_mut().handle;
+        let this = self.as_mut().get_mut();
+        let handle_ref = &mut this.handle;
         let completion = handle_ref
             .as_ref()
             .expect("It is illegal to poll a completed future");
@@ -281,7 +314,89 @@ impl<'a, T: Unpin, C: MakeResult<T>> Future for RingFuture<'a, T, C> {
             task_state.return_completion(completion);
         }
 
+        #[cfg(feature = "fault_injection")]
+        if result.is_ready()
+            && let Some(fault) = this.fault.take()
+        {
+            return Poll::Ready(Err(fault));
+        }
+
         result
+    }
+}
+
+/// Parks a buffer at a stable address owned by the completion until the CQE arrives.
+pub(crate) struct BufferFuture<B: 'static> {
+    future: Option<UsizeFuture<'static>>,
+    completion: Option<Rc<Completion>>,
+    _marker: std::marker::PhantomData<fn() -> B>,
+}
+
+impl<B: 'static> BufferFuture<B> {
+    pub(crate) fn new<Entry: Into<SQE>>(
+        buffer: B,
+        make_entry: impl FnOnce(&mut B) -> Entry,
+        fd: i32,
+        timeout: Option<Duration>,
+        io_type: IOType,
+    ) -> Self {
+        let future = UsizeFuture::with_resources(
+            |resources| {
+                let CompletionResources::Buffer(buffer) = resources else {
+                    unreachable!()
+                };
+                // Construct pointers only after the owner reaches its final
+                // allocation. Even inline buffers then stay valid across moves.
+                let mut buffer = buffer.buffer.borrow_mut();
+                let buffer = buffer.as_deref_mut().unwrap().downcast_mut::<B>().unwrap();
+                make_entry(buffer).into()
+            },
+            fd,
+            timeout,
+            io_type,
+            false,
+            CompletionResources::Buffer(CompletionBuffer {
+                buffer: std::cell::RefCell::new(Some(Box::new(buffer))),
+                abandoned: std::cell::Cell::new(false),
+            }),
+        );
+        let completion = future.handle.as_ref().unwrap().clone();
+        Self {
+            future: Some(future),
+            completion: Some(completion),
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<B: 'static> Future for BufferFuture<B> {
+    type Output = BufferResult<usize, B>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let result = std::task::ready!(Pin::new(this.future.as_mut().unwrap()).poll(cx));
+        let completion = this.completion.take().unwrap();
+        let CompletionResources::Buffer(buffer) = &completion.owned_resources else {
+            unreachable!()
+        };
+        let buffer = buffer.buffer.borrow_mut().take().unwrap();
+        TaskState::get().return_completion(completion);
+        let buffer = *buffer.downcast::<B>().unwrap_or_else(|_| unreachable!());
+        Poll::Ready((result, buffer))
+    }
+}
+
+impl<B: 'static> Drop for BufferFuture<B> {
+    fn drop(&mut self) {
+        if let Some(completion) = self.completion.take() {
+            let CompletionResources::Buffer(buffer) = &completion.owned_resources else {
+                unreachable!()
+            };
+            buffer.abandoned.set(true);
+            drop(self.future.take());
+            // Buffer destructors can call runtime operations.
+            drop(completion.take_abandoned_buffer());
+        }
     }
 }
 
@@ -423,14 +538,18 @@ impl MakeResult<[u64; 2]> for ResultToCqe {
 #[cfg(test)]
 mod test {
     use crate::{AsyncEvent, Errno, OwnedFd, operations};
-    use std::rc::Rc;
+    use std::{cell::Cell, rc::Rc};
 
     async fn completion_result<T: Unpin, C: super::MakeResult<T>>(
         future: &super::RingFuture<'_, T, C>,
     ) -> Result<u32, crate::Errno> {
+        completion_result_for(future.handle.as_ref().unwrap()).await
+    }
+
+    async fn completion_result_for(completion: &crate::Completion) -> Result<u32, crate::Errno> {
         for _ in 0..1000 {
             operations::nop().await.unwrap();
-            if let Some(result) = future.handle.as_ref().unwrap().state.use_mut(|state| {
+            if let Some(result) = completion.state.use_mut(|state| {
                 if let crate::CompletionState::Completed { result, .. } = state {
                     Some(*result)
                 } else {
@@ -441,6 +560,162 @@ mod test {
             }
         }
         panic!("I/O did not complete");
+    }
+
+    struct TrackedBuffer {
+        bytes: [u8; 16],
+        drops: Rc<Cell<usize>>,
+    }
+
+    impl AsMut<[u8]> for TrackedBuffer {
+        fn as_mut(&mut self) -> &mut [u8] {
+            &mut self.bytes
+        }
+    }
+
+    impl Drop for TrackedBuffer {
+        fn drop(&mut self) {
+            // Buffer destruction must run outside the runtime's state borrow.
+            drop(crate::task::TaskState::get());
+            self.drops.set(self.drops.get() + 1);
+        }
+    }
+
+    fn owned_read(
+        fd: OwnedFd,
+        drops: Rc<Cell<usize>>,
+    ) -> super::BufferFuture<(Rc<OwnedFd>, TrackedBuffer)> {
+        use rustix::fd::AsRawFd;
+        let raw_fd = fd.as_raw_fd();
+        super::BufferFuture::new(
+            (
+                Rc::new(fd),
+                TrackedBuffer {
+                    bytes: [0; 16],
+                    drops,
+                },
+            ),
+            |(_, buffer)| {
+                rustix_uring::opcode::Read::new(
+                    rustix_uring::types::Fd(raw_fd),
+                    buffer.bytes.as_mut_ptr(),
+                    buffer.bytes.len() as u32,
+                )
+                .build()
+            },
+            raw_fd,
+            None,
+            crate::io_type::IOType::Read,
+        )
+    }
+
+    #[crate::test]
+    async fn unpolled_owned_buffer_is_released() {
+        let (fd, _peer) = crate::pipe::bipipe();
+        let drops = Rc::new(Cell::new(0));
+        drop(owned_read(fd, drops.clone()));
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[crate::test]
+    async fn dropped_owned_buffer_waits_for_the_target_cqe() {
+        let (fd, _peer) = crate::pipe::bipipe();
+        let drops = Rc::new(Cell::new(0));
+        let mut read = Box::pin(owned_read(fd, drops.clone()));
+        let completion = read.completion.as_ref().unwrap().clone();
+        assert!(futures::poll!(read.as_mut()).is_pending());
+        drop(read);
+        assert_eq!(drops.get(), 0);
+        assert!(
+            completion
+                .state
+                .use_mut(|state| matches!(state, crate::CompletionState::Submitted { .. }))
+        );
+        assert_eq!(
+            completion_result_for(&completion).await,
+            Err(Errno::CANCELED)
+        );
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[crate::test]
+    async fn io_scope_does_not_retain_completed_abandoned_buffers() {
+        operations::io_scope(async || {
+            let (fd, _peer) = crate::pipe::bipipe();
+            let drops = Rc::new(Cell::new(0));
+            let mut read = Box::pin(owned_read(fd, drops.clone()));
+            let completion = read.completion.as_ref().unwrap().clone();
+            assert!(futures::poll!(read.as_mut()).is_pending());
+            drop(read);
+            assert_eq!(drops.get(), 0);
+            assert_eq!(
+                completion_result_for(&completion).await,
+                Err(Errno::CANCELED)
+            );
+            assert_eq!(drops.get(), 1);
+        })
+        .await;
+    }
+
+    #[crate::test]
+    async fn forgotten_owned_buffer_remains_valid_and_can_complete() {
+        let (fd, peer) = crate::pipe::bipipe();
+        let drops = Rc::new(Cell::new(0));
+        let mut read = Box::pin(owned_read(fd, drops.clone()));
+        let completion = read.completion.as_ref().unwrap().clone();
+        assert!(futures::poll!(read.as_mut()).is_pending());
+        let allocation: *mut super::BufferFuture<(Rc<OwnedFd>, TrackedBuffer)> =
+            read.as_mut().get_mut();
+        std::mem::forget(read);
+        assert_eq!(drops.get(), 0);
+        operations::write(&peer, b"safe").await.unwrap();
+        assert_eq!(completion_result_for(&completion).await, Ok(4));
+        assert_eq!(drops.get(), 0);
+
+        // SAFETY: this is the Box deliberately forgotten above. Its pinned
+        // allocation has not moved, and the kernel has finished accessing it.
+        let read = unsafe { Box::from_raw(allocation) };
+        let (result, (_fd, buffer)) = read.await;
+        assert_eq!(result, Ok(4));
+        assert_eq!(&buffer.bytes[..4], b"safe");
+        drop(buffer);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn shutdown_drains_abandoned_owned_buffers() {
+        let drops = Rc::new(Cell::new(0));
+        let task_drops = drops.clone();
+        crate::run_test("shutdown_drains_abandoned_owned_buffers", async move {
+            let (fd, _peer) = crate::pipe::bipipe();
+            let mut read = Box::pin(owned_read(fd, task_drops.clone()));
+            assert!(futures::poll!(read.as_mut()).is_pending());
+            drop(read);
+            assert_eq!(task_drops.get(), 0);
+        });
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[cfg(feature = "fault_injection")]
+    #[crate::test]
+    async fn injected_fault_does_not_return_a_submitted_owned_buffer() {
+        let (fd, _peer) = crate::pipe::bipipe();
+        let drops = Rc::new(Cell::new(0));
+        let mut read = Box::pin(owned_read(fd, drops.clone()));
+        let completion = read.completion.as_ref().unwrap().clone();
+        assert!(futures::poll!(read.as_mut()).is_pending());
+        operations::inject_fault(0, Errno::FAULT);
+        assert!(futures::poll!(read.as_mut()).is_pending());
+        assert_eq!(drops.get(), 0);
+        let (result, buffer) = read.await;
+        assert_eq!(result, Err(Errno::FAULT));
+        assert!(
+            completion
+                .state
+                .use_mut(|state| matches!(state, crate::CompletionState::Terminated))
+        );
+        drop(buffer);
+        assert_eq!(drops.get(), 1);
     }
 
     #[crate::test]

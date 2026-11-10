@@ -26,7 +26,7 @@ use varlink_reply::{
 };
 
 use crate::{
-    AsyncLock, AsyncStreamRead, AsyncStreamWrite, Errno, OwnedFdStream,
+    AsyncLock, AsyncStreamRead, AsyncStreamWrite, BufferSlice, Errno, OwnedFdStream,
     operations::{self, AddressFamily, SocketAddrUnix, SocketType},
 };
 
@@ -159,8 +159,8 @@ impl ResolverState {
             };
         }
 
-        let first = match self.connection.as_mut() {
-            Some(connection) => exchange_varlink(connection, &request, host, port).await,
+        let (first, request) = match self.connection.as_mut() {
+            Some(connection) => exchange_varlink(connection, request, host, port).await,
             None => return PreferredOutcome::TransportFailure,
         };
         match first {
@@ -182,7 +182,7 @@ impl ResolverState {
         };
 
         let retried = match self.connection.as_mut() {
-            Some(connection) => exchange_varlink(connection, &request, host, port).await,
+            Some(connection) => exchange_varlink(connection, request, host, port).await.0,
             None => return PreferredOutcome::TransportFailure,
         };
         match retried {
@@ -289,11 +289,13 @@ impl VarlinkConnection {
             let read_size = remaining.min(VARLINK_READ_CHUNK);
             let filled = self.input.len();
             self.input.resize(filled + read_size, 0);
-            let amount = self
+            let input = std::mem::take(&mut self.input);
+            let (result, input) = self
                 .stream
-                .try_read(&mut self.input[filled..], None)
-                .await
-                .map_err(|_| ExchangeError::Transport)?;
+                .try_read(BufferSlice::new(input, filled..filled + read_size), None)
+                .await;
+            self.input = input.into_inner();
+            let amount = result.map_err(|_| ExchangeError::Transport)?;
             self.input.truncate(filled + amount);
             if amount == 0 {
                 return Err(ExchangeError::Transport);
@@ -316,17 +318,18 @@ enum ExchangeError {
 
 async fn exchange_varlink(
     connection: &mut VarlinkConnection,
-    request: &[u8],
+    request: Vec<u8>,
     host: &str,
     port: u16,
-) -> Result<Vec<SocketAddr>, ExchangeError> {
-    connection
-        .stream
-        .write(request, None)
-        .await
-        .map_err(|_| ExchangeError::Transport)?;
-    let frame = connection.read_frame().await?;
-    decode_varlink_reply(&frame, host, port).map_err(ExchangeError::Response)
+) -> (Result<Vec<SocketAddr>, ExchangeError>, Vec<u8>) {
+    let (result, request) = connection.stream.write(request, None).await;
+    let result = async {
+        result.map_err(|_| ExchangeError::Transport)?;
+        let frame = connection.read_frame().await?;
+        decode_varlink_reply(&frame, host, port).map_err(ExchangeError::Response)
+    }
+    .await;
+    (result, request)
 }
 
 fn encode_varlink_request(host: &str) -> Result<Vec<u8>, ResolveError> {

@@ -55,12 +55,13 @@ pub use rustix_uring::types::{OFlags, Statx};
 
 use crate::async_event::TaskSource;
 use crate::io_type::IOType;
-use crate::ring_future::{OwnedFdFuture, UnitFuture, UsizeFuture};
+use crate::ring_future::{BufferFuture, OwnedFdFuture, UnitFuture, UsizeFuture};
 use crate::task::{IoScopeCompletions, Task, TaskReadyState, TaskState};
 use crate::task_ref::wake_task;
 use crate::tracing::Events;
 use crate::{
-    CanceledError, Completion, CompletionResources, CompletionState, Errno, TaskHandleError,
+    BufferResult, CanceledError, Completion, CompletionResources, CompletionState, Errno,
+    TaskHandleError,
 };
 use rustix::fd::{AsFd, AsRawFd};
 use rustix_uring::{
@@ -739,6 +740,117 @@ pub fn write_with_timeout<'a>(
     )
 }
 
+pub(crate) async fn write_owned_with_deadline<B: AsRef<[u8]> + 'static>(
+    fd: Rc<OwnedFd>,
+    buffer: B,
+    deadline: Option<Instant>,
+) -> BufferResult<usize, B> {
+    let timeout = match timeout_from_deadline(deadline) {
+        Ok(timeout) => timeout,
+        Err(error) => return (Err(error), buffer),
+    };
+    let raw_fd = fd.as_raw_fd();
+    let (result, (_, buffer)) = BufferFuture::new(
+        (fd, buffer),
+        |(_, buffer)| {
+            let buffer = buffer.as_ref();
+            opcode::Write::new(
+                Fd(raw_fd),
+                buffer.as_ptr(),
+                buffer.len().min(u32::MAX as usize) as u32,
+            )
+            .offset(u64::MAX)
+            .build()
+        },
+        raw_fd,
+        timeout,
+        IOType::Write,
+    )
+    .await;
+    (result, buffer)
+}
+
+pub(crate) async fn writev_owned_with_deadline<B: AsRef<[u8]> + 'static>(
+    fd: Rc<OwnedFd>,
+    buffers: Vec<B>,
+    deadline: Option<Instant>,
+) -> BufferResult<(), Vec<B>> {
+    struct VectoredBuffers<B> {
+        _fd: Rc<OwnedFd>,
+        buffers: Vec<B>,
+        vectors: Vec<iovec>,
+        first: usize,
+    }
+
+    let raw_fd = fd.as_raw_fd();
+    let mut buffers = VectoredBuffers {
+        _fd: fd,
+        buffers,
+        vectors: Vec::new(),
+        first: 0,
+    };
+    // The owners remain in this Vec throughout the operation, so even inline
+    // buffer storage stays at a stable address when the holder moves.
+    buffers.vectors = buffers
+        .buffers
+        .iter()
+        .map(|buffer| {
+            let buffer = buffer.as_ref();
+            iovec {
+                iov_base: buffer.as_ptr().cast_mut().cast(),
+                iov_len: buffer.len(),
+            }
+        })
+        .filter(|vector| vector.iov_len != 0)
+        .collect();
+
+    let result = loop {
+        if buffers.first == buffers.vectors.len() {
+            break Ok(());
+        }
+        let timeout = match timeout_from_deadline(deadline) {
+            Ok(timeout) => timeout,
+            Err(error) => break Err(error),
+        };
+        let (result, returned) = BufferFuture::new(
+            buffers,
+            |buffers| {
+                let vectors = &buffers.vectors[buffers.first..];
+                opcode::Writev::new(
+                    Fd(raw_fd),
+                    vectors.as_ptr(),
+                    vectors.len().min(libc::UIO_MAXIOV as usize) as u32,
+                )
+                .offset(u64::MAX)
+                .build()
+            },
+            raw_fd,
+            timeout,
+            IOType::Write,
+        )
+        .await;
+        buffers = returned;
+        let mut written = match result {
+            Ok(0) => break Err(Errno::PIPE),
+            Ok(written) => written,
+            Err(error) => break Err(error),
+        };
+        while written != 0 {
+            let vector = &mut buffers.vectors[buffers.first];
+            if written >= vector.iov_len {
+                written -= vector.iov_len;
+                buffers.first += 1;
+            } else {
+                // SAFETY: the CQE reports bytes written within this owned buffer.
+                vector.iov_base = unsafe { vector.iov_base.byte_add(written) };
+                vector.iov_len -= written;
+                written = 0;
+            }
+        }
+    };
+    (result, buffers.buffers)
+}
+
 // TODO: When bumping the minor version, change send/recv/sendmsg/recvmsg to
 // expose no-timeout wrappers plus *_with_timeout and *_with_deadline variants
 // matching read/write naming. Their current timeout parameter is public API.
@@ -996,6 +1108,46 @@ pub fn read_with_timeout<'a>(
         timeout,
         IOType::Read,
     )
+}
+
+pub(crate) async fn read_owned_with_deadline<B: AsMut<[u8]> + 'static>(
+    fd: Rc<OwnedFd>,
+    buffer: B,
+    deadline: Option<Instant>,
+) -> BufferResult<usize, B> {
+    let timeout = match timeout_from_deadline(deadline) {
+        Ok(timeout) => timeout,
+        Err(error) => return (Err(error), buffer),
+    };
+    let raw_fd = fd.as_raw_fd();
+    let (result, (_, buffer)) = BufferFuture::new(
+        (fd, buffer),
+        |(_, buffer)| {
+            let buffer = buffer.as_mut();
+            opcode::Read::new(
+                Fd(raw_fd),
+                buffer.as_mut_ptr(),
+                buffer.len().min(u32::MAX as usize) as u32,
+            )
+            .offset(u64::MAX)
+            .build()
+        },
+        raw_fd,
+        timeout,
+        IOType::Read,
+    )
+    .await;
+    (result, buffer)
+}
+
+pub(crate) async fn close_shared_fd(mut fd: Rc<OwnedFd>) -> Result<(), Errno> {
+    loop {
+        match Rc::try_unwrap(fd) {
+            Ok(fd) => return close(fd).await,
+            Err(shared) => fd = shared,
+        }
+        yield_io().await;
+    }
 }
 
 /// Reads data from a file descriptor at a specific offset into a buffer.

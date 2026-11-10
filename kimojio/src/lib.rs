@@ -27,6 +27,7 @@ mod cancellation_token;
 pub mod configuration;
 mod errors;
 mod handle_table;
+mod io_buffer;
 pub mod io_type;
 mod message_pipe;
 mod mut_in_place_cell;
@@ -73,6 +74,7 @@ pub use errors::{
     CanceledError, ChannelError, TaskHandleError, TimeoutError, errno_from_task_handle_result,
 };
 pub use handle_table::{HandleTable, Index};
+pub use io_buffer::{BufferResult, BufferSlice};
 pub use message_pipe::{
     MessagePipe, MessagePipeReceiver, MessagePipeSender, make_message_pipe,
     make_message_pipe_oneway, make_message_pipe_oneway_sync,
@@ -138,6 +140,7 @@ pub(crate) struct Completion {
 #[allow(dead_code)]
 enum CompletionResources {
     None,
+    Buffer(CompletionBuffer),
     CloseFd(std::cell::Cell<Option<OwnedFd>>),
     Timespec(rustix_uring::types::Timespec),
     Box(Box<dyn std::any::Any>),
@@ -145,7 +148,28 @@ enum CompletionResources {
     InlineBuffer([u8; 8]),
 }
 
+struct CompletionBuffer {
+    buffer: std::cell::RefCell<Option<Box<dyn std::any::Any>>>,
+    abandoned: std::cell::Cell<bool>,
+}
+
 impl Completion {
+    fn take_abandoned_buffer(&self) -> Option<Box<dyn std::any::Any>> {
+        if let CompletionResources::Buffer(buffer) = &self.owned_resources
+            && buffer.abandoned.get()
+            && self.state.use_mut(|state| {
+                matches!(
+                    state,
+                    CompletionState::Completed { .. } | CompletionState::Terminated
+                )
+            })
+        {
+            buffer.buffer.borrow_mut().take()
+        } else {
+            None
+        }
+    }
+
     fn finish_close(&self, result: Result<u32, Errno>) {
         if let CompletionResources::CloseFd(fd) = &self.owned_resources
             && let Some(fd) = fd.take()
